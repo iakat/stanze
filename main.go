@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -150,11 +152,17 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 			w.Write(body)
 		}
 	}
+	selfHash := binaryHash()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// No SPA fallback: anything that is not the single page is a 404.
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
+		}
+		// The hash of the file on disk, so a guest compares it with a local
+		// build. It is a claim by the running process, not a proof.
+		if selfHash != "" {
+			w.Header().Set("X-Binary-SHA256", selfHash)
 		}
 		serve("index.html")(w, r)
 	})
@@ -172,6 +180,23 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/DONE.md", docHandler(cfg.DocsDir, "DONE.md"))
 
 	return securityHeaders(mux, srv.log), nil
+}
+
+// binaryHash returns the sha256 of the executable that is running, or an empty
+// string when the file cannot be read, as with a memfd or a deleted image.
+// It is computed once, at start, so a later replacement on disk does not change
+// the answer the process gives about itself.
+func binaryHash() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(exe)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // docHandler serves one markdown file, from the docs directory when a copy is
