@@ -117,7 +117,7 @@ only server, and its deployment manifest is `deploy/deployment.json`.
   server, including the live URL: names are `guest`, history is empty, plaintext
   chat has no path, the handshake agrees, and an observer with no key opens
   nothing.
-- `cmd/selftest` — 43 checks, 0 failed, including the `/e2e` redirect and the
+- `cmd/selftest` — 41 checks, 0 failed, including the `/e2e` redirect and the
   three removed page assets.
 - `tools/pq-browser-e2e.js` — two real headless browsers against the one join
   form with `?sealed=1`: video and audio play through the transform, chat and

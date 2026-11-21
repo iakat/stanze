@@ -1086,7 +1086,15 @@ function disableCam() {
   state.cam = false;
   state.prefCam = false;
   store('cam', 0);
-  if (state.camTrack) state.camTrack.enabled = false;
+  // A disabled track keeps the device open, so the camera light stays on. Stop
+  // the track and drop it: enableCam asks the device again, and the video
+  // sender that still holds the old track gets the new one in adoptCam.
+  const track = state.camTrack;
+  state.camTrack = null;
+  if (track) {
+    if (state.raw) state.raw.removeTrack(track);
+    try { track.stop(); } catch { /* already stopped */ }
+  }
   if (!state.screen) paintSelfCam(false);
   updateButtons();
   sendState();
