@@ -313,23 +313,45 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .tile[data-state="disconnected"] .state { color: #a00000; }
 .tile[data-relay="yes"] .state::after { content: " | relay"; color: #604000; }
 
-/* sealed rooms: the short code under a guest, and a green frame once the keys
- * of that pair are confirmed. The attribute is only set in sealed mode, so a
- * plain room is drawn exactly as before. */
+/* sealed rooms: the short code of a guest. It is a card at the foot of the
+ * tile, made of OpenMoji drawings and the code in groups of four. A plain
+ * room has no such element. */
 .tile .sas {
   position: absolute;
-  left: 4px;
-  bottom: 26px;
-  max-width: calc(100% - 8px);
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 12px);
+  padding: 4px 8px 5px;
+  background: #04120a;
+  border: 1px solid #2f8f4a;
+  box-shadow: 0 0 0 1px #08160c, 0 4px 12px rgba(0, 0, 0, 0.65);
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.2;
+  color: #9cf0b0;
+  pointer-events: none;
+}
+.tile .sas[hidden] { display: none; }
+.tile .sas-head {
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #6fbf85;
+}
+.tile .sas-row { display: flex; gap: 3px; }
+.tile .sas-emoji { width: 22px; height: 22px; display: block; }
+.tile .sas-code {
+  letter-spacing: 1px;
+  color: #d6ffe2;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: monospace;
-  font-size: 11px;
-  color: #9cf0b0;
-  background: #08160c;
-  border: 1px solid #1c5b2a;
-  padding: 0 4px;
+  max-width: 100%;
 }
 .tile[data-e2e="ready"] { box-shadow: inset 0 0 0 2px #1c5b2a; }
 .tile[data-e2e="handshake"] { box-shadow: inset 0 0 0 2px #8a7a1c; }

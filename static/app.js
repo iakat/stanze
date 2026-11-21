@@ -2132,18 +2132,19 @@ async function updateStats() {
 // relay only ever sees opaque blobs.
 
 // The short code is 13 base32 characters, which is fine to compare on a screen
-// but clumsy to read aloud. The same bits are shown as six emoji with a
-// different shape and a different name each, so two people on a voice call can
-// compare them without spelling anything and without confusing two of them.
+// but clumsy to read aloud. The same bits are shown as six OpenMoji drawings
+// with a different shape and a different name each, so two people on a voice
+// call can compare them without spelling anything and without confusing two of
+// them. The third field is the file name of the drawing in static/openmoji.
 const VERIFY_EMOJI = [
-  ['⚓', 'anchor'], ['🔔', 'bell'], ['🚲', 'bicycle'], ['🌵', 'cactus'],
-  ['📷', 'camera'], ['🕯', 'candle'], ['🥕', 'carrot'], ['🕐', 'clock'],
-  ['☁️', 'cloud'], ['👑', 'crown'], ['🐬', 'dolphin'], ['🐉', 'dragon'],
-  ['🥁', 'drum'], ['🦅', 'eagle'], ['🐟', 'fish'], ['👻', 'ghost'],
-  ['🎸', 'guitar'], ['🔨', 'hammer'], ['🚁', 'helicopter'], ['🔑', 'key'],
-  ['🧲', 'magnet'], ['🍄', 'mushroom'], ['🦉', 'owl'], ['✏️', 'pencil'],
-  ['🚀', 'rocket'], ['✂️', 'scissors'], ['🚢', 'ship'], ['☀️', 'sun'],
-  ['☂️', 'umbrella'], ['🎻', 'violin'], ['🐝', 'bee'], ['🐌', 'snail'],
+  ['⚓', 'anchor', '2693'], ['🔔', 'bell', '1F514'], ['🚲', 'bicycle', '1F6B2'], ['🌵', 'cactus', '1F335'],
+  ['📷', 'camera', '1F4F7'], ['🕯', 'candle', '1F56F'], ['🥕', 'carrot', '1F955'], ['🕐', 'clock', '1F550'],
+  ['☁️', 'cloud', '2601'], ['👑', 'crown', '1F451'], ['🐬', 'dolphin', '1F42C'], ['🐉', 'dragon', '1F409'],
+  ['🥁', 'drum', '1F941'], ['🦅', 'eagle', '1F985'], ['🐟', 'fish', '1F41F'], ['👻', 'ghost', '1F47B'],
+  ['🎸', 'guitar', '1F3B8'], ['🔨', 'hammer', '1F528'], ['🚁', 'helicopter', '1F681'], ['🔑', 'key', '1F511'],
+  ['🧲', 'magnet', '1F9F2'], ['🍄', 'mushroom', '1F344'], ['🦉', 'owl', '1F989'], ['✏️', 'pencil', '270F'],
+  ['🚀', 'rocket', '1F680'], ['✂️', 'scissors', '2702'], ['🚢', 'ship', '1F6A2'], ['☀️', 'sun', '2600'],
+  ['☂️', 'umbrella', '2602'], ['🎻', 'violin', '1F3BB'], ['🐝', 'bee', '1F41D'], ['🐌', 'snail', '1F40C'],
 ];
 
 const sealUtf8 = new TextEncoder();
@@ -2697,15 +2698,40 @@ function sealedSetE2E(peer, status) {
   if (!sas) return;
   if (!peer.sas) {
     sas.hidden = true;
-    sas.textContent = '';
+    sas.replaceChildren();
     sas.removeAttribute('title');
     return;
   }
   sas.hidden = false;
-  sas.textContent = verifyText(peer.sas) + '  code ' + peer.sas;
-  // The names behind the emoji are a title, so a screen reader and a nervous
-  // guest can both tell what they are looking at.
+  sas.replaceChildren(...sealedCodePanel(peer.sas));
+  // The names behind the drawings are a title, so a screen reader and a
+  // nervous guest can both tell what they are looking at.
   sas.title = verifyNames(peer.sas) + ' (' + peer.sas + ')';
+}
+
+// sealedCodePanel builds the code card of one guest: a small heading, the six
+// OpenMoji drawings, and the code in groups of four. The card is opaque text
+// and images, so it needs no font of its own.
+function sealedCodePanel(code) {
+  const head = document.createElement('span');
+  head.className = 'sas-head';
+  head.textContent = 'sealed code';
+  const row = document.createElement('span');
+  row.className = 'sas-row';
+  for (const [emoji, name, hex] of verifyEmojis(code)) {
+    const img = document.createElement('img');
+    img.className = 'sas-emoji';
+    img.src = `/openmoji/${hex}.svg`;
+    img.alt = emoji;
+    img.title = name;
+    img.width = 22;
+    img.height = 22;
+    row.appendChild(img);
+  }
+  const text = document.createElement('span');
+  text.className = 'sas-code';
+  text.textContent = String(code || '').replace(/(.{4})(?=.)/g, '$1 ');
+  return [head, row, text];
 }
 
 // ------------------------------------------------------------- sealed signaling
