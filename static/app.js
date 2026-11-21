@@ -2006,24 +2006,6 @@ async function enterRoom(room, pass) {
       return;
     }
 
-    // A fresh call: no counter from the last room may reach the stats panel.
-    state.frames = {};
-    state.encryptFrames = 0;
-    state.decryptFrames = 0;
-    state.chatSent = 0;
-    state.chatRecv = 0;
-    state.confirmFailures = 0;
-    state.workerErrors = [];
-    state.sealFault = '';
-    state.wireFrames = 0;
-    state.wireLeaks = [];
-    state.canaries = [];
-    state.samples = [];
-    state.keyWait.clear();
-    if (state.worker) {
-      state.worker.terminate();
-      state.worker = null;
-    }
     startSealedWorker();
     state.identity = JSON.parse(pqModule().gen());
     canary(state.name);
