@@ -354,7 +354,7 @@ func main() {
 
 	// One sealed chat line, then look at everything the observer ever received.
 	plain := []byte(`{"k":"chat","n":"` + nameA + `","x":"` + canary + `"}`)
-	sealed, err := pq.Seal(offer.Keys.SendChat, []byte("pq-e2e v2 chat "+lo+"|"+hi), plain)
+	sealed, err := pq.Seal(offer.Keys.SendChat, []byte("pq-e2e v2 chat "+lo+"|"+hi+" 1"), plain)
 	if err != nil {
 		fmt.Println("FAIL  seal:", err)
 		os.Exit(1)
@@ -369,9 +369,9 @@ func main() {
 	time.Sleep(400 * time.Millisecond)
 
 	// The intended receiver opens it; the observer cannot.
-	got, err := pq.Open(acc.Keys.RecvChat, []byte("pq-e2e v2 chat "+lo+"|"+hi), sealed)
+	got, err := pq.Open(acc.Keys.RecvChat, []byte("pq-e2e v2 chat "+lo+"|"+hi+" 1"), sealed)
 	check("receiver opens the sealed chat", err == nil && bytes.Equal(got, plain), string(got))
-	if _, err := pq.Open(make([]byte, 32), []byte("pq-e2e v2 chat "+lo+"|"+hi), sealed); err == nil {
+	if _, err := pq.Open(make([]byte, 32), []byte("pq-e2e v2 chat "+lo+"|"+hi+" 1"), sealed); err == nil {
 		check("observer with no key opens nothing", false, "random key decrypted")
 	} else {
 		check("observer with no key opens nothing", true, "")

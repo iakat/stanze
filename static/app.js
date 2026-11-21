@@ -80,6 +80,7 @@ const state = {
   decryptFrames: 0,
   chatSent: 0,
   chatRecv: 0,
+  replayDrops: 0,      // a sealed chat or name frame out of order or replayed
   confirmFailures: 0,
   workerErrors: [],    // a red row in the stats panel, never ignored
   sealFault: '',       // why this browser can not seal media, if it can not
@@ -1496,6 +1497,8 @@ function ensurePeer(id, mic, cam) {
     sentConfirm: false,
     keyPromise: null,
     keysInstalled: false,
+    seqOut: 0, // sealed chat/name frames sent on this pair
+    seqIn: 0,  // the last one opened, inbound only grows
     mySig: '',
     fp: '',            // fingerprint once the peer proved its identity
     pin: '',           // 'changed' when a label here holds another key
@@ -1994,6 +1997,7 @@ function leave(message) {
   state.decryptFrames = 0;
   state.chatSent = 0;
   state.chatRecv = 0;
+  state.replayDrops = 0;
   state.confirmFailures = 0;
   state.workerErrors = [];
   state.sealFault = '';
@@ -2546,10 +2550,11 @@ function verifyNames(code) {
   return verifyEmojis(code).map((pair) => pair[1]).join(', ');
 }
 
-// The associated data names the protocol version and the pair, so a blob sealed
-// for one pair can not be replayed into another.
-function chatAAD(peerId) {
-  return sealUtf8.encode('pq-e2e v2 chat ' + pairLabel(peerId));
+// The associated data names the protocol version, the pair and the sequence
+// number of the frame, so a blob sealed for one pair can not be replayed into
+// another, and one captured frame can not be shown twice.
+function chatAAD(peerId, seq) {
+  return sealUtf8.encode('pq-e2e v2 chat ' + pairLabel(peerId) + ' ' + seq);
 }
 
 // sealingAvailable answers the only question that matters for the media: can
@@ -2655,7 +2660,7 @@ function pqSelfTest() {
     key: off.keys.recvMedia, transcript: off.transcript, tag: acc.confirm, id: k2.pub, sig: '',
   })));
   const pt = b64e(sealUtf8.encode('sealed hello'));
-  const aad = b64e(sealUtf8.encode('pq-e2e v2 chat a|b'));
+  const aad = b64e(sealUtf8.encode('pq-e2e v2 chat a|b 1'));
   const sealed = JSON.parse(pq.seal(JSON.stringify({ key: off.keys.sendChat, aad, pt })));
   const opened = JSON.parse(pq.open(JSON.stringify({
     key: acc.keys.recvChat, aad, b: sealed.b,
@@ -3178,6 +3183,8 @@ function sealedRestart(peer, resend) {
   peer.proven = false;
   peer.ready = '';
   peer.keyPromise = null;
+  peer.seqOut = 0;
+  peer.seqIn = 0;
   peer.announcedName = '';
   if (peer.pc) {
     peer.pc.close();
@@ -3245,6 +3252,8 @@ function sealedHoldKeys(peer, out) {
     recvChat: b64d(out.keys.recvChat),
   };
   peer.transcript = out.transcript;
+  peer.seqOut = 0;
+  peer.seqIn = 0;
   peer.sas = out.keys.sas;
   peer.myConfirm = out.confirm;
   peer.ready = 'handshake';
@@ -3440,18 +3449,27 @@ function sealedHandleOpaque(from, b) {
       // video sender of this pair.
       if (state.worker) state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id) });
       break;
-    case 'app':
+    case 'app': {
       if (!peer.keys || !peer.keysInstalled || !msg.b) return;
-      sealedOnApp(peer, msg.b);
+      // Both directions have their own counter. The socket is ordered, so the
+      // next number is the only one that can be current; anything else is a
+      // replay, a reorder or a forgery, and it is dropped before decryption.
+      const seq = Number(msg.q);
+      if (!Number.isSafeInteger(seq) || seq !== peer.seqIn + 1) {
+        state.replayDrops++;
+        return;
+      }
+      sealedOnApp(peer, msg.b, seq);
       break;
+    }
     default:
       break;
   }
 }
 
-function sealedOnApp(peer, b) {
+function sealedOnApp(peer, b, seq) {
   const out = pqCall((json) => pqModule().open(json), {
-    key: b64e(peer.keys.recvChat), aad: b64e(chatAAD(peer.id)), b,
+    key: b64e(peer.keys.recvChat), aad: b64e(chatAAD(peer.id, seq)), b,
   });
   if (!out || out.error) return;
   let obj;
@@ -3460,6 +3478,7 @@ function sealedOnApp(peer, b) {
   } catch {
     return;
   }
+  peer.seqIn = seq;
   if (obj.k === 'name') {
     sealedSetName(peer, obj.n);
   } else if (obj.k === 'chat') {
@@ -3476,12 +3495,15 @@ function sealedAnnounceName(peer) {
 
 function sealedSend(peer, obj) {
   if (!peer.keys) return;
+  const seq = peer.seqOut + 1;
   const out = pqCall((json) => pqModule().seal(json), {
     key: b64e(peer.keys.sendChat),
-    aad: b64e(chatAAD(peer.id)),
+    aad: b64e(chatAAD(peer.id, seq)),
     pt: b64e(sealUtf8.encode(JSON.stringify(obj))),
   });
-  if (out && out.b) sealedSendOpaque(peer.id, { k: 'app', b: out.b });
+  if (!out || !out.b) return;
+  peer.seqOut = seq;
+  sealedSendOpaque(peer.id, { k: 'app', q: seq, b: out.b });
 }
 
 function sendSealedChat() {
@@ -3764,8 +3786,8 @@ function sealedStatsRows() {
     `frames ${state.wireFrames} | canaries ${state.canaries.length} | plaintext leaks ${state.wireLeaks.length}`,
   ], state.wireLeaks.length === 0));
   rows.push(statsRow('sealed chat', [
-    `out ${state.chatSent} | in ${state.chatRecv} | confirm failures ${state.confirmFailures} | identity refusals ${state.identityFailures}`,
-  ], state.confirmFailures === 0 && state.identityFailures === 0));
+    `out ${state.chatSent} | in ${state.chatRecv} | replays ${state.replayDrops} | confirm failures ${state.confirmFailures} | identity refusals ${state.identityFailures}`,
+  ], state.confirmFailures === 0 && state.identityFailures === 0 && state.replayDrops === 0));
 
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
@@ -3964,6 +3986,7 @@ win().e2eApp = {
     decryptFrames: state.decryptFrames,
     chatSent: state.chatSent,
     chatRecv: state.chatRecv,
+    replayDrops: state.replayDrops,
     confirmFailures: state.confirmFailures,
     identityFailures: state.identityFailures,
     workerErrors: state.workerErrors,
