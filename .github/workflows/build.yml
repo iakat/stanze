@@ -1,0 +1,164 @@
+# Binaries and the container image, both with the flags build.sh uses, so a
+# build here matches a local one byte for byte.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing here needs more than reading the tree; the two jobs that do add a
+# permission below, and nothing but the tag job can write to a release.
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+  GOFLAGS: -mod=mod
+
+jobs:
+  binaries:
+    name: rooms ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-amd64
+            arch: amd64
+            goamd64: v1
+          - label: linux-amd64-v4
+            arch: amd64
+            goamd64: v4
+          - label: linux-arm64
+            arch: arm64
+            goamd64: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The client is embedded, so it is rebuilt from this commit's source
+      # first, exactly like build.sh does (wasm, then the deterministic pack).
+      - name: client
+        run: |
+          GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+          go run -trimpath -buildvcs=false ./cmd/pack
+
+      - name: build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          GOAMD64: ${{ matrix.goamd64 }}
+        run: |
+          mkdir -p out
+          go build -trimpath -buildvcs=false -ldflags "-s -w" -o out/rooms-${{ matrix.label }} .
+          go build -trimpath -buildvcs=false -ldflags "-s -w" -o out/selftest-${{ matrix.label }} ./cmd/selftest
+          (cd out && sha256sum * > SHA256SUMS-${{ matrix.label }})
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: out
+          if-no-files-found: error
+          retention-days: 14
+
+  # A release needs every artifact at once, so it cannot live in the matrix:
+  # three parallel legs would race to create the same release.
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
+          fi
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # ghcr rejects upper case, and a repository name may carry some.
+      - name: name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # A PR builds and pushes nothing; only main and tags get there.
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=sha,format=short
+
+      # The builder runs on the runner's own platform and Go cross compiles
+      # into the target, so no qemu is needed for the arm64 half.
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # x86-64-v4 is a separate tag, never the default: the binary faults on
+      # anything below AVX-512, which is most machines that are not new servers.
+      - uses: docker/metadata-action@v5
+        id: meta-v4
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: suffix=-v4
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: build v4
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: GOAMD64=v4
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-v4.outputs.tags }}
+          labels: ${{ steps.meta-v4.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,6 @@
+# Build context without the local build outputs and history: 50 MB become
+# 10 MB, and the image must never pick up a stale bin/ or packed/.
+.git
+bin
+packed
+shots
