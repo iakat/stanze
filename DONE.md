@@ -13,4 +13,4 @@ One line per work item, newest last.
 - Client reconnects on its own with a capped backoff and keeps the camera and microphone open.
 - Browser end-to-end run 31 of 31 checks.
 - CSS: the `hidden` attribute is honoured and the lobby page no longer scrolls.
-- `go.mod` on Go 1.27, built with the 1.27.4 toolchain.
+- QUEUE.md and DONE.md are published at https://ocbot-files.ch-test.katia.sh/stanze/ and put there again after each change.
