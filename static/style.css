@@ -1,6 +1,31 @@
 /* A deliberately 1995 conference room: grey everything, bevelled edges,
  * navy title bars. No rounded corners, no shadows, no gradients except the
- * one every window manager shipped. */
+ * one every window manager shipped.
+ *
+ * Two rules hold the whole sheet, and they are measured, not eyeballed:
+ * the body is 15 px and nothing is smaller than 12 px, and every text pair
+ * reaches 7:1 or better, down to the smallest label. On the grey panel that
+ * means ink of #2b2b2b or darker, so the secondary text is a dark grey and
+ * not a mid grey. */
+
+:root {
+  --panel: #c0c0c0;
+  --panel-hi: #dfdfdf;
+  --panel-lo: #808080;
+  --edge: #404040;
+  --ink: #1a1a1a;      /* 9.6:1 on the panel, 16.9:1 on white */
+  --soft: #2b2b2b;     /* 7.8:1 on the panel, 14.2:1 on white */
+  --grey: #565656;     /* 7.4:1 on white */
+  --navy: #000080;     /* 8.8:1 on the panel, 16:1 on white */
+  --navy-soft: #dcebff; /* 7.6:1 at the light end of the title bar */
+  --green: #003a00;    /* 7.2:1 on the panel, 13.1:1 on white */
+  --red: #6b0000;      /* 7.1:1 on the panel, 12.9:1 on white */
+  --amber: #442c00;    /* 7.2:1 on the panel */
+  --fs: 15px;
+  --fs-small: 14px;
+  --fs-smaller: 13px;
+  --fs-tiny: 12px;
+}
 
 /* Arial metrics, because Arial was the desktop sans of the era, but shipped
  * with the page: every browser then puts the same letters on the same pixels,
@@ -32,92 +57,101 @@ html, body {
 
 body {
   background: #008080;
-  color: #000;
-  font: 13px/1.4 "Stanze Sans", "MS Sans Serif", "Tahoma", "Verdana", sans-serif;
+  color: var(--ink);
+  font: var(--fs)/1.45 "Stanze Sans", "MS Sans Serif", "Tahoma", "Verdana", sans-serif;
 }
 
 /* ---------------------------------------------------------------- window */
 
 .window {
-  background: #c0c0c0;
+  background: var(--panel);
   border: 2px solid;
-  border-color: #dfdfdf #000 #000 #dfdfdf;
-  box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 #808080;
+  border-color: var(--panel-hi) #000 #000 var(--panel-hi);
+  box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 var(--panel-lo);
   padding: 2px;
 }
 
 .titlebar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 4px;
-  background: linear-gradient(90deg, #000080, #1084d0);
+  gap: 5px;
+  height: 26px;
+  padding: 0 5px;
+  /* The light end is #084a80 and no lighter: white text on #1084d0 was
+   * four to one, and the gradient has to carry the title and the timer. */
+  background: linear-gradient(90deg, var(--navy), #084a80);
   color: #fff;
   font-weight: bold;
-  font-size: 12px;
+  font-size: var(--fs-smaller);
   user-select: none;
 }
-.tbicon { font-size: 11px; }
+.tbicon { font-size: var(--fs-small); }
 .tbtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tbbuttons { margin-left: auto; display: flex; align-items: center; gap: 3px; }
 .tbcap {
-  width: 16px; height: 14px;
-  background: #c0c0c0;
+  width: 18px; height: 16px;
+  background: var(--panel);
   border: 1px solid;
   border-color: #fff #000 #000 #fff;
   display: inline-block;
 }
-.tbcap.close { text-align: center; line-height: 12px; font-size: 10px; color: #000; }
+.tbcap.close { text-align: center; line-height: 14px; font-size: var(--fs-smaller); color: var(--ink); }
 
-.window-body { padding: 10px 12px 8px; }
+.window-body { padding: 12px 14px 10px; }
 
 /* ---------------------------------------------------------------- controls */
 
 button {
   font: inherit;
-  font-size: 12px;
-  color: #000;
-  background: #c0c0c0;
+  font-size: var(--fs-small);
+  color: var(--ink);
+  background: var(--panel);
   border: 2px solid;
-  border-color: #fff #404040 #404040 #fff;
-  box-shadow: inset 1px 1px 0 #dfdfdf, inset -1px -1px 0 #808080;
-  padding: 2px 10px;
-  min-height: 23px;
+  border-color: #fff var(--edge) var(--edge) #fff;
+  box-shadow: inset 1px 1px 0 var(--panel-hi), inset -1px -1px 0 var(--panel-lo);
+  padding: 3px 12px;
+  min-height: 28px;
   cursor: pointer;
 }
 button:hover { background: #cacaca; }
 button:active {
-  border-color: #404040 #fff #fff #404040;
-  box-shadow: inset 1px 1px 0 #808080;
-  padding: 3px 9px 1px 11px;
+  border-color: var(--edge) #fff #fff var(--edge);
+  box-shadow: inset 1px 1px 0 var(--panel-lo);
+  padding: 4px 11px 2px 13px;
 }
-button:disabled { color: #808080; text-shadow: 1px 1px 0 #fff; cursor: default; }
-button:focus-visible { outline: 1px dotted #000; outline-offset: -4px; }
-button.danger { color: #800000; }
-button[aria-pressed="false"] { color: #404040; }
+/* A disabled button keeps the flat sunken bevel of the era; its label stays
+ * at reading contrast, because a label nobody can read is not a control. */
+button:disabled {
+  color: var(--soft);
+  border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
+  box-shadow: none;
+  cursor: default;
+}
+button:focus-visible { outline: 1px dotted var(--ink); outline-offset: -4px; }
+button.danger { color: var(--red); }
+button[aria-pressed="false"] { color: var(--soft); }
 
 input, select {
   width: 100%;
   font: inherit;
-  font-size: 12px;
-  color: #000;
+  font-size: var(--fs-small);
+  color: var(--ink);
   background: #fff;
   border: 2px solid;
-  border-color: #808080 #fff #fff #808080;
-  padding: 2px 4px;
-  min-height: 22px;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+  padding: 3px 5px;
+  min-height: 26px;
 }
-select { padding: 1px 2px; }
-input:focus, select:focus { outline: 1px dotted #000; outline-offset: -3px; }
+select { padding: 2px 3px; }
+input:focus, select:focus { outline: 1px dotted var(--ink); outline-offset: -3px; }
 
 label {
   display: block;
-  margin-bottom: 8px;
-  font-size: 12px;
+  margin-bottom: 9px;
+  font-size: var(--fs-small);
 }
 label input, label select { margin-top: 3px; }
-label.check { display: flex; align-items: center; gap: 5px; margin: 6px 0; }
+label.check { display: flex; align-items: center; gap: 6px; margin: 7px 0; }
 label.check input { width: auto; min-height: 0; margin: 0; }
 
 .with-button { display: flex; gap: 4px; }
@@ -126,27 +160,27 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 /* ---------------------------------------------------------------- lobby */
 
 .lobby {
-  max-width: 470px;
+  max-width: 520px;
   margin: 7vh auto;
 }
-.hint { margin: 0 0 10px; font-size: 12px; }
+.hint { margin: 0 0 12px; font-size: var(--fs-small); }
 .note {
-  margin: -2px 0 10px;
-  font-size: 11px;
-  color: #404040;
+  margin: -2px 0 12px;
+  font-size: var(--fs-smaller);
+  color: var(--soft);
 }
-.row { display: flex; gap: 6px; margin-top: 10px; }
-.row button { flex: 1; min-height: 28px; }
-.foot { margin: 12px 0 0; font-size: 11px; }
-.foot a { color: #000080; }
+.row { display: flex; gap: 6px; margin-top: 12px; }
+.row button { flex: 1; min-height: 32px; }
+.foot { margin: 14px 0 0; font-size: var(--fs-smaller); }
+.foot a { color: var(--navy); }
 .error {
-  margin: 8px 0 0;
-  padding: 3px 6px;
+  margin: 9px 0 0;
+  padding: 4px 7px;
   background: #fff;
   border: 2px solid;
-  border-color: #808080 #fff #fff #808080;
-  color: #a00000;
-  font-size: 12px;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+  color: var(--red);
+  font-size: var(--fs-small);
 }
 
 /* ---------------------------------------------------------------- stage */
@@ -162,32 +196,37 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px;
+  gap: 5px;
+  padding: 5px;
 }
+/* On the teal desktop no text reaches 7:1, so the status line is a toolbar:
+ * grey, bevelled, and readable. */
 .statusline {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 2px;
-  font-size: 11px;
+  padding: 1px 5px;
+  font-size: var(--fs-smaller);
+  background: var(--panel);
+  border: 2px solid;
+  border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
 }
 .dot {
-  width: 9px; height: 9px;
-  background: #808080;
-  border: 1px solid #404040;
+  width: 10px; height: 10px;
+  background: var(--panel-lo);
+  border: 1px solid var(--edge);
   flex: none;
 }
-.dot.on { background: #00a000; }
-.dot.off { background: #a00000; }
-.muted { color: #404040; }
-.peercount { font-weight: normal; font-size: 11px; margin-right: 6px; }
+.dot.on { background: #007000; }
+.dot.off { background: var(--red); }
+.muted { color: var(--soft); }
+.peercount { font-weight: normal; font-size: var(--fs-smaller); margin-right: 6px; }
 /* The call length sits in the header and stays readable at any width. */
 .timer {
   font-family: monospace;
   font-variant-numeric: tabular-nums;
   font-weight: normal;
-  font-size: 11px;
+  font-size: var(--fs-smaller);
   margin-right: 6px;
 }
 
@@ -195,11 +234,11 @@ label.check input { width: auto; min-height: 0; margin: 0; }
  * code, so the state of the room is visible without opening the stats. */
 .badge {
   margin-left: auto;
-  padding: 1px 8px;
-  font-size: 11px;
+  padding: 1px 9px;
+  font-size: var(--fs-smaller);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #d8ffe0;
+  color: #eaffef;
   background: #1c5b2a;
   border: 1px solid #2f8b45;
   white-space: nowrap;
@@ -209,80 +248,101 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 
 #room-label {
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-smaller);
   font-weight: normal;
-  color: #c8dcff;
+  color: var(--navy-soft);
 }
 
 .room-row {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 4px;
+  gap: 5px;
 }
 
-.chat {
+/* The chat and the stats are the same panel: one border, one header bar. */
+.chat, .stats {
   flex: none;
-  width: 250px;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #c0c0c0;
+  background: var(--panel);
   border: 2px solid;
-  border-color: #dfdfdf #808080 #808080 #dfdfdf;
+  border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
   padding: 1px;
 }
-.chat-head {
-  background: #000080;
+.chat { width: 290px; }
+.stats { width: 260px; }
+.chat-head, .stats-head {
+  background: var(--navy);
   color: #fff;
-  font-size: 11px;
-  padding: 1px 4px;
+  font-size: var(--fs-smaller);
+  padding: 2px 5px;
   flex: none;
 }
-.chat-log {
+.stats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.chat-head .muted { color: var(--navy-soft); }
+.stats-head button {
+  font: inherit;
+  line-height: 1;
+  padding: 1px 5px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  color: var(--navy);
+  border: 1px solid;
+  border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
+  box-shadow: none;
+}
+.chat-log, .stats-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   margin: 1px 0;
-  padding: 2px 4px;
+  padding: 3px 5px;
   list-style: none;
   background: #fff;
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: var(--fs-smaller);
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 .chat-log li { margin: 0; }
-.chat-log .when { color: #808080; margin-right: 3px; }
-.chat-log .who { color: #000080; font-weight: bold; }
+.chat-log .when { color: var(--grey); margin-right: 4px; }
+.chat-log .who { color: var(--navy); font-weight: bold; }
 .chat-form {
   display: flex;
   gap: 2px;
   flex: none;
 }
-.chat-form input { flex: 1; min-width: 0; font-size: 11px; }
-.chat-form button { min-width: 44px; padding: 1px 4px; }
+.chat-form input { flex: 1; min-width: 0; font-size: var(--fs-smaller); }
+.chat-form button { min-width: 50px; padding: 2px 6px; }
 
 .grid {
   flex: 1;
   min-height: 0;
   display: grid;
-  gap: 4px;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 5px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   align-content: center;
   background: #000;
   border: 2px solid;
-  border-color: #404040 #dfdfdf #dfdfdf #404040;
-  padding: 4px;
+  border-color: var(--edge) var(--panel-hi) var(--panel-hi) var(--edge);
+  padding: 5px;
 }
 
 .tile {
   position: relative;
   background: #101010;
   border: 2px solid;
-  border-color: #404040 #dfdfdf #dfdfdf #404040;
+  border-color: var(--edge) var(--panel-hi) var(--panel-hi) var(--edge);
   overflow: hidden;
   aspect-ratio: 16 / 9;
-  min-height: 120px;
+  min-height: 130px;
 }
 .tile video {
   width: 100%;
@@ -293,19 +353,20 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 }
 .tile.mirrored video { transform: scaleX(-1); }
 .tile.screenshare video { object-fit: contain; }
+/* The centre name stands on a black tile, so it is light: 8:1 on #101010. */
 .tile .avatar {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 10px 14px;
-  font-size: clamp(13px, 2.2vw, 22px);
+  padding: 12px 16px;
+  font-size: clamp(15px, 2.2vw, 26px);
   line-height: 1.2;
   letter-spacing: 1px;
   text-align: center;
   text-transform: uppercase;
   overflow-wrap: anywhere;
-  color: #606060;
+  color: #a8a8a8;
 }
 .tile.playing .avatar { display: none; }
 /* The camera is off: the tile keeps the black frame of a disabled track out
@@ -332,16 +393,16 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   display: flex;
   justify-content: space-between;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--fs-smaller);
   pointer-events: none;
 }
 .tile .flags { display: flex; gap: 3px; }
 .tile .flags span,
 .tile .name, .tile .state {
-  background: #c0c0c0;
+  background: var(--panel);
   border: 1px solid;
-  border-color: #fff #404040 #404040 #fff;
-  color: #000;
+  border-color: #fff var(--edge) var(--edge) #fff;
+  color: var(--ink);
   padding: 0 4px;
 }
 .tile .name {
@@ -350,10 +411,10 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tile[data-state="connected"] .state { color: #006000; }
+.tile[data-state="connected"] .state { color: var(--green); }
 .tile[data-state="failed"] .state,
-.tile[data-state="disconnected"] .state { color: #a00000; }
-.tile[data-relay="yes"] .state::after { content: " | relay"; color: #604000; }
+.tile[data-state="disconnected"] .state { color: var(--red); }
+.tile[data-relay="yes"] .state::after { content: " | relay"; color: var(--amber); }
 
 /* sealed rooms: the short code of a guest. It is a card at the foot of the
  * tile, made of OpenMoji drawings and the code in groups of four. It only
@@ -362,20 +423,20 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .tile .sas {
   position: absolute;
   left: 50%;
-  bottom: 30px;
+  bottom: 34px;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
   max-width: calc(100% - 12px);
-  padding: 4px 8px 5px;
+  padding: 5px 9px 6px;
   background: #04120a;
   border: 1px solid #2f8f4a;
   box-shadow: 0 0 0 1px #08160c, 0 4px 12px rgba(0, 0, 0, 0.65);
   font-family: monospace;
-  font-size: 10px;
-  line-height: 1.2;
+  font-size: var(--fs-tiny);
+  line-height: 1.25;
   color: #9cf0b0;
   opacity: 0;
   visibility: hidden;
@@ -386,13 +447,13 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .tile:hover .sas,
 .tile:focus-within .sas { opacity: 1; visibility: visible; }
 .tile .sas-head {
-  font-size: 9px;
+  font-size: var(--fs-tiny);
   letter-spacing: 1px;
   text-transform: uppercase;
   color: #6fbf85;
 }
 .tile .sas-row { display: flex; gap: 3px; }
-.tile .sas-emoji { width: 22px; height: 22px; display: block; }
+.tile .sas-emoji { width: 24px; height: 24px; display: block; }
 .tile .sas-code {
   letter-spacing: 1px;
   color: #d6ffe2;
@@ -414,36 +475,36 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 1px 3px;
-  background: #c0c0c0;
+  padding: 1px 4px;
+  background: var(--panel);
   border: 1px solid;
-  border-color: #fff #404040 #404040 #fff;
-  font-size: 10px;
-  line-height: 12px;
-  color: #000;
+  border-color: #fff var(--edge) var(--edge) #fff;
+  font-size: var(--fs-tiny);
+  line-height: 14px;
+  color: var(--ink);
 }
 .tile .vol-range {
-  width: 72px;
+  width: 84px;
   min-height: 0;
-  height: 14px;
+  height: 16px;
   margin: 0;
   padding: 0;
-  border: 1px solid #808080;
-  background: #dfdfdf;
+  border: 1px solid var(--panel-lo);
+  background: var(--panel-hi);
 }
-.tile .vol-range:focus { outline: 1px dotted #000; outline-offset: -2px; }
-.tile .vol-num { min-width: 32px; text-align: right; }
+.tile .vol-range:focus { outline: 1px dotted var(--ink); outline-offset: -2px; }
+.tile .vol-num { min-width: 36px; text-align: right; }
 
 /* host controls: a three dot button on a remote tile, only for the admin */
 .dots {
   position: absolute;
   top: 4px;
   right: 4px;
-  min-width: 22px;
-  min-height: 20px;
+  min-width: 24px;
+  min-height: 22px;
   padding: 0 4px;
-  line-height: 16px;
-  font-size: 13px;
+  line-height: 18px;
+  font-size: var(--fs);
   display: none;
 }
 body.is-admin .tile[data-peer]:hover .dots,
@@ -452,75 +513,32 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 .tile .menu {
   position: absolute;
-  top: 26px;
+  top: 28px;
   right: 4px;
   z-index: 5;
   display: flex;
   flex-direction: column;
-  background: #c0c0c0;
+  background: var(--panel);
   border: 2px solid;
-  border-color: #dfdfdf #000 #000 #dfdfdf;
+  border-color: var(--panel-hi) #000 #000 var(--panel-hi);
   padding: 2px;
 }
 .tile .menu button {
-  min-width: 140px;
+  min-width: 150px;
   text-align: left;
-  font-size: 11px;
+  font-size: var(--fs-smaller);
   border-width: 0;
   box-shadow: none;
   background: transparent;
-  padding: 2px 6px;
+  padding: 3px 7px;
 }
-.tile .menu button:hover { background: #000080; color: #fff; }
+.tile .menu button:hover { background: var(--navy); color: #fff; }
 
-.stats {
-  flex: none;
-  width: 224px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: #c0c0c0;
-  border: 2px solid;
-  border-color: #dfdfdf #808080 #808080 #dfdfdf;
-  padding: 1px;
-}
-.stats-head {
-  background: #000080;
-  color: #fff;
-  font-size: 11px;
-  padding: 1px 4px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-.stats-head button {
-  font: inherit;
-  line-height: 1;
-  padding: 0 4px;
-  min-width: 0;
-  background: #c0c0c0;
-  color: #000080;
-  border: 1px solid;
-  border-color: #dfdfdf #808080 #808080 #dfdfdf;
-}
-.stats-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  margin: 1px 0;
-  padding: 2px 4px;
-  background: #fff;
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-.srow { margin-bottom: 6px; }
-.sname { font-weight: bold; color: #000080; }
-.sline { color: #303030; }
-.sline.good { color: #006000; }
-.sline.bad { color: #a00000; }
+.srow { margin-bottom: 7px; }
+.sname { font-weight: bold; color: var(--navy); }
+.sline { color: var(--ink); }
+.sline.good { color: var(--green); }
+.sline.bad { color: var(--red); }
 
 .controls {
   display: flex;
@@ -528,13 +546,13 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 4px;
-  background: #c0c0c0;
+  padding: 5px;
+  background: var(--panel);
   border: 2px solid;
-  border-color: #dfdfdf #808080 #808080 #dfdfdf;
+  border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
 }
-.ctrl { min-width: 96px; }
-.pick { display: flex; align-items: center; gap: 4px; margin: 0; font-size: 11px; }
+.ctrl { min-width: 104px; }
+.pick { display: flex; align-items: center; gap: 4px; margin: 0; font-size: var(--fs-smaller); }
 .pick select { width: auto; margin: 0; }
 .pick.check { margin: 0; }
 
@@ -544,14 +562,14 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 
 @media (max-width: 900px) {
   .room-row { flex-direction: column; }
-  .chat { width: auto; height: 150px; }
-  .stats { width: auto; height: 130px; }
+  .chat { width: auto; height: 160px; }
+  .stats { width: auto; height: 140px; }
 }
 
 /* A phone cannot spare a column for the stats, and a narrow strip between the
    tiles and the chat is easy to miss. Under 700 px the panel becomes a sheet
-   that covers the lower part of the screen, with larger text and its own
-   close button, so the numbers can be read with one hand. */
+   that covers the lower part of the screen, with its own close button, so the
+   numbers can be read with one hand. */
 @media (max-width: 700px) {
   .stats {
     position: fixed;
@@ -564,10 +582,8 @@ body.is-admin .tile[data-peer]:focus-within .dots {
     z-index: 40;
     box-shadow: 0 -3px 14px rgba(0, 0, 0, 0.35);
   }
-  .stats-head { font-size: 12px; padding: 4px 8px; }
+  .stats-head { padding: 4px 8px; }
   .stats-body {
-    font-size: 13px;
-    line-height: 1.45;
     padding: 6px 8px;
     -webkit-overflow-scrolling: touch;
   }
