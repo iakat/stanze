@@ -12,11 +12,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -179,25 +180,26 @@ func dec(s string) (opaque, error) {
 
 func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
+// randomRoomID makes a 128 bit name, the same shape the server uses. The first
+// join creates the room, so the probe needs no create route.
+func randomRoomID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)), nil
+}
+
 func main() {
 	addr := flag.String("addr", "http://127.0.0.1:8096", "server base URL")
 	flag.Parse()
 
-	res, err := http.Post(*addr+"/api/new", "application/json", strings.NewReader("{}"))
+	room, err := randomRoomID()
 	if err != nil {
-		fmt.Println("FAIL  server unreachable:", err)
+		fmt.Println("FAIL  no room id:", err)
 		os.Exit(1)
 	}
-	var created struct {
-		Room string `json:"room"`
-	}
-	json.NewDecoder(res.Body).Decode(&created)
-	res.Body.Close()
-	if created.Room == "" {
-		fmt.Println("FAIL  could not create a room")
-		os.Exit(1)
-	}
-	check("room created", true, "")
+	check("room id made", true, "")
 
 	const nameA = "alice-probe-name"
 	const nameB = "bob-probe-name"
@@ -222,15 +224,15 @@ func main() {
 	defer b.conn.Close()
 	defer eve.conn.Close()
 
-	if err := a.join(created.Room, nameA); err != nil {
+	if err := a.join(room, nameA); err != nil {
 		fmt.Println("FAIL  peer A join:", err)
 		os.Exit(1)
 	}
-	if err := b.join(created.Room, nameB); err != nil {
+	if err := b.join(room, nameB); err != nil {
 		fmt.Println("FAIL  peer B join:", err)
 		os.Exit(1)
 	}
-	if err := eve.join(created.Room, "eve-observer-name"); err != nil {
+	if err := eve.join(room, "eve-observer-name"); err != nil {
 		fmt.Println("FAIL  observer join:", err)
 		os.Exit(1)
 	}

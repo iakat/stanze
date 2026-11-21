@@ -24,7 +24,6 @@ type server struct {
 	log      *slog.Logger
 	upgrader websocket.Upgrader
 
-	creates *windowLimiter
 	joins   *windowLimiter
 }
 
@@ -33,7 +32,6 @@ func newServer(cfg *Config, hub *Hub, log *slog.Logger) *server {
 		cfg:     cfg,
 		hub:     hub,
 		log:     log,
-		creates: newWindowLimiter(time.Minute, cfg.CreatePerMin),
 		joins:   newWindowLimiter(time.Minute, 60),
 	}
 	s.upgrader = websocket.Upgrader{
@@ -75,45 +73,6 @@ func clientAddr(r *http.Request, behindProxy bool) string {
 		return r.RemoteAddr
 	}
 	return host
-}
-
-// handleNew creates a room. It is the only route that hands out a room id and
-// it never reveals anything about existing rooms.
-func (s *server) handleNew(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.creates.allow(clientAddr(r, s.cfg.BehindProxy)) {
-		http.Error(w, "too many rooms", http.StatusTooManyRequests)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1024)
-	var in struct {
-		Pass string `json:"pass"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && err.Error() != "EOF" {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if len(in.Pass) > 256 {
-		http.Error(w, "passphrase too long", http.StatusBadRequest)
-		return
-	}
-	id, err := s.hub.create(in.Pass)
-	if err != nil {
-		if err == errRoomLimit {
-			http.Error(w, "too many rooms", http.StatusServiceUnavailable)
-			return
-		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	s.log.Debug("room created", "room", fingerprint(id))
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]string{"room": id})
 }
 
 func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {

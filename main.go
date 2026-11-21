@@ -72,9 +72,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	stop := make(chan struct{})
-	go hub.runReaper(stop)
-
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           handler,
@@ -101,7 +98,6 @@ func main() {
 		log.Info("shutting down")
 	}
 
-	close(stop)
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelShutdown()
 	httpSrv.Shutdown(shutdownCtx)
@@ -110,7 +106,7 @@ func main() {
 	}
 }
 
-// buildHandler wires exactly four routes. Everything else is a 404, so there
+// buildHandler wires the page, the socket, the two docs and the drawings. Everything else is a 404, so there
 // is no path that could list, count or reveal rooms.
 func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	assets, err := loadAssets(cfg.StaticDir)
@@ -119,7 +115,6 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/new", srv.handleNew)
 	mux.HandleFunc("/ws", srv.handleWS)
 
 	var wasmGz []byte

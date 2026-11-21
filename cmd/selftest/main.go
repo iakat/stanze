@@ -71,29 +71,6 @@ func httpDo(method, path string, body string) (int, []byte, error) {
 	return res.StatusCode, b, err
 }
 
-func createRoom(pass string) (string, error) {
-	payload, _ := json.Marshal(map[string]string{"pass": pass})
-	code, body, err := httpDo(http.MethodPost, "/api/new", string(payload))
-	if err != nil {
-		return "", err
-	}
-	if code != http.StatusOK {
-		return "", fmt.Errorf("create room: status %d: %s", code, body)
-	}
-	var out struct {
-		Room string `json:"room"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", err
-	}
-	if len(out.Room) != 26 {
-		return "", fmt.Errorf("room id %q does not look like 128 bit base32", out.Room)
-	}
-	return out.Room, nil
-}
-
-// ---------------------------------------------------------------- signaling
-
 type peerInfo struct {
 	ID string `json:"id"`
 }
@@ -345,15 +322,14 @@ func testHTTPSurface() {
 		report(fmt.Sprintf("all %d non-UI paths return 404", len(paths)), nil)
 	}
 
-	// A created room must not be discoverable after the fact.
-	room, err := createRoom("")
+	// A room name must not be discoverable after the fact.
+	room, err := randomRoomID()
 	if err != nil {
-		report("room creation", err)
+		report("room id", err)
 		return
 	}
-	report("room creation", nil)
 	found := false
-	for _, p := range append(paths, "/api/new", "/api/rooms/"+room, "/room/"+room) {
+	for _, p := range append(paths, "/api/rooms/"+room, "/room/"+room) {
 		code, body, err := httpDo(http.MethodGet, p, "")
 		if err != nil {
 			continue
@@ -368,8 +344,7 @@ func testHTTPSurface() {
 		report("room id never appears in any GET response", nil)
 	}
 
-	code, _, err = httpDo(http.MethodGet, "/api/new", "")
-	report("GET /api/new rejected", errOr(err, code != http.StatusMethodNotAllowed, fmt.Sprintf("status %d", code)))
+	_ = code
 }
 
 func testUnauthorizedJoin() {
@@ -387,11 +362,18 @@ func testUnauthorizedJoin() {
 	}
 
 	// Wrong passphrase on a real room must produce a byte identical answer.
-	room, err := createRoom("secret")
+	// The first join sets the passphrase, so a holder peer keeps it alive.
+	room, err := randomRoomID()
 	if err != nil {
 		report("wrong passphrase rejected", err)
 		return
 	}
+	holder, err := join(room, "secret")
+	if err != nil {
+		report("wrong passphrase rejected", err)
+		return
+	}
+	defer holder.c.close()
 	wrongPass, err := rawJoinMessage(room, "nope")
 	if err != nil {
 		report("wrong passphrase rejected", err)
@@ -512,7 +494,7 @@ func testHardening() {
 }
 
 func testRelay() {
-	room, err := createRoom("")
+	room, err := randomRoomID()
 	if err != nil {
 		report("relay room", err)
 		return
@@ -575,7 +557,7 @@ func testRelay() {
 // server announces peers by id and flags only, and a name sent by an old client
 // is ignored rather than stored or echoed.
 func testNoNameInJoin() {
-	room, err := createRoom("")
+	room, err := randomRoomID()
 	if err != nil {
 		report("no name: room", err)
 		return
@@ -598,8 +580,8 @@ func testNoNameInJoin() {
 }
 
 func testRoomIsolation() {
-	room1, _ := createRoom("")
-	room2, _ := createRoom("")
+	room1, _ := randomRoomID()
+	room2, _ := randomRoomID()
 	a, err := join(room1, "")
 	if err != nil {
 		report("isolation: A joins", err)
@@ -628,7 +610,7 @@ func testRoomIsolation() {
 // testRoomLifetime proves a room is gone as soon as its last peer leaves: the
 // same id joins at once as a new room, so the old passphrase opens nothing.
 func testRoomLifetime() {
-	room, err := createRoom("first-pass")
+	room, err := randomRoomID()
 	if err != nil {
 		report("lifetime: room", err)
 		return
@@ -667,7 +649,7 @@ func testRoomLifetime() {
 }
 
 func testLimits() {
-	room, err := createRoom("")
+	room, err := randomRoomID()
 	if err != nil {
 		report("limits: room", err)
 		return
@@ -908,7 +890,7 @@ func iceFromServer(ice []iceCfg) webrtc.Configuration {
 }
 
 func testWebRTCMesh() {
-	room, err := createRoom("")
+	room, err := randomRoomID()
 	if err != nil {
 		report("webrtc: room", err)
 		return
@@ -963,7 +945,7 @@ func testWebRTCMesh() {
 }
 
 func testTURNRelay() {
-	room, err := createRoom("")
+	room, err := randomRoomID()
 	if err != nil {
 		report("relay: room", err)
 		return

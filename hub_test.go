@@ -1,22 +1,10 @@
 package main
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
-// testClock is the hub clock under test control, so no test sleeps.
-type testClock struct{ t time.Time }
-
-func (c *testClock) now() time.Time          { return c.t }
-func (c *testClock) advance(d time.Duration) { c.t = c.t.Add(d) }
-
-func newTestHub(t *testing.T, ttl time.Duration) (*Hub, *testClock) {
+func newTestHub(t *testing.T) *Hub {
 	t.Helper()
-	h := newHub(&Config{MaxPeers: 8, MaxRooms: 50, EmptyRoomTTL: ttl})
-	c := &testClock{t: time.Unix(1700000000, 0)}
-	h.now = c.now
-	return h, c
+	return newHub(&Config{MaxPeers: 8, MaxRooms: 50})
 }
 
 func joinPeer(t *testing.T, h *Hub, roomID, pass string) (*Peer, *Room) {
@@ -43,7 +31,7 @@ func roomInMap(h *Hub, id string) *Room {
 
 // The last leave must drop the room in the same locked section, not later.
 func TestLastLeaveDropsRoomAtOnce(t *testing.T) {
-	h, _ := newTestHub(t, time.Minute)
+	h := newTestHub(t)
 
 	p, room := joinPeer(t, h, "abc", "")
 	if got := roomCount(h); got != 1 {
@@ -68,7 +56,7 @@ func TestLastLeaveDropsRoomAtOnce(t *testing.T) {
 
 // One of two peers leaving keeps the room and the other peer.
 func TestRoomSurvivesOneLeaveOfTwo(t *testing.T) {
-	h, _ := newTestHub(t, time.Minute)
+	h := newTestHub(t)
 
 	a, _ := joinPeer(t, h, "abc", "")
 	b, _ := joinPeer(t, h, "abc", "")
@@ -90,7 +78,7 @@ func TestRoomSurvivesOneLeaveOfTwo(t *testing.T) {
 // The oldest remaining peer inherits the role when the last admin leaves, and
 // that path still runs for a room that keeps peers.
 func TestAdminReassignedWhenAdminLeaves(t *testing.T) {
-	h, _ := newTestHub(t, time.Minute)
+	h := newTestHub(t)
 
 	a, room := joinPeer(t, h, "abc", "")
 	b, _ := joinPeer(t, h, "abc", "")
@@ -109,66 +97,10 @@ func TestAdminReassignedWhenAdminLeaves(t *testing.T) {
 	}
 }
 
-// A room created ahead of the first join waits for its first peer, then the
-// reaper drops it.
-func TestReaperDropsRoomCreatedAheadOfFirstJoin(t *testing.T) {
-	const ttl = time.Minute
-	h, clock := newTestHub(t, ttl)
-
-	id, err := h.create("open-sesame")
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-
-	clock.advance(ttl / 2)
-	h.reap()
-	if roomInMap(h, id) == nil {
-		t.Fatal("room dropped before its ttl ran out")
-	}
-
-	clock.advance(ttl)
-	h.reap()
-	if roomInMap(h, id) != nil {
-		t.Fatal("room that was never joined survived its ttl")
-	}
-	if got := roomCount(h); got != 0 {
-		t.Fatalf("rooms after reap = %d, want 0", got)
-	}
-}
-
-// The reaper never touches a room with a peer in it, whatever its age.
-func TestReaperKeepsRoomWithPeers(t *testing.T) {
-	h, clock := newTestHub(t, time.Minute)
-
-	joinPeer(t, h, "abc", "")
-	clock.advance(time.Hour)
-	h.reap()
-
-	if roomInMap(h, "abc") == nil {
-		t.Fatal("reaper dropped a room with a peer in it")
-	}
-}
-
-// A room that was created ahead of the first join keeps its passphrase when
-// the first peer joins inside the ttl.
-func TestPreCreatedRoomKeepsItsPassphrase(t *testing.T) {
-	h, _ := newTestHub(t, time.Minute)
-
-	id, err := h.create("open-sesame")
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	joinPeer(t, h, id, "open-sesame")
-
-	if _, err := h.join(id, "wrong", newPeer()); err != errRoomUnavailable {
-		t.Fatalf("join with a wrong passphrase: err = %v, want errRoomUnavailable", err)
-	}
-}
-
 // Everything the room held dies with it: a later join starts from nothing, so
 // no state and a passphrase the newcomer picks.
 func TestRejoinAfterDropStartsFresh(t *testing.T) {
-	h, _ := newTestHub(t, time.Minute)
+	h := newTestHub(t)
 
 	a, room := joinPeer(t, h, "abc", "first-pass")
 	h.leave(a)
