@@ -1728,12 +1728,6 @@ async function flushPending(peer) {
   }
 }
 
-// Duplicate answers arrive after a rejoin and have nothing to complete; only
-// an answer to our own local offer is applied.
-function answerFits(pc) {
-  return pc.signalingState === 'have-local-offer';
-}
-
 // onDescription queues one description per peer. Two offers, or an answer that
 // races a rejoin, would interleave setRemoteDescription and
 // setLocalDescription and leave the pair at "new"; the chain makes them run one
@@ -1753,7 +1747,8 @@ async function applyDescription(peer, type, sdp) {
   // polite side gives way instead.
   peer.ignoreOffer = !peer.polite && collision;
   if (peer.ignoreOffer) return;
-  if (type === 'answer' && !answerFits(pc)) return;
+  // A duplicate answer arrives after a rejoin and completes nothing.
+  if (type === 'answer' && pc.signalingState !== 'have-local-offer') return;
 
   try {
     // Perfect negotiation: the polite side rolls its offer back, so the remote
@@ -2237,10 +2232,6 @@ function addChatLine(name, text, ts) {
   log.appendChild(li);
   while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
-}
-
-function sendChat() {
-  sendSealedChat();
 }
 
 // ---------------------------------------------------------------- sound effects
@@ -2867,10 +2858,6 @@ function sealedSendOpaque(to, obj) {
   send({ t: 'enc', to, b: encOpaque(obj) });
 }
 
-function sealedOpenOpaque(b) {
-  return decOpaque(b);
-}
-
 // pqCall parses one JSON answer of the module and turns any fault into null, so
 // a broken bridge can never throw through an event handler.
 /** @param {(json: string) => string} fn @param {any} input @returns {any} */
@@ -3143,7 +3130,7 @@ function sealedHandleOpaque(from, b) {
   if (!peer) return;
   let msg;
   try {
-    msg = sealedOpenOpaque(b);
+    msg = decOpaque(b);
   } catch {
     return;
   }
@@ -3709,7 +3696,7 @@ function init() {
 
   $('chat-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    sendChat();
+    sendSealedChat();
   });
 
   $('noise-live').addEventListener('change', async () => {
