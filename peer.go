@@ -152,10 +152,11 @@ func (b *tokenBucket) allow() bool {
 // windowLimiter counts events per key inside a fixed window. It is used to
 // slow down room creation and passphrase guessing per client address.
 type windowLimiter struct {
-	mu     sync.Mutex
-	window time.Duration
-	limit  int
-	hits   map[string]*windowEntry
+	mu        sync.Mutex
+	window    time.Duration
+	limit     int
+	hits      map[string]*windowEntry
+	lastSweep time.Time
 }
 
 type windowEntry struct {
@@ -167,6 +168,10 @@ func newWindowLimiter(window time.Duration, limit int) *windowLimiter {
 	return &windowLimiter{window: window, limit: limit, hits: make(map[string]*windowEntry)}
 }
 
+// pruneAt is the number of keys that triggers a sweep of stale entries. A
+// sweep needs no timer of its own: a map that never grows never needs one.
+const pruneAt = 1024
+
 func (l *windowLimiter) allow(key string) bool {
 	if l == nil {
 		return true
@@ -174,6 +179,10 @@ func (l *windowLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	if len(l.hits) >= pruneAt && now.Sub(l.lastSweep) > l.window {
+		l.pruneLocked(now)
+		l.lastSweep = now
+	}
 	e, ok := l.hits[key]
 	if !ok || now.Sub(e.start) > l.window {
 		l.hits[key] = &windowEntry{count: 1, start: now}
@@ -186,10 +195,7 @@ func (l *windowLimiter) allow(key string) bool {
 	return true
 }
 
-func (l *windowLimiter) prune() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
+func (l *windowLimiter) pruneLocked(now time.Time) {
 	for k, e := range l.hits {
 		if now.Sub(e.start) > 2*l.window {
 			delete(l.hits, k)

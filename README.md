@@ -118,7 +118,6 @@ Every flag has an environment variable equivalent. Flags win.
 | `-create-per-min` | `CREATE_PER_MIN` | `10` | room creations per client IP per minute |
 | `-max-msg-bytes` | `MAX_MSG_BYTES` | `262144` | largest accepted WebSocket message (SDP + ICE) |
 | `-empty-room-ttl` | `EMPTY_ROOM_TTL` | `2m` | how long a room created before the first join waits for its first peer |
-| `-join-timeout` | `JOIN_TIMEOUT` | `10s` | WebSocket must send `join` within this time |
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
