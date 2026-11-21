@@ -15,6 +15,7 @@ import (
 const (
 	wsReadTimeout  = 90 * time.Second
 	wsWriteTimeout = 10 * time.Second
+	joinTimeout    = 10 * time.Second
 )
 
 type server struct {
@@ -156,7 +157,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer p.close()
 	go p.writeLoop(conn, done)
 
-	conn.SetReadDeadline(time.Now().Add(s.cfg.JoinTimeout))
+	conn.SetReadDeadline(time.Now().Add(joinTimeout))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 	})

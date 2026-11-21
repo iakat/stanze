@@ -74,19 +74,6 @@ func main() {
 
 	stop := make(chan struct{})
 	go hub.runReaper(stop)
-	go func() {
-		t := time.NewTicker(10 * time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-				srv.creates.prune()
-				srv.joins.prune()
-			}
-		}
-	}()
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,

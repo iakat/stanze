@@ -30,7 +30,6 @@ type Config struct {
 	MaxRooms      int
 	MaxMsgBytes   int64
 	EmptyRoomTTL  time.Duration
-	JoinTimeout   time.Duration
 	CreatePerMin  int
 	BehindProxy   bool
 	StaticDir     string
@@ -115,7 +114,6 @@ func loadConfig(args []string) (*Config, error) {
 	fs.IntVar(&cfg.CreatePerMin, "create-per-min", envInt("CREATE_PER_MIN", 10), "room creations allowed per client IP per minute")
 	fs.Int64Var(&cfg.MaxMsgBytes, "max-msg-bytes", int64(envInt("MAX_MSG_BYTES", 256*1024)), "maximum websocket message size in bytes")
 	fs.DurationVar(&cfg.EmptyRoomTTL, "empty-room-ttl", envDur("EMPTY_ROOM_TTL", 2*time.Minute), "how long a room that was never joined waits for its first peer")
-	fs.DurationVar(&cfg.JoinTimeout, "join-timeout", envDur("JOIN_TIMEOUT", 10*time.Second), "time a websocket may stay open before sending join")
 	fs.BoolVar(&cfg.BehindProxy, "behind-proxy", envStr("BEHIND_PROXY", "") != "", "trust X-Forwarded-For for rate limiting (only behind a proxy you control)")
 	fs.StringVar(&cfg.StaticDir, "static-dir", envStr("STATIC_DIR", ""), "serve the web client from this directory instead of the embedded copy")
 	fs.StringVar(&cfg.DocsDir, "docs-dir", envStr("DOCS_DIR", ""), "serve QUEUE.md and DONE.md from this directory (empty disables the routes)")
