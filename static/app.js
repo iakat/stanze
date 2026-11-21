@@ -74,7 +74,8 @@ const state = {
   revoked: new Map(),  // fingerprint -> {fp, label, at}, a pin that was replaced
   identityFailures: 0, // a peer that sent no identity or could not prove one
   worker: null,        // /e2e-transform.js, one per sealed call
-  keyWait: new Map(),  // pair -> resolve, waiting for the worker to import keys
+  keyWait: new Map(),  // pair -> {gen, resolve}, waiting for the worker to import keys
+  keyGen: 0,           // one rising number for every key agreement on the page
   frames: {},          // pair|dir|kind -> last counter message of the worker
   encryptFrames: 0,
   decryptFrames: 0,
@@ -1497,6 +1498,8 @@ function ensurePeer(id, mic, cam) {
     sentConfirm: false,
     keyPromise: null,
     keysInstalled: false,
+    gen: 0,           // bumps on every new key agreement on this pair
+    ctlPending: [],   // hello/ok held until the pub and the keys are here
     seqOut: 0, // sealed chat/name frames sent on this pair
     seqIn: 0,  // the last one opened, inbound only grows
     mySig: '',
@@ -3135,10 +3138,12 @@ function startSealedWorker() {
       state.frames[msg.pair + '|' + msg.dir + (msg.kind ? '|' + msg.kind : '')] = msg;
       paintFrameCounters();
     } else if (msg.type === 'keys-ok') {
-      const resolve = state.keyWait.get(msg.pair);
-      if (resolve) {
+      const waiting = state.keyWait.get(msg.pair);
+      // An import that belongs to an older handshake must not open this gate:
+      // the slot it filled may already hold newer keys.
+      if (waiting && waiting.gen === msg.gen) {
         state.keyWait.delete(msg.pair);
-        resolve(true);
+        waiting.resolve(true);
       }
     } else if (msg.type === 'sample') {
       if (state.samples.length < 40) state.samples.push(msg);
@@ -3146,10 +3151,10 @@ function startSealedWorker() {
       state.workerErrors.push(msg.msg || 'worker error');
       // A key import that failed resolves the gate false. The pair says so and
       // never builds a connection that can only drop frames.
-      const fail = msg.pair && state.keyWait.get(msg.pair);
-      if (fail) {
+      const waiting = msg.pair && state.keyWait.get(msg.pair);
+      if (waiting && (msg.gen === undefined || waiting.gen === msg.gen)) {
         state.keyWait.delete(msg.pair);
-        fail(false);
+        waiting.resolve(false);
         say('the frame keys did not install; the link stays without video');
       }
     }
@@ -3206,6 +3211,14 @@ function sealedRefuse(peer, why) {
 // case is "this device was reset", which re-pins and starts over; the automatic
 // case is a peer that comes back with a fresh session id.
 function sealedRestart(peer, resend) {
+  // A restart is a new generation: every key import still in flight belongs to
+  // the old one and must not resolve the gate of this one.
+  peer.gen = ++state.keyGen;
+  const waiting = state.keyWait.get(pairLabel(peer.id));
+  if (waiting) {
+    state.keyWait.delete(pairLabel(peer.id));
+    waiting.resolve(false);
+  }
   wipeKeys(peer);
   peer.pub = null;
   peer.transcript = null;
@@ -3221,6 +3234,9 @@ function sealedRestart(peer, resend) {
   peer.seqOut = 0;
   peer.seqIn = 0;
   peer.announcedName = '';
+  // Frames held for the old pair can never open with the new keys.
+  peer.appPending = [];
+  peer.ctlPending = [];
   if (peer.pc) {
     peer.pc.close();
     peer.pc = null;
@@ -3236,14 +3252,14 @@ function sealedRestart(peer, resend) {
 function sealedOnPub(peer, msg) {
   if (peer.pub && peer.pub.sid && msg.sid && peer.pub.sid !== msg.sid) sealedRestart(peer, false);
   peer.pub = { x: msg.x, m: msg.m, id: msg.id || '', sid: msg.sid || '' };
-  if (peer.keys || peer.keyPromise) return;
   if (!peer.pub.id || !peer.pub.sid) {
     sealedRefuse(peer, 'sent no identity');
     return;
   }
-  if (String(state.self) < String(peer.id)) {
+  if (!peer.keys && !peer.keyPromise && String(state.self) < String(peer.id)) {
     sealedInitiate(peer).catch(() => sealedRefuse(peer, 'handshake failed'));
   }
+  sealedDrainCtl(peer);
 }
 
 // sealedProved records that the peer's signature over this transcript checked
@@ -3301,6 +3317,10 @@ function sealedHoldKeys(peer, out) {
 // frame always meets a key.
 function sealedInstallKeys(peer) {
   peer.keysInstalled = true;
+  // The generation rises across the whole page, not per peer: a pair id that
+  // comes back in a new peer object still gets a newer number than the worker
+  // has seen, so its keys are never mistaken for a stale import.
+  const gen = (peer.gen = ++state.keyGen);
   const pair = pairLabel(peer.id);
   return new Promise((resolve) => {
     if (!state.worker) {
@@ -3308,9 +3328,10 @@ function sealedInstallKeys(peer) {
       resolve(false);
       return;
     }
-    state.keyWait.set(pair, resolve);
+    state.keyWait.set(pair, { gen, resolve });
     state.worker.postMessage({
-      type: 'keys', pair, peer: peer.id, enc: b64e(peer.keys.sendMedia), dec: b64e(peer.keys.recvMedia),
+      type: 'keys', pair, peer: peer.id, gen,
+      enc: b64e(peer.keys.sendMedia), dec: b64e(peer.keys.recvMedia),
     });
   });
 }
@@ -3406,7 +3427,9 @@ async function sealedRespond(peer, msg) {
     k: 'ok', c: out.confirm, id: state.idKey.pub, sid: state.sid, sig,
   });
   // The pair is not ready yet: the initiator's own ok still has to prove it,
-  // which is the half that used to be missing.
+  // which is the half that used to be missing. That ok may have arrived while
+  // this hello was still being answered, so the hold is drained here.
+  sealedDrainCtl(peer);
 }
 
 // sealedOnProof is an `ok` from the peer, on either side. Nothing about the
@@ -3417,7 +3440,10 @@ async function sealedOnProof(peer, msg) {
   if (!peer.keys || !peer.pub || !peer.transcript) return;
   if (peer.confirmed) return;
   if (msg.id !== peer.pub.id || msg.sid !== peer.pub.sid) {
-    sealedRefuse(peer, 'answered with another identity');
+    // A proof for another session is the old handshake arriving late, not an
+    // attack: the gate below checks the signature over *this* transcript, so
+    // a real mismatch still fails there. Dropping it here would tear down the
+    // fresh pair whenever a rejoin crossed its own tail.
     return;
   }
   const res = sealedProve(peer, msg);
@@ -3458,6 +3484,19 @@ async function sealedOnProof(peer, msg) {
   });
 }
 
+// sealedHoldCtl keeps a handshake frame that arrived before the state it needs.
+// It is replayed in arrival order once the pub or the keys are in place.
+function sealedHoldCtl(peer, msg) {
+  if (peer.ctlPending.length < 8) peer.ctlPending.push(msg);
+}
+
+function sealedDrainCtl(peer) {
+  if (!peer.ctlPending.length) return;
+  const held = peer.ctlPending;
+  peer.ctlPending = [];
+  for (const msg of held) sealedHandleOpaque(peer.id, encOpaque(msg));
+}
+
 function sealedHandleOpaque(from, b) {
   const peer = state.peers.get(from);
   if (!peer) return;
@@ -3472,12 +3511,16 @@ function sealedHandleOpaque(from, b) {
       sealedOnPub(peer, msg);
       break;
     case 'hello':
-      if (!peer.pub) return;
+      if (!peer.pub) return sealedHoldCtl(peer, msg);
       if (String(state.self) < String(from)) return; // we are the initiator
       if (peer.keys || peer.keyPromise) return; // duplicate hello, keys already set
       sealedRespond(peer, msg).catch(() => sealedRefuse(peer, 'handshake failed'));
       break;
     case 'ok':
+      // The initiator sends its hello and its own proof back to back. Both
+      // proofs need the keys of our side, and those are agreed only when the
+      // hello is answered, so an early one is held, never dropped.
+      if (!peer.keys || !peer.pub || !peer.transcript) return sealedHoldCtl(peer, msg);
       sealedOnProof(peer, msg).catch(() => sealedRefuse(peer, 'handshake failed'));
       break;
     case 'key':

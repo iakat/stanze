@@ -74,20 +74,31 @@ self.onmessage = async (event) => {
   if (msg.type !== 'keys') return;
   let slot = KEYS.get(msg.pair);
   if (!slot) {
-    slot = {};
+    slot = { gen: 0 };
     KEYS.set(msg.pair, slot);
   }
-  try {
-    if (msg.enc) {
-      slot.enc = await crypto.subtle.importKey('raw', b64d(msg.enc), { name: 'AES-GCM' }, false, ['encrypt']);
+  // Imports for one pair run one after the other, and an older generation that
+  // lands late never overwrites a newer one. Rejoins race here otherwise: the
+  // two ends can end up holding keys from different handshakes.
+  const gen = Number(msg.gen) || 0;
+  slot.chain = (slot.chain || Promise.resolve()).then(async () => {
+    if (gen < slot.gen) return;
+    slot.gen = gen;
+    try {
+      if (msg.enc) {
+        slot.enc = await crypto.subtle.importKey('raw', b64d(msg.enc), { name: 'AES-GCM' }, false, ['encrypt']);
+      }
+      if (msg.dec) {
+        slot.dec = await crypto.subtle.importKey('raw', b64d(msg.dec), { name: 'AES-GCM' }, false, ['decrypt']);
+      }
+      self.postMessage({
+        type: 'keys-ok', pair: msg.pair, peer: msg.peer, gen,
+        enc: !!slot.enc, dec: !!slot.dec,
+      });
+    } catch (err) {
+      self.postMessage({ type: 'error', where: 'keys', pair: msg.pair, gen, msg: String(err) });
     }
-    if (msg.dec) {
-      slot.dec = await crypto.subtle.importKey('raw', b64d(msg.dec), { name: 'AES-GCM' }, false, ['decrypt']);
-    }
-    self.postMessage({ type: 'keys-ok', pair: msg.pair, peer: msg.peer, enc: !!slot.enc, dec: !!slot.dec });
-  } catch (err) {
-    self.postMessage({ type: 'error', where: 'keys', pair: msg.pair, msg: String(err) });
-  }
+  });
 };
 
 async function transformFrame(frame, controller, options) {
