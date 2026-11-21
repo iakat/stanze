@@ -203,6 +203,9 @@ async function stats(page) {
 
     // ---- join: the camera and the microphone are on from the first second
     await until(pageA, () => document.querySelectorAll('.tile').length >= 1, null, 30000, 'A local tile');
+    // The tile is drawn before the device answer arrives, so wait for the join
+    // to finish asking before reading the tracks.
+    await until(pageA, () => state.micTrack && state.camTrack, null, 30000, 'A camera and microphone');
     const localA = await pageA.evaluate(snapshot);
     check('A getUserMedia produced a live local preview', localA.locals.length === 1 && localA.locals[0].w > 0 && !localA.locals[0].paused,
       JSON.stringify(localA.locals[0] || {}));
@@ -373,13 +376,16 @@ async function stats(page) {
     await pageA.click('#mic-btn');
     await pageA.click('#cam-btn');
     const toggled = await pageA.evaluate(() => ({
-      micTrack: state.micTrack ? state.micTrack.enabled : null,
+      // The microphone stays live and is muted on its gain, so a toggle never
+      // has to reopen the device.
+      micOn: state.mic,
+      micGain: state.micGain ? state.micGain.gain.value : null,
       camTrack: state.camTrack ? state.camTrack.enabled : null,
       micBtn: document.getElementById('mic-btn').textContent,
       camBtn: document.getElementById('cam-btn').textContent,
       prefs: [localStorage.getItem('rooms.mic'), localStorage.getItem('rooms.cam')],
     }));
-    check('mic toggle disables the audio track', toggled.micTrack === false && /off/.test(toggled.micBtn),
+    check('mic toggle mutes the microphone and turns it off', toggled.micOn === false && toggled.micGain === 0 && /off/.test(toggled.micBtn),
       JSON.stringify(toggled));
     check('camera toggle disables the video track', toggled.camTrack === false && /off/.test(toggled.camBtn),
       JSON.stringify(toggled));
@@ -436,9 +442,11 @@ async function stats(page) {
       info.stopped = state.lostSource === null;
       return info;
     });
-    check('the lost connection cue is a 4 s loop of one calm pad',
-      cue.started && cue.loop === true && cue.dur >= 4 && cue.dur <= 5, JSON.stringify(cue));
-    check('the lost cue is mono and band limited', cue.channels === 1 && cue.rate === 48000,
+    check('the lost connection cue is an 8 s loop of two soft chimes',
+      cue.started && cue.loop === true && cue.dur >= 8 && cue.dur <= 9, JSON.stringify(cue));
+    // Chromium decodes Opus at its own rate here, so only the mono shape and
+    // the loop window are fixed expectations.
+    check('the lost cue is a mono loop of the expected window', cue.channels === 1 && cue.window >= 7900 && cue.window <= 8100,
       cue.channels + 'ch ' + cue.rate + ' Hz, window ' + cue.window + ' ms');
     check('a second reconnect attempt does not stack a second cue', cue.same === true);
     check('the loop point is seamless (no step bigger than the waveform itself)',
@@ -466,7 +474,9 @@ async function stats(page) {
         return orig(constraints);
       };
     });
-    await pageA.goto(BASE + '/#r=' + room, { waitUntil: 'load', timeout: 60000 });
+    // A reload is what makes the stored choice load again; navigating to the
+    // same fragment would only scroll.
+    await pageA.reload({ waitUntil: 'load', timeout: 60000 });
     const restored = await pageA.evaluate(() => ({
       prefMic: state.prefMic,
       prefCam: state.prefCam,

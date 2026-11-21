@@ -235,6 +235,21 @@ without a camera. Note that a strict `script-src 'self'` CSP blocks Playwright's
 `page.waitForFunction`, which evaluates inside the page; the script polls with
 `page.evaluate` instead.
 
+`tools/smoke.js` is the quick client check. It is small on purpose: a fresh
+page joins a new room with fake devices, and the test fails on the first
+uncaught exception or console error, with the stack. That catches the faults a
+missing element check never sees, where the join throws and the page just sits
+there. It also sends one chat line, toggles the microphone and the camera, opens
+the stats panel, joins a second peer and moves one volume slider, then leaves.
+`jsconfig.json` type checks the client with `tsc --checkJs`; a new error fails
+the check.
+
+```sh
+make typecheck     # tsc -p . over static/app.js, no emit
+make smoke         # needs a server on ROOMSBASE and PW=playwright-core
+make check         # typecheck, then smoke
+```
+
 ## Limits and deliberate omissions
 
 - Mesh topology: upload bandwidth grows with the number of peers, which is why
