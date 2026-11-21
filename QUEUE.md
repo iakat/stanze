@@ -10,6 +10,10 @@ One line per work item. New work goes to the bottom.
 - Choose P2P only or relay only before the join (katia).
 - Screen sharing with audio, plus a choice of resolution and frame rate (katia).
 - Funny sound effects for the room events: join, leave, mic on, mic off (katia).
+- Remember the visitor name in the browser and prefill it on the next visit (coderobe; written in the tree, not deployed yet).
+- Accept arbitrary room names and prefill a random 128 bit id for a private room (coderobe; written in the tree, not deployed yet).
+- Mirror the own camera preview by default with a toggle, and keep remote tiles unmirrored (coderobe; written in the tree, not deployed yet).
+- Deploy the current tree and test it in a browser; the live site is older than the tree (custom names, media path, screen share, quality, rnnoise, 1990s look, mirror).
 - Give the client a 1990s software look (katia, confirmed GO 12:52).
 - Add host controls: mute or remove one peer from the room.
 - Test TURN allocations over plain HTTP, not only through the TLS proxy.
