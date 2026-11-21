@@ -7,7 +7,7 @@ TSC ?= /data/workspace/tools/tscheck/node_modules/.bin/tsc
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build selftest run test typecheck smoke check clean
+.PHONY: all build selftest run test typecheck smoke sealed check clean
 
 all: build selftest
 
@@ -33,6 +33,11 @@ typecheck:
 smoke:
 	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
 	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) $(NODE)/node tools/smoke.js
+
+# Two browsers in a sealed room: handshake, media frames, sealed chat, audit.
+sealed:
+	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
+	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) OUTDIR=$(OUTDIR) $(NODE)/node tools/pq-browser-e2e.js
 
 # What a normal check runs: the types first, then the browser.
 check: typecheck smoke

@@ -165,6 +165,22 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .muted { color: #404040; }
 .peercount { font-weight: normal; font-size: 11px; margin-right: 6px; }
 
+/* The sealed badge sits at the far end of the status line and carries the short
+ * code, so the state of the room is visible without opening the stats. */
+.badge {
+  margin-left: auto;
+  padding: 1px 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #d8ffe0;
+  background: #1c5b2a;
+  border: 1px solid #2f8b45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #room-label {
   font: inherit;
   font-size: 11px;
@@ -294,6 +310,28 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .tile[data-state="disconnected"] .state { color: #a00000; }
 .tile[data-relay="yes"] .state::after { content: " | relay"; color: #604000; }
 
+/* sealed rooms: the short code under a guest, and a green frame once the keys
+ * of that pair are confirmed. The attribute is only set in sealed mode, so a
+ * plain room is drawn exactly as before. */
+.tile .sas {
+  position: absolute;
+  left: 4px;
+  bottom: 26px;
+  max-width: calc(100% - 8px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 11px;
+  color: #9cf0b0;
+  background: #08160c;
+  border: 1px solid #1c5b2a;
+  padding: 0 4px;
+}
+.tile[data-e2e="ready"] { box-shadow: inset 0 0 0 2px #1c5b2a; }
+.tile[data-e2e="handshake"] { box-shadow: inset 0 0 0 2px #8a7a1c; }
+.tile[data-e2e="failed"] { box-shadow: inset 0 0 0 2px #a00000; }
+
 /* per peer volume: a small slider in the top left corner, so the three dot
  * menu keeps its own corner on the right and the hover still works */
 .tile .vol {
@@ -379,6 +417,20 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   font-size: 11px;
   padding: 1px 4px;
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.stats-head button {
+  font: inherit;
+  line-height: 1;
+  padding: 0 4px;
+  min-width: 0;
+  background: #c0c0c0;
+  color: #000080;
+  border: 1px solid;
+  border-color: #dfdfdf #808080 #808080 #dfdfdf;
 }
 .stats-body {
   flex: 1;
@@ -394,6 +446,8 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .srow { margin-bottom: 6px; }
 .sname { font-weight: bold; color: #000080; }
 .sline { color: #303030; }
+.sline.good { color: #006000; }
+.sline.bad { color: #a00000; }
 
 .controls {
   display: flex;
@@ -419,6 +473,31 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   .room-row { flex-direction: column; }
   .chat { width: auto; height: 150px; }
   .stats { width: auto; height: 130px; }
+}
+
+/* A phone cannot spare a column for the stats, and a narrow strip between the
+   tiles and the chat is easy to miss. Under 700 px the panel becomes a sheet
+   that covers the lower part of the screen, with larger text and its own
+   close button, so the numbers can be read with one hand. */
+@media (max-width: 700px) {
+  .stats {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: auto;
+    max-height: 55vh;
+    z-index: 40;
+    box-shadow: 0 -3px 14px rgba(0, 0, 0, 0.35);
+  }
+  .stats-head { font-size: 12px; padding: 4px 8px; }
+  .stats-body {
+    font-size: 13px;
+    line-height: 1.45;
+    padding: 6px 8px;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 @media (max-width: 560px) {

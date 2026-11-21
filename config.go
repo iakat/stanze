@@ -36,6 +36,11 @@ type Config struct {
 	StaticDir     string
 	DocsDir       string
 	AllowedOrigin string
+	// E2E keeps the server blind even for a plain client: every name is
+	// replaced by "guest", plaintext chat is dropped and no room history is
+	// kept. Sealed rooms do not need it; their names, chat and media stay in
+	// `enc` frames, which the relay forwards in both modes.
+	E2E bool
 }
 
 func envStr(key, def string) string {
@@ -120,6 +125,7 @@ func loadConfig(args []string) (*Config, error) {
 	fs.StringVar(&cfg.StaticDir, "static-dir", envStr("STATIC_DIR", ""), "serve the web client from this directory instead of the embedded copy")
 	fs.StringVar(&cfg.DocsDir, "docs-dir", envStr("DOCS_DIR", ""), "serve QUEUE.md and DONE.md from this directory (empty disables the routes)")
 	fs.StringVar(&cfg.AllowedOrigin, "allowed-origin", envStr("ALLOWED_ORIGIN", ""), "extra allowed websocket Origin (default: same host only)")
+	fs.BoolVar(&cfg.E2E, "e2e", envStr("E2E", "") != "", "hide names, plaintext chat and room history from the server even for plain clients (sealed rooms work without it)")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err

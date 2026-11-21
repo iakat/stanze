@@ -20,6 +20,11 @@ type Peer struct {
 	mic bool
 	cam bool
 
+	// sealed says the client seals its names, chat and media end to end. The
+	// flag is what lets the other peers tell a guest that uses the other mode
+	// apart from a broken link; it protects no content by itself.
+	sealed bool
+
 	// kicked marks a peer that was removed by an admin, so the room log
 	// shows the kick and not a second, plain leave.
 	kicked atomic.Bool
@@ -70,11 +75,12 @@ func (p *Peer) close() {
 }
 
 type peerInfo struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Mic   bool   `json:"mic"`
-	Cam   bool   `json:"cam"`
-	Admin bool   `json:"admin,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Mic    bool   `json:"mic"`
+	Cam    bool   `json:"cam"`
+	Admin  bool   `json:"admin,omitempty"`
+	Sealed bool   `json:"sealed,omitempty"`
 }
 
 type iceServer struct {
@@ -103,6 +109,14 @@ type clientMsg struct {
 
 	// text is one chat line.
 	Text string `json:"text,omitempty"`
+
+	// b is an opaque, already encrypted payload for another peer or for the
+	// whole room. The server never decodes it.
+	B string `json:"b,omitempty"`
+
+	// sealed marks a client that seals its own names, chat and media. It is a
+	// mode announcement for the other peers, never a claim about their media.
+	Sealed bool `json:"sealed,omitempty"`
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
@@ -127,6 +141,9 @@ type serverMsg struct {
 	Chat      []chatLine      `json:"chat,omitempty"`
 	Code      string          `json:"code,omitempty"`
 	Ice       []iceServer     `json:"ice,omitempty"`
+
+	// b is relayed verbatim from another peer.
+	B string `json:"b,omitempty"`
 }
 
 // tokenBucket is a small per-connection message limiter.
