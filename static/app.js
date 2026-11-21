@@ -52,6 +52,7 @@ const state = {
   fatal: '',
   statsTimer: null,
   statsBusy: false,
+  statHist: [],       // one sample a second, for the graph in the stats panel
   callStart: 0,       // ms at the join, for the header timer
   callTimer: null,
   sfxCtx: null,
@@ -61,6 +62,7 @@ const state = {
   lostWanted: false,
   speakTimer: null,   // the green light on each tile while a person talks
   ownSpoke: null,
+  spotlight: '',       // peer id or 'self' while one guest holds the large area
 
   // Sealed room state, live for the whole call: the worker, the identity and
   // the frame counters belong to one join and die with it.
@@ -112,8 +114,10 @@ const state = {
  *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
  *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, 'link-dot': HTMLElement,
  *   'link-text': HTMLElement, 'sealed-badge': HTMLElement, grid: HTMLElement,
+ *   'stage-main': HTMLElement, 'stage-rail': HTMLElement,
  *   'pin-count': HTMLElement,
- *   'stats-panel': HTMLElement,
+ *   'stats-panel': HTMLElement, 'stats-graph-box': HTMLElement,
+ *   'stats-graph': HTMLCanvasElement, 'stats-graph-note': HTMLElement,
  *   'stats-body': HTMLElement, 'chat-log': HTMLElement, 'chat-form': HTMLFormElement,
  *   'chat-text': HTMLInputElement, 'chat-note': HTMLElement, 'mic-btn': HTMLButtonElement,
  *   'chat-panel': HTMLElement, 'file-btn': HTMLButtonElement, 'file-input': HTMLInputElement,
@@ -276,8 +280,72 @@ function makeTile(id, name, local = false) {
   // only ever carries pictures and stays muted.
   if (!local) tile.querySelector('video').muted = true;
   if (!local) wireDots(tile);
-  $('grid').appendChild(tile);
+  $('stage-main').appendChild(tile);
   return tile;
+}
+
+// ---------------------------------------------------------------- stage layout
+
+// stageTiles is every tile in a stable order: the own preview first, then the
+// guests in the order they joined. The order of the two zones follows it, so a
+// relayout never reshuffles the room.
+function stageTiles() {
+  const out = [];
+  const self = document.querySelector('.tile[data-local="yes"]');
+  if (self) out.push(self);
+  for (const peer of state.peers.values()) if (peer.tile) out.push(peer.tile);
+  return out;
+}
+
+// tileHasPicture answers "does this tile show a moving picture now". A camera
+// that is off, a track that the sender muted and a track that stopped all say
+// no, and that guest belongs in the rail as a row.
+function tileHasPicture(tile) {
+  if (!tile || tile.classList.contains('camoff')) return false;
+  const video = tile.querySelector('video');
+  const stream = video && video.srcObject;
+  if (!stream || typeof stream.getVideoTracks !== 'function') return false;
+  return stream.getVideoTracks().some((track) => track.readyState === 'live' && !track.muted);
+}
+
+// spotlightTile is the one tile that holds the large area while the spotlight
+// is on. A guest that left takes the spotlight with it.
+function spotlightTile() {
+  if (!state.spotlight) return null;
+  if (state.spotlight === 'self') return document.querySelector('.tile[data-local="yes"]');
+  for (const peer of state.peers.values()) {
+    if (peer.id === state.spotlight) return peer.tile;
+  }
+  return null;
+}
+
+// layoutStage moves the existing tiles between the large area and the rail. A
+// tile keeps its node, so its video element keeps its stream and its sliders
+// keep their listener. Without a spotlight, the tiles with a picture take the
+// large area and the rest become compact rows.
+function layoutStage() {
+  const main = $('stage-main');
+  const rail = $('stage-rail');
+  if (!main || !rail) return;
+  const spot = spotlightTile();
+  if (state.spotlight && !spot) state.spotlight = '';
+  for (const tile of stageTiles()) {
+    const big = spot ? tile === spot : tileHasPicture(tile);
+    const host = big ? main : rail;
+    if (tile.parentElement !== host) host.appendChild(tile);
+    tile.classList.toggle('spot', big && !!spot);
+  }
+  const alone = main.childElementCount === 1 ? 'yes' : 'no';
+  if (main.dataset.alone !== alone) main.dataset.alone = alone;
+  main.hidden = main.childElementCount === 0;
+  rail.hidden = rail.childElementCount === 0;
+}
+
+// setSpotlight puts one guest alone in the large area, or ends the spotlight
+// when that guest already holds it.
+function setSpotlight(id) {
+  state.spotlight = id && state.spotlight !== id ? id : '';
+  layoutStage();
 }
 
 // ---------------------------------------------------------------- volume
@@ -327,6 +395,7 @@ function applyFlags(tile, mic, cam, admin) {
   // A camera that is off must show the centre name again. The last frame of a
   // disabled track is black, so the tile can not stay in the playing state.
   tile.classList.toggle('camoff', cam === false);
+  tile.dataset.mic = mic === false ? 'off' : 'on';
   const box = tile.querySelector('.flags');
   if (!box) return;
   const out = [];
@@ -339,6 +408,9 @@ function applyFlags(tile, mic, cam, admin) {
     chip.textContent = text;
     box.appendChild(chip);
   }
+  // The camera flag decides the zone of this tile: a picture goes to the large
+  // area, a row without one goes to the rail.
+  layoutStage();
 }
 
 // ---------------------------------------------------------------- host control
@@ -932,11 +1004,12 @@ function paintSelfCam(on) {
     if (video.srcObject !== stream) video.srcObject = stream;
     self.classList.add('playing');
     video.play().catch(() => {});
-    return;
+  } else {
+    self.classList.remove('playing');
+    try { video.pause(); } catch { /* not playing */ }
+    video.srcObject = null;
   }
-  self.classList.remove('playing');
-  try { video.pause(); } catch { /* not playing */ }
-  video.srcObject = null;
+  layoutStage();
 }
 
 // adoptCam makes one camera track the live video. While a screen is shared the
@@ -1354,6 +1427,7 @@ function applyMirror() {
   tile.classList.toggle('screenshare', !!state.screen);
   const badge = tile.querySelector('.state');
   if (badge) badge.textContent = state.screen ? 'your screen' : 'you';
+  layoutStage();
 }
 
 // ---------------------------------------------------------------- screen share
@@ -1530,6 +1604,7 @@ function ensurePeer(id, mic, cam) {
   applyFlags(peer.tile, peer.mic, peer.cam);
   wireVolume(peer);
   state.peers.set(id, peer);
+  layoutStage();
   updateCount();
   return peer;
 }
@@ -1587,6 +1662,12 @@ function connectPeer(id, initiator, mic, cam) {
     if (video.srcObject !== stream) video.srcObject = stream;
     peer.tile.classList.add('playing');
     video.play().catch(() => {});
+    // A sender that stops its camera mutes the track here instead of ending
+    // it, so both edges of the track move the guest between the zones.
+    track.addEventListener('mute', () => layoutStage());
+    track.addEventListener('unmute', () => layoutStage());
+    track.addEventListener('ended', () => layoutStage());
+    layoutStage();
   };
 
   pc.onconnectionstatechange = () => {
@@ -1622,6 +1703,7 @@ function setPeerState(peer, text) {
   // data attribute only.
   if (peer.tile) peer.tile.dataset.state = text;
   if ((text === 'failed' || text === 'closed') && peer.tile) peer.tile.classList.remove('playing');
+  layoutStage();
   if (text === 'connected') $('link-text').textContent = `sealed, ${state.peers.size + 1} in the room`;
   else if (text === 'failed') $('link-text').textContent = 'sealed, link failed';
   updateCount();
@@ -1715,6 +1797,7 @@ function dropPeer(id) {
   // The pair secrets go with the peer, zeroed: no later join can resume them.
   wipeKeys(peer);
   state.peers.delete(id);
+  layoutStage();
   updateSealedBadge();
   updateCount();
 }
@@ -2075,7 +2158,10 @@ function leave(message) {
   clearStatsPanel();
   $('stats-panel').hidden = true;
   $('stats-btn').setAttribute('aria-pressed', 'false');
-  $('grid').replaceChildren();
+  state.spotlight = '';
+  $('stage-main').replaceChildren();
+  $('stage-rail').replaceChildren();
+  $('stage-rail').hidden = true;
   stopCallClock();
   $('stage').hidden = true;
   $('lobby').hidden = false;
@@ -3130,9 +3216,11 @@ function stopLost() {
 // ---------------------------------------------------------------- telemetry
 
 // The stats panel is read at 1 Hz from getStats deltas: two byte counters give
-// a bitrate, and the selected candidate pair gives the round trip time and the
+// a bitrate, two packet counters give the loss, the inbound streams give the
+// jitter, and the selected candidate pair gives the round trip time and the
 // path. Polling stops when the panel is closed or the tab is hidden.
 const STATS_MS = 1000;
+const STATS_HISTORY = 60;   // one sample a second, so a minute of the call
 
 function statsOpen() {
   const panel = $('stats-panel');
@@ -3141,7 +3229,11 @@ function statsOpen() {
 
 function startStats() {
   if (state.statsTimer || !statsOpen()) return;
-  for (const peer of state.peers.values()) peer.statLast.clear();
+  for (const peer of state.peers.values()) {
+    peer.statLast.clear();
+    peer.statLoss = undefined;
+  }
+  state.statHist.length = 0;
   clearStatsPanel();
   updateStats();
   state.statsTimer = setInterval(() => updateStats(), STATS_MS);
@@ -3183,6 +3275,18 @@ function isDirectType(type) {
   return type === 'host' || type === 'srflx' || type === 'prflx';
 }
 
+// counterDelta is the movement of one cumulative counter since the last tick.
+// A counter that is missing or that went backwards yields null, so a restarted
+// report cannot turn into a burst of invented packets.
+function counterDelta(last, report, field) {
+  const value = report[field];
+  if (typeof value !== 'number') return null;
+  const key = `${report.id || report.type + ':' + report.kind}:${field}`;
+  const prev = last.get(key);
+  last.set(key, { bytes: value, ts: report.timestamp || 0 });
+  return prev ? value - prev.bytes : null;
+}
+
 // peerStats reads one report of one peer. Every access is guarded: a peer that
 // closed between two ticks must not throw.
 async function peerStats(peer) {
@@ -3198,7 +3302,10 @@ async function peerStats(peer) {
   if (!report || typeof report.forEach !== 'function') return null;
   if (!(peer.statLast instanceof Map)) peer.statLast = new Map();
 
-  const out = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 }, rtt: null, path: '' };
+  const out = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 }, rtt: null, path: '', jitter: null, loss: null };
+  let jitterMax = null;   // seconds, the worse of the two inbound streams
+  let lost = 0;           // packets lost in this tick, both streams
+  let got = 0;            // packets received in this tick, both streams
   let pairId = null;
   const pairs = new Map();
   const cands = new Map();
@@ -3208,6 +3315,18 @@ async function peerStats(peer) {
         out.up[r.kind] += bitrate(peer.statLast, r, 'bytesSent');
       } else if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.kind === 'video')) {
         out.down[r.kind] += bitrate(peer.statLast, r, 'bytesReceived');
+        // Jitter and loss belong to the side that listens: a packet lost on
+        // the way here is a packet gone for this guest, so this report is the
+        // only honest place to read them.
+        if (typeof r.jitter === 'number') {
+          jitterMax = jitterMax === null ? r.jitter : Math.max(jitterMax, r.jitter);
+        }
+        const dLost = counterDelta(peer.statLast, r, 'packetsLost');
+        const dGot = counterDelta(peer.statLast, r, 'packetsReceived');
+        if (dLost !== null && dGot !== null && dGot >= 0) {
+          lost += Math.max(0, dLost);
+          got += dGot;
+        }
       } else if (r.type === 'transport' && r.selectedCandidatePairId) {
         pairId = r.selectedCandidatePairId;
       } else if (r.type === 'candidate-pair') {
@@ -3245,54 +3364,173 @@ async function peerStats(peer) {
     if (relays.length) out.path = `relay (${relays.join(' + ')})`;
     else if (isDirectType(lt) && isDirectType(rt)) out.path = 'p2p';
   }
+  if (jitterMax !== null) out.jitter = jitterMax * 1000;
+  if (got > 0) {
+    // One tick is a short window, so the share is smoothed: a single burst
+    // moves the number without pinning it for the rest of the call.
+    const now = (lost / (lost + got)) * 100;
+    out.loss = typeof peer.statLoss === 'number' ? peer.statLoss * 0.7 + now * 0.3 : now;
+    peer.statLoss = out.loss;
+  }
   return out;
 }
 
-// ownMediaPairs is the own card: what the browser holds, then what it moves.
+// rateText renders a bitrate in the unit that keeps the number short. A rate
+// of zero returns an empty string, so a line with nothing to say is not drawn.
+function rateText(kbit) {
+  if (!(kbit > 0)) return '';
+  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + ' Mbit/s';
+  return Math.round(kbit) + ' kbit/s';
+}
+
+// msText renders one round trip time in milliseconds.
+function msText(ms) {
+  return Math.round(ms) + ' ms';
+}
+
+// jitterText renders one jitter in milliseconds. The numbers are small and a
+// few milliseconds decide whether a voice sounds clear, so under 10 ms keeps
+// one decimal.
+function jitterText(ms) {
+  if (typeof ms !== 'number') return '';
+  return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + ' ms';
+}
+
+// lossText renders a packet loss share. Under a twentieth of a percent is not
+// a loss that a person can hear, so it reads as none; two percent and more is
+// the point where a voice starts to break, and the caller marks it red.
+function lossText(pct) {
+  if (typeof pct !== 'number') return '';
+  if (pct < 0.05) return 'none';
+  return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + ' %';
+}
+
+// lossMark is the colour rule for a loss row: red from two percent, no mark
+// below it.
+function lossMark(pct) {
+  return pct >= 2 ? false : undefined;
+}
+
+// mediaPairs is one direction: the two kinds added, then each kind that moved
+// a byte as an indented row. The parts are shown only when both are live, so a
+// call with sound and no picture stays short.
 /** @returns {(string | boolean | undefined)[][]} */
-// A live track with a silent meter points at the graph; a dead context points
-// at the autoplay rule of a phone, so the sound state only shows when it needs
-// a click.
-function ownMediaPairs() {
+function mediaPairs(label, video, audio) {
+  const total = video + audio;
+  if (!(total > 0)) return [];
+  const out = [[label, rateText(total)]];
+  if (video > 0 && audio > 0) {
+    out.push(['video ', rateText(video), undefined, true]);
+    out.push(['audio ', rateText(audio), undefined, true]);
+  }
+  return out;
+}
+
+// pathText is the word a guest reads for one route: the report says p2p for a
+// direct pair, and the panel says direct.
+function pathText(path) {
+  return path === 'p2p' ? 'direct' : path;
+}
+
+// callPath is the route of the whole call: one word when every pair takes the
+// same route, and the list of routes when they do not.
+function callPath(live) {
+  const words = new Set();
+  for (const s of live) if (s.path) words.add(pathText(s.path));
+  if (words.size === 0) return '';
+  if (words.size === 1) return [...words][0];
+  return 'mixed: ' + [...words].join(', ');
+}
+
+// callPairs is the first card and the glance of the panel: the route, the
+// round trip time and the two bitrates of the whole call. A number that does
+// not exist yet is left out, so the card never shows a dash.
+/** @returns {(string | boolean | undefined)[][]} */
+function callPairs(live, total) {
+  const out = [];
+  const path = callPath(live);
+  if (path) out.push(['path ', path]);
+  const rtts = live.map((s) => s.rtt).filter((n) => typeof n === 'number');
+  if (rtts.length) {
+    const lo = Math.min(...rtts);
+    const hi = Math.max(...rtts);
+    out.push(['round trip ', lo === hi ? msText(lo) : `${lo} to ${hi} ms`]);
+  }
+  const jitters = live.map((s) => s.jitter).filter((n) => typeof n === 'number');
+  if (jitters.length) out.push(['jitter ', jitterText(Math.max(...jitters))]);
+  const losses = live.map((s) => s.loss).filter((n) => typeof n === 'number');
+  if (losses.length) {
+    const worst = Math.max(...losses);
+    out.push(['loss ', lossText(worst), lossMark(worst)]);
+  }
+  out.push(...mediaPairs('up ', total.up.video, total.up.audio));
+  out.push(...mediaPairs('down ', total.down.video, total.down.audio));
+  return out;
+}
+
+// ownPairs is the own card: what the browser holds, then what it moves. A live
+// track with a silent meter points at the graph; a dead context points at the
+// autoplay rule of a phone, so the sound state only shows when it needs a
+// click.
+/** @returns {(string | boolean | undefined)[][]} */
+function ownPairs() {
   const out = [];
   const live = !!(state.mic && state.micTrack && state.micTrack.readyState === 'live');
   const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
   let label = live ? 'on' : 'off';
   // Safari reports no sample rate on an audio track, so the rate is a bonus
   // and a missing rate never means off.
-  if (mic && mic.sampleRate) label += ` ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
+  if (mic && mic.sampleRate) label += `, ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
   out.push(['mic ', label]);
   out.push(['denoise ', state.denoiseOn ? 'on' : 'off']);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
   out.push(['camera ', cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : 'off']);
-  if (live) out.push(['', micLevelLine()]);
+  if (live) out.push(['level ', levelText(state.meterPeak), undefined, true]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
-  if (play !== 'running') out.push(['sound ', `${play}: tap the page once`]);
+  if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);
   return out;
 }
 
-// peerPairs is one peer card: the link, then what moves over it.
-// The rate is out/in, the same order in both columns, so two cards compare at
-// a glance.
+// peerPairs is one guest card: the route, the trip and the two rates of that
+// pair, then the sealed detail as indented rows. A row appears only when it
+// has a number, and with one guest in the room this card is the whole call.
 /** @returns {(string | boolean | undefined)[][]} */
 function peerPairs(peer, s) {
-  if (!s) return [['', 'connecting'], ['', inLevelLine(peer)]];
-  const out = [
-    ['rtt ', `${s.rtt === null ? '-' : s.rtt + ' ms'} · ${s.path || 'no path'}`],
-    ['video ', `${s.up.video}/${s.down.video} kbit/s`],
-    ['audio ', `${s.up.audio}/${s.down.audio} kbit/s`],
-  ];
-  out.push(['', inLevelLine(peer)]);
+  const out = [];
+  if (!s) {
+    out.push(['', 'connecting', undefined, true]);
+  } else {
+    if (s.path) out.push(['path ', pathText(s.path)]);
+    if (typeof s.rtt === 'number') out.push(['round trip ', msText(s.rtt)]);
+    if (typeof s.jitter === 'number') out.push(['jitter ', jitterText(s.jitter)]);
+    if (typeof s.loss === 'number') out.push(['loss ', lossText(s.loss), lossMark(s.loss)]);
+    out.push(...mediaPairs('up ', s.up.video, s.up.audio));
+    out.push(...mediaPairs('down ', s.down.video, s.down.audio));
+  }
+  // With one code in the room the code card below names it once, and a line
+  // on every guest would say the same thing again.
+  if (peer.sas && sealedRoomCodes().size > 1) out.push(['code ', verifyText(peer.sas), undefined, true]);
+  const pin = pinState(peer);
+  if (peer.fp && pin !== 'new') {
+    out.push(['id ', `${pin === 'known' ? pinLabelOf(peer) : pin} ${peer.fp}`,
+      pin === 'changed' || pin === 'rollback' ? false : undefined, true]);
+  }
+  if (!peer.keys) out.push(['keys ', 'none', false, true]);
+  else if (peer.ready === 'ready' && !peer.confirmed) out.push(['keys ', 'not confirmed', false, true]);
+  const c = sealedPairCount(peer.id);
+  if (c.refused) out.push(['frames ', `${c.refused} refused`, false, true]);
+  const inLevel = inLevelLine(peer);
+  if (s && !/none$/.test(inLevel)) out.push(['in level ', inLevel.replace('in level ', ''), undefined, true]);
   return out;
 }
 
 // statsRow is one card of the panel: a name and a short list of key/value
-// lines. A line is [key, value] or [key, value, mark], where a mark of true
-// turns it green and false turns it red.
-function statLine(key, value, mark) {
+// lines. A line is [key, value] or [key, value, mark] with a mark of true for
+// green and false for red, and a fourth true makes it an indented sub row.
+function statLine(key, value, mark, sub) {
   const line = document.createElement('div');
-  line.className = 'sline' + (mark === true ? ' good' : mark === false ? ' bad' : '');
+  line.className = 'sline' + (sub ? ' sub' : '') + (mark === true ? ' good' : mark === false ? ' bad' : '');
   const k = document.createElement('span');
   k.className = 'sk';
   k.textContent = key;
@@ -3310,13 +3548,94 @@ function statsRow(title, pairs, mark) {
   head.className = 'sname';
   head.textContent = title;
   row.appendChild(head);
-  for (const p of pairs) row.appendChild(statLine(p[0], p[1], p.length > 2 ? p[2] : mark));
+  for (const p of pairs) row.appendChild(statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false));
   return row;
 }
 
-// updateStats draws one round. The totals of the own card are the sums of the
-// per peer numbers across every connection. A fault sits above the cards, so a
-// red line is the first thing on the panel and a healthy call needs no scroll.
+// recordStatsHistory appends one sample of the whole call: what came down,
+// the worst round trip and the worst loss of that second. The graph is a
+// glance, so a healthy call draws a flat floor and not a row of numbers.
+function recordStatsHistory(total, live) {
+  const worst = (key) => {
+    const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
+    return nums.length ? Math.max(...nums) : null;
+  };
+  state.statHist.push({ down: total.down.video + total.down.audio, rtt: worst('rtt'), loss: worst('loss') });
+  if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
+}
+
+// drawStatsGraph draws the last minute: the downlink as a filled area and the
+// round trip as a line, each scaled to its own peak. The note under it carries
+// the numbers, so a guest who cannot read the shapes loses nothing, and the
+// area and the line are named there as well as drawn.
+function drawStatsGraph() {
+  const canvas = $('stats-graph');
+  const box = $('stats-graph-box');
+  const note = $('stats-graph-note');
+  if (!canvas || !box || !note) return;
+  const hist = state.statHist;
+  box.hidden = hist.length < 2;
+  if (hist.length < 2) return;
+  const cssW = canvas.clientWidth || 288;
+  const cssH = canvas.clientHeight || 40;
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(cssW * dpr);
+  const h = Math.round(cssH * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const css = getComputedStyle(document.documentElement);
+  const navy = css.getPropertyValue('--navy').trim() || '#000080';
+  const green = css.getPropertyValue('--green').trim() || '#002b00';
+  const downPeak = Math.max(100, ...hist.map((p) => p.down));
+  const rttPeak = Math.max(100, ...hist.map((p) => (typeof p.rtt === 'number' ? p.rtt : 0)));
+  const stepX = (cssW - 2) / Math.max(1, hist.length - 1);
+  const px = (i) => 1 + i * stepX;
+  const py = (v, peak) => cssH - 1 - (v / peak) * (cssH - 2);
+
+  // A filled area for the downlink: the shape says "steady" or "collapsing" at
+  // a glance.
+  ctx.beginPath();
+  ctx.moveTo(px(0), cssH - 1);
+  for (let i = 0; i < hist.length; i++) ctx.lineTo(px(i), py(hist[i].down, downPeak));
+  ctx.lineTo(px(hist.length - 1), cssH - 1);
+  ctx.closePath();
+  ctx.fillStyle = navy;
+  ctx.globalAlpha = 0.22;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // A thin line for the round trip, broken where a sample has no value.
+  ctx.beginPath();
+  ctx.strokeStyle = green;
+  ctx.lineWidth = 1.5;
+  let drawing = false;
+  for (let i = 0; i < hist.length; i++) {
+    const v = hist[i].rtt;
+    if (typeof v !== 'number') { drawing = false; continue; }
+    if (!drawing) { ctx.moveTo(px(i), py(v, rttPeak)); drawing = true; }
+    else ctx.lineTo(px(i), py(v, rttPeak));
+  }
+  ctx.stroke();
+
+  const downMax = Math.max(0, ...hist.map((p) => p.down));
+  const lossMax = Math.max(0, ...hist.map((p) => (typeof p.loss === 'number' ? p.loss : 0)));
+  const rttValues = hist.map((p) => p.rtt).filter((n) => typeof n === 'number');
+  const parts = [`${hist.length} s: down up to ${rateText(downMax) || '0 kbit/s'} (area)`];
+  if (rttValues.length) parts.push(`round trip up to ${msText(Math.max(...rttValues))} (line)`);
+  if (lossMax > 0) parts.push(`loss up to ${lossText(lossMax)}`);
+  note.textContent = parts.join(', ');
+}
+
+// updateStats draws one round. A fault sits above the cards, so a red line is
+// the first thing on the panel and a healthy call needs no scroll. Then the
+// call at a glance, then the own side, then only the guest rows that add a
+// number of their own.
 async function updateStats() {
   if (!statsOpen() || state.statsBusy) return;
   const body = $('stats-body');
@@ -3324,24 +3643,33 @@ async function updateStats() {
   state.statsBusy = true;
   try {
     const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
-    const peers = [];
+    const live = [];
+    const guests = [];
     for (const peer of state.peers.values()) {
       const s = await peerStats(peer);
       if (s) {
+        live.push(s);
         for (const dir of ['up', 'down']) {
           for (const kind of ['audio', 'video']) total[dir][kind] += s[dir][kind];
         }
       }
-      const pairs = peerPairs(peer, s);
-      for (const p of sealedPeerPairs(peer)) pairs.push(p);
-      peers.push(statsRow(peer.name || shortPeer(peer.id), pairs));
+      guests.push({ peer, s });
     }
-    const ownPairs = ownMediaPairs();
-    ownPairs.push(['video ', `${total.up.video}/${total.down.video} kbit/s`]);
-    ownPairs.push(['audio ', `${total.up.audio}/${total.down.audio} kbit/s`]);
-    const own = statsRow('you', ownPairs);
-    const alarms = sealedAlarms();
-    body.replaceChildren(...alarms, own, ...peers, ...sealedCards());
+    const rows = [];
+    recordStatsHistory(total, live);
+    // With one guest in the room that card is the whole call, and a second
+    // card of the same numbers would only be read twice.
+    if (state.peers.size > 1) {
+      const call = callPairs(live, total);
+      if (call.length) rows.push(statsRow('call', call));
+    }
+    for (const { peer, s } of guests) {
+      const pairs = peerPairs(peer, s);
+      if (pairs.length) rows.push(statsRow(peer.name || shortPeer(peer.id), pairs));
+    }
+    rows.push(statsRow('you', ownPairs()));
+    body.replaceChildren(...sealedAlarms(), ...rows, ...sealedCards());
+    drawStatsGraph();
   } finally {
     state.statsBusy = false;
   }
@@ -3358,7 +3686,7 @@ async function updateStats() {
 // The wasm and its shim must be the build this page is. app.js carries the
 // build query, so both fetches inherit it and a cached old pair can never meet
 // a newer page, which would fail every handshake without a word.
-const BUILD_Q = '?' + ((document.currentScript && document.currentScript.src.split('?')[1]) || 'v=1');
+const BUILD_Q = '?' + ((/** @type {HTMLScriptElement} */ (document.currentScript) || { src: '' }).src.split('?')[1] || 'v=1');
 
 // The short code is 13 base32 characters, which is fine to compare on a screen
 // but clumsy to read aloud. The same bits are shown as six OpenMoji drawings
@@ -4708,21 +5036,6 @@ function sealedPairCount(id) {
   return { out, inn, refused };
 }
 
-// sealedPeerPairs is the sealed half of one peer card: the code both ends
-/** @returns {(string | boolean | undefined)[][]} */
-// share, the key state and the sealed frame counters. It sits under the media
-// numbers of the same person, so one card answers "is this peer good".
-function sealedPeerPairs(peer) {
-  const c = sealedPairCount(peer.id);
-  const pin = pinState(peer);
-  return [
-    ['code ', verifyText(peer.sas) || '-'],
-    ['keys ', `${peer.keys ? 'ok' : 'none'} · link ${peer.pc ? peer.pc.connectionState : 'none'} · confirmed ${peer.confirmed ? 'yes' : 'no'}`],
-    ['id ', `${peer.proven ? peer.fp : 'unproven'} · pin ${pin === 'known' ? pinLabelOf(peer) : pin}`],
-    ['frames ', `out ${c.out} in ${c.inn} refused ${c.refused}`, c.refused === 0 ? undefined : false],
-  ];
-}
-
 // sealedAlarms are the lines that mean something is wrong now. A healthy call
 // shows none of them, so the panel opens on the numbers and not on a warning
 // that has to be read twice to be dismissed.
@@ -4773,33 +5086,34 @@ function wasmTestFaults(wt) {
 }
 
 // sealedCards is the sealed half of the panel, below the person cards: what
-// the relay cannot see, in the few lines that answer it.
+// the relay cannot see, in the few lines that answer it. A line that only
+// repeats the suite or says "not run yet" is left out.
 function sealedCards() {
   const out = [];
   const available = sealingAvailable();
   const wt = state.wasmTest;
-  out.push(statsRow('sealed', [
-    ['suite ', 'pq-e2e v2'],
-    ['media ', available ? 'worker, every frame sealed' : 'NO SEALING: no media is sent', available],
-    ['self test ', wt ? (wasmTestOk(wt) ? 'pass' : 'FAIL') : 'not run', wt ? wasmTestOk(wt) : undefined],
-  ]));
+  const seal = [['media ', available ? 'sealed, every frame' : 'NO SEALING, no media is sent', available]];
+  if (wt) seal.push(['self test ', wasmTestOk(wt) ? 'pass' : 'FAIL', wasmTestOk(wt)]);
+  out.push(statsRow('sealed', seal));
 
   const me = state.idKey;
-  out.push(statsRow('identity', [
-    ['key ', me ? `${me.kind} ${me.fp}` : 'none'],
-    ['device ', deviceNote()],
-  ]));
+  if (me) {
+    out.push(statsRow('identity', [
+      ['key ', `${me.kind} ${me.fp}`],
+      ['device ', deviceNote(), undefined, true],
+    ]));
+  }
 
   const code = sealedRoomCode();
   const codes = sealedRoomCodes();
   if (codes.size > 1) {
-    const pairs = [['code ', `one code per pair · ${state.peers.size} guests`, true]];
-    for (const c of codes) pairs.push(['', `${verifyText(c)} ${c}`]);
+    const pairs = [['codes ', `${codes.size} guests, one code per pair`, true]];
+    for (const c of codes) pairs.push(['', `${verifyText(c)} ${c}`, undefined, true]);
     out.push(statsRow('room code', pairs));
-  } else {
+  } else if (code) {
     out.push(statsRow('room code', [
-      ['code ', `${verifyText(code) || '-'} ${code || 'pending'}`, code ? true : undefined],
-      ['words ', verifyNames(code) || '-'],
+      ['code ', code, true],
+      ['words ', verifyNames(code), undefined, true],
     ]));
   }
 
@@ -4808,12 +5122,22 @@ function sealedCards() {
     if (st && st.dir === 'recv') refused += st.fail || 0;
   }
   const clean = state.workerErrors.length === 0;
-  out.push(statsRow('counters', [
+  const counts = [
     ['frames ', `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`, refused === 0 && clean],
-    ['files ', `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`],
-    ['chat ', `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`, state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0],
-    ['wire ', `frames ${state.wireFrames} canaries ${state.canaries.length} leaks ${state.wireLeaks.length}`, state.wireLeaks.length === 0],
-  ]));
+    ['wire ', `frames ${state.wireFrames} leaks ${state.wireLeaks.length}`, state.wireLeaks.length === 0],
+  ];
+  const files = state.fileOffers + state.fileRecv + state.fileChunksRecv + state.fileChunksSent +
+    state.fileRefused + state.fileCancelled;
+  if (files) {
+    counts.push(['files ', `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`,
+      state.fileRefused === 0 && state.fileCancelled === 0]);
+  }
+  const chat = state.chatSent + state.chatRecv + state.replayDrops + state.confirmFailures + state.identityFailures;
+  if (chat) {
+    counts.push(['chat ', `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`,
+      state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0]);
+  }
+  out.push(statsRow('counters', counts));
   return out;
 }
 
@@ -5189,6 +5513,26 @@ function init() {
 
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
+
+  // A click on a tile is a spotlight: that guest takes the large area alone
+  // and every other guest becomes a rail row. The same click again, a click on
+  // the empty stage, or Esc gives the normal layout back. A click on a control
+  // in the tile stays with that control.
+  $('grid').addEventListener('click', (event) => {
+    const target = /** @type {Element} */ (event.target);
+    const tile = target.closest('.tile');
+    if (!tile) {
+      setSpotlight('');
+      return;
+    }
+    if (target.closest('.vol, .dots, .menu, .sas, .pin')) return;
+    const el = /** @type {HTMLElement} */ (tile);
+    const id = el.dataset.peer || (el.dataset.local ? 'self' : '');
+    if (id) setSpotlight(id);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.spotlight) setSpotlight('');
+  });
 
   // A hidden tab has no one to read the numbers, so the polling sleeps until
   // it comes back.

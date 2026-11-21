@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261121w">
+<link rel="stylesheet" href="/style.css?v=20261122a">
 </head>
 <body>
 
@@ -88,12 +88,20 @@
     </div>
 
     <div class="room-row">
-      <section id="grid" class="grid"></section>
+      <section id="grid" class="grid">
+        <div id="stage-main" class="stage-main"></div>
+        <aside id="stage-rail" class="stage-rail" aria-label="guests without a picture" hidden></aside>
+      </section>
 
       <aside id="stats-panel" class="stats" hidden>
         <div class="stats-head">
           <span>stats</span>
           <button id="stats-close" type="button" aria-label="close the stats">x</button>
+        </div>
+        <div id="stats-graph-box" class="sgraph-box" hidden>
+          <canvas id="stats-graph" class="sgraph" height="40" role="img"
+            aria-label="downlink rate as a filled area and round trip time as a line, last minute"></canvas>
+          <p id="stats-graph-note" class="sgnote"></p>
         </div>
         <div id="stats-body" class="stats-body"></div>
       </aside>
@@ -139,6 +147,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261121w"></script>
+<script src="/app.js?v=20261122a"></script>
 </body>
 </html>

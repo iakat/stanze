@@ -347,17 +347,54 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .file-save { color: var(--navy); font-weight: bold; font-size: var(--fs-tiny); }
 .file-save:focus-visible { outline: 1px dotted var(--ink); outline-offset: 1px; }
 
+/* The stage is two zones. The large area takes all the width and height that
+   the rail does not use. The rail is one column of compact rows, so a guest
+   without a picture does not hold a black rectangle. */
 .grid {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  gap: 5px;
+  background: #000;
+  border: 2px solid;
+  border-color: var(--edge) var(--panel-hi) var(--panel-hi) var(--edge);
+  padding: 5px;
+}
+.stage-main {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   display: grid;
   gap: 5px;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
   align-content: center;
-  background: #000;
-  border: 2px solid;
-  border-color: var(--edge) var(--panel-hi) var(--panel-hi) var(--edge);
-  padding: 5px;
+}
+.stage-rail {
+  flex: 0 0 clamp(20%, 26%, 30%);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  align-content: start;
+}
+.stage-main[hidden],
+.stage-rail[hidden] { display: none; }
+/* Nobody has a picture: the rail is the whole stage, so the rows get the
+   width and the black area is not left empty. */
+.stage-main[hidden] + .stage-rail { flex: 1 1 auto; }
+/* One guest alone in the large area fills it, and the picture covers the
+   whole frame instead of keeping a fixed ratio with black bars. */
+.stage-main[data-alone="yes"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+.stage-main[data-alone="yes"] .tile {
+  aspect-ratio: auto;
+  min-height: 0;
 }
 
 .tile {
@@ -589,6 +626,135 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 .tile .menu button:hover { background: var(--navy); color: #fff; }
 
+/* A rail row is the same tile node in a compact form. The picture, the centre
+   name and the code card are out of the way, and the tag becomes the row: name,
+   the mute and camera chips, the link state, and the volume slider. The node is
+   moved, never copied, so the stream stays on the one video element. */
+.stage-rail .tile {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  aspect-ratio: auto;
+  min-height: 26px;
+  padding: 1px 4px;
+  background: var(--panel);
+  border: 1px solid;
+  border-color: #fff var(--edge) var(--edge) #fff;
+  font-size: var(--fs-tiny);
+  cursor: pointer;
+}
+.stage-rail .tile video,
+.stage-rail .tile .avatar,
+.stage-rail .tile .sas,
+.stage-rail .tile .pin { display: none; }
+.stage-rail .tile .tag {
+  order: 3;
+  position: static;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-tiny);
+}
+/* The microphone lamp of a rail row: filled when the microphone is open, dark
+   red when it is muted, so the state reads without a word. */
+.stage-rail .tile::before {
+  content: "";
+  order: 1;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--red);
+  border: 1px solid var(--edge);
+}
+.stage-rail .tile[data-mic="on"]::before { background: #007000; }
+.stage-rail .tile .tag > * { min-width: 0; }
+.stage-rail .tile .name {
+  flex: 1 1 auto;
+  max-width: none;
+  padding: 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-rail .tile .flags { flex: none; gap: 2px; }
+.stage-rail .tile .flags span,
+.stage-rail .tile .state { padding: 0 2px; }
+/* A row has no width for the words of the link state, so the link is a second
+   lamp beside the microphone lamp. The words stay on the tile in the large
+   area, in the status line and in the stats panel. */
+.stage-rail .tile .state { display: none; }
+.stage-rail .tile::after {
+  content: "";
+  order: 2;
+  flex: none;
+  width: 12px;
+  height: 5px;
+  background: var(--panel-lo);
+  border: 1px solid var(--edge);
+}
+.stage-rail .tile[data-state="connected"]::after { background: #007000; }
+.stage-rail .tile[data-state="failed"]::after,
+.stage-rail .tile[data-state="disconnected"]::after { background: var(--red); }
+.stage-rail .tile .vol {
+  order: 4;
+  position: static;
+  flex: none;
+  gap: 2px;
+  padding: 0 2px;
+}
+.stage-rail .tile .vol-range { width: 52px; }
+.stage-rail .tile .vol-num { min-width: 28px; }
+.stage-rail .tile .dots {
+  order: 5;
+  position: static;
+  min-width: 20px;
+  min-height: 18px;
+  padding: 0 2px;
+}
+
+/* The spotlight ring holds on the grey panel and on a black picture: a navy
+   border for the panel, a white inner line for the frame behind it. */
+.tile.spot {
+  border-color: var(--navy);
+  box-shadow: inset 0 0 0 2px #fff, inset 0 0 0 4px var(--navy);
+}
+
+/* Under 900 px the rail becomes a strip under the large area. The pictures
+   keep the width, and the strip keeps a small height of its own. */
+@media (max-width: 900px) {
+  .grid { flex-direction: column; }
+  .stage-rail {
+    flex: 0 0 auto;
+    max-height: 30%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-y: auto;
+  }
+  .stage-rail .tile { flex: 1 1 180px; }
+}
+
+/* A small graph under the title bar: one filled area for the downlink and one
+ * line for the round trip. The numbers stay in the rows below and in the note,
+ * so a guest who cannot read the shapes loses nothing. */
+.sgraph-box {
+  flex: none;
+  padding: 4px 5px 3px;
+  border-bottom: 1px solid #0000001f;
+}
+.sgraph {
+  display: block;
+  width: 100%;
+  height: 40px;
+  background: #b4b4b4;
+}
+.sgnote {
+  margin: 2px 0 0;
+  font-size: var(--fs-tiny);
+  color: var(--soft);
+  line-height: 1.4;
+}
+
 /* One card per person or per group: a name, then key/value lines. The key is
    small and quiet on the left, the value sits on the right in tabular figures,
    so a column of numbers reads in one look and nothing has to be parsed out of
@@ -615,6 +781,11 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 .sline.good { color: var(--green); }
 .sline.bad { color: var(--red); }
+/* An indented row carries the part under a total, and its value is quiet:
+ * the total is the number to read first. */
+.sline.sub { padding-left: 10px; }
+.sline.sub .sv { margin-left: 0; text-align: left; }
+.sline.sub:not(.good):not(.bad) .sv { color: var(--soft); }
 
 .controls {
   display: flex;
@@ -666,7 +837,7 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 
 @media (max-width: 560px) {
-  .grid { grid-template-columns: 1fr; }
+  .stage-main { grid-template-columns: 1fr; }
   .ctrl { min-width: 0; flex: 1; }
   .pick { width: 100%; justify-content: space-between; }
 }

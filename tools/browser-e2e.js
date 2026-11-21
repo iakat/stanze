@@ -353,11 +353,12 @@ async function stats(page) {
     });
     check('the stats panel opens and polls once a second', tel.open && tel.timer, tel.text);
     check('stats show the peer, the round trip time and the path',
-      tel.text.includes('bob') && /\d+ ms/.test(tel.text) && /(p2p|relay)/.test(tel.text), tel.text);
-    check('stats show outbound and inbound bitrate for video and audio',
-      /video [1-9]\d*\/[1-9]\d*/.test(tel.text) && /audio [1-9]\d*\/[1-9]\d*/.test(tel.text), tel.text);
+      tel.text.includes('bob') && /\d+ ms/.test(tel.text) && /(direct|relay)/.test(tel.text), tel.text);
+    check('stats show the outbound and inbound bitrate, in video and audio rows',
+      /up [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text) && /down [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text)
+      && /video [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text) && /audio [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text), tel.text);
     check('stats show the own denoise state and device settings',
-      /denoise (on|off)/.test(tel.text) && /mic (on|off) \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
+      /denoise (on|off)/.test(tel.text) && /mic (on|off), \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
     const hiddenStop = await pageA.evaluate(() => {
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
       document.dispatchEvent(new Event('visibilitychange'));
