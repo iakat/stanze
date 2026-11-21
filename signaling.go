@@ -142,7 +142,8 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		for _, other := range peers {
 			other.enqueue(left)
 		}
-		if room != nil {
+		// An empty room is gone, so it gets no leave line and no admin list.
+		if room != nil && len(peers) > 0 {
 			if !p.kicked.Load() {
 				s.logLineTo(room, peers, chatLine{Kind: "leave", From: p.id, Name: p.name})
 			}
