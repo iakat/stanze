@@ -654,6 +654,47 @@ func testRoomIsolation() {
 	report("no room information pushed to peers", errOr(nil, err == nil, "unexpected message "+m.T))
 }
 
+// testRoomLifetime proves a room is gone as soon as its last peer leaves: the
+// same id joins at once as a new room, so the old passphrase opens nothing.
+func testRoomLifetime() {
+	room, err := createRoom("first-pass")
+	if err != nil {
+		report("lifetime: room", err)
+		return
+	}
+	a, err := join(room, "first-pass", "a")
+	if err != nil {
+		report("lifetime: first peer joins", err)
+		return
+	}
+	a.c.close()
+
+	// The close is handled in another goroutine on the server, so the join is
+	// retried: the first accepted one is the join of the new room.
+	var b *joinedPeer
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		b, err = join(room, "second-pass", "b")
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			reportf("last leave drops the room", "room still there after 3 s: %v", err)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	defer b.c.close()
+	report("last leave drops the room", nil)
+
+	// The dropped room took its passphrase with it.
+	if _, err := join(room, "first-pass", "c"); err == nil {
+		report("dropped room forgot its passphrase", errors.New("the old passphrase still opens the room"))
+	} else {
+		report("dropped room forgot its passphrase", nil)
+	}
+}
+
 func testLimits() {
 	room, err := createRoom("")
 	if err != nil {
@@ -1042,6 +1083,7 @@ func main() {
 	testRoomIsolation()
 	testModeFlags()
 	testLimits()
+	testRoomLifetime()
 	fmt.Println()
 	testWebRTCMesh()
 	fmt.Println()
