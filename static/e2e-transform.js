@@ -199,6 +199,18 @@ async function transformFrame(frame, controller, options) {
 self.onrtctransform = (event) => {
   const transformer = event.transformer;
   const options = transformer.options || {};
+  // Safari does not always start a video encoder on a key frame, and a sealed
+  // receiver can not decode delta frames. Two local asks, one now and one after
+  // the encoder settles, cover a slow start. Nothing travels on the wire.
+  if ((options.dir || '') === 'send' && (options.kind || '') === 'video') {
+    const nudge = () => {
+      try {
+        if (typeof transformer.generateKeyFrame === 'function') transformer.generateKeyFrame();
+      } catch (_err) { /* this browser can not nudge the encoder */ }
+    };
+    nudge();
+    setTimeout(nudge, 700);
+  }
   const stream = new TransformStream({
     transform(frame, controller) {
       return transformFrame(frame, controller, options);
