@@ -314,8 +314,10 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .tile[data-relay="yes"] .state::after { content: " | relay"; color: #604000; }
 
 /* sealed rooms: the short code of a guest. It is a card at the foot of the
- * tile, made of OpenMoji drawings and the code in groups of four. A plain
- * room has no such element. */
+ * tile, made of OpenMoji drawings and the code in groups of four. It only
+ * shows while the pointer is over that tile or while the host menu has the
+ * focus, so the picture is free of clutter. A plain room has no such
+ * element. */
 .tile .sas {
   position: absolute;
   left: 50%;
@@ -334,9 +336,14 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   font-size: 10px;
   line-height: 1.2;
   color: #9cf0b0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 90ms linear;
   pointer-events: none;
 }
 .tile .sas[hidden] { display: none; }
+.tile:hover .sas,
+.tile:focus-within .sas { opacity: 1; visibility: visible; }
 .tile .sas-head {
   font-size: 9px;
   letter-spacing: 1px;

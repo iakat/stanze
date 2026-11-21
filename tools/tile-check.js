@@ -56,7 +56,8 @@ async function joinPage(context, name, room) {
   await page.click('#enter-btn', { timeout: 20000 });
   await until(page, () => window.e2eApp && window.e2eApp.state.self && !document.getElementById('stage').hidden,
     null, 25000, name + ' joined');
-  return { page, errors };
+  const app = await page.evaluate(() => ({ room: window.e2eApp.state.room, sealed: window.e2eApp.state.sealed }));
+  return { page, errors, app };
 }
 
 // tileOf reads one tile in the page: the one of the local visitor or the one
@@ -69,13 +70,18 @@ function tileOf(page, local) {
     if (!tile) return { missing: true };
     const avatar = tile.querySelector('.avatar');
     const sas = tile.querySelector('.sas');
+    const sasStyle = sas ? getComputedStyle(sas) : null;
     return {
       name: tile.querySelector('.name') ? tile.querySelector('.name').textContent : '',
       avatar: avatar ? avatar.textContent : '',
       avatarDisplay: avatar ? getComputedStyle(avatar).display : 'none',
       sasText: sas && !sas.hidden ? sas.textContent.trim() : '',
-      sasOpacity: sas ? Number(getComputedStyle(sas).opacity) : 0,
-      sasVisible: sas ? (sas.hidden ? false : getComputedStyle(sas).visibility !== 'hidden') : false,
+      sasOpacity: sasStyle ? Number(sasStyle.opacity) : 0,
+      sasVisible: sas ? (!sas.hidden && sasStyle.visibility !== 'hidden' && Number(sasStyle.opacity) > 0.5) : false,
+      sasImages: sas ? [...sas.querySelectorAll('img.sas-emoji')].map((i) => ({
+        src: i.getAttribute('src'), w: i.naturalWidth, h: i.naturalHeight, alt: i.alt,
+      })) : [],
+      sasCode: sas && sas.querySelector('.sas-code') ? sas.querySelector('.sas-code').textContent : '',
       playing: tile.classList.contains('playing'),
       videoW: tile.querySelector('video') ? tile.querySelector('video').videoWidth : 0,
     };
@@ -97,9 +103,13 @@ function peerCount(page) {
     const ctxA = await browser.newContext({ viewport: { width: 1180, height: 780 }, permissions: ['camera', 'microphone'] });
     const ctxB = await browser.newContext({ viewport: { width: 1180, height: 780 }, permissions: ['camera', 'microphone'] });
     a = await joinPage(ctxA, 'alice', room);
-    b = await joinPage(ctxB, 'bob', '');
-    await until(a.page, () => window.e2eApp.state.peers.size === 1, null, 30000, 'A sees one peer');
-    await until(b.page, () => window.e2eApp.state.peers.size === 1, null, 30000, 'B sees one peer');
+    b = await joinPage(ctxB, 'bob', a.app.room);
+    const ready = (page, label) => until(page, () => {
+      const p = window.e2eApp.peers();
+      return p.length === 1 && p[0].ready === 'ready' && p[0].confirmed && p[0].sas.length === 13;
+    }, null, 60000, label);
+    await ready(a.page, 'A handshake');
+    await ready(b.page, 'B handshake');
     await sleep(2500);
 
     const remoteA = await tileOf(a.page, false);
@@ -134,6 +144,30 @@ function peerCount(page) {
 
     check('A page had no uncaught error', a.errors.length === 0, JSON.stringify(a.errors.slice(0, 3)));
     check('B page had no uncaught error', b.errors.length === 0, JSON.stringify(b.errors.slice(0, 3)));
+
+    // The sealed code card: hidden until the pointer is over the tile.
+    const codeNow = await b.page.evaluate(() => window.e2eApp.peers()[0].sas);
+    const cardIdle = await tileOf(b.page, false);
+    check('the code card has six drawings', cardIdle.sasImages.length === 6, cardIdle.sasImages.length);
+    check('the code card is hidden while the pointer is away', !cardIdle.sasVisible, 'opacity ' + cardIdle.sasOpacity);
+    check('the code card keeps the code of the pair',
+      cardIdle.sasCode.replace(/\s+/g, '') === codeNow, cardIdle.sasCode + ' vs ' + codeNow);
+
+    await b.page.hover('#grid > .tile:not([data-local])');
+    await sleep(400);
+    const cardHover = await tileOf(b.page, false);
+    check('the code card shows on hover', cardHover.sasVisible, 'opacity ' + cardHover.sasOpacity);
+    check('every drawing comes from the openmoji folder',
+      cardHover.sasImages.every((i) => /^\/openmoji\/[0-9A-F]+\.svg$/.test(i.src)),
+      JSON.stringify(cardHover.sasImages.map((i) => i.src)));
+    check('every drawing decoded', cardHover.sasImages.every((i) => i.w > 0 && i.h > 0),
+      JSON.stringify(cardHover.sasImages.map((i) => i.w + 'x' + i.h)));
+    check('the drawings have a name for a screen reader',
+      cardHover.sasImages.every((i) => i.alt && i.alt.length > 0),
+      JSON.stringify(cardHover.sasImages.map((i) => i.alt)));
+    const missing = await b.page.evaluate(() => fetch('/openmoji/0000.svg').then((r) => r.status));
+    check('an unknown drawing is a 404', missing === 404, missing);
+    await b.page.screenshot({ path: OUT + '/tile-code-hover.png' });
   } catch (err) {
     check('test completed without exception', false, err && err.stack ? err.stack.split('\n')[0] : String(err));
   } finally {
