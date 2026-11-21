@@ -37,3 +37,10 @@ fi
 git add -A
 git commit -q -m "$msg"
 git log --oneline -1
+
+# Push every green commit when a remote is set.
+if git remote get-url origin >/dev/null 2>&1; then
+	GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -i /data/ocbot-ssh-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new}" \
+		git push -q origin HEAD 2>&1 || { echo "commit is local, push failed"; exit 1; }
+	echo "pushed to $(git remote get-url origin)"
+fi

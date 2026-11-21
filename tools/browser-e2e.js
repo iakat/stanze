@@ -500,6 +500,26 @@ async function stats(page) {
     check('the per peer volume came back after the reload',
       rejoin.volume === '140' && Math.abs((rejoin.gain || 0) - 1.4) < 1e-6, rejoin.volume + ' gain=' + rejoin.gain);
 
+    // ---- relay only path from the browser, over whatever this server speaks
+    await pageA.click('#leave-btn');
+    await until(pageA, () => !document.getElementById('lobby').hidden, null, 20000, 'A back in the lobby');
+    await pageA.evaluate(() => {
+      const pick = document.getElementById('path');
+      pick.value = 'relay';
+      pick.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await pageA.click('#enter-btn');
+    await until(pageA, () => [...state.peers.values()].some((p) => p.state === 'connected'), null, 60000, 'A relayed to B');
+    await pageA.click('#stats-btn');
+    await sleep(2000);
+    const relay = await pageA.evaluate(() => {
+      const peer = [...state.peers.values()][0];
+      const box = document.getElementById('stats-body');
+      return { state: peer ? peer.state : '', text: box ? box.textContent : '' };
+    });
+    check('the relay only path works from the browser', /relay \(you\)/.test(relay.text), relay.text);
+    await pageA.click('#stats-btn');
+
     // ---- screenshots
     const shots = [];
     for (const [page, label] of [[pageA, 'a'], [pageB, 'b']]) {
