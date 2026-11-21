@@ -237,6 +237,8 @@ func assetNames() []string {
 		"sfx/pop.webm", "sfx/bonk.webm", "sfx/timp.webm", "sfx/hammer.webm",
 		"sfx/pop.ogg", "sfx/bonk.ogg", "sfx/timp.ogg", "sfx/hammer.ogg",
 		"sfx/pop.mp3", "sfx/bonk.mp3", "sfx/timp.mp3", "sfx/hammer.mp3",
+		// The lost connection pad is a loop, encoded the same way.
+		"sfx/lost.webm", "sfx/lost.ogg", "sfx/lost.mp3",
 	}
 }
 

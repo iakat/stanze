@@ -142,8 +142,11 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		for _, other := range peers {
 			other.enqueue(left)
 		}
-		if next := s.hub.adminOf(room); next != "" && next != p.id {
-			adminMsg := mustJSON(serverMsg{T: "admin", Admin: next})
+		if room != nil {
+			if !p.kicked.Load() {
+				s.logLineTo(room, peers, chatLine{Kind: "leave", From: p.id, Name: p.name})
+			}
+			adminMsg := mustJSON(serverMsg{T: "admin", Admins: s.hub.adminsOf(room)})
 			for _, other := range peers {
 				other.enqueue(adminMsg)
 			}
@@ -211,6 +214,8 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}))
 		case "mod":
 			s.handleMod(p, m)
+		case "chat":
+			s.handleChat(p, m)
 		case "leave":
 			return
 		case "ping":
@@ -220,30 +225,36 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMod runs one admin command. The server is the authority: a peer that
-// is not the admin is ignored, and the target must be in the same room.
+// is not an admin is ignored, and the target must be in the same room.
 func (s *server) handleMod(p *Peer, m clientMsg) {
 	room := p.room
 	if room == nil || m.To == "" || m.To == p.id {
 		return
 	}
-	if s.hub.adminOf(room) != p.id {
+	if !s.hub.isAdmin(room, p.id) {
 		return
 	}
 	switch m.Action {
 	case "admin":
-		if s.hub.setAdmin(room, m.To) {
-			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admin", Admin: m.To}))
+		if s.hub.grantAdmin(room, m.To) {
+			s.sendAdmins(room)
+			if target := s.hub.peerOf(room, m.To); target != nil {
+				s.logLine(room, chatLine{Kind: "admin", From: p.id, Name: p.name, Text: target.name})
+			}
 		}
 	case "mute":
 		if target := s.hub.peerOf(room, m.To); target != nil {
 			target.enqueueJSON(serverMsg{T: "mod", From: p.id, Action: "mute"})
+			s.logLine(room, chatLine{Kind: "mute", From: p.id, Name: target.name, Text: p.name})
 		}
 	case "kick":
 		target := s.hub.peerOf(room, m.To)
 		if target == nil {
 			return
 		}
+		target.kicked.Store(true)
 		target.enqueueJSON(serverMsg{T: "kicked", From: p.id})
+		s.logLine(room, chatLine{Kind: "kick", From: p.id, Name: target.name, Text: p.name})
 		// Give the notice a moment to leave the queue, then close the socket.
 		go func() {
 			time.Sleep(200 * time.Millisecond)
@@ -251,6 +262,65 @@ func (s *server) handleMod(p *Peer, m clientMsg) {
 		}()
 	}
 }
+
+// sendAdmins tells the whole room who holds the role now.
+func (s *server) sendAdmins(room *Room) {
+	s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admin", Admins: s.hub.adminsOf(room)}))
+}
+
+// logLine adds one line to the room log and sends it to everyone in the room.
+func (s *server) logLine(room *Room, line chatLine) {
+	line.TS = time.Now().UnixMilli()
+	s.hub.addChat(room, line)
+	s.hub.broadcastTo(room, mustJSON(serverMsg{
+		T: "chat", Kind: line.Kind, From: line.From, Name: line.Name,
+		Text: line.Text, TS: line.TS,
+	}))
+}
+
+// logLineTo adds one line to the room log and sends it to a fixed peer list.
+// It is used when the sender has just left and the room broadcast no longer
+// reaches them.
+func (s *server) logLineTo(room *Room, peers []*Peer, line chatLine) {
+	line.TS = time.Now().UnixMilli()
+	s.hub.addChat(room, line)
+	msg := mustJSON(serverMsg{
+		T: "chat", Kind: line.Kind, From: line.From, Name: line.Name,
+		Text: line.Text, TS: line.TS,
+	})
+	for _, other := range peers {
+		other.enqueue(msg)
+	}
+}
+
+// handleChat relays one text line. The text is cut to a sane length and control
+// characters are dropped, so a line can not break the layout of another client.
+func (s *server) handleChat(p *Peer, m clientMsg) {
+	room := p.room
+	if room == nil {
+		return
+	}
+	text := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, m.Text)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if runes := []rune(text); len(runes) > chatTextMax {
+		text = string(runes[:chatTextMax])
+	}
+	s.logLine(room, chatLine{Kind: "text", From: p.id, Name: p.name, Text: text})
+}
+
+// chatTextMax is the longest accepted chat line, in runes.
+const chatTextMax = 500
 
 func mustJSON(v any) []byte {
 	b, err := json.Marshal(v)
@@ -289,14 +359,23 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 
 	existing := s.hub.peersOf(room, p.id)
-	admin := s.hub.adminOf(room)
+	admins := s.hub.adminsOf(room)
+	isAdmin := make(map[string]bool, len(admins))
+	for _, id := range admins {
+		isAdmin[id] = true
+	}
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
 		peers = append(peers, peerInfo{
 			ID: other.id, Name: other.name, Mic: other.mic, Cam: other.cam,
-			Admin: other.id == admin,
+			Admin: isAdmin[other.id],
 		})
 	}
+
+	// The join itself is the first line of the room log, so the peer that just
+	// arrived finds it in the history it receives.
+	line := chatLine{Kind: "join", From: p.id, Name: p.name, TS: time.Now().UnixMilli()}
+	history := s.hub.addChat(room, line)
 
 	// Fresh, time limited relay credentials for this connection only.
 	ice, err := iceServersFor(s.cfg)
@@ -305,19 +384,24 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 
 	p.enqueueJSON(serverMsg{
-		T:     "joined",
-		Self:  p.id,
-		Peers: peers,
-		Ice:   ice,
-		Admin: admin,
+		T:      "joined",
+		Self:   p.id,
+		Peers:  peers,
+		Ice:    ice,
+		Admins: admins,
+		Chat:   history,
 	})
 
 	joinedMsg := mustJSON(serverMsg{
 		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Name: p.name, Mic: p.mic, Cam: p.cam, Admin: admin == p.id},
+		Peer: &peerInfo{ID: p.id, Name: p.name, Mic: p.mic, Cam: p.cam, Admin: isAdmin[p.id]},
+	})
+	lineMsg := mustJSON(serverMsg{
+		T: "chat", Kind: line.Kind, From: line.From, Name: line.Name, TS: line.TS,
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)
+		other.enqueue(lineMsg)
 	}
 
 	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))

@@ -284,10 +284,17 @@ func testHTTPSurface() {
 	code, body, err := httpDo(http.MethodGet, "/", "")
 	report("index page served with local client", errOr(err,
 		code != 200, fmt.Sprintf("status %d", code),
-		!bytes.Contains(body, []byte("<script src=\"/app.js\">")), "no app.js reference",
+		!bytes.Contains(body, []byte(`src="/app.js?v=`)), "no versioned app.js reference",
+		!bytes.Contains(body, []byte(`href="/style.css?v=`)), "no versioned style.css reference",
 		bytes.Contains(body, []byte("http://")), "external resource found"))
 
-	for _, path := range []string{"/app.js", "/style.css", "/favicon.svg"} {
+	for _, path := range []string{
+		"/app.js", "/style.css", "/favicon.svg",
+		// The version query is ignored by the route and must still be served,
+		// so a cache buster never costs a 404.
+		"/app.js?v=test", "/style.css?v=test",
+		"/sfx/lost.webm", "/sfx/lost.ogg", "/sfx/lost.mp3",
+	} {
 		code, _, err := httpDo(http.MethodGet, path, "")
 		report("asset "+path, errOr(err, code != 200, fmt.Sprintf("status %d", code)))
 	}

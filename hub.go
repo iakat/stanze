@@ -117,12 +117,27 @@ type Room struct {
 	peers   map[string]*Peer
 	created time.Time
 	emptyAt time.Time
-	// admin is the peer that may mute, remove or promote others. The first
-	// peer in the room gets it, and it moves on when that peer leaves.
-	admin string
-	// order keeps the join order, so the next admin is the oldest peer.
+	// admins are the peers that may mute, remove or promote others. The first
+	// peer in the room gets the role, and a room can have several admins.
+	admins map[string]bool
+	// order keeps the join order, so a new admin is the oldest peer.
 	order []string
+	// chat is the recent line buffer, sent to a peer that joins late.
+	chat []chatLine
 }
+
+// chatLine is one line of the room log. Events (join, leave, kick, mute) use
+// the same shape as a text message, so a client renders one list.
+type chatLine struct {
+	Kind string `json:"kind"`
+	From string `json:"from,omitempty"`
+	Name string `json:"name,omitempty"`
+	Text string `json:"text,omitempty"`
+	TS   int64  `json:"ts"`
+}
+
+// chatMax is the number of lines a room keeps.
+const chatMax = 100
 
 type Hub struct {
 	mu           sync.Mutex
@@ -184,6 +199,7 @@ func (h *Hub) create(passphrase string) (string, error) {
 			id:      id,
 			pass:    pass,
 			peers:   make(map[string]*Peer),
+			admins:  make(map[string]bool),
 			created: now,
 			emptyAt: now,
 		}
@@ -244,6 +260,7 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 			id:      roomID,
 			pass:    pass,
 			peers:   make(map[string]*Peer),
+			admins:  make(map[string]bool),
 			created: now,
 			emptyAt: now,
 		}
@@ -264,8 +281,8 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 	room.order = append(room.order, p.id)
 	room.emptyAt = time.Time{}
 	p.room = room
-	if room.admin == "" {
-		room.admin = p.id
+	if len(room.admins) == 0 {
+		room.admins[p.id] = true
 	}
 	return room, nil
 }
@@ -287,11 +304,11 @@ func (h *Hub) leave(p *Peer) {
 	if len(room.peers) == 0 {
 		room.emptyAt = time.Now()
 	}
-	if room.admin == p.id {
-		room.admin = ""
+	delete(room.admins, p.id)
+	if len(room.admins) == 0 {
 		for _, id := range room.order {
 			if _, ok := room.peers[id]; ok {
-				room.admin = id
+				room.admins[id] = true
 				break
 			}
 		}
@@ -331,18 +348,35 @@ func (h *Hub) relay(p *Peer, to string, payload []byte) {
 	target.enqueue(payload)
 }
 
-// adminOf reports the current admin id of a room.
-func (h *Hub) adminOf(room *Room) string {
+// adminsOf returns the current admin ids of a room, oldest first.
+func (h *Hub) adminsOf(room *Room) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if room == nil {
-		return ""
+		return nil
 	}
-	return room.admin
+	out := make([]string, 0, len(room.admins))
+	for _, id := range room.order {
+		if room.admins[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
-// setAdmin hands the role to another peer of the same room.
-func (h *Hub) setAdmin(room *Room, id string) bool {
+// isAdmin reports whether one peer holds the admin role.
+func (h *Hub) isAdmin(room *Room, id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room == nil {
+		return false
+	}
+	return room.admins[id]
+}
+
+// grantAdmin gives the role to another peer of the same room. The role is only
+// added: a room can have more than one admin.
+func (h *Hub) grantAdmin(room *Room, id string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if room == nil {
@@ -351,8 +385,36 @@ func (h *Hub) setAdmin(room *Room, id string) bool {
 	if _, ok := room.peers[id]; !ok {
 		return false
 	}
-	room.admin = id
+	room.admins[id] = true
 	return true
+}
+
+// addChat appends one line to the room log and returns the room history.
+func (h *Hub) addChat(room *Room, line chatLine) []chatLine {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room == nil {
+		return nil
+	}
+	room.chat = append(room.chat, line)
+	if len(room.chat) > chatMax {
+		room.chat = append(room.chat[:0], room.chat[len(room.chat)-chatMax:]...)
+	}
+	out := make([]chatLine, len(room.chat))
+	copy(out, room.chat)
+	return out
+}
+
+// chatOf returns a copy of the room log.
+func (h *Hub) chatOf(room *Room) []chatLine {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room == nil {
+		return nil
+	}
+	out := make([]chatLine, len(room.chat))
+	copy(out, room.chat)
+	return out
 }
 
 // peerOf looks one peer up inside a room.
