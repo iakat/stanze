@@ -459,6 +459,10 @@ async function runAttempt(browser, scenario, cycle) {
     pages.b = await waitPrep(ctxB, 'bo', room, errorsB, 'B');
     if (!pages.a || !pages.a.page || !pages.b || !pages.b.page) {
       rec.how = 'prep';
+      rec.prep = {
+        a: pages.a ? (pages.a.ready || {}) : 'absent',
+        b: pages.b ? (pages.b.ready || {}) : 'absent',
+      };
       return { ok: false, rec, pages, errors: { A: errorsA, B: errorsB, C: errorsC } };
     }
     if (scenario.churn) {
@@ -544,13 +548,25 @@ async function closeAttempt(attempt) {
 }
 
 // waitPrep keeps a page that failed to load out of the attempt as a named
-// failure instead of an exception with no context.
+// failure instead of an exception with no context. A lobby load is not the
+// subject of this suite, so it gets three tries like the join in the sibling
+// suite: a flaky asset fetch must not be read as a race.
 async function waitPrep(ctx, name, room, errors, label) {
-  try {
-    return await prep(ctx, name, room, errors);
-  } catch (err) {
-    return { page: null, errors, ready: { failed: String(err).slice(0, 300) }, label };
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const out = await prep(ctx, name, room, errors);
+      return out;
+    } catch (err) {
+      last = String((err && err.message) || err).slice(0, 300);
+      console.log('PREP-RETRY ' + label + ' attempt ' + (attempt + 1) + '  ' + last);
+      // A fresh page: the failed one may be stuck on a half-loaded lobby.
+      const pages = ctx.pages();
+      for (const p of pages) await p.close().catch(() => {});
+      await sleep(400);
+    }
   }
+  return { page: null, errors, ready: { failed: last }, label };
 }
 
 async function dumpFailure(browser, attempt) {
@@ -615,11 +631,21 @@ async function dumpFailure(browser, attempt) {
   let pass = 0;
   let fail = 0;
   const tally = {};
+  const retried = new Set();
   let aborted = false;
 
   for (let i = 0; i < plan.length && i < ATTEMPTS_MAX && !aborted; i++) {
     const [scenario, cycle] = plan[i];
-    const attempt = await runAttempt(browser, scenario, cycle);
+    let attempt = await runAttempt(browser, scenario, cycle);
+    if (!attempt.ok && attempt.rec.how === 'prep' && !retried.has(i)) {
+      // The lobby did not load: that is the harness, not the pair.
+      retried.add(i);
+      console.log('RETRY-ATTEMPT ' + attempt.rec.tag + ' after prep failure '
+        + JSON.stringify(attempt.rec.prep || {}));
+      await closeAttempt(attempt);
+      i--;
+      continue;
+    }
     const r = attempt.rec;
     tally[scenario.name] = tally[scenario.name] || { pass: 0, fail: 0 };
     const view = r.view || {};

@@ -263,16 +263,6 @@ function send(msg) {
   // line in the clear.
   if (state.sealed) auditWire('out', raw);
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    // A key frame request is a hint, not a step: a second request for the same
-    // peer says the same thing, so the newer one takes the older slot and the
-    // queue never fills with requests that a later one makes moot.
-    if (msg.t === 'keyframe' && msg.to) {
-      const at = state.outbox.findIndex((item) => item.t === 'keyframe' && item.to === msg.to);
-      if (at !== -1) {
-        state.outbox[at] = { t: msg.t, to: msg.to, raw };
-        return;
-      }
-    }
     // Keep the newest frames: an offer outranks the ICE of a peer that the
     // close already dropped.
     if (state.outbox.length >= OUTBOX_MAX) state.outbox.shift();
@@ -932,9 +922,6 @@ function addTrackToPeer(peer, track) {
     say(state.sealFault);
     return;
   }
-  // A fresh sender transform starts on a delta frame that the remote can not
-  // decode before its own keys exist; ask our encoder for a key frame now.
-  forceKeyFrame(peer);
 }
 
 // publishTrack offers one new track to every peer. addTrack triggers the
@@ -1466,7 +1453,6 @@ async function replaceOutVideo(track) {
             continue;
           }
         }
-        forceKeyFrame(peer);
       }
     } else if (track) {
       addTrackToPeer(peer, track);
@@ -1621,9 +1607,6 @@ function ensurePeer(id, name, mic, cam) {
     recvSet: new Set(),
     recvFaulted: false,
     desc: null,        // the description chain of this pair
-    keyFrameAt: 0,     // last key frame request, so a burst is not repeated
-    keyRetryTimer: null,
-    keyRetryDone: false,
     announcedName: '',
   };
   peer.vol = storedVolume(peer.name);
@@ -1706,10 +1689,6 @@ function connectPeer(id, name, initiator, mic, cam) {
   pc.onconnectionstatechange = () => {
     setPeerState(peer, pc.connectionState);
     if (pc.connectionState === 'connected') {
-      // A join or a rejoin starts both decoders from nothing. Ask each side
-      // for a fresh key frame once the pair is up.
-      forceKeyFrame(peer);
-      requestKeyFrame(peer, true);
       // The encodings exist now, so a cap that was too early applies here.
       capCameraSenders(pc);
     }
@@ -1835,7 +1814,6 @@ function dropPeer(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
   if (peer.helloTimer) clearTimeout(peer.helloTimer);
-  if (peer.keyRetryTimer) clearTimeout(peer.keyRetryTimer);
   dropAudio(peer);
   if (peer.pc) peer.pc.close();
   if (peer.tile) peer.tile.remove();
@@ -2028,12 +2006,6 @@ function handle(msg) {
     case 'ice': {
       const peer = state.peers.get(msg.from);
       if (peer) onCandidate(peer, msg.candidate);
-      break;
-    }
-    case 'keyframe': {
-      // The other side has no picture: emit a fresh key frame.
-      const peer = state.peers.get(msg.from);
-      if (peer) forceKeyFrame(peer);
       break;
     }
   }
@@ -3020,19 +2992,6 @@ function startSealedWorker() {
         state.keyWait.delete(msg.pair);
         resolve();
       }
-      // The pair can decrypt now. Everything the sender encoded before this
-      // point is a delta frame the decoder can not use, so ask both encoders
-      // for a key frame.
-      const peer = peerByPair(msg.pair);
-      if (peer) {
-        forceKeyFrame(peer);
-        requestKeyFrame(peer);
-      }
-    } else if (msg.type === 'keyframe') {
-      // Only a failed receive request is worth a signaling round trip: the
-      // sender side has nothing to ask the peer for, and a reply there would
-      // bounce between two browsers that both lack the call.
-      if (!msg.ok && msg.peer && msg.dir === 'recv') send({ t: 'keyframe', to: msg.peer });
     } else if (msg.type === 'sample') {
       if (state.samples.length < 40) state.samples.push(msg);
     } else if (msg.type === 'error') {
@@ -3061,7 +3020,6 @@ function paintFrameCounters() {
 function installSealedReceivers(peer) {
   const pc = peer.pc;
   if (!pc || !state.sealed || !state.worker) return;
-  let attached = 0;
   for (const receiver of pc.getReceivers()) {
     if (peer.recvSet.has(receiver)) continue;
     let transform = null;
@@ -3078,7 +3036,6 @@ function installSealedReceivers(peer) {
     // marks the receiver, so a later call tries this one again.
     if (transform && receiver.transform) {
       peer.recvSet.add(receiver);
-      attached++;
     } else if (!peer.recvFaulted) {
       peer.recvFaulted = true;
       state.sealFault = 'this browser did not keep the receive transform, so incoming frames stay sealed';
@@ -3086,10 +3043,6 @@ function installSealedReceivers(peer) {
       say(state.sealFault);
     }
   }
-  // A receiver that was added by a renegotiation has missed the frames before
-  // its transform existed; start it again on a key frame. A connection that is
-  // not up yet asks on its first "connected" instead.
-  if (attached > 0 && pc.connectionState === 'connected') requestKeyFrame(peer);
 }
 
 // peerByPair finds the peer whose pair label the worker named.
@@ -3098,71 +3051,6 @@ function peerByPair(pair) {
     if (pairLabel(peer.id) === pair) return peer;
   }
   return null;
-}
-
-// One key frame request per pair per half second: a burst of joins must not
-// turn into a burst of requests.
-const KEY_FRAME_MIN_MS = 500;
-// A request that arrives before the sender's encoder has a frame to repeat is
-// lost. One delayed second ask per peer covers that without a poll.
-const KEY_FRAME_RETRY_MS = 1500;
-
-// requestKeyFrame asks the sender for a fresh key frame, so a decoder that
-// started on delta frames gets a picture. The preferred path is the receiving
-// transform: RTCRtpScriptTransformer.generateKeyFrame asks over the media path
-// and needs no signaling. A build that exposes the call on the receiver is used
-// when present. If neither exists the request travels over the signaling
-// channel and the sender asks its own encoder there. No bitrate is touched.
-function requestKeyFrame(peer, force) {
-  if (!peer.pc) return;
-  const now = Date.now();
-  if (!force && peer.keyFrameAt && now - peer.keyFrameAt < KEY_FRAME_MIN_MS) return;
-  peer.keyFrameAt = now;
-  let handled = false;
-  for (const receiver of peer.pc.getReceivers()) {
-    if (!receiver.track || receiver.track.kind !== 'video') continue;
-    const recv = /** @type {any} */ (receiver);
-    if (typeof recv.requestKeyFrame === 'function') {
-      try {
-        recv.requestKeyFrame();
-        handled = true;
-      } catch { /* this receiver can not be nudged */ }
-    }
-  }
-  if (!handled && state.sealed && state.worker) {
-    state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id), peer: peer.id, dir: 'recv' });
-    handled = true;
-  }
-  if (!handled) send({ t: 'keyframe', to: peer.id });
-  if (!peer.keyRetryTimer && !peer.keyRetryDone) {
-    peer.keyRetryTimer = setTimeout(() => {
-      peer.keyRetryTimer = null;
-      peer.keyRetryDone = true;
-      if (state.peers.get(peer.id) === peer && peer.pc) requestKeyFrame(peer, true);
-    }, KEY_FRAME_RETRY_MS);
-  }
-}
-
-// forceKeyFrame asks our own encoder for a key frame, for the peer that just
-// got the keys or just had the send transform attached. The send transform is
-// the standard place for the call; a build that exposes it on the sender is
-// used as well. A browser with neither keeps encoding on its own schedule.
-function forceKeyFrame(peer) {
-  if (!peer.pc) return;
-  let handled = false;
-  for (const sender of peer.pc.getSenders()) {
-    if (!sender.track || sender.track.kind !== 'video') continue;
-    const out = /** @type {any} */ (sender);
-    if (typeof out.generateKeyFrame === 'function') {
-      try {
-        out.generateKeyFrame();
-        handled = true;
-      } catch { /* this sender can not be nudged */ }
-    }
-  }
-  if (!handled && state.sealed && state.worker) {
-    state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id), peer: peer.id, dir: 'send' });
-  }
 }
 
 // ------------------------------------------------------------- handshake
@@ -3646,12 +3534,6 @@ function handleSealed(msg) {
     case 'ice': {
       const peer = state.peers.get(msg.from);
       if (peer && msg.candidate) onCandidate(peer, msg.candidate);
-      break;
-    }
-    case 'keyframe': {
-      // Carries no room content: just "emit a key frame".
-      const peer = state.peers.get(msg.from);
-      if (peer) forceKeyFrame(peer);
       break;
     }
     case 'state': {
