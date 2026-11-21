@@ -23,6 +23,12 @@ import (
 //go:embed static
 var embeddedFS embed.FS
 
+// The queue and the done list ship inside the binary as a fallback, so the
+// two links in the page always lead somewhere. A docs directory on disk wins.
+//
+//go:embed QUEUE.md DONE.md
+var embeddedDocs embed.FS
+
 func main() {
 	cfg, err := loadConfig(os.Args[1:])
 	if err != nil {
@@ -162,8 +168,9 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	return securityHeaders(mux, srv.log), nil
 }
 
-// docHandler serves one markdown file from the docs directory. The content is
-// served as plain text so every browser shows it inline.
+// docHandler serves one markdown file, from the docs directory when a copy is
+// there, else from the copy embedded in the binary. The content is served as
+// plain text so every browser shows it inline.
 func docHandler(dir, name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -171,11 +178,16 @@ func docHandler(dir, name string) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if dir == "" {
-			http.NotFound(w, r)
-			return
+		if dir != "" {
+			// A file on disk is a live edit and wins over the embedded copy.
+			if body, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.Header().Set("Cache-Control", "no-store")
+				w.Write(body)
+				return
+			}
 		}
-		body, err := os.ReadFile(filepath.Join(dir, name))
+		body, err := fs.ReadFile(embeddedDocs, name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
