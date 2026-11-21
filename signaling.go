@@ -188,6 +188,20 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.hub.relay(p, m.To, mustJSON(serverMsg{T: "ice", From: p.id, Candidate: m.Candidate}))
+		case "state":
+			// A mute or camera toggle is a small indicator for the other
+			// tiles. It carries no media, and the server keeps the last value
+			// only for the lifetime of the connection.
+			if m.Mic != nil {
+				p.mic = *m.Mic
+			}
+			if m.Cam != nil {
+				p.cam = *m.Cam
+			}
+			mic, cam := p.mic, p.cam
+			s.hub.broadcast(p, mustJSON(serverMsg{
+				T: "state", From: p.id, Mic: &mic, Cam: &cam,
+			}))
 		case "leave":
 			return
 		case "ping":
@@ -235,7 +249,7 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	existing := s.hub.peersOf(room, p.id)
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
-		peers = append(peers, peerInfo{ID: other.id, Name: other.name})
+		peers = append(peers, peerInfo{ID: other.id, Name: other.name, Mic: other.mic, Cam: other.cam})
 	}
 
 	// Fresh, time limited relay credentials for this connection only.
@@ -253,7 +267,7 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 
 	joinedMsg := mustJSON(serverMsg{
 		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Name: p.name},
+		Peer: &peerInfo{ID: p.id, Name: p.name, Mic: p.mic, Cam: p.cam},
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)

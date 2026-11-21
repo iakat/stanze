@@ -25,6 +25,11 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
 
     this.vad = 0;
     this.alive = true;
+
+    // Safety net: if a loud input comes out near silent, the filter is wrong
+    // for this microphone. Pass the dry signal for a while, then try again.
+    this.dead = 0;
+    this.bypassLeft = 0;
     this.port.onmessage = (event) => {
       if (event.data && event.data.stop) this.alive = false;
     };
@@ -34,10 +39,35 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
     const heap = this.module.HEAPF32;
     const inBase = this.inPtr >> 2;
     const outBase = this.outPtr >> 2;
-    for (let i = 0; i < FRAME; i++) heap[inBase + i] = frame[i] * 32768;
+    let inEnergy = 0;
+    for (let i = 0; i < FRAME; i++) {
+      const v = frame[i] * 32768;
+      heap[inBase + i] = v;
+      inEnergy += v * v;
+    }
     this.vad = this.module._rnnoise_process_frame(this.state, this.outPtr, this.inPtr);
-    for (let i = 0; i < FRAME; i++) this.frameOut[i] = heap[outBase + i] / 32768;
+    let outEnergy = 0;
+    for (let i = 0; i < FRAME; i++) {
+      const v = heap[outBase + i] / 32768;
+      this.frameOut[i] = v;
+      outEnergy += v * v;
+    }
     this.outPos = 0;
+
+    const inRms = Math.sqrt(inEnergy / FRAME);
+    const outRms = Math.sqrt(outEnergy / FRAME);
+    if (inRms > 200 && outRms < inRms * 0.02) this.dead++;
+    else this.dead = Math.max(0, this.dead - 1);
+    if (this.dead > 30) {
+      // 300 ms of audible input and no output: stop filtering.
+      this.dead = 0;
+      this.bypassLeft = 500;
+    }
+    if (this.bypassLeft > 0) {
+      // About 5 s of the untouched signal, then a fresh attempt.
+      this.bypassLeft--;
+      this.frameOut.set(frame);
+    }
   }
 
   process(inputs, outputs) {

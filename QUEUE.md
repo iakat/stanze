@@ -7,7 +7,6 @@ One line per work item. New work goes to the bottom.
 - Decide the policy for custom room names: a guessed name lets people drop in, and the point of random ids is that they cannot (coderobe).
 - Decide if a bot or a text peer can take part in a room: today only browsers join one, so the voice bridge from the jitsi port has no place here yet (open question, not started).
 - Funny sound effects for the room events: join, leave, mic on, mic off (katia).
-- Show the own tile with a placeholder when the camera is refused, so the mirror preview and the own badge are always visible (seen in Chromium without a camera).
 - Add host controls: mute or remove one peer from the room.
 - Test TURN allocations over plain HTTP, not only through the TLS proxy.
 - Add a camera and microphone picker.

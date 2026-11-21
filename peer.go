@@ -14,6 +14,11 @@ type Peer struct {
 	name string
 	room *Room
 
+	// mic and cam are the flags the client reported last. They are only
+	// indicators for the other tiles; the media itself decides the truth.
+	mic bool
+	cam bool
+
 	send      chan []byte
 	closeOnce sync.Once
 	onClose   func()
@@ -25,6 +30,8 @@ func newPeer() *Peer {
 	return &Peer{
 		send:  make(chan []byte, 64),
 		limit: newTokenBucket(120, 60),
+		mic:   true,
+		cam:   true,
 	}
 }
 
@@ -60,6 +67,8 @@ func (p *Peer) close() {
 type peerInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Mic  bool   `json:"mic"`
+	Cam  bool   `json:"cam"`
 }
 
 type iceServer struct {
@@ -78,6 +87,10 @@ type clientMsg struct {
 	To        string          `json:"to,omitempty"`
 	SDP       string          `json:"sdp,omitempty"`
 	Candidate json.RawMessage `json:"candidate,omitempty"`
+
+	// mic and cam are pointers so "not sent" and "false" differ.
+	Mic *bool `json:"mic,omitempty"`
+	Cam *bool `json:"cam,omitempty"`
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
@@ -90,6 +103,8 @@ type serverMsg struct {
 	From      string          `json:"from,omitempty"`
 	SDP       string          `json:"sdp,omitempty"`
 	Candidate json.RawMessage `json:"candidate,omitempty"`
+	Mic       *bool           `json:"mic,omitempty"`
+	Cam       *bool           `json:"cam,omitempty"`
 	Code      string          `json:"code,omitempty"`
 	Ice       []iceServer     `json:"ice,omitempty"`
 }
