@@ -4,6 +4,9 @@ One line per work item. The top item is the most important.
 
 ## In work, not live yet
 
+- The stats panel gets a redesign: it reads as a clear sheet and not as a pile of rows, and the numbers stay the same.
+- The stats panel gets old school graphs: the downlink area, the round trip line and the loss, drawn in the look of the rest of the sheet, and a text line under each drawing.
+
 
 ## Open
 
@@ -16,3 +19,5 @@ One line per work item. The top item is the most important.
 - Make a posted URL clickable in the chat: a guest who types or pastes a link gets a clickable link, http and https only, with the target shown on hover. A link is not a preview: no page is fetched and no image is loaded until a guest clicks it, because a link that phones home tells the other side who reads the room.
 - A waiting room, which an admin can turn on for the room. A new guest waits outside the room until a guest inside lets them in. While the guest waits, every member of the meeting can see and hear them, and the screen tells the waiting guest in clear words that the camera and the microphone are on and that every member of the meeting can see and hear them before they are let in.
 - Add a sound switch: the four cues and the lost connection chime are always on, they can only be made quiet by hand. It sits at the bottom of the queue.
+- Beauty filters and masks on the own camera: a picker of a few face filters and masks, drawn in the page before the frame leaves the machine, so the other side needs nothing, one choice per guest, off by default, and the camera light stays honest.
+- A two person layout: when the room has two guests, one takes the full stage and the other sits small in a corner. A guest can move that small tile to any of the four corners and the tile snaps to the corner. The place is kept for the guest.
