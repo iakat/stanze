@@ -230,7 +230,11 @@ func loadAssets(dir string) (map[string][]byte, error) {
 }
 
 func assetNames() []string {
-	return []string{"index.html", "app.js", "style.css", "favicon.svg", "rnnoise-sync.js", "rnnoise-worklet.js", workletBundle}
+	return []string{
+		"index.html", "app.js", "style.css", "favicon.svg",
+		"rnnoise-sync.js", "rnnoise-worklet.js", workletBundle,
+		"sfx/pop.mp3", "sfx/bonk.mp3", "sfx/timp.mp3", "sfx/hammer.mp3",
+	}
 }
 
 // workletBundle is the one module the audio worklet loads. A worklet module
@@ -267,6 +271,8 @@ func contentType(name string) string {
 		return "text/css; charset=utf-8"
 	case strings.HasSuffix(name, ".svg"):
 		return "image/svg+xml"
+	case strings.HasSuffix(name, ".mp3"):
+		return "audio/mpeg"
 	}
 	return "application/octet-stream"
 }
