@@ -279,6 +279,9 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   color: #606060;
 }
 .tile.playing .avatar { display: none; }
+/* The camera is off: the tile keeps the black frame of a disabled track out
+ * of the way, so the centre name is visible again. */
+.tile.camoff .avatar { display: grid; }
 .tile .tag {
   position: absolute;
   left: 4px;
