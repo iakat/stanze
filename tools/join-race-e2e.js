@@ -115,16 +115,46 @@ const SCENARIOS = [
     },
   },
   {
-    name: 'reload-early',
+    // One lost signaling frame, not a timing change: A's first encrypted reply
+    // (the hello when A is the lower id, the ok when A is the higher id) never
+    // reaches B. Nothing in the client retries either message, so this is the
+    // smallest deterministic reproduction of "keys, tile, no picture".
+    name: 'drop-first-reply',
     cycles: 2,
+    optIn: true,
+    start: async (a, b) => {
+      await a.evaluate(() => { window.__race.drop = { mode: 'first-reply-enc', done: false }; });
+      await Promise.all([click(a), click(b)]);
+    },
+  },
+  {
+    name: 'reload-early',
+    cycles: 4,
     start: (a, b) => Promise.all([click(a), click(b)]),
     after: async (pages) => {
-      await sleep(150);
+      // Each cycle reloads at a different point in the first half second, so
+      // the sweep covers the boot, the key install and the offer, not one spot.
+      const offset = [0, 60, 120, 180, 260, 340][pages.cycle % 6];
+      await sleep(150 + offset);
       const b = pages.b.page;
-      await b.goto(BASE + '/?sealed=1#r=' + pages.room, { waitUntil: 'load', timeout: 60000 });
-      await until(b, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 60000, 'reload wasm');
-      await b.fill('#name', 'bo');
-      await b.click('#enter-btn', { timeout: 20000 });
+      // A navigation to the exact same URL, fragment included, is not a reload
+      // in this browser: it is a same-document no-op, so the old page keeps the
+      // call and the lobby input is hidden. The nonce forces a new document.
+      await b.goto(BASE + '/?sealed=1&n=' + Date.now() + '#r=' + pages.room,
+        { waitUntil: 'load', timeout: 30000 });
+      await until(b, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 30000, 'reload wasm');
+      if (!(await b.evaluate(() => !!(window.e2eApp && window.e2eApp.state.self)))) {
+        // The lobby is the normal case. A filled stage means the link joined
+        // by itself, and then there is nothing to click.
+        const lobby = await b.evaluate(() => {
+          const el = document.getElementById('name');
+          return !!(el && el.offsetParent !== null);
+        });
+        if (!lobby) throw new Error('the reloaded page shows neither the lobby nor a call');
+        await b.fill('#name', 'bo', { timeout: 5000 });
+        await b.click('#enter-btn', { timeout: 10000 });
+      }
+      await until(b, () => !!(window.e2eApp && window.e2eApp.state.self), null, 20000, 'reloaded B joined');
       pages.reloaded = true;
     },
   },
@@ -152,10 +182,14 @@ function staggerStart(first) {
 // peer connections, with a page-relative timestamp.
 function instrument() {
   const race = window.__race = {
-    t0: performance.now(), ws: [], rpc: [], warn: [], xf: [], pcs: [], wsSeq: 0,
+    t0: performance.now(), ws: [], rpc: [], warn: [], xf: [], pcs: [], wsSeq: 0, inEnc: 0,
   };
   const now = () => Math.round(performance.now() - race.t0);
   const push = (list, item) => { if (list.length < 600) list.push(item); };
+  const kindOf = (data) => {
+    if (typeof data !== 'string') return '';
+    try { return JSON.parse(data).t || ''; } catch { return ''; }
+  };
 
   function sdpSummary(sdp) {
     const parts = [];
@@ -193,9 +227,22 @@ function instrument() {
     push(race.ws, { t: now(), dir: 'new', ws: tag });
     ws.addEventListener('open', () => push(race.ws, { t: now(), dir: 'open', ws: tag }));
     ws.addEventListener('close', () => push(race.ws, { t: now(), dir: 'close', ws: tag }));
-    ws.addEventListener('message', (ev) => push(race.ws, { t: now(), dir: 'in', ws: tag, m: brief(ev.data) }));
+    ws.addEventListener('message', (ev) => {
+      if (kindOf(ev.data) === 'enc') race.inEnc = (race.inEnc || 0) + 1;
+      push(race.ws, { t: now(), dir: 'in', ws: tag, m: brief(ev.data) });
+    });
     const send = ws.send.bind(ws);
     ws.send = (data) => {
+      const kind = kindOf(data);
+      const cfg = race.drop;
+      // A fault-injection mode used by drop-first-reply: the first encrypted
+      // frame this page sends after it has seen one is the hello (lower id) or
+      // the ok (higher id), and it is thrown away instead of sent.
+      if (cfg && cfg.mode === 'first-reply-enc' && !cfg.done && kind === 'enc' && (race.inEnc || 0) > 0) {
+        cfg.done = true;
+        push(race.ws, { t: now(), dir: 'drop', ws: tag, m: brief(data) });
+        return;
+      }
       push(race.ws, { t: now(), dir: 'out', ws: tag, m: brief(data) });
       return send(data);
     };
@@ -463,6 +510,25 @@ async function waitPair(pageA, targetA, pageB, targetB, ms) {
   return { ok: false, waited: Date.now() - start, view: last, reconnects };
 }
 
+// waitSelf reads the page's own peer id, waiting for a page that is still
+// joining or reconnecting. A page that never gets one is reported as "join",
+// with the console errors, instead of as a missing picture later.
+async function waitSelf(page, label) {
+  try {
+    return await until(page, () => (window.e2eApp && window.e2eApp.state.self) || '', null, 25000, label + ' self');
+  } catch {
+    return null;
+  }
+}
+
+// hostChurn spots a transport fault that is not the pair under test: a host
+// rollout answers the handshake with 503, the client folds the socket and
+// rebuilds every peer, and the room can even disappear with the old pod. The
+// record keeps the mark so the run can be attributed instead of blamed.
+function hostChurn(errors) {
+  return (errors || []).some((e) => /503|WebSocket connection|connection lost|101 Switching/i.test(String(e)));
+}
+
 function roomName(tag) {
   const run = Date.now().toString(36).slice(-5);
   const clean = tag.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -502,6 +568,7 @@ async function runAttempt(browser, scenario, cycle) {
       pages.c = await waitPrep(ctxC, 'cy', room, errorsC, 'C');
     }
     pages.room = room;
+    pages.cycle = cycle;
 
     rec.startAt = Date.now() - t0;
     await scenario.start(pages.a.page, pages.b.page, pages.c && pages.c.page, scenario);
@@ -519,15 +586,21 @@ async function runAttempt(browser, scenario, cycle) {
       return { ok: false, rec, pages, errors: { A: errorsA, B: errorsB, C: errorsC } };
     }
 
-    if (scenario.after) await scenario.after(pages).catch((e) => { rec.afterError = String(e).slice(0, 200); });
+    if (scenario.after) await scenario.after(pages).catch((e) => { rec.afterError = String(e).slice(0, 600); });
 
-    // With a reload the peer id of B changes; the id is read fresh below and
-    // the wait also matches on the sealed name, so a reconnect is not mistaken
-    // for a missing peer.
-    const idA = await pages.a.page.evaluate(() => window.e2eApp.state.self);
-    const idB = await pages.b.page.evaluate(() => window.e2eApp.state.self);
+    // A perturbation can replace a page (the reload) or a socket (a rollout),
+    // so the ids are read after it, and a page that still has no self is given
+    // one wait instead of being read as a missing picture.
+    const idA = await waitSelf(pages.a.page, 'A');
+    const idB = await waitSelf(pages.b.page, 'B');
     rec.idA = idA;
     rec.idB = idB;
+    if (!idA || !idB) {
+      rec.how = 'join';
+      rec.selfNow = { a: idA, b: idB };
+      rec.hostChurn = hostChurn(errorsA.concat(errorsB));
+      return { ok: false, rec, pages, errors: { A: errorsA, B: errorsB, C: errorsC } };
+    }
 
     const waited = await waitPair(pages.a.page, { id: idB, name: 'bo' }, pages.b.page, { id: idA, name: 'ana' }, VIDEO_MS);
     rec.view = waited.view;
@@ -535,6 +608,7 @@ async function runAttempt(browser, scenario, cycle) {
     rec.reconnects = waited.reconnects;
     if (!waited.ok) {
       rec.how = 'no-video';
+      rec.hostChurn = hostChurn(errorsA.concat(errorsB));
       const nowA = await pages.a.page.evaluate(() => window.e2eApp.state.self).catch(() => '?');
       const nowB = await pages.b.page.evaluate(() => window.e2eApp.state.self).catch(() => '?');
       rec.selfNow = { a: nowA, b: nowB };
@@ -565,6 +639,7 @@ async function runAttempt(browser, scenario, cycle) {
       && rec.counters.a.movedDec && rec.counters.b.movedDec;
     if (!countersOk) {
       rec.how = 'counters';
+      rec.hostChurn = hostChurn(errorsA.concat(errorsB));
       return { ok: false, rec, pages, errors: { A: errorsA, B: errorsB, C: errorsC } };
     }
     rec.how = 'ok';
@@ -572,6 +647,7 @@ async function runAttempt(browser, scenario, cycle) {
   } catch (err) {
     rec.how = 'exception';
     rec.exception = err && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : String(err);
+    rec.hostChurn = hostChurn(errorsA.concat(errorsB));
     return { ok: false, rec, pages, errors: { A: errorsA, B: errorsB, C: errorsC } };
   } finally {
     // The contexts stay open on a failure: the dump reads the live pages and
@@ -664,7 +740,10 @@ async function dumpFailure(browser, attempt) {
 
   const plan = [];
   for (const sc of SCENARIOS) {
+    // An opt-in scenario is a fault injection, not a timing run: it is only in
+    // the plan when it is named explicitly.
     if (ONLY.length && !ONLY.includes(sc.name)) continue;
+    if (sc.optIn && !ONLY.includes(sc.name)) continue;
     const n = sc.cycles || CYCLES;
     for (let i = 0; i < n; i++) plan.push([sc, i]);
   }
@@ -680,11 +759,13 @@ async function dumpFailure(browser, attempt) {
   for (let i = 0; i < plan.length && i < ATTEMPTS_MAX && !aborted; i++) {
     const [scenario, cycle] = plan[i];
     let attempt = await runAttempt(browser, scenario, cycle);
-    if (!attempt.ok && attempt.rec.how === 'prep' && !retried.has(i)) {
-      // The lobby did not load: that is the harness, not the pair.
+    if (!attempt.ok && (attempt.rec.how === 'prep' || attempt.rec.hostChurn) && !retried.has(i)) {
+      // The lobby did not load, or the host was replaced under the pair: that
+      // is the harness or the deployment, not the race under test.
       retried.add(i);
-      console.log('RETRY-ATTEMPT ' + attempt.rec.tag + ' after prep failure '
-        + JSON.stringify(attempt.rec.prep || {}));
+      console.log('RETRY-ATTEMPT ' + attempt.rec.tag + ' after '
+        + (attempt.rec.how === 'prep' ? 'prep failure ' + JSON.stringify(attempt.rec.prep || {})
+          : 'host churn (how=' + attempt.rec.how + ') ' + JSON.stringify((attempt.rec.selfNow || {}))));
       await closeAttempt(attempt);
       i--;
       continue;
@@ -692,6 +773,8 @@ async function dumpFailure(browser, attempt) {
     const r = attempt.rec;
     tally[scenario.name] = tally[scenario.name] || { pass: 0, fail: 0 };
     const view = r.view || {};
+    const peersA = view.a && view.a.now ? view.a.now.peers : null;
+    const peersB = view.b && view.b.now ? view.b.now.peers : null;
     const line = 'ATTEMPT ' + (i + 1) + '/' + plan.length + ' ' + r.tag + ' ' + (attempt.ok ? 'PASS' : 'FAIL')
       + ' media=' + (r.mediaMs || 0) + 'ms'
       + (view.a ? ' A[w=' + (view.a.now || {}).w + ' t=' + Number((view.a.now || {}).t || 0).toFixed(2)
@@ -699,6 +782,9 @@ async function dumpFailure(browser, attempt) {
       + (view.b ? ' B[w=' + (view.b.now || {}).w + ' t=' + Number((view.b.now || {}).t || 0).toFixed(2)
         + ' ' + (view.b.now || {}).conn + '/' + (view.b.now || {}).sig + ']' : '')
       + (r.how && r.how !== 'ok' ? ' how=' + r.how : '')
+      + (r.hostChurn ? ' host-churn' : '')
+      + (r.reconnects ? ' reconnects=' + r.reconnects : '')
+      + (peersA > 1 || peersB > 1 ? ' ghost-peers=' + peersA + '/' + peersB : '')
       + (r.exception ? ' exc=' + r.exception : '');
     console.log(line);
     results.push({ name: r.tag, ok: attempt.ok, detail: line });

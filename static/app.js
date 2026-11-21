@@ -1209,9 +1209,14 @@ function speakTick() {
     paintSpeaking(own, state.mic ? analyserLevel(state.micAnalyser) : 0, state.ownSpoke);
   }
   for (const peer of state.peers.values()) {
+    // One read per tick feeds the light and the stats line. The light follows
+    // the microphone flag, but the level is measured either way, so a stats row
+    // still shows what arrives from a peer that reports a muted microphone.
+    const level = analyserLevel(peer.meter);
+    peer.meterPeak = Math.max(level, (peer.meterPeak || 0) * 0.9);
     if (!peer.tile) continue;
     if (!peer.spoke) peer.spoke = { last: 0 };
-    paintSpeaking(peer.tile, peer.mic ? analyserLevel(peer.meter) : 0, peer.spoke);
+    paintSpeaking(peer.tile, peer.mic ? level : 0, peer.spoke);
   }
 }
 
@@ -1227,15 +1232,28 @@ function stopSpeaking() {
   state.ownSpoke = null;
 }
 
-// micLevelLine reports the peak as a percent between -60 dB and full scale,
-// with the dB value beside it, because that is what a phone's meter shows. A
-// value near zero with a live track points at the graph, not at the device.
-function micLevelLine() {
-  if (!state.micAnalyser) return 'level none';
-  const peak = state.meterPeak;
+// levelText renders one RMS peak as a percent between -60 dB and full scale,
+// with the dB value beside it, because that is what a phone's meter shows.
+function levelText(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
   const pct = db > -60 ? Math.round(((db + 60) / 60) * 100) : 0;
-  return db > -90 ? `level ${pct}% ${Math.round(db)} dB` : 'level 0% silent';
+  return db > -90 ? `${pct}% ${Math.round(db)} dB` : '0% silent';
+}
+
+// micLevelLine reports the local input. A value near zero with a live track
+// points at the graph, not at the device.
+function micLevelLine() {
+  if (!state.micAnalyser) return 'level none';
+  return `level ${levelText(state.meterPeak)}`;
+}
+
+// inLevelLine reports what arrives from one peer, read at its source node
+// before the gain. A silent line beside a live inbound rate points at the
+// decode or the graph, not at the network; a live line with no sound points
+// after the gain.
+function inLevelLine(peer) {
+  if (!peer.audioSrc || !peer.meter) return 'in level none';
+  return `in level ${levelText(peer.meterPeak || 0)}`;
 }
 
 // setNoise switches the microphone between the raw path and the RNNoise path.
@@ -1585,6 +1603,7 @@ function ensurePeer(id, name, mic, cam) {
     audioSrc: null,
     audioEl: null,
     meter: null,     // tap on the incoming audio, for the talking light
+    meterPeak: 0,    // decaying peak of that tap, so one stats tick sees a word
     spoke: null,     // last time this peer was heard, for the hold
 
     statLast: new Map(),
@@ -1796,7 +1815,11 @@ async function applyDescription(peer, type, sdp) {
     capCameraSenders(pc);
   } catch (err) {
     peer.settingAnswer = false;
-    console.warn('description failed', err);
+    // A description that the browser rejects leaves the pair at "new": no
+    // media, no retry, and nothing on screen. Say it, and keep the detail.
+    const why = err && err.message ? err.message : String(err);
+    state.workerErrors.push('description failed for ' + shortPeer(peer.id) + ': ' + why);
+    say('the ' + type + ' with ' + shortPeer(peer.id) + ' failed; the link has no media');
   }
 }
 
@@ -1817,6 +1840,7 @@ function dropPeer(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
   if (peer.helloTimer) clearTimeout(peer.helloTimer);
+  if (peer.handshakeTimer) clearTimeout(peer.handshakeTimer);
   dropAudio(peer);
   if (peer.pc) peer.pc.close();
   if (peer.tile) peer.tile.remove();
@@ -2680,13 +2704,13 @@ async function updateStats() {
     for (const peer of state.peers.values()) {
       const s = await peerStats(peer);
       if (!s) {
-        rows.push(statsRow(peer.name, ['connecting']));
+        rows.push(statsRow(peer.name, ['connecting', inLevelLine(peer)]));
         continue;
       }
       for (const dir of ['up', 'down']) {
         for (const kind of ['audio', 'video']) total[dir][kind] += s[dir][kind];
       }
-      rows.push(statsRow(peer.name, [pathLine(s), rateLine(s)]));
+      rows.push(statsRow(peer.name, [pathLine(s), rateLine(s), inLevelLine(peer)]));
     }
     const own = statsRow('you', [ownMediaLine(), rateLine(total)]);
     const sealed = state.sealed ? sealedStatsRows() : [];
@@ -3128,7 +3152,36 @@ function sealedInstallKeys(peer, out) {
     attempt();
   });
   sealedSetE2E(peer, 'handshake');
+  armHandshakeWatch(peer);
   return ready;
+}
+
+// A handshake can hold valid keys on both sides and still have no peer
+// connection: one lost hello or ok is enough, and neither side sends that step
+// again. The watchdog repeats the step this side owns, twice, and then says so.
+const HANDSHAKE_WATCH_MS = 4000;
+const HANDSHAKE_WATCH_TRIES = 2;
+
+function armHandshakeWatch(peer) {
+  if (peer.handshakeTimer) clearTimeout(peer.handshakeTimer);
+  peer.handshakeTries = 0;
+  const tick = () => {
+    peer.handshakeTimer = null;
+    if (state.leaving || !state.peers.has(peer.id) || peer.pc || !peer.keys) return;
+    if (peer.handshakeTries >= HANDSHAKE_WATCH_TRIES) {
+      sealedSetE2E(peer, 'failed');
+      say('the handshake with ' + shortPeer(peer.id) + ' stopped; the link has no media');
+      return;
+    }
+    peer.handshakeTries += 1;
+    if (String(state.self) < String(peer.id)) {
+      if (peer.lastHello) sealedSendOpaque(peer.id, peer.lastHello);
+    } else if (peer.myConfirm) {
+      sealedSendOpaque(peer.id, { k: 'ok', c: peer.myConfirm });
+    }
+    peer.handshakeTimer = setTimeout(tick, HANDSHAKE_WATCH_MS);
+  };
+  peer.handshakeTimer = setTimeout(tick, HANDSHAKE_WATCH_MS);
 }
 
 function sealedInitiate(peer) {
@@ -3151,7 +3204,8 @@ function sealedInitiate(peer) {
   }
   peer.keyPromise = sealedInstallKeys(peer, out);
   peer.myConfirm = out.confirm;
-  sealedSendOpaque(peer.id, { k: 'hello', epk: out.epk, ct: out.ct });
+  peer.lastHello = { k: 'hello', epk: out.epk, ct: out.ct };
+  sealedSendOpaque(peer.id, peer.lastHello);
 }
 
 function sealedRespond(peer, msg) {
@@ -3209,6 +3263,7 @@ function sealedOnConfirm(peer, msg) {
     Promise.resolve(peer.keyPromise).then((ok) => {
       // A timed out key install must not start a connection that can only
       // drop frames; the retry inside the install is the recovery path.
+      if (!state.peers.has(peer.id)) return; // the peer left during the install
       if (ok !== false && !peer.pc && !state.leaving) connectPeer(peer.id, null, true);
     });
   }
@@ -3424,6 +3479,7 @@ async function sealedOnOffer(peer, sdp) {
       // and the status line already say why no picture arrives.
       state.workerErrors.push('answered an offer without frame keys');
     }
+    if (!state.peers.has(peer.id)) return; // the peer left while the keys installed
   }
   const target = connectPeer(peer.id, null, false);
   await onDescription(target, 'offer', sdp);
