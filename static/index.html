@@ -46,7 +46,7 @@
       <p class="note">Every room is sealed end to end in the browser: your name, the chat and the
         media stay there, with X25519 + ML-KEM-768 and AES-256-GCM. The server only forwards
         sealed blobs. Compare the emoji code with the other people to rule out a swapped key.</p>
-      <label class="check"><input id="noise" type="checkbox" checked> noise suppression (RNNoise)</label>
+      <label class="check"><input id="noise" type="checkbox" checked> noise suppression (GTCRN)</label>
       <label>camera
         <select id="cam-select">
           <option value="">system camera</option>
@@ -129,7 +129,7 @@
         </select>
       </label>
       <label class="pick check"><input id="mirror" type="checkbox" checked> mirror me</label>
-      <label class="pick check"><input id="noise-live" type="checkbox" checked> rnnoise</label>
+      <label class="pick check"><input id="noise-live" type="checkbox" checked> denoise</label>
       <button id="leave-btn" type="button" class="ctrl danger">leave</button>
     </footer>
 

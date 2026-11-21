@@ -1,0 +1,39 @@
+gtcrn.wasm and gtcrn.js are the GTCRN streaming speech enhancer, built from
+the official model with onnx2c, with STFT and inverse STFT (pffft) inside the
+same binary. The JavaScript loader is the emscripten output of that build.
+
+GTCRN
+MIT License, Copyright (c) 2024 Rong Xiaobin
+https://github.com/Xiaobin-Rong/gtcrn
+
+The wasm build and its loader: MIT License, Copyright (c) sapphi-red
+https://github.com/sapphi-red/gtcrn-wasm
+
+pffft, inside the same binary
+Copyright (c) 2020 Dario Mambro
+Copyright (c) 2019 Hayati Ayguen
+Copyright (c) 2013 Julien Pommier
+Copyright (c) 2004 the University Corporation for Atmospheric Research
+("UCAR"). All rights reserved. Developed by NCAR's Computational and
+Information Systems Laboratory, UCAR, www.cisl.ucar.edu.
+
+Redistribution and use in source and binary forms, with or without
+modification, is permitted provided that the following conditions are met:
+
+- Neither the names of NCAR's Computational and Information Systems
+  Laboratory, the University Corporation for Atmospheric Research, nor the
+  names of their sponsors or contributors may be used to endorse or promote
+  products derived from this software without specific prior written
+  permission.
+- Redistributions of source code must retain the above copyright notices,
+  this list of conditions, and the disclaimer below.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions, and the disclaimer below in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE CONTRIBUTORS
+DISCLAIM ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE.

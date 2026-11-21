@@ -9,7 +9,7 @@
 // worker, so the relay only ever forwards sealed blobs.
 //
 // Microphone audio always goes through one output track that is built here:
-// mic -> RNNoise (optional) -> gain -> mixer destination. Sharing a screen
+// mic -> GTCRN (optional) -> gain -> mixer destination. Sharing a screen
 // adds the screen audio to the same mixer, so neither a mute nor a screen
 // stop needs a renegotiation.
 
@@ -31,8 +31,8 @@ const state = {
   micSource: null,
   micAnalyser: null,  // tap on the microphone input, for the stats level
   meterPeak: 0,       // decaying peak, so one tick per second can see a word
-  rnnoise: null,
-  rnnoiseOn: false,
+  denoise: null,
+  denoiseOn: false,
   playCtx: null,      // the remote audio graph, so a peer can go over 100%
   screen: null,       // display stream while sharing
   screenSource: null,
@@ -153,7 +153,7 @@ function say(text) {
 // ---------------------------------------------------------------- preferences
 
 // The browser keeps a few small strings: the name, the room, the last
-// microphone and camera choice, the media path, rnnoise, and the volume of
+// microphone and camera choice, the media path, denoise, and the volume of
 // each peer by name. An unreadable storage (private mode) simply keeps nothing.
 function store(key, value) {
   if (!window.localStorage) return;
@@ -861,7 +861,7 @@ function publishTrack(track) {
   }
 }
 
-// adoptMic makes one microphone track the live input: it goes through RNNoise
+// adoptMic makes one microphone track the live input: it goes through GTCRN
 // and the gain into the mixer, and the mixer track is what peers receive. A
 // second device needs a new source, because a source can not be repointed; the
 // analyser is rebuilt with it and the noise choice of the call is kept.
@@ -882,7 +882,7 @@ async function adoptMic(track) {
         state.micAnalyser = null;
       }
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
-      await setNoise(state.rnnoiseOn);
+      await setNoise(state.denoiseOn);
     }
   }
   startMeter();
@@ -1016,7 +1016,7 @@ function disableCam() {
   sendState();
 }
 
-// buildAudio wires mic -> (RNNoise) -> gain -> mixer. The mixer track is what
+// buildAudio wires mic -> (GTCRN) -> gain -> mixer. The mixer track is what
 // the peers receive, and it is created even without a microphone so screen
 // audio can be added later without touching the peer connections.
 async function buildAudio() {
@@ -1143,26 +1143,26 @@ function inLevelLine(peer) {
   return `in level ${levelText(peer.meterPeak || 0)}`;
 }
 
-// setNoise switches the microphone between the raw path and the RNNoise path.
+// setNoise switches the microphone between the raw path and the GTCRN path.
 // The output of the mixer does not change, so no peer is disturbed.
 async function setNoise(on) {
   if (!state.micSource || !state.audioCtx) {
-    state.rnnoiseOn = false;
+    state.denoiseOn = false;
     return false;
   }
-  if (on && !state.rnnoise) {
+  if (on && !state.denoise) {
     try {
       // The worklet module gets the wasm bytes from the page: a worklet can
       // only build a module from bytes it already holds, so the binary comes
       // over the wire as a file and travels in processorOptions.
       const [binary] = await Promise.all([
-        fetch('/rnnoise.wasm').then((res) => {
-          if (!res.ok) throw new Error('rnnoise.wasm ' + res.status);
+        fetch('/gtcrn.wasm').then((res) => {
+          if (!res.ok) throw new Error('gtcrn.wasm ' + res.status);
           return res.arrayBuffer();
         }),
-        state.audioCtx.audioWorklet.addModule('/rnnoise-node.js'),
+        state.audioCtx.audioWorklet.addModule('/gtcrn-node.js'),
       ]);
-      state.rnnoise = new AudioWorkletNode(state.audioCtx, 'rnnoise', {
+      state.denoise = new AudioWorkletNode(state.audioCtx, 'gtcrn', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [1],
@@ -1170,23 +1170,23 @@ async function setNoise(on) {
         channelCountMode: 'explicit',
         processorOptions: { wasm: new Uint8Array(binary) },
       });
-      state.rnnoise.connect(state.micGain);
+      state.denoise.connect(state.micGain);
     } catch (err) {
       console.warn('noise suppression unavailable', err);
-      state.rnnoise = null;
-      state.rnnoiseOn = false;
+      state.denoise = null;
+      state.denoiseOn = false;
       return false;
     }
   }
   try { state.micSource.disconnect(); } catch { /* not connected */ }
   if (on) {
-    state.micSource.connect(state.rnnoise);
-    state.rnnoiseOn = true;
+    state.micSource.connect(state.denoise);
+    state.denoiseOn = true;
   } else {
     state.micSource.connect(state.micGain);
-    state.rnnoiseOn = false;
+    state.denoiseOn = false;
   }
-  return state.rnnoiseOn;
+  return state.denoiseOn;
 }
 
 function resumeAudio() {
@@ -1319,7 +1319,7 @@ function updateButtons() {
   $('mirror').checked = state.mirror;
   // Without a microphone the switch still shows what the next microphone will
   // get, which is the stored choice.
-  $('noise-live').checked = state.micSource ? state.rnnoiseOn : state.noiseWanted;
+  $('noise-live').checked = state.micSource ? state.denoiseOn : state.noiseWanted;
 }
 
 function applyMirror() {
@@ -2002,8 +2002,8 @@ function leave(message) {
   state.mixer = null;
   state.micGain = null;
   state.micSource = null;
-  state.rnnoise = null;
-  state.rnnoiseOn = false;
+  state.denoise = null;
+  state.denoiseOn = false;
   state.micAnalyser = null;
   state.meterPeak = 0;
   stopSpeaking();
@@ -2346,7 +2346,7 @@ async function peerStats(peer) {
 }
 
 // ownMediaLine describes the local devices: the microphone and its input
-// level, rnnoise, the state of the microphone graph and the camera
+// level, denoise, the state of the microphone graph and the camera
 // resolution. A live track with a silent meter points at the graph; a dead
 // context points at the autoplay rule of a phone.
 function ownMediaLine() {
@@ -2359,7 +2359,7 @@ function ownMediaLine() {
   if (mic && mic.sampleRate) label += ` ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
   parts.push(label);
   if (live) parts.push(micLevelLine());
-  parts.push(state.rnnoiseOn ? 'rnnoise on' : 'rnnoise off');
+  parts.push(state.denoiseOn ? 'denoise on' : 'denoise off');
   parts.push(`audio ${state.audioCtx ? state.audioCtx.state : 'none'}`);
   parts.push(`out ${state.playCtx ? state.playCtx.state : 'none'}`);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
@@ -3388,7 +3388,7 @@ function init() {
   const lastName = load('name');
   if (lastName) $('name').value = lastName;
 
-  // The last microphone, camera, path and rnnoise choice comes back, like the
+  // The last microphone, camera, path and denoise choice comes back, like the
   // name. No stored value means on: the join asks for both by default. A
   // stored off is honoured, and that device is not asked for at all.
   state.mic = load('mic') !== '0';

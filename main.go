@@ -275,7 +275,7 @@ func assetNames() []string {
 		// The house typeface: Arial metrics, shipped with the page so every
 		// browser puts the same letters on the same pixels.
 		"lsans.woff2", "lsans-bold.woff2",
-		"rnnoise-sync.js", "rnnoise-worklet.js", "rnnoise.wasm", workletBundle,
+		"gtcrn.js", "gtcrn-worklet.js", "gtcrn.wasm", workletBundle,
 		// The sealed half of the one client: the frame worker and the
 		// WebAssembly build of the key agreement. The old e2e page is gone.
 		"e2e-transform.js", "wasm_exec.js", "pq.wasm",
@@ -291,23 +291,24 @@ func assetNames() []string {
 // workletBundle is the one module the audio worklet loads. A worklet module
 // has its own scope, so a second module can not share its globals: the wasm
 // bundle and the processor must be served as a single file.
-const workletBundle = "rnnoise-node.js"
+const workletBundle = "gtcrn-node.js"
 
 // routeNames is every served asset, sources and the combined worklet.
 func routeNames() []string {
 	return assetNames()
 }
 
-// withWorkletBundle glues the wasm bundle and the processor into the single
-// module that /rnnoise-node.js serves.
+// withWorkletBundle glues the module loader and the processor into the single
+// module that /gtcrn-node.js serves. The loader defines `Module` in that same
+// scope, so the processor can call it.
 func withWorkletBundle(in map[string][]byte) map[string][]byte {
-	// The wasm bundle ends with `self.createRNNWasmModuleSync = ...`, but a
-	// worklet module scope does not define `self` here, so alias it first.
+	// The loader looks for `self` in a worker scope, which a worklet still
+	// treats as an alias of the global object; set it first.
 	shim := []byte("var self = globalThis;\n")
-	joined := make([]byte, 0, len(shim)+len(in["rnnoise-sync.js"])+len(in["rnnoise-worklet.js"]))
+	joined := make([]byte, 0, len(shim)+len(in["gtcrn.js"])+len(in["gtcrn-worklet.js"]))
 	joined = append(joined, shim...)
-	joined = append(joined, in["rnnoise-sync.js"]...)
-	joined = append(joined, in["rnnoise-worklet.js"]...)
+	joined = append(joined, in["gtcrn.js"]...)
+	joined = append(joined, in["gtcrn-worklet.js"]...)
 	in[workletBundle] = joined
 	return in
 }
