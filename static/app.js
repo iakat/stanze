@@ -214,6 +214,7 @@ async function enableMic() {
     publishTrack(track);
   }
   state.mic = true;
+  playSfx('timp');
   if (state.micGain) state.micGain.gain.value = 1;
   if (state.micTrack) state.micTrack.enabled = true;
   updateButtons();
@@ -221,6 +222,7 @@ async function enableMic() {
 }
 
 function disableMic() {
+  playSfx('hammer');
   state.mic = false;
   if (state.micGain) state.micGain.gain.value = 0;
   updateButtons();
@@ -743,6 +745,7 @@ function handle(msg) {
     }
     case 'peer-joined': {
       ensurePeer(msg.peer.id, msg.peer.name, msg.peer.mic, msg.peer.cam);
+      playSfx('pop');
       break;
     }
     case 'state': {
@@ -756,6 +759,7 @@ function handle(msg) {
     }
     case 'peer-left': {
       dropPeer(msg.from);
+      playSfx('bonk');
       break;
     }
     case 'offer':
@@ -782,6 +786,7 @@ function handle(msg) {
 // ---------------------------------------------------------------- room flow
 
 async function enterRoom(room, pass) {
+  ensureSfx();
   cancelReconnect();
   state.fatal = '';
   state.room = room;
@@ -838,6 +843,11 @@ function leave(message) {
     state.audioCtx.close().catch(() => {});
     state.audioCtx = null;
   }
+  if (state.sfxCtx) {
+    state.sfxCtx.close().catch(() => {});
+    state.sfxCtx = null;
+  }
+  sfxCache.clear();
   state.mixer = null;
   state.micGain = null;
   state.micSource = null;
@@ -864,6 +874,64 @@ function leave(message) {
   suggestRoom();
   state.reconnectDelay = 500;
   if (message) say(message);
+}
+
+// ---------------------------------------------------------------- sound effects
+
+// The four cartoon cues come from the Hanna-Barbera sound effects library that
+// is on archive.org. They are small, and the browser decodes them once.
+// The pop file holds two pops and a long silence, so each cue plays only a
+// short window of its file.
+const SFX = {
+  pop: { url: 'sfx/pop.mp3', offset: 0.35, dur: 0.9 },
+  bonk: { url: 'sfx/bonk.mp3', offset: 0, dur: 1.2 },
+  timp: { url: 'sfx/timp.mp3', offset: 0, dur: 0.8 },
+  hammer: { url: 'sfx/hammer.mp3', offset: 0, dur: 0.9 },
+};
+const sfxCache = new Map();
+
+function ensureSfx() {
+  if (state.sfxCtx) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    state.sfxCtx = new Ctx();
+  } catch {
+    state.sfxCtx = null;
+  }
+}
+
+function playSfx(name) {
+  const cue = SFX[name];
+  if (!cue || !state.sfxCtx) return;
+  const ctx = state.sfxCtx;
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  const start = (buffer) => {
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.35;
+      src.connect(gain);
+      gain.connect(ctx.destination);
+      src.start(0, cue.offset, cue.dur);
+    } catch {
+      // The context is gone; the next click builds a new one.
+    }
+  };
+  const cached = sfxCache.get(name);
+  if (cached) {
+    start(cached);
+    return;
+  }
+  fetch(cue.url)
+    .then((r) => r.arrayBuffer())
+    .then((b) => ctx.decodeAudioData(b))
+    .then((buffer) => {
+      sfxCache.set(name, buffer);
+      start(buffer);
+    })
+    .catch(() => {});
 }
 
 // ---------------------------------------------------------------- relay badge
