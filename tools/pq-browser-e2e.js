@@ -243,8 +243,26 @@ async function frameDump(page, label) {
       JSON.stringify(a.app.test));
     const room = a.app.room;
     check('A has a 26 character random room id', /^[a-z2-7]{26}$/.test(room), room);
+    // Sealed is the default, so the address carries the room only; a plain
+    // room is the one that says sealed=0.
+    const hashA = await a.page.evaluate(() => location.hash);
+    check('a sealed link carries no sealed flag', !/sealed=/.test(hashA), hashA);
 
     b = await joinPage(ctxB, 'bob', room);
+
+    // A green edge marks the person who speaks: the RMS tap on the audio of
+    // every tile must light, the fake microphone is never silent.
+    const sawLight = async (page, label) => {
+      try {
+        await until(page, () => [...document.querySelectorAll('.tile')].some((t) => t.classList.contains('speaking')),
+          null, 15000, label + ' talking light');
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const lightA = await sawLight(a.page, 'A');
+    check('a tile lights up while a person talks', lightA, lightA);
 
     // Both sides reach a confirmed handshake for exactly one peer.
     const ready = async (page, label) => until(page, () => {
