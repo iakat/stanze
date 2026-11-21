@@ -8,6 +8,7 @@ One line per work item. The top item is the most important.
 ## Open
 
 - Fix the sealed badge in a room with three or more guests: the code is derived per pair, so every pair has its own code and the badge says `pq-e2e codes differ` although the call is correct. The badge must show the code of one peer, or say that a mesh has one code per pair, and the alarm must stay per pair (coderobe 17:19).
+- Show the per peer volume slider and the `e2e ready` badge only while the pointer is over that tile, so a full room is a picture and not a panel. On a touch screen there is no hover, so the control must open on a tap (coderobe 17:40).
 - Decide the policy for custom room names: a guessed name lets people drop in, and the point of random ids is that they cannot (coderobe).
 - Decide if a bot or a text peer can take part in a room: today only browsers join one, so the voice bridge from the jitsi port has no place here yet (open question, not started).
 - Add a camera and microphone picker: the join asks for the camera and the microphone but always takes the default devices. Choose the device before the join and keep the choice beside the name. On Android and GrapheneOS the default microphone can be a device that gives silence, so this may be the same fault as the silent phone call (katia 14:33).
