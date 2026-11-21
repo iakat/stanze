@@ -344,16 +344,17 @@ func testHTTPSurface() {
 }
 
 func testUnauthorizedJoin() {
-	// A malformed id is refused, and nothing is created.
-	malformed, err := rawJoinMessage("not-a-room-id", "")
+	// An id with characters outside the allowed set is refused, and nothing is
+	// created. Any other name is a legit room name and is created by the join.
+	malformed, err := rawJoinMessage("$bad/id", "")
 	if err != nil {
-		report("malformed room id rejected", err)
+		report("invalid room id rejected", err)
 		return
 	}
 	if !strings.Contains(malformed, `"code":"unavailable"`) {
-		report("malformed room id rejected", fmt.Errorf("unexpected answer %q", malformed))
+		report("invalid room id rejected", fmt.Errorf("unexpected answer %q", malformed))
 	} else {
-		report("malformed room id rejected with a generic error", nil)
+		report("invalid room id rejected with a generic error", nil)
 	}
 
 	// Wrong passphrase on a real room must produce a byte identical answer.
@@ -372,7 +373,7 @@ func testUnauthorizedJoin() {
 	} else {
 		report("wrong passphrase rejected with a generic error", nil)
 	}
-	report("malformed id and wrong passphrase are byte identical", errOr(nil,
+	report("invalid id and wrong passphrase are byte identical", errOr(nil,
 		malformed != wrongPass, fmt.Sprintf("%q vs %q", malformed, wrongPass)))
 
 	// Every failure mode of a join must look the same, including a full room.

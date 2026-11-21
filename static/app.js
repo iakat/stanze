@@ -3,6 +3,11 @@
 // Small full mesh: every peer keeps one RTCPeerConnection per other peer.
 // The server only relays SDP and ICE. Negotiation follows the "perfect
 // negotiation" pattern so both sides can renegotiate without glare.
+//
+// Microphone audio always goes through one output track that is built here:
+// mic -> RNNoise (optional) -> gain -> mixer destination. Sharing a screen
+// adds the screen audio to the same mixer, so neither a mute nor a screen
+// stop needs a renegotiation.
 
 const state = {
   ws: null,
@@ -12,9 +17,24 @@ const state = {
   name: '',
   ice: [],
   peers: new Map(),
-  stream: null,
+  raw: null,          // camera + microphone from getUserMedia
+  camTrack: null,
+  micTrack: null,
+  outStream: null,    // what is sent to peers
+  audioCtx: null,
+  mixer: null,
+  micGain: null,
+  micSource: null,
+  rnnoise: null,
+  rnnoiseOn: false,
+  screen: null,       // display stream while sharing
+  screenSource: null,
   mic: true,
   cam: true,
+  path: 'auto',
+  quality: '1280x720@30',
+  mirror: true,
+  noiseWanted: true,
   leaving: false,
   reconnectTimer: null,
   reconnectDelay: 500,
@@ -22,11 +42,18 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
-const ROOM_RE = /^[a-z2-7]{26}$/;
+const ROOM_RE = /^[a-z0-9._-]{1,64}$/;
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
+const QUALITY = {
+  '640x360@30': { w: 640, h: 360, fps: 30 },
+  '1280x720@30': { w: 1280, h: 720, fps: 30 },
+  '1920x1080@30': { w: 1920, h: 1080, fps: 30 },
+  '1920x1080@60': { w: 1920, h: 1080, fps: 60 },
+  '2560x1440@30': { w: 2560, h: 1440, fps: 30 },
+};
 
-// newRoomID builds a 128 bit room id in the client, so an empty room field
-// needs no request to the server: the first join creates the room.
+// newRoomID builds a 128 bit room id in the client, so the lobby can suggest
+// one without asking the server.
 function newRoomID() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   let bits = 0;
@@ -50,14 +77,30 @@ function say(text) {
   box.hidden = !text;
 }
 
+function suggestRoom() {
+  $('room').value = newRoomID();
+}
+
+// normalizeRoom turns whatever was pasted into a room name: a full link, a
+// #r= fragment, mixed case, or a plain name.
+function normalizeRoom(raw) {
+  let text = String(raw || '').trim();
+  const hash = text.match(/#r=([^&\s"'<>]+)/);
+  if (hash) text = hash[1];
+  try {
+    text = decodeURIComponent(text);
+  } catch { /* keep the raw text */ }
+  return text.trim().toLowerCase();
+}
+
 function roomFromHash() {
   const raw = location.hash.replace(/^#/, '');
-  const id = (new URLSearchParams(raw).get('r') || '').toLowerCase();
+  const id = normalizeRoom(new URLSearchParams(raw).get('r') || '');
   return ROOM_RE.test(id) ? id : '';
 }
 
 function setHash(room) {
-  history.replaceState(null, '', room ? `#r=${room}` : location.pathname);
+  history.replaceState(null, '', room ? `#r=${encodeURIComponent(room)}` : location.pathname);
 }
 
 function wsURL() {
@@ -77,6 +120,7 @@ function makeTile(id, name, local = false) {
   const tile = document.createElement('div');
   tile.className = 'tile';
   tile.dataset.state = 'new';
+  if (local) tile.dataset.local = 'yes';
   tile.innerHTML = `
     <video autoplay playsinline${local ? ' muted' : ''}></video>
     <div class="avatar"></div>
@@ -101,31 +145,113 @@ function updateCount() {
 
 // ---------------------------------------------------------------- media
 
-async function openCamera() {
+const MIC_AUDIO = { echoCancellation: true, noiseSuppression: false, autoGainControl: true };
+
+async function openMedia() {
   const want = {
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    audio: MIC_AUDIO,
     video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
   };
   try {
-    state.stream = await navigator.mediaDevices.getUserMedia(want);
-  } catch (err) {
+    state.raw = await navigator.mediaDevices.getUserMedia(want);
+  } catch {
     try {
-      state.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.raw = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO });
       state.cam = false;
-    } catch (err2) {
+    } catch {
       say('no camera or microphone available, joining to watch only');
       state.mic = false;
       state.cam = false;
+      state.raw = null;
     }
   }
-  if (state.stream) {
+  state.camTrack = state.raw ? state.raw.getVideoTracks()[0] || null : null;
+  state.micTrack = state.raw ? state.raw.getAudioTracks()[0] || null : null;
+  if (state.camTrack) state.camTrack.contentHint = 'motion';
+
+  await buildAudio();
+
+  state.outStream = new MediaStream();
+  if (state.mixer) state.outStream.addTrack(state.mixer.stream.getAudioTracks()[0]);
+  if (state.camTrack) state.outStream.addTrack(state.camTrack);
+
+  if (state.raw) {
     const self = makeTile(state.name, state.name, true);
-    self.querySelector('video').srcObject = state.stream;
+    const preview = new MediaStream();
+    if (state.camTrack) preview.addTrack(state.camTrack);
+    self.querySelector('video').srcObject = preview;
     self.classList.add('playing');
     self.dataset.state = 'connected';
     self.querySelector('.state').textContent = 'you';
   }
+  applyMirror();
   updateButtons();
+}
+
+// buildAudio wires mic -> (RNNoise) -> gain -> mixer. The mixer track is what
+// the peers receive, and it is created even without a microphone so screen
+// audio can be added later without touching the peer connections.
+async function buildAudio() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    state.audioCtx = new Ctx({ sampleRate: 48000, latencyHint: 'interactive' });
+  } catch {
+    return;
+  }
+  state.mixer = state.audioCtx.createMediaStreamDestination();
+  state.micGain = state.audioCtx.createGain();
+  state.micGain.connect(state.mixer);
+  if (state.micTrack) {
+    state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([state.micTrack]));
+    await setNoise(state.noiseWanted);
+  }
+  resumeAudio();
+}
+
+// setNoise switches the microphone between the raw path and the RNNoise path.
+// The output of the mixer does not change, so no peer is disturbed.
+async function setNoise(on) {
+  if (!state.micSource || !state.audioCtx) {
+    state.rnnoiseOn = false;
+    return false;
+  }
+  if (on && !state.rnnoise) {
+    try {
+      await state.audioCtx.audioWorklet.addModule('/rnnoise-worklet.js');
+      state.rnnoise = new AudioWorkletNode(state.audioCtx, 'rnnoise', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: 'explicit',
+      });
+      state.rnnoise.connect(state.micGain);
+    } catch (err) {
+      console.warn('noise suppression unavailable', err);
+      state.rnnoise = null;
+      state.rnnoiseOn = false;
+      return false;
+    }
+  }
+  try { state.micSource.disconnect(); } catch { /* not connected */ }
+  if (on) {
+    state.micSource.connect(state.rnnoise);
+    state.rnnoiseOn = true;
+  } else {
+    state.micSource.connect(state.micGain);
+    state.rnnoiseOn = false;
+  }
+  return state.rnnoiseOn;
+}
+
+function resumeAudio() {
+  if (state.audioCtx && state.audioCtx.state === 'suspended') {
+    state.audioCtx.resume().catch(() => {
+      // Autoplay policy: retry on the next click.
+      document.addEventListener('click', () => state.audioCtx && state.audioCtx.resume().catch(() => {}), { once: true });
+    });
+  }
 }
 
 function updateButtons() {
@@ -133,16 +259,137 @@ function updateButtons() {
   $('mic-btn').setAttribute('aria-pressed', String(state.mic));
   $('cam-btn').textContent = state.cam ? 'camera on' : 'camera off';
   $('cam-btn').setAttribute('aria-pressed', String(state.cam));
+  $('share-btn').textContent = state.screen ? 'stop share' : 'share screen';
+  $('share-btn').setAttribute('aria-pressed', String(!!state.screen));
+  $('mirror').checked = state.mirror;
+  $('noise-live').checked = state.rnnoiseOn;
 }
 
-function toggleTrack(kind, on) {
-  if (!state.stream) return;
-  for (const track of state.stream.getTracks()) {
-    if (track.kind === kind) track.enabled = on;
+function toggleMic() {
+  state.mic = !state.mic;
+  // The mixer keeps running; the gain is the mute.
+  if (state.micGain) state.micGain.gain.value = state.mic ? 1 : 0;
+  updateButtons();
+}
+
+function applyMirror() {
+  const tile = document.querySelector('.tile[data-local="yes"]');
+  if (!tile) return;
+  const camera = !state.screen;
+  tile.classList.toggle('mirrored', state.mirror && camera);
+  tile.classList.toggle('screenshare', !!state.screen);
+  const badge = tile.querySelector('.state');
+  if (badge) badge.textContent = state.screen ? 'your screen' : 'you';
+}
+
+// ---------------------------------------------------------------- screen share
+
+// replaceOutVideo swaps the track that is sent to every peer and keeps the
+// local preview in sync. replaceTrack avoids a renegotiation when the peer
+// already has a video sender. The old camera track stays alive so the share
+// can be stopped again.
+async function replaceOutVideo(track) {
+  if (!state.outStream) return;
+  for (const old of state.outStream.getVideoTracks()) {
+    state.outStream.removeTrack(old);
+  }
+  if (track) state.outStream.addTrack(track);
+  for (const peer of state.peers.values()) {
+    if (!peer.pc) continue;
+    let sender = peer.pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+    if (!sender) {
+      const tr = peer.pc.getTransceivers().find((t) => t.receiver.track && t.receiver.track.kind === 'video');
+      if (tr) {
+        sender = tr.sender;
+        if (tr.direction === 'recvonly') tr.direction = 'sendrecv';
+      }
+    }
+    if (sender) {
+      await sender.replaceTrack(track || null).catch(() => {});
+    } else if (track) {
+      peer.pc.addTrack(track, state.outStream);
+    }
   }
 }
 
+async function startShare() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    say('screen sharing is not supported by this browser');
+    return;
+  }
+  const q = QUALITY[state.quality] || QUALITY['1280x720@30'];
+  let display;
+  try {
+    display = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: q.fps, max: q.fps }, width: { ideal: q.w }, height: { ideal: q.h } },
+      audio: true,
+    });
+  } catch (err) {
+    if (err && err.name === 'NotAllowedError') return;
+    say('screen sharing failed');
+    return;
+  }
+  state.screen = display;
+  const video = display.getVideoTracks()[0];
+  if (video) {
+    video.contentHint = 'detail';
+    video.addEventListener('ended', () => stopShare());
+    await replaceOutVideo(video);
+    const tile = document.querySelector('.tile[data-local="yes"]');
+    if (tile) tile.querySelector('video').srcObject = display;
+  }
+  const audio = display.getAudioTracks()[0];
+  if (audio && state.audioCtx) {
+    state.screenSource = state.audioCtx.createMediaStreamSource(new MediaStream([audio]));
+    state.screenSource.connect(state.mixer);
+    resumeAudio();
+  }
+  applyMirror();
+  updateButtons();
+}
+
+async function stopShare() {
+  if (!state.screen) return;
+  for (const track of state.screen.getTracks()) {
+    try { track.stop(); } catch { /* already stopped */ }
+  }
+  if (state.screenSource) {
+    try { state.screenSource.disconnect(); } catch { /* not connected */ }
+    state.screenSource = null;
+  }
+  state.screen = null;
+  await replaceOutVideo(state.cam ? state.camTrack : null);
+  const tile = document.querySelector('.tile[data-local="yes"]');
+  if (tile) {
+    const preview = new MediaStream();
+    if (state.camTrack) preview.addTrack(state.camTrack);
+    tile.querySelector('video').srcObject = preview;
+  }
+  applyMirror();
+  updateButtons();
+}
+
 // ---------------------------------------------------------------- peers
+
+function iceServers() {
+  const all = state.ice || [];
+  if (state.path === 'p2p') {
+    // Direct only: hand over STUN servers and nothing that could relay.
+    return all.filter((server) => {
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls || ''];
+      return urls.every((u) => !/^turns?:/i.test(u));
+    });
+  }
+  return all;
+}
+
+function rtcConfig() {
+  return {
+    iceServers: iceServers(),
+    iceTransportPolicy: state.path === 'relay' ? 'relay' : 'all',
+    bundlePolicy: 'max-bundle',
+  };
+}
 
 function ensurePeer(id, name) {
   let peer = state.peers.get(id);
@@ -174,9 +421,9 @@ function ensurePeer(id, name) {
 
 function addLocalTracks(peer) {
   if (peer.tracksAdded) return;
-  if (state.stream) {
-    for (const track of state.stream.getTracks()) {
-      peer.pc.addTrack(track, state.stream);
+  if (state.outStream) {
+    for (const track of state.outStream.getTracks()) {
+      peer.pc.addTrack(track, state.outStream);
     }
   }
   peer.tracksAdded = true;
@@ -185,7 +432,7 @@ function addLocalTracks(peer) {
 // Only the side that starts the offer needs explicit transceivers: without a
 // local track the offer would otherwise describe nothing to receive.
 function ensureRecvTransceivers(peer) {
-  const kinds = new Set(state.stream ? state.stream.getTracks().map((t) => t.kind) : []);
+  const kinds = new Set(state.outStream ? state.outStream.getTracks().map((t) => t.kind) : []);
   for (const kind of ['audio', 'video']) {
     if (!kinds.has(kind)) peer.pc.addTransceiver(kind, { direction: 'recvonly' });
   }
@@ -199,7 +446,7 @@ function connectPeer(id, name, initiator) {
   }
   peer.initiator = initiator;
 
-  const pc = new RTCPeerConnection({ iceServers: state.ice, bundlePolicy: 'max-bundle' });
+  const pc = new RTCPeerConnection(rtcConfig());
   peer.pc = pc;
 
   pc.onnegotiationneeded = async () => {
@@ -436,7 +683,14 @@ async function enterRoom(room, pass) {
   state.room = room;
   state.pass = pass;
   state.name = ($('name').value || '').trim().slice(0, 32) || 'guest';
+  state.path = $('path').value;
+  state.quality = $('quality').value;
+  state.noiseWanted = $('noise').checked;
+  state.mirror = true;
   state.leaving = false;
+  if (window.localStorage) {
+    try { localStorage.setItem('rooms.name', state.name); } catch { /* private mode */ }
+  }
 
   $('lobby').hidden = true;
   $('stage').hidden = false;
@@ -444,7 +698,9 @@ async function enterRoom(room, pass) {
   $('room-label').title = room;
   setHash(room);
 
-  await openCamera();
+  await openMedia();
+  if (!state.noiseWanted && state.rnnoiseOn) await setNoise(false);
+  updateButtons();
   connectWS();
 }
 
@@ -457,11 +713,29 @@ function leave(message) {
     ws.onclose = null;
     try { ws.close(); } catch { /* already gone */ }
   }
-  dropPeers();
-  if (state.stream) {
-    for (const track of state.stream.getTracks()) track.stop();
-    state.stream = null;
+  if (state.screen) {
+    for (const track of state.screen.getTracks()) {
+      try { track.stop(); } catch { /* already stopped */ }
+    }
+    state.screen = null;
   }
+  dropPeers();
+  if (state.raw) {
+    for (const track of state.raw.getTracks()) track.stop();
+    state.raw = null;
+  }
+  if (state.audioCtx) {
+    state.audioCtx.close().catch(() => {});
+    state.audioCtx = null;
+  }
+  state.mixer = null;
+  state.micGain = null;
+  state.micSource = null;
+  state.rnnoise = null;
+  state.rnnoiseOn = false;
+  state.outStream = null;
+  state.camTrack = null;
+  state.micTrack = null;
   $('grid').replaceChildren();
   $('stage').hidden = true;
   $('lobby').hidden = false;
@@ -474,7 +748,11 @@ function leave(message) {
   state.ice = [];
   state.fatal = '';
   state.reconnectDelay = 500;
+  state.mic = true;
+  state.cam = true;
   setHash('');
+  suggestRoom();
+  state.reconnectDelay = 500;
   if (message) say(message);
 }
 
@@ -507,41 +785,74 @@ async function pollRelay() {
 
 function init() {
   const fromHash = roomFromHash();
-  if (fromHash) $('room').value = fromHash;
+  if (fromHash) {
+    $('room').value = fromHash;
+  } else {
+    suggestRoom();
+  }
+  if (window.localStorage) {
+    try {
+      const last = localStorage.getItem('rooms.name');
+      if (last) $('name').value = last;
+    } catch { /* private mode */ }
+  }
+
+  $('newid-btn').addEventListener('click', (event) => {
+    event.preventDefault();
+    suggestRoom();
+  });
 
   $('join-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    const raw = $('room').value.trim().toLowerCase();
-    // An empty room field makes a new room: the join creates it.
-    if (!raw) {
-      $('room').value = '';
-      enterRoom(newRoomID(), $('pass').value || '');
+    const room = normalizeRoom($('room').value);
+    if (!room) {
+      // Nothing typed: the suggested id is used.
+      const id = newRoomID();
+      $('room').value = id;
+      enterRoom(id, $('pass').value || '');
       return;
     }
-    const id = (raw.match(/[a-z2-7]{26}/) || [raw])[0];
-    if (!ROOM_RE.test(id)) {
-      say('that does not look like a room id');
+    if (!ROOM_RE.test(room)) {
+      say('room names use a-z 0-9 . _ - (1 to 64 characters)');
       return;
     }
-    enterRoom(id, $('pass').value || '');
+    $('room').value = room;
+    enterRoom(room, $('pass').value || '');
   });
 
-  $('mic-btn').addEventListener('click', () => {
-    state.mic = !state.mic;
-    toggleTrack('audio', state.mic);
+  $('noise-live').addEventListener('change', async () => {
+    const on = $('noise-live').checked;
+    const applied = await setNoise(on);
+    if (applied !== on) say('noise suppression is not available');
     updateButtons();
   });
 
+  $('mirror').addEventListener('change', () => {
+    state.mirror = $('mirror').checked;
+    applyMirror();
+  });
+
+  $('quality').addEventListener('change', () => {
+    state.quality = $('quality').value;
+  });
+
+  $('share-btn').addEventListener('click', () => {
+    if (state.screen) stopShare();
+    else startShare();
+  });
+
+  $('mic-btn').addEventListener('click', toggleMic);
+
   $('cam-btn').addEventListener('click', () => {
     state.cam = !state.cam;
-    toggleTrack('video', state.cam);
+    if (state.camTrack) state.camTrack.enabled = state.cam;
     updateButtons();
   });
 
   $('leave-btn').addEventListener('click', () => leave(''));
 
   $('copy-btn').addEventListener('click', async () => {
-    const link = `${location.origin}/#r=${state.room}`;
+    const link = `${location.origin}/#r=${encodeURIComponent(state.room)}`;
     try {
       await navigator.clipboard.writeText(link);
       $('copy-btn').textContent = 'copied';
