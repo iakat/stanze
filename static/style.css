@@ -445,6 +445,8 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 }
 .tile:hover .sas,
 .tile:focus-within .sas { opacity: 1; visibility: visible; }
+/* The card lets the pointer through, except its buttons: the pin lives there. */
+.tile .sas button { pointer-events: auto; }
 .tile .sas-head {
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -621,14 +623,8 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .pin[data-pin="known"] { color: #003a00; }
 .pin[data-pin="changed"] { color: #6b0000; border-color: #6b0000; }
 
-.id-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-top: 3px;
-  font-size: 12px;
-}
+.id-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  margin-top: 3px; font-size: 12px; }
 
 .id-state { color: #1a1a1a; }
 .id-state[data-pin="known"] { color: #003a00; }
