@@ -52,7 +52,31 @@ const state = {
   lostWanted: false,
 };
 
-const $ = (id) => document.getElementById(id);
+// The markup is the single source of truth for the element types: an id that
+// is not listed here is a typo, and a listed id hands back the right DOM type.
+/**
+ * @typedef {{
+ *   lobby: HTMLElement, 'join-form': HTMLFormElement, name: HTMLInputElement,
+ *   room: HTMLInputElement, 'newid-btn': HTMLButtonElement, pass: HTMLInputElement,
+ *   path: HTMLSelectElement, noise: HTMLInputElement, 'enter-btn': HTMLButtonElement,
+ *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
+ *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, 'link-dot': HTMLElement,
+ *   'link-text': HTMLElement, grid: HTMLElement, 'stats-panel': HTMLElement,
+ *   'stats-body': HTMLElement, 'chat-log': HTMLElement, 'chat-form': HTMLFormElement,
+ *   'chat-text': HTMLInputElement, 'mic-btn': HTMLButtonElement,
+ *   'cam-btn': HTMLButtonElement, 'share-btn': HTMLButtonElement,
+ *   'stats-btn': HTMLButtonElement, 'leave-btn': HTMLButtonElement,
+ *   quality: HTMLSelectElement, mirror: HTMLInputElement,
+ *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
+ * }} Elements
+ */
+
+/**
+ * @template {keyof Elements} K
+ * @param {K} id
+ * @returns {Elements[K]}
+ */
+const $ = (id) => /** @type {Elements[K]} */ (document.getElementById(id));
 const ROOM_RE = /^[a-z0-9._-]{1,64}$/;
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const QUALITY = {
@@ -250,7 +274,8 @@ function wireDots(tile) {
   if (!dots || !menu) return;
   dots.addEventListener('click', (event) => {
     event.stopPropagation();
-    for (const other of document.querySelectorAll('.tile .menu:not([hidden])')) {
+    const open = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.tile .menu:not([hidden])'));
+    for (const other of open) {
       if (other !== menu) other.hidden = true;
     }
     if (!menu.hidden) {
@@ -515,6 +540,8 @@ function disableCam() {
 // the peers receive, and it is created even without a microphone so screen
 // audio can be added later without touching the peer connections.
 async function buildAudio() {
+  // Safari still exposes the prefixed constructor, which the DOM lib omits.
+  // @ts-expect-error -- vendor prefixed fallback
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   try {
@@ -590,6 +617,8 @@ function ensurePlayback() {
     resumePlayback();
     return state.playCtx;
   }
+  // Safari still exposes the prefixed constructor, which the DOM lib omits.
+  // @ts-expect-error -- vendor prefixed fallback
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return null;
   try {
@@ -776,16 +805,25 @@ async function stopShare() {
 
 function iceServers() {
   const all = state.ice || [];
+  const hasTurn = (server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls || ''];
+    return urls.every((u) => /^turns?:/i.test(u));
+  };
   if (state.path === 'p2p') {
     // Direct only: hand over STUN servers and nothing that could relay.
-    return all.filter((server) => {
-      const urls = Array.isArray(server.urls) ? server.urls : [server.urls || ''];
-      return urls.every((u) => !/^turns?:/i.test(u));
-    });
+    return all.filter((server) => !hasTurn(server));
+  }
+  if (state.path === 'relay') {
+    // Relay only: a STUN server that is unreachable would only stall the
+    // gathering and leave the peer with no candidate at all.
+    return all.filter(hasTurn);
   }
   return all;
 }
 
+/**
+ * @returns {RTCConfiguration}
+ */
 function rtcConfig() {
   return {
     iceServers: iceServers(),
@@ -1349,16 +1387,17 @@ function sendChat() {
 // for all four files together. An mp3 copy stays next to each one for a
 // browser that can not decode Opus.
 //
-// The fifth cue is the lost connection pad: it is synthesized here, so it has
+// The fifth cue is the lost connection chime: it is synthesized here, so it has
 // no source sample to credit, and it is a seamless loop instead of a one shot.
 const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
 const SFX_RATE = 0.35;
 // The pad sits under the room for as long as the socket is down, so it plays
 // quieter than a one shot cue.
 const LOST_RATE = 0.2;
-// The lost cue is 4.32 s long and loops the middle 4.0 s of it.
+// The lost cue is 8.32 s long and loops the middle 8.0 s of it: two soft
+// chimes four seconds apart, with real silence at the loop point.
 const LOST_LOOP_START = 0.16;
-const LOST_LOOP_END = 4.16;
+const LOST_LOOP_END = 8.16;
 const sfxCache = new Map();
 let sfxExt = '';
 
@@ -1384,6 +1423,8 @@ function pickSfxExt() {
 
 function ensureSfx() {
   if (state.sfxCtx) return;
+  // Safari still exposes the prefixed constructor, which the DOM lib omits.
+  // @ts-expect-error -- vendor prefixed fallback
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   try {
@@ -1446,7 +1487,7 @@ function playSfx(name) {
   }
 }
 
-// startLost loops the calm pad while the signaling socket is down. A second
+// startLost loops the waiting chime while the signaling socket is down. A second
 // call while it already plays does nothing, so a chain of reconnect attempts
 // can never stack copies of it.
 function startLost() {
@@ -1460,7 +1501,7 @@ function startLost() {
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.loop = true;
-    // The file carries a little head and tail around the 4.0 s loop, so the
+    // The file carries a little head and tail around the 8.0 s loop, so the
     // codec padding at the file edges stays outside the loop point: the pad
     // runs on with no gap and no click.
     if (buffer.duration >= LOST_LOOP_END) {
