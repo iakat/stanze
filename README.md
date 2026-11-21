@@ -74,33 +74,24 @@ video bitrates, the round trip time and whether the path is direct or relayed.
 The client keeps the camera and the microphone open and reconnects on its own
 with a capped backoff if the signaling socket drops in the middle of a call.
 
-## Sealed rooms
+## End-to-end encryption
 
-One join form serves both kinds of room. The `enable post-quantum e2ee` checkbox
-switches a join to post-quantum end-to-end encryption, and the choice is
-remembered in the browser like the name and the devices. There is no second
-page: `/e2e` answers a `302` to `/?sealed=1`, so a link from before the merge
-still lands on the form with the box on.
+Every room is sealed. The name, the chat and every media frame are encrypted in
+the browser, and the server sees only `enc` blobs: it never receives a name,
+never sends a `chat` message and keeps no room history. Names and chat lines
+travel as sealed `app` payloads, media frames are sealed by
+`RTCRtpScriptTransform` with a worker (`e2e-transform.js`), and the key exchange
+runs in a WebAssembly module (`pq.wasm`) built from `internal/pq`. Both sides
+show the same 13 character short code and six emoji on each tile, for comparison
+over the call.
 
-In a sealed room the name, the chat and every media frame are encrypted in the
-browser. The server sees only `enc` blobs: it replaces the join name with
-`guest` on its side of the wire, never sends its own `chat` message, and keeps
-no room history. Names and chat lines travel as sealed `app` payloads, media
-frames are sealed by `RTCRtpScriptTransform` with a worker
-(`e2e-transform.js`), and the key exchange runs in a WebAssembly module
-(`pq.wasm`) built from `internal/pq`. Both sides show the same 13 character
-short code and six emoji on each tile, for comparison over the call.
+There is no fallback to a clear room. The link is `#r=<room>`, and a browser
+that cannot install a media transform joins without a microphone and a camera
+and says why instead of sending clear frames. The post-quantum module is
+fetched when the lobby opens, so the join itself is only a device prompt.
 
-A sealed room never falls back to plain: the fragment link is
-`#r=<room>&sealed=1`, and a browser that cannot install a media transform
-joins without a microphone and a camera and says why instead of sending clear
-frames. The post-quantum module is fetched only when the box is on or a sealed
-link is opened.
-
-Sealed rooms do not need the `-e2e` flag. The relay forwards `enc` in both
-modes, so one process serves plain and sealed rooms. The flag still keeps the
-server blind for plain clients as well: it forces `guest` names and drops plain
-chat and history, which is why a normal deployment runs without it.
+The relay needs no flag for this: it forwards `enc` frames without reading
+them, and there is no other chat or name path to switch off.
 
 `getUserMedia` requires a secure context: use `http://localhost` for local
 tests or TLS in front of the server. WebSocket upgrades also need a proxy that
@@ -131,7 +122,6 @@ Every flag has an environment variable equivalent. Flags win.
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
-| `-e2e` | `E2E` | off | hide names, plain chat and history from the server for plain clients too; sealed rooms work without it |
 | `-debug` | `DEBUG` | off | verbose logs (room ids are still only logged as a 8 hex character hash) |
 
 Room creation and join attempts are limited per client IP. Behind a reverse
@@ -173,8 +163,8 @@ well.
 - A room id is 16 random bytes from `crypto/rand`, rendered as lowercase
   base32 (26 characters). Guessing one is not feasible.
 - Rooms exist only in memory. A room is dropped in the same step that removes
-  its last peer, and the passphrase digest and the chat buffer go with it: a
-  later join of the same id starts a new room, with no history. A room made with
+  its last peer, and the passphrase digest goes with it: a later join of the
+  same id starts a new room with nothing carried over. A room made with
   `POST /api/new` and not yet joined waits `-empty-room-ttl` for its first peer.
   Nothing is ever written to disk.
 - There is no route that lists, counts or describes rooms. The only endpoints
@@ -195,10 +185,12 @@ One JSON object per WebSocket text frame. Client to server:
 
 | message | fields |
 | --- | --- |
-| `join` | `room`, `pass`, `name` |
+| `join` | `room`, `pass` |
 | `offer` / `answer` | `to`, `sdp` |
 | `ice` | `to`, `candidate` |
 | `enc` | `to` (empty or `*` for the room), `b` (base64 sealed blob) |
+| `state` | `mic`, `cam` |
+| `mod` | `to`, `action` (`kick`, `mute`, `admin`) |
 | `leave` | – |
 | `ping` | – |
 
@@ -206,14 +198,21 @@ Server to client:
 
 | message | fields |
 | --- | --- |
-| `joined` | `self`, `peers[{id,name}]`, `ice[{urls,username,credential}]` |
-| `peer-joined` | `peer{id,name}` |
+| `joined` | `self`, `peers[{id,mic,cam,admin}]`, `admins`, `ice[{urls,username,credential}]` |
+| `peer-joined` | `peer{id,mic,cam,admin}` |
 | `peer-left` | `from` |
 | `offer` / `answer` | `from`, `sdp` |
 | `ice` | `from`, `candidate` |
 | `enc` | `from`, `b` (forwarded verbatim, never decoded) |
+| `state` | `from`, `mic`, `cam` |
+| `admin` | `admins` |
+| `mod` | `from`, `action` |
+| `kicked` | `from` |
 | `error` | `code` (`unavailable`, `bad-message`) |
 | `pong` | – |
+
+A peer has no name field on the wire. The name is sealed with the chat and
+arrives as an `enc` payload once the pair keys exist.
 
 The `ice` list is per connection and carries a fresh, time limited TURN
 credential (TURN REST style: `timestamp:tag` username, HMAC-SHA1 with the
@@ -252,18 +251,18 @@ handshake check:
 python3 tools/wsjoin.py http://127.0.0.1:8095 <room-id>
 ```
 
-`tools/browser-e2e.js` is the browser test. It opens two Chromium contexts
+`tools/browser-e2e.js` is the full browser test. It opens two Chromium contexts
 (separate users, fake camera and microphone), has one create a room and the
 other join it through the shared link, and then asserts what a user would see:
-two tiles on both sides, both joined with camera and microphone on, the joined
+two tiles on both sides, both joined with camera and microphone on, the sealed
 name on the remote tile, `connected`, a remote video with decoded frames whose
 playhead keeps advancing, audio and video RTP packets arriving on both peer
 connections, working mute and camera toggles, a 0 and 175 percent volume on the
-remote gain, a 1 Hz stats panel with milliseconds, path and bitrates, a seamless
-lost connection loop, a camera off reload that asks for the microphone only, a
-relay only join, no console or CSP errors, and that `/rooms`, `/api/rooms`,
-`/metrics` and friends answer 404 from inside the page without ever containing
-the room id. It writes one screenshot per user.
+remote gain, a 1 Hz stats panel with milliseconds, path, bitrates and the sealed
+counters, a seamless lost connection loop, a camera off reload that asks for the
+microphone only, a relay only join, no console or CSP errors, and that `/rooms`,
+`/api/rooms`, `/metrics` and friends answer 404 from inside the page without
+ever containing the room id. It writes one screenshot per user.
 
 ```sh
 npm install --prefix /tmp/pw playwright-core@1.47.0   # or use a Playwright image
@@ -278,11 +277,10 @@ without a camera. Note that a strict `script-src 'self'` CSP blocks Playwright's
 `page.waitForFunction`, which evaluates inside the page; the script polls with
 `page.evaluate` instead.
 
-`tools/pq-browser-e2e.js` is the sealed counterpart. It opens the join form
-with `?sealed=1`, joins two contexts and asserts the handshake, matching short
-codes, media through the frame transform, sealed chat both ways, that no name
-or chat text appears in a signaling frame, and that a wrong key decodes
-nothing. Run it the same way:
+`tools/pq-browser-e2e.js` is the sealed suite. It joins two contexts on the one
+join form and asserts the handshake, matching short codes, media through the
+frame transform, sealed chat both ways, that no name or chat text appears in a
+signaling frame, and that a wrong key decodes nothing. Run it the same way:
 
 ```sh
 PW=/tmp/pw/node_modules/playwright-core \
