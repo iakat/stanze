@@ -124,7 +124,7 @@ function makeTile(id, name, local = false) {
   tile.innerHTML = `
     <video autoplay playsinline${local ? ' muted' : ''}></video>
     <div class="avatar"></div>
-    <div class="tag"><span class="name"></span><span class="state"></span></div>`;
+    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span></div>`;
   tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
   tile.querySelector('.avatar').textContent = (name || '?').slice(0, 2);
   $('grid').appendChild(tile);
@@ -135,6 +135,23 @@ function setTileState(peer, text) {
   if (!peer.tile) return;
   peer.tile.dataset.state = text;
   peer.tile.querySelector('.state').textContent = text;
+}
+
+// applyFlags shows the mute and camera state of one tile. A tile with neither
+// flag shows nothing extra.
+function applyFlags(tile, mic, cam) {
+  if (!tile) return;
+  const box = tile.querySelector('.flags');
+  if (!box) return;
+  const out = [];
+  if (mic === false) out.push('muted');
+  if (cam === false) out.push('no cam');
+  box.innerHTML = '';
+  for (const text of out) {
+    const chip = document.createElement('span');
+    chip.textContent = text;
+    box.appendChild(chip);
+  }
 }
 
 function updateCount() {
@@ -175,15 +192,16 @@ async function openMedia() {
   if (state.mixer) state.outStream.addTrack(state.mixer.stream.getAudioTracks()[0]);
   if (state.camTrack) state.outStream.addTrack(state.camTrack);
 
-  if (state.raw) {
-    const self = makeTile(state.name, state.name, true);
-    const preview = new MediaStream();
-    if (state.camTrack) preview.addTrack(state.camTrack);
-    self.querySelector('video').srcObject = preview;
-    self.classList.add('playing');
-    self.dataset.state = 'connected';
-    self.querySelector('.state').textContent = 'you';
-  }
+  // The own tile exists even with no camera and no microphone, so the mirror
+  // preview, the name and the mute flags always have a place.
+  const self = makeTile(state.name, state.name, true);
+  const preview = new MediaStream();
+  if (state.camTrack) preview.addTrack(state.camTrack);
+  self.querySelector('video').srcObject = preview;
+  if (state.camTrack) self.classList.add('playing');
+  self.dataset.state = 'connected';
+  self.querySelector('.state').textContent = 'you';
+  applyFlags(self, state.mic, state.cam);
   applyMirror();
   updateButtons();
 }
@@ -256,6 +274,16 @@ function resumeAudio() {
   }
 }
 
+// sendState tells the room that the microphone or the camera changed. The
+// other clients show it as a small flag on the tile.
+function sendState() {
+  const self = document.querySelector('.tile[data-local="yes"]');
+  applyFlags(self, state.mic, state.cam);
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    send({ t: 'state', mic: state.mic, cam: state.cam });
+  }
+}
+
 function updateButtons() {
   $('mic-btn').textContent = state.mic ? 'mic on' : 'mic off';
   $('mic-btn').setAttribute('aria-pressed', String(state.mic));
@@ -272,6 +300,7 @@ function toggleMic() {
   // The mixer keeps running; the gain is the mute.
   if (state.micGain) state.micGain.gain.value = state.mic ? 1 : 0;
   updateButtons();
+  sendState();
 }
 
 function applyMirror() {
@@ -393,9 +422,14 @@ function rtcConfig() {
   };
 }
 
-function ensurePeer(id, name) {
+function ensurePeer(id, name, mic, cam) {
   let peer = state.peers.get(id);
   if (peer) {
+    if (mic !== undefined || cam !== undefined) {
+      peer.mic = mic === undefined ? peer.mic : mic;
+      peer.cam = cam === undefined ? peer.cam : cam;
+      applyFlags(peer.tile, peer.mic, peer.cam);
+    }
     if (name && peer.name !== name) {
       peer.name = name;
       peer.tile.querySelector('.name').textContent = name;
@@ -405,6 +439,8 @@ function ensurePeer(id, name) {
   peer = {
     id,
     name: name || 'guest',
+    mic: mic === undefined ? true : mic,
+    cam: cam === undefined ? true : cam,
     pc: null,
     tile: null,
     polite: String(state.self) > String(id),
@@ -416,6 +452,7 @@ function ensurePeer(id, name) {
     initiator: false,
   };
   peer.tile = makeTile(peer.name, peer.name);
+  applyFlags(peer.tile, peer.mic, peer.cam);
   state.peers.set(id, peer);
   updateCount();
   return peer;
@@ -440,8 +477,8 @@ function ensureRecvTransceivers(peer) {
   }
 }
 
-function connectPeer(id, name, initiator) {
-  const peer = ensurePeer(id, name);
+function connectPeer(id, name, initiator, mic, cam) {
+  const peer = ensurePeer(id, name, mic, cam);
   if (peer.pc) {
     peer.initiator = peer.initiator || initiator;
     return peer;
@@ -645,11 +682,20 @@ function handle(msg) {
       state.self = msg.self;
       state.ice = msg.ice || [];
       say('');
-      for (const peer of msg.peers || []) connectPeer(peer.id, peer.name, true);
+      for (const peer of msg.peers || []) connectPeer(peer.id, peer.name, true, peer.mic, peer.cam);
       break;
     }
     case 'peer-joined': {
-      ensurePeer(msg.peer.id, msg.peer.name);
+      ensurePeer(msg.peer.id, msg.peer.name, msg.peer.mic, msg.peer.cam);
+      break;
+    }
+    case 'state': {
+      const peer = state.peers.get(msg.from);
+      if (peer) {
+        if (msg.mic !== undefined) peer.mic = msg.mic;
+        if (msg.cam !== undefined) peer.cam = msg.cam;
+        applyFlags(peer.tile, peer.mic, peer.cam);
+      }
       break;
     }
     case 'peer-left': {
@@ -849,6 +895,7 @@ function init() {
     state.cam = !state.cam;
     if (state.camTrack) state.camTrack.enabled = state.cam;
     updateButtons();
+    sendState();
   });
 
   $('leave-btn').addEventListener('click', () => leave(''));

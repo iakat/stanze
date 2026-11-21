@@ -307,6 +307,13 @@ func (h *Hub) relay(p *Peer, to string, payload []byte) {
 	target.enqueue(payload)
 }
 
+// broadcast sends one message to every other peer in the room.
+func (h *Hub) broadcast(p *Peer, payload []byte) {
+	for _, other := range h.peersOf(p.room, p.id) {
+		other.enqueue(payload)
+	}
+}
+
 // reap drops rooms that stayed empty for longer than the grace period.
 func (h *Hub) reap() {
 	now := time.Now()
