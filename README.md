@@ -1,4 +1,4 @@
-# rooms
+# stanze
 
 A tiny self-hosted replacement for a meeting server: one Go binary that serves
 a static browser client and a WebSocket signaling endpoint, plus an embedded
@@ -8,7 +8,7 @@ audio or video; when two peers cannot reach each other, the embedded TURN
 server relays encrypted packets without being able to read them.
 
 - One binary, no database, no external services, no third-party JS or fonts.
-- Rooms are 128 bit random ids (26 characters of base32) that live only in
+- Room ids are 128 bit random ids (26 characters of base32) that live only in
   memory. The first join creates the room, and a room is forgotten a couple of
   minutes after its last participant leaves.
 - Optional per-room passphrase, hashed with PBKDF2-HMAC-SHA256 in memory.
