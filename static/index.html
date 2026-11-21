@@ -48,6 +48,18 @@
         X25519 + ML-KEM-768 and AES-256-GCM. The server only forwards sealed blobs. Compare the
         emoji code with the other people to rule out a swapped key.</p>
       <label class="check"><input id="noise" type="checkbox" checked> noise suppression (RNNoise)</label>
+      <label>camera
+        <select id="cam-select">
+          <option value="">system camera</option>
+        </select>
+      </label>
+      <label>microphone
+        <select id="mic-select">
+          <option value="">system microphone</option>
+        </select>
+      </label>
+      <p class="note">Choose the camera and the microphone before the join. The names appear after
+        the browser has asked once, and the choice is remembered.</p>
       <div class="row">
         <button id="enter-btn" type="submit">enter</button>
       </div>
@@ -101,6 +113,12 @@
       <button id="cam-btn" type="button" class="ctrl" aria-pressed="true">camera on</button>
       <button id="share-btn" type="button" class="ctrl" aria-pressed="false">share screen</button>
       <button id="stats-btn" type="button" class="ctrl" aria-pressed="false">stats</button>
+      <label class="pick" id="cam-pick" hidden>camera
+        <select id="cam-live"><option value="">system camera</option></select>
+      </label>
+      <label class="pick" id="mic-pick" hidden>mic
+        <select id="mic-live"><option value="">system microphone</option></select>
+      </label>
       <label class="pick">quality
         <select id="quality">
           <option value="640x360@30">360p 30</option>

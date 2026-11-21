@@ -46,6 +46,10 @@ const state = {
   cam: false,
   prefMic: true,      // the choice kept in localStorage
   prefCam: true,
+  camId: '',          // deviceId of the chosen camera, '' = the system device
+  micId: '',          // the same for the microphone
+  devCams: [],        // last enumerateDevices() video inputs
+  devMics: [],        // last enumerateDevices() audio inputs
   path: 'auto',
   quality: '1280x720@30',
   mirror: true,
@@ -107,6 +111,9 @@ const state = {
  *   'leave-btn': HTMLButtonElement,
  *   quality: HTMLSelectElement, mirror: HTMLInputElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
+ *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
+ *   'cam-live': HTMLSelectElement, 'mic-live': HTMLSelectElement,
+ *   'cam-pick': HTMLElement, 'mic-pick': HTMLElement,
  * }} Elements
  */
 
@@ -421,6 +428,211 @@ async function ask(constraints) {
   }
 }
 
+// ---------------------------------------------------------------- devices
+//
+// The join form carries one picker per kind, and the toolbar keeps a second pair
+// for a switch during a call. Every picker shows the same list and the choice
+// lives in state.camId and state.micId, so no two pickers can disagree. The
+// browser hides the labels and the ids until the page has permission once:
+// before that the options are numbered, and a stored id stays in its picker as
+// one extra entry, so a reload never loses the camera.
+
+const DEVICE_NOUN = { video: 'camera', audio: 'microphone' };
+
+function devicePickers(kind) {
+  return kind === 'video' ? [$('cam-select'), $('cam-live')] : [$('mic-select'), $('mic-live')];
+}
+
+function deviceList(kind) {
+  return kind === 'video' ? state.devCams : state.devMics;
+}
+
+function chosenDevice(kind) {
+  return (kind === 'video' ? state.camId : state.micId) || '';
+}
+
+function setChosenDevice(kind, id) {
+  if (kind === 'video') state.camId = id;
+  else state.micId = id;
+  store(kind === 'video' ? 'camId' : 'micId', id);
+}
+
+// paintDeviceSelect rewrites one picker in place. The wanted id keeps its place
+// while the browser still lists it; a list without ids (no permission yet)
+// keeps it as one extra entry; a list with labels that no longer has it drops
+// it, so the next request asks for the system device.
+function paintDeviceSelect(select, kind, list, wanted) {
+  if (!select) return '';
+  const noun = DEVICE_NOUN[kind];
+  const seen = new Set();
+  const frag = document.createDocumentFragment();
+  const auto = document.createElement('option');
+  auto.value = '';
+  auto.textContent = `system ${noun}`;
+  frag.appendChild(auto);
+  let count = 0;
+  for (const device of list) {
+    if (!device.deviceId || seen.has(device.deviceId)) continue;
+    seen.add(device.deviceId);
+    count++;
+    const opt = document.createElement('option');
+    // A label needs permission once. Before that the picker counts the
+    // devices, so a guest still sees that there is more than one.
+    opt.textContent = device.label || `${noun} ${count}`;
+    opt.value = device.deviceId;
+    frag.appendChild(opt);
+  }
+  const complete = list.some((device) => !!device.label);
+  let value = '';
+  if (wanted && seen.has(wanted)) value = wanted;
+  else if (wanted && !complete) {
+    const opt = document.createElement('option');
+    opt.value = wanted;
+    opt.textContent = `${noun} (last used)`;
+    frag.appendChild(opt);
+    value = wanted;
+  }
+  select.replaceChildren(frag);
+  select.value = value;
+  return value;
+}
+
+// paintDevices fills every picker from the last enumeration, and a choice that
+// the browser no longer offers is dropped with one line in the status box. The
+// toolbar pickers only appear when a kind has more than one device to offer.
+function paintDevices() {
+  for (const kind of ['video', 'audio']) {
+    const wanted = chosenDevice(kind);
+    const list = deviceList(kind);
+    let kept = '';
+    for (const select of devicePickers(kind)) kept = paintDeviceSelect(select, kind, list, wanted);
+    if (wanted && kept !== wanted) {
+      setChosenDevice(kind, '');
+      say(`the ${DEVICE_NOUN[kind]} you chose is gone; the system ${DEVICE_NOUN[kind]} will be used`);
+    }
+  }
+  $('cam-pick').hidden = deviceList('video').filter((d) => d.deviceId).length < 2;
+  $('mic-pick').hidden = deviceList('audio').filter((d) => d.deviceId).length < 2;
+}
+
+// refreshDevices re-reads the device list and repaints the pickers. It runs at
+// boot, after every successful device request (the labels arrive with the first
+// permission) and on every devicechange.
+async function refreshDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  let all = [];
+  try {
+    all = await navigator.mediaDevices.enumerateDevices();
+  } catch {
+    return;
+  }
+  state.devCams = all.filter((device) => device.kind === 'videoinput');
+  state.devMics = all.filter((device) => device.kind === 'audioinput');
+  paintDevices();
+}
+
+// constraintsFor builds one request: the chosen device when there is one, the
+// plain ideal request when there is not. facingMode only rides along with a
+// plain camera request, because a deviceId already names the exact lens.
+function constraintsFor(kind, pick) {
+  if (kind === 'video') {
+    const base = { width: CAM_VIDEO.width, height: CAM_VIDEO.height };
+    return pick ? { ...base, deviceId: { exact: pick } } : { ...base, facingMode: 'user' };
+  }
+  return pick ? { ...MIC_AUDIO, deviceId: { exact: pick } } : { ...MIC_AUDIO };
+}
+
+// askKind opens one kind of device. A stored id the browser can no longer honour
+// (unplugged, or a profile without it) falls back to the plain request once, so
+// a stale choice never blocks a join or a switch.
+async function askKind(kind, pick) {
+  const want = (id) => (kind === 'video' ? { video: constraintsFor('video', id) } : { audio: constraintsFor('audio', id) });
+  const first = await ask(want(pick));
+  if (first.stream || !pick) return first;
+  if (!first.err || (first.err.name !== 'OverconstrainedError' && first.err.name !== 'NotFoundError')) return first;
+  if (pick === chosenDevice(kind)) {
+    setChosenDevice(kind, '');
+    paintDevices();
+    say(`the ${DEVICE_NOUN[kind]} you chose was not available; the system ${DEVICE_NOUN[kind]} will be used`);
+  }
+  return ask(want(''));
+}
+
+// switchDevice moves one live call to another device. The microphone feeds the
+// mixer, and the mixer track is what the peers receive, so an audio switch
+// touches no sender. The camera replaces the track on the video sender that is
+// already there, so the peers see the new camera without a rejoin; only a call
+// that started with no camera at all adds a sender.
+async function switchDevice(kind, id) {
+  if (state.sealed && !sealingAvailable()) {
+    say('this browser cannot seal media frames, so the device stays off');
+    return;
+  }
+  const got = await askKind(kind, id);
+  const track = got.stream
+    ? (kind === 'video' ? got.stream.getVideoTracks()[0] : got.stream.getAudioTracks()[0])
+    : null;
+  if (!track) {
+    const refused = got.err && got.err.name === 'NotAllowedError';
+    say(refused ? `the ${DEVICE_NOUN[kind]} was refused` : `that ${DEVICE_NOUN[kind]} is not available`);
+    paintDevices();
+    return;
+  }
+  if (kind === 'video') {
+    const wasOn = state.cam;
+    await adoptCam(track);
+    // A switch never changes the on and off choice of the call.
+    if (!wasOn) {
+      track.enabled = false;
+      if (!state.screen) paintSelfCam(false);
+    }
+  } else {
+    await adoptMic(track);
+  }
+  refreshSelf();
+  sendState();
+  refreshDevices();
+}
+
+// onDevicePicked stores the choice and, in a call, moves the live device.
+function onDevicePicked(kind, id) {
+  setChosenDevice(kind, id || '');
+  for (const select of devicePickers(kind)) {
+    if (select && select.value !== (id || '')) select.value = id || '';
+  }
+  if (!state.room || state.leaving) return;
+  switchDevice(kind, id || '').catch(() => {});
+}
+
+// onDeviceChange reacts to a camera or a microphone that came or went. A device
+// that is still listed keeps its place; one that is gone leaves the picker and
+// the status line says so. A live track that ended is let go, so the flags of
+// the call stay true until a device is chosen again.
+let devTimer = null;
+
+function onDeviceChange() {
+  if (state.camTrack && state.camTrack.readyState === 'ended') {
+    state.camTrack = null;
+    if (state.cam) {
+      state.cam = false;
+      if (!state.screen) paintSelfCam(false);
+      refreshSelf();
+      sendState();
+    }
+  }
+  if (state.micTrack && state.micTrack.readyState === 'ended') {
+    state.micTrack = null;
+    if (state.mic) {
+      state.mic = false;
+      refreshSelf();
+      sendState();
+    }
+  }
+  // Chrome fires several events for one plug, so the list is read once.
+  if (devTimer) clearTimeout(devTimer);
+  devTimer = setTimeout(() => { devTimer = null; refreshDevices(); }, 250);
+}
+
 // requestLocal asks for the camera and the microphone when the join button is
 // pressed: one prompt when both are wanted, and the call starts with both on.
 // A refusal or a missing device never stops the join; the devices that did not
@@ -448,7 +660,10 @@ async function requestLocal() {
   };
 
   if (wantMic && wantCam) {
-    const both = await ask({ audio: MIC_AUDIO, video: CAM_VIDEO });
+    const both = await ask({
+      audio: constraintsFor('audio', state.micId),
+      video: constraintsFor('video', state.camId),
+    });
     if (both.stream) {
       await adoptMic(both.stream.getAudioTracks()[0]);
       await adoptCam(both.stream.getVideoTracks()[0]);
@@ -457,8 +672,9 @@ async function requestLocal() {
       refused.push('camera and microphone');
     } else {
       // One of the two may be missing or busy: ask for each of them alone, so
-      // the other one still starts.
-      const parts = await Promise.all([ask({ audio: MIC_AUDIO }), ask({ video: CAM_VIDEO })]);
+      // the other one still starts. A stored device that is gone falls back to
+      // the system device here.
+      const parts = await Promise.all([askKind('audio', state.micId), askKind('video', state.camId)]);
       const mic = parts[0].stream ? parts[0].stream.getAudioTracks()[0] : null;
       const cam = parts[1].stream ? parts[1].stream.getVideoTracks()[0] : null;
       await adoptMic(mic);
@@ -467,12 +683,12 @@ async function requestLocal() {
       if (!cam) noteErr(parts[1].err, 'camera');
     }
   } else if (wantMic) {
-    const mic = await ask({ audio: MIC_AUDIO });
+    const mic = await askKind('audio', state.micId);
     const track = mic.stream ? mic.stream.getAudioTracks()[0] : null;
     await adoptMic(track);
     if (!track) noteErr(mic.err, 'microphone');
   } else {
-    const cam = await ask({ video: CAM_VIDEO });
+    const cam = await askKind('video', state.camId);
     const track = cam.stream ? cam.stream.getVideoTracks()[0] : null;
     await adoptCam(track);
     if (!track) noteErr(cam.err, 'camera');
@@ -485,6 +701,8 @@ async function requestLocal() {
   } else if (missing.length) {
     say(`no ${joinWords(missing)}; you joined without ${missing.length > 1 ? 'them' : 'it'}`);
   }
+  // The first permission is what turns the placeholders into real labels.
+  refreshDevices();
   refreshSelf();
 }
 
@@ -558,15 +776,28 @@ function publishTrack(track) {
 }
 
 // adoptMic makes one microphone track the live input: it goes through RNNoise
-// and the gain into the mixer, and the mixer track is what peers receive.
+// and the gain into the mixer, and the mixer track is what peers receive. A
+// second device needs a new source, because a source can not be repointed; the
+// analyser is rebuilt with it and the noise choice of the call is kept.
 async function adoptMic(track) {
   if (!track) return;
+  const prev = state.micTrack;
   state.micTrack = track;
   track.enabled = true;
   if (!state.audioCtx) await buildAudio();
-  if (!state.micSource && state.audioCtx) {
-    state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
-    await setNoise(state.noiseWanted);
+  if (state.audioCtx) {
+    if (!state.micSource) {
+      state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
+      await setNoise(state.noiseWanted);
+    } else if (prev && prev !== track) {
+      try { state.micSource.disconnect(); } catch { /* not connected */ }
+      if (state.micAnalyser) {
+        try { state.micAnalyser.disconnect(); } catch { /* not connected */ }
+        state.micAnalyser = null;
+      }
+      state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
+      await setNoise(state.rnnoiseOn);
+    }
   }
   startMeter();
   const out = state.mixer && state.mixer.stream.getAudioTracks()[0];
@@ -574,6 +805,9 @@ async function adoptMic(track) {
     state.outStream.addTrack(out);
   }
   publishTrack(out);
+  if (prev && prev !== track) {
+    try { prev.stop(); } catch { /* already stopped */ }
+  }
 }
 
 // paintSelfCam paints the local preview from the camera state. A disabled
@@ -596,18 +830,35 @@ function paintSelfCam(on) {
 }
 
 // adoptCam makes one camera track the live video. While a screen is shared the
-// screen stays what peers receive, so only the preview would change later.
+// screen stays what peers receive, so only the camera and the preview change. A
+// track that replaces an earlier camera is handed to the video sender that is
+// already there, so a switch needs no renegotiation; a call that started without
+// a camera adds a sender instead.
 async function adoptCam(track) {
   if (!track) return;
+  const prev = state.camTrack;
   state.camTrack = track;
   track.contentHint = 'motion';
   track.enabled = true;
   if (!state.screen) paintSelfCam(true);
-  if (state.screen) return;
-  if (state.outStream && !state.outStream.getVideoTracks().includes(track)) {
-    state.outStream.addTrack(track);
+  if (!state.screen && state.outStream) {
+    for (const old of state.outStream.getVideoTracks()) {
+      if (old !== track) state.outStream.removeTrack(old);
+    }
+    if (!state.outStream.getVideoTracks().includes(track)) state.outStream.addTrack(track);
+    for (const peer of state.peers.values()) {
+      if (!peer.pc) continue;
+      for (const sender of peer.pc.getSenders()) {
+        if (sender.track && sender.track.kind === 'video' && sender.track !== track) {
+          await sender.replaceTrack(track).catch(() => {});
+        }
+      }
+    }
+    publishTrack(track);
   }
-  publishTrack(track);
+  if (prev && prev !== track) {
+    try { prev.stop(); } catch { /* already stopped */ }
+  }
   applyMirror();
 }
 
@@ -618,7 +869,7 @@ async function enableMic() {
     return;
   }
   if (!state.micTrack) {
-    const mic = await ask({ audio: MIC_AUDIO });
+    const mic = await askKind('audio', state.micId);
     const track = mic.stream ? mic.stream.getAudioTracks()[0] : null;
     if (!track) {
       say(mic.err && mic.err.name === 'NotAllowedError'
@@ -627,6 +878,7 @@ async function enableMic() {
       return;
     }
     await adoptMic(track);
+    refreshDevices();
   }
   state.mic = true;
   state.prefMic = true;
@@ -654,7 +906,7 @@ async function enableCam() {
     return;
   }
   if (!state.camTrack) {
-    const cam = await ask({ video: CAM_VIDEO });
+    const cam = await askKind('video', state.camId);
     const track = cam.stream ? cam.stream.getVideoTracks()[0] : null;
     if (!track) {
       say(cam.err && cam.err.name === 'NotAllowedError'
@@ -663,6 +915,7 @@ async function enableCam() {
       return;
     }
     await adoptCam(track);
+    refreshDevices();
   }
   state.cam = true;
   state.prefCam = true;
@@ -3332,6 +3585,11 @@ function init() {
   state.prefCam = load('cam') !== '0';
   state.mic = state.prefMic;
   state.cam = state.prefCam;
+  // The chosen devices come back like the on and off choices. An id is opaque
+  // and only meaningful inside this browser profile, so a stale one is simply
+  // not found and the system device is used.
+  state.camId = load('camId').slice(0, 256);
+  state.micId = load('micId').slice(0, 256);
   const storedPath = load('path');
   if (['auto', 'p2p', 'relay'].includes(storedPath)) {
     state.path = storedPath;
@@ -3411,6 +3669,18 @@ function init() {
     store('path', state.path);
   });
 
+  // Both pickers of a kind read the same list and write the same choice, so a
+  // change in the toolbar and a change in the form can not disagree.
+  for (const kind of ['video', 'audio']) {
+    for (const select of devicePickers(kind)) {
+      if (!select) continue;
+      select.addEventListener('change', () => onDevicePicked(kind, select.value));
+    }
+  }
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
+  }
+
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
 
@@ -3454,6 +3724,9 @@ function init() {
   });
 
   setInterval(pollRelay, 5000);
+  // The form shows a picker before the first permission: the labels are hidden,
+  // so the options are numbered until a request has succeeded once.
+  refreshDevices();
 }
 
 init();
