@@ -86,6 +86,46 @@ runs in a WebAssembly module (`pq.wasm`) built from `internal/pq`. Both sides
 show the same 13 character short code and six emoji on each tile, for comparison
 over the call.
 
+### Identity and pins
+
+Each browser makes a long-term Ed25519 identity the first time it runs here and
+keeps it: as a non-extractable WebCrypto key where the browser has Ed25519, and
+otherwise as a seed sealed under a non-extractable AES-GCM key in IndexedDB. The
+private half is never exported, never written to `localStorage`, and never sent.
+Only the public key travels, and only inside the sealed `pub` bundle.
+
+The handshake is mutual. Both sides put the two identity keys, the two session
+ids and the two key exchange halves into one transcript, both sign it, and each
+side checks the other's signature and key confirmation tag in a single gate
+(`Proved` in `internal/pq`, mirrored as `proved` in the module) before it opens
+one frame of the pair. An `ok` without a valid signature closes the pair: a
+missing signature is not a downgrade. The gate is also where the pin state is
+read, so a peer is never treated as established before both checks pass.
+
+A peer's fingerprint (`xxxx-xxxx-xxxx-xxxx-xxxx`) is pinned per origin with a
+local label, the first and the last time it was seen. A key that is already
+pinned reads `verified`; a new one stays `unverified` even after it signs
+correctly, because a signature proves this call, not the person. A label that
+now holds a different key reads `changed` and the pair is closed until someone
+taps "this device was reset", which re-pins and starts a new handshake; a
+revoked fingerprint that comes back is refused without that prompt. The badge
+counts `verified N of M`, and no display name is ever bound to an identity: the
+name arrives sealed and can change at any time.
+
+The session keys stay ephemeral. A fresh X25519 key and a fresh ML-KEM-768
+encapsulation are made per call, held in memory only, mixed by HKDF, and wiped
+when the peer leaves or the call ends. Nothing session-related is written to
+IndexedDB, `localStorage`, `sessionStorage`, a cookie or the server. The pin
+answers who the peer is; the ephemeral keys keep the media secret now and
+unreadable later, even with a stolen identity key.
+
+`static/pq.wasm` is a build of `internal/pq` and `cmd/pqwasm`; a change there
+needs a rebuild:
+
+```sh
+GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+```
+
 There is no fallback to a clear room. The link is `#r=<room>`, and a browser
 that cannot install a media transform joins without a microphone and a camera
 and says why instead of sending clear frames. The post-quantum module is
@@ -278,13 +318,19 @@ without a camera. Note that a strict `script-src 'self'` CSP blocks Playwright's
 `tools/pq-browser-e2e.js` is the sealed suite. It joins two contexts on the one
 join form and asserts the handshake, matching short codes, media through the
 frame transform, sealed chat both ways, that no name or chat text appears in a
-signaling frame, and that a wrong key decodes nothing. Run it the same way:
+signaling frame, that a replayed sealed chat frame is dropped rather than shown
+twice, and that a wrong key decodes nothing. Run it the same way:
 
 ```sh
 PW=/tmp/pw/node_modules/playwright-core \
 ROOMSBASE=http://127.0.0.1:8095 OUTDIR=/tmp/shots \
   node tools/pq-browser-e2e.js
 ```
+
+`tools/pq-mesh-e2e.js` adds the parts a two browser test cannot reach: a third
+guest, a fake peer that runs the module and answers without signing, another
+that signs but is not pinned, and a bundle with the identity fields stripped.
+Each one has to be refused or shown as unverified.
 
 `tools/smoke.js` is the quick client check. It is small on purpose: a fresh
 page joins a new room with fake devices, and the test fails on the first
