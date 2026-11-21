@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"compress/gzip"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -25,8 +27,13 @@ import (
 	"time"
 )
 
-//go:embed static
-var embeddedFS embed.FS
+// The client ships as one gzip compressed tar, not as loose files: the page is
+// 6.5 MB on disk and 1.7 MB packed, so the binary carries the packed copy and
+// unpacks it in memory at start. cmd/pack writes the archive before the build,
+// with no timestamps, so two builds of one commit give the same bytes.
+//
+//go:embed packed/static.tgz
+var embeddedPack []byte
 
 // The queue and the done list ship inside the binary as a fallback, so the
 // two links in the page always lead somewhere. A docs directory on disk wins.
@@ -119,8 +126,33 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", srv.handleWS)
 
-	var wasmGz []byte
-	var wasmOnce sync.Once
+	var gzMu sync.Mutex
+	gz := make(map[string][]byte)
+	// packed returns the gzip copy of one asset, made once. It is a copy, not a
+	// transform: the bytes a client gets are the bytes of the file, so the
+	// sha256 of a download and the sha256 of the file agree.
+	packed := func(name string, body []byte) []byte {
+		gzMu.Lock()
+		defer gzMu.Unlock()
+		if b, ok := gz[name]; ok {
+			return b
+		}
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		zw.Write(body)
+		zw.Close()
+		gz[name] = buf.Bytes()
+		return gz[name]
+	}
+	compressible := func(name string) bool {
+		switch {
+		case strings.HasSuffix(name, ".wasm"), strings.HasSuffix(name, ".js"),
+			strings.HasSuffix(name, ".css"), strings.HasSuffix(name, ".html"),
+			strings.HasSuffix(name, ".svg"), strings.HasSuffix(name, ".md"):
+			return true
+		}
+		return false
+	}
 	serve := func(name string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -135,19 +167,15 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 			}
 			w.Header().Set("Content-Type", contentType(name))
 			w.Header().Set("Cache-Control", "no-store")
-			if name == "pq.wasm" && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-				// The WebAssembly build is 5 MiB; one gzip pass makes it 1.5 MiB.
-				wasmOnce.Do(func() {
-					var buf bytes.Buffer
-					zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-					zw.Write(assets["pq.wasm"])
-					zw.Close()
-					wasmGz = buf.Bytes()
-				})
-				w.Header().Set("Content-Encoding", "gzip")
+			if compressible(name) {
+				// One gzip pass, cached: the page is 6.5 MB of source and
+				// 1.7 MB on the wire, and the wasm alone loses 3.9 MB.
 				w.Header().Set("Vary", "Accept-Encoding")
-				w.Write(wasmGz)
-				return
+				if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+					w.Header().Set("Content-Encoding", "gzip")
+					w.Write(packed(name, body))
+					return
+				}
 			}
 			w.Write(body)
 		}
@@ -229,8 +257,9 @@ func docHandler(dir, name string) http.HandlerFunc {
 	}
 }
 
-// loadAssets reads the embedded client, or a directory override for hacking on
-// the frontend.
+// loadAssets gives the client files as bytes: from the directory override when
+// one is set, else from the embedded archive. The audio worklet bundle and the
+// drawings are added last, so both paths end with the same map.
 func loadAssets(dir string) (map[string][]byte, error) {
 	out := make(map[string][]byte)
 	if dir != "" {
@@ -249,43 +278,63 @@ func loadAssets(dir string) (map[string][]byte, error) {
 		}
 		return withWorkletBundle(out), nil
 	}
+	if err := unpackArchive(out); err != nil {
+		return nil, err
+	}
 	for _, name := range assetNames() {
 		if name == workletBundle {
 			continue
 		}
-		b, err := fs.ReadFile(embeddedFS, "static/"+name)
-		if err != nil {
-			return nil, err
+		if _, ok := out[name]; !ok {
+			return nil, fmt.Errorf("client archive has no %s", name)
 		}
-		out[name] = b
-	}
-	if err := loadOpenmoji("", out); err != nil {
-		return nil, err
 	}
 	return withWorkletBundle(out), nil
+}
+
+// unpackArchive fills out with every file of the embedded archive. The packed
+// copy is the source of the served bytes, so a name in the archive that is not
+// in assetNames() is still kept: the drawings are found by their prefix.
+func unpackArchive(out map[string][]byte) error {
+	zr, err := gzip.NewReader(bytes.NewReader(embeddedPack))
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	tr := tar.NewReader(zr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return err
+		}
+		out[path.Clean(hdr.Name)] = data
+	}
 }
 
 // loadOpenmoji reads the drawings of the short code. One directory of small
 // SVG files, so a glob is shorter than a second list that could drift from
 // the client, and a missing drawing fails the build, not a call.
 func loadOpenmoji(dir string, out map[string][]byte) error {
-	var names []string
-	var err error
-	if dir != "" {
-		names, err = filepath.Glob(filepath.Join(dir, "openmoji", "*.svg"))
-	} else {
-		names, err = fs.Glob(embeddedFS, "static/openmoji/*.svg")
+	// With the archive the drawings are already in out, found by their prefix.
+	if dir == "" {
+		return nil
 	}
+	names, err := filepath.Glob(filepath.Join(dir, "openmoji", "*.svg"))
 	if err != nil {
 		return err
 	}
 	for _, name := range names {
-		var b []byte
-		if dir != "" {
-			b, err = os.ReadFile(name)
-		} else {
-			b, err = fs.ReadFile(embeddedFS, name)
-		}
+		b, err := os.ReadFile(name)
 		if err != nil {
 			return err
 		}

@@ -23,6 +23,11 @@ export CGO_ENABLED=0
 [ -n "${GOMODCACHE:-}" ] || export GOMODCACHE="$GOPATH/pkg/mod"
 [ -n "${GOCACHE:-}" ] || export GOCACHE="$(cd "$here/.." && pwd)/tools/gocache"
 
+# The client is embedded as one gzip compressed tar, so it is packed first.
+# The packer writes sorted names and no timestamps, so the archive is the same
+# for the same files and two builds of one commit match.
+"$GO" run ./cmd/pack
+
 mkdir -p bin
 "$GO" build -trimpath -ldflags "-s -w" -o bin/rooms .
 "$GO" build -trimpath -ldflags "-s -w" -o bin/selftest ./cmd/selftest
