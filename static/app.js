@@ -1152,15 +1152,23 @@ async function setNoise(on) {
   }
   if (on && !state.rnnoise) {
     try {
-      // A worklet module has its own scope, so the wasm bundle and the
-      // processor come as one file: /rnnoise-node.js.
-      await state.audioCtx.audioWorklet.addModule('/rnnoise-node.js');
+      // The worklet module gets the wasm bytes from the page: a worklet can
+      // only build a module from bytes it already holds, so the binary comes
+      // over the wire as a file and travels in processorOptions.
+      const [binary] = await Promise.all([
+        fetch('/rnnoise.wasm').then((res) => {
+          if (!res.ok) throw new Error('rnnoise.wasm ' + res.status);
+          return res.arrayBuffer();
+        }),
+        state.audioCtx.audioWorklet.addModule('/rnnoise-node.js'),
+      ]);
       state.rnnoise = new AudioWorkletNode(state.audioCtx, 'rnnoise', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [1],
         channelCount: 1,
         channelCountMode: 'explicit',
+        processorOptions: { wasm: new Uint8Array(binary) },
       });
       state.rnnoise.connect(state.micGain);
     } catch (err) {
