@@ -9,6 +9,7 @@ One line per work item. New work goes to the bottom.
 - Ship the rnnoise microphone filter on by default, with a switch that turns it off (katia).
 - Choose P2P only or relay only before the join (katia).
 - Screen sharing with audio, plus a choice of resolution and frame rate (katia).
+- Funny sound effects for the room events: join, leave, mic on, mic off (katia).
 - Give the client a 1990s software look; katia said noooo just after the ask, so confirm first (katia).
 - Add host controls: mute or remove one peer from the room.
 - Test TURN allocations over plain HTTP, not only through the TLS proxy.
