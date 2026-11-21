@@ -2,8 +2,12 @@
 
 GO ?= go
 BIN ?= bin
+NODE ?= /data/workspace/node/bin
+TSC ?= /data/workspace/tools/tscheck/node_modules/.bin/tsc
+PW ?=
+ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build selftest run test clean
+.PHONY: all build selftest run test typecheck smoke check clean
 
 all: build selftest
 
@@ -20,6 +24,18 @@ run: build
 # Test a server that is already running on ADDR.
 test: selftest
 	$(BIN)/selftest -addr $${ADDR:-http://127.0.0.1:8095}
+
+# Type check the client as JavaScript (no build step, no emit).
+typecheck:
+	PATH=$(NODE):$$PATH $(TSC) -p .
+
+# One real browser, one real join. Fails on the first uncaught exception.
+smoke:
+	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
+	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) $(NODE)/node tools/smoke.js
+
+# What a normal check runs: the types first, then the browser.
+check: typecheck smoke
 
 clean:
 	rm -rf $(BIN)
