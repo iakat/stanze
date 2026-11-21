@@ -3016,6 +3016,8 @@ function updatePinCount() {
 function paintPin(peer) {
   updatePinCount();
   paintState(peer);
+  const idRow = peer.tile ? peer.tile.querySelector('.sas .id-row') : null;
+  if (idRow) idRow.replaceWith(sealedIdentityRow(peer));
   const chip = peer.tile ? peer.tile.querySelector('.pin') : null;
   if (!chip) return;
   const what = pinState(peer);
