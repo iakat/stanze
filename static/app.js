@@ -26,6 +26,10 @@ const state = {
   mixer: null,
   micGain: null,
   micSource: null,
+  micAnalyser: null,  // tap on the microphone input, for the stats level
+  meterBuf: null,     // one reusable buffer for the analyser
+  meterPeak: 0,       // decaying peak, so one tick per second can see a word
+  meterTimer: null,
   rnnoise: null,
   rnnoiseOn: false,
   playCtx: null,      // the remote audio graph, so a peer can go over 100%
@@ -451,6 +455,7 @@ async function adoptMic(track) {
     state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
     await setNoise(state.noiseWanted);
   }
+  startMeter();
   const out = state.mixer && state.mixer.stream.getAudioTracks()[0];
   if (out && state.outStream && !state.outStream.getAudioTracks().includes(out)) {
     state.outStream.addTrack(out);
@@ -560,7 +565,66 @@ async function buildAudio() {
     state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([state.micTrack]));
     await setNoise(state.noiseWanted);
   }
+  startMeter();
   resumeAudio();
+}
+
+// startMeter reads the microphone before the gain, on a second branch of the
+// source, so the stats show a live device even while the local mute is on. It
+// does not touch the path to the peers: a muted gain still sends silence.
+const METER_MS = 50;
+
+function startMeter() {
+  if (!state.audioCtx || !state.micSource) return;
+  if (!state.micAnalyser) {
+    try {
+      state.micAnalyser = state.audioCtx.createAnalyser();
+      state.micAnalyser.fftSize = 1024;
+      state.micSource.connect(state.micAnalyser);
+    } catch {
+      state.micAnalyser = null;
+      return;
+    }
+  }
+  if (state.meterTimer) return;
+  state.meterTimer = setInterval(readMeter, METER_MS);
+}
+
+// readMeter keeps a peak that falls slowly: the stats panel is read once a
+// second, and a 50 ms sample of speech is mostly gaps.
+function readMeter() {
+  const a = state.micAnalyser;
+  if (!a) return;
+  if (!state.meterBuf || state.meterBuf.length !== a.fftSize) {
+    state.meterBuf = new Float32Array(a.fftSize);
+  }
+  a.getFloatTimeDomainData(state.meterBuf);
+  let sum = 0;
+  for (let i = 0; i < state.meterBuf.length; i++) {
+    const v = state.meterBuf[i];
+    sum += v * v;
+  }
+  const rms = Math.sqrt(sum / state.meterBuf.length);
+  state.meterPeak = Math.max(rms, state.meterPeak * 0.9);
+}
+
+function stopMeter() {
+  if (state.meterTimer) clearInterval(state.meterTimer);
+  state.meterTimer = null;
+  state.micAnalyser = null;
+  state.meterBuf = null;
+  state.meterPeak = 0;
+}
+
+// micLevelLine reports the peak as a percent between -60 dB and full scale,
+// with the dB value beside it, because that is what a phone's meter shows. A
+// value near zero with a live track points at the graph, not at the device.
+function micLevelLine() {
+  if (!state.micAnalyser) return 'level none';
+  const peak = state.meterPeak;
+  const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+  const pct = db > -60 ? Math.round(((db + 60) / 60) * 100) : 0;
+  return db > -90 ? `level ${pct}% ${Math.round(db)} dB` : 'level 0% silent';
 }
 
 // setNoise switches the microphone between the raw path and the RNNoise path.
@@ -1283,6 +1347,7 @@ function leave(message) {
   state.micSource = null;
   state.rnnoise = null;
   state.rnnoiseOn = false;
+  stopMeter();
   state.outStream = null;
   state.camTrack = null;
   state.micTrack = null;
@@ -1651,15 +1716,22 @@ async function peerStats(peer) {
   return out;
 }
 
-// ownMediaLine describes the local devices: rnnoise, the microphone rate and
-// the camera resolution, which is what the own tile contributes.
+// ownMediaLine describes the local devices: the microphone and its input
+// level, rnnoise, the state of the microphone graph and the camera
+// resolution. A live track with a silent meter points at the graph; a dead
+// context points at the autoplay rule of a phone.
 function ownMediaLine() {
   const parts = [];
-  if (!state.micTrack) parts.push('rnnoise off');
-  else parts.push(state.rnnoiseOn ? 'rnnoise on' : 'rnnoise off');
-  const mic = state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
-  if (mic && mic.sampleRate) parts.push(`mic ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`);
-  else parts.push('mic off');
+  const live = !!(state.mic && state.micTrack && state.micTrack.readyState === 'live');
+  const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
+  let label = live ? 'mic on' : 'mic off';
+  // Safari reports no sample rate on an audio track, so the rate is a bonus
+  // and a missing rate never means off.
+  if (mic && mic.sampleRate) label += ` ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
+  parts.push(label);
+  if (live) parts.push(micLevelLine());
+  parts.push(state.rnnoiseOn ? 'rnnoise on' : 'rnnoise off');
+  parts.push(`audio ${state.audioCtx ? state.audioCtx.state : 'none'}`);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
   if (cam && cam.width && cam.height) parts.push(`camera ${cam.width}x${cam.height}`);
   else parts.push('camera off');

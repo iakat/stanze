@@ -9,7 +9,7 @@ One line per work item. The top item is the most important.
 ## Open
 
 - Add post-quantum end-to-end encryption for all media and metadata: audio, video, the text in the room, and the names (katia, top priority).
-- Keep queued work items durable under load: many requests in one turn must not drop them (coderobe).
+- Fold the join UI of the e2e mode into the regular join UI: one toggle when joining or creating a room, remembered beside the name, and the separate e2e join page goes away (coderobe 14:51). The sealed mode has no relay path today, the normal mode has one, so the toggle must say so.
 - Decide the policy for custom room names: a guessed name lets people drop in, and the point of random ids is that they cannot (coderobe).
 - Decide if a bot or a text peer can take part in a room: today only browsers join one, so the voice bridge from the jitsi port has no place here yet (open question, not started).
 - Add a camera and microphone picker: the join asks for the camera and the microphone but always takes the default devices.
