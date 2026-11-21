@@ -201,10 +201,29 @@ async function stats(page) {
     room = await pageA.evaluate(() => location.hash.replace('#r=', ''));
     check('A created a room (128 bit base32 id)', /^[a-z2-7]{26}$/.test(room), 'len=' + room.length);
 
+    // ---- join: the camera and the microphone are on from the first second
     await until(pageA, () => document.querySelectorAll('.tile').length >= 1, null, 30000, 'A local tile');
     const localA = await pageA.evaluate(snapshot);
     check('A getUserMedia produced a live local preview', localA.locals.length === 1 && localA.locals[0].w > 0 && !localA.locals[0].paused,
       JSON.stringify(localA.locals[0] || {}));
+
+    const joinedA = await pageA.evaluate(() => {
+      const local = document.querySelector('.tile[data-local="yes"]');
+      const box = document.getElementById('stage-error');
+      return {
+        micTrack: state.micTrack ? state.micTrack.readyState + ':' + state.micTrack.enabled : 'none',
+        camTrack: state.camTrack ? state.camTrack.readyState + ':' + state.camTrack.enabled : 'none',
+        micBtn: document.getElementById('mic-btn').textContent,
+        camBtn: document.getElementById('cam-btn').textContent,
+        admins: state.admins instanceof Set,
+        badge: local ? local.querySelector('.state').textContent : '',
+        status: box && !box.hidden ? box.textContent : '',
+      };
+    });
+    check('A joined with the microphone on', joinedA.micTrack === 'live:true' && /^mic on$/.test(joinedA.micBtn), JSON.stringify(joinedA));
+    check('A joined with the camera on', joinedA.camTrack === 'live:true' && /^camera on$/.test(joinedA.camBtn), joinedA.camTrack);
+    check('prepareLocal finished (role set, own badge, buttons painted)', joinedA.admins && joinedA.badge === 'you' && joinedA.status === '',
+      JSON.stringify({ admins: joinedA.admins, badge: joinedA.badge, status: joinedA.status }));
 
     // ---- B joins the same room through the shared link
     await pageB.goto(BASE + '/#r=' + room, { waitUntil: 'load', timeout: 60000 });
@@ -213,6 +232,8 @@ async function stats(page) {
     await pageB.fill('#name', 'bob');
     await pageB.click('#enter-btn');
     await until(pageB, () => !document.getElementById('stage').hidden, null, 30000, 'B stage visible');
+    await until(pageB, () => state.micTrack && state.camTrack, null, 30000, 'B camera and microphone');
+    check('B joins with the camera and the microphone on', true);
 
     // ---- both sides end up with two tiles and a connected remote
     // connected is not enough: require the first decoded frame on the remote tile
@@ -272,28 +293,97 @@ async function stats(page) {
       info('peer connection stats unavailable from page state', JSON.stringify({ stA, stB }));
     }
 
-    // ---- signaling must ride the page's own origin (wss behind TLS)
+    // ---- signaling must ride the page's own origin (wss behind TLS, ws on
+    // a plain http test server)
     const wsA = await pageA.evaluate(() => ({ url: state.ws ? state.ws.url : '', open: !!(state.ws && state.ws.readyState === 1) }));
     const wsB = await pageB.evaluate(() => ({ url: state.ws ? state.ws.url : '', open: !!(state.ws && state.ws.readyState === 1) }));
-    check('A signaling socket is wss and open', wsA.open && /^wss:\/\//.test(wsA.url), wsA.url);
-    check('B signaling socket is wss and open', wsB.open && /^wss:\/\//.test(wsB.url), wsB.url);
+    const wsBase = BASE.replace(/^http/, 'ws').replace(/\/+$/, '');
+    check('A signaling socket is open on the page origin', wsA.open && wsA.url.startsWith(wsBase), wsA.url + ' vs ' + wsBase);
+    check('B signaling socket is open on the page origin', wsB.open && wsB.url.startsWith(wsBase), wsB.url + ' vs ' + wsBase);
+
+    // ---- per peer volume: a 0..200 slider on the remote tile, routed through
+    // a gain node, kept per peer name
+    const vol = await pageA.evaluate(() => {
+      const tile = document.querySelector('.tile[data-peer]');
+      const range = tile.querySelector('.vol-range');
+      const num = tile.querySelector('.vol-num');
+      const peer = [...state.peers.values()][0];
+      const set = (v) => {
+        range.value = String(v);
+        range.dispatchEvent(new Event('input', { bubbles: true }));
+        return {
+          gain: peer.gain ? peer.gain.gain.value : null,
+          label: num.textContent,
+          stored: localStorage.getItem('rooms.vol.' + peer.name),
+        };
+      };
+      const snap = { normal: { gain: peer.gain ? peer.gain.gain.value : null, label: num.textContent }, name: peer.name };
+      snap.zero = set(0);
+      snap.loud = set(175);
+      snap.kept = set(140);
+      snap.max = range.max;
+      snap.ownTile = !!document.querySelector('.tile[data-local="yes"] .vol-range');
+      snap.ctx = state.playCtx ? state.playCtx.state : 'none';
+      return snap;
+    });
+    check('a remote tile has a 0-200 volume slider at 100 percent', vol.max === '200' && vol.normal.gain === 1 && vol.normal.label === '100%',
+      JSON.stringify(vol.normal) + ' max=' + vol.max);
+    check('the own tile has no volume slider', vol.ownTile === false);
+    check('volume 0 mutes that peer', vol.zero.gain === 0 && vol.zero.label === '0%' && vol.zero.stored === '0', JSON.stringify(vol.zero));
+    check('volume 175 is a real boost above unity gain', Math.abs(vol.loud.gain - 1.75) < 1e-6 && vol.loud.label === '175%', JSON.stringify(vol.loud));
+    check('the volume is kept per peer name', vol.kept.stored === '140' && vol.kept.label === '140%', JSON.stringify(vol.kept));
+    check('remote audio runs through the playback graph', vol.ctx === 'running' || vol.ctx === 'suspended', vol.ctx);
+
+    // ---- telemetry: a toolbar toggle and a panel that polls getStats
+    await pageA.click('#stats-btn');
+    await sleep(3000);
+    const tel = await pageA.evaluate(() => {
+      const body = document.getElementById('stats-body');
+      return {
+        open: !document.getElementById('stats-panel').hidden,
+        timer: !!state.statsTimer,
+        text: body ? body.textContent : '',
+      };
+    });
+    check('the stats panel opens and polls once a second', tel.open && tel.timer, tel.text);
+    check('stats show the peer, the round trip time and the path',
+      tel.text.includes('bob') && /\d+ ms/.test(tel.text) && /(p2p|relay)/.test(tel.text), tel.text);
+    check('stats show outbound and inbound bitrate for video and audio',
+      /video [1-9]\d*\/[1-9]\d*/.test(tel.text) && /audio [1-9]\d*\/[1-9]\d*/.test(tel.text), tel.text);
+    check('stats show the own rnnoise state and device settings',
+      /rnnoise (on|off)/.test(tel.text) && /mic \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
+    const hiddenStop = await pageA.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      const timer = state.statsTimer;
+      delete document.hidden;
+      document.dispatchEvent(new Event('visibilitychange'));
+      return { hiddenTimer: timer, backTimer: !!state.statsTimer };
+    });
+    check('stats polling stops while the tab is hidden and comes back', hiddenStop.hiddenTimer === null && hiddenStop.backTimer,
+      JSON.stringify(hiddenStop));
+    await pageA.click('#stats-btn');
+    const closedStats = await pageA.evaluate(() => ({
+      hidden: document.getElementById('stats-panel').hidden,
+      timer: state.statsTimer,
+    }));
+    check('stats polling stops when the panel is closed', closedStats.hidden && closedStats.timer === null, JSON.stringify(closedStats));
 
     // ---- mute / camera toggles flip the local track and the UI
     await pageA.click('#mic-btn');
     await pageA.click('#cam-btn');
-    const toggled = await pageA.evaluate(() => {
-      const v = document.querySelector('.tile video[muted]');
-      const tracks = v.srcObject.getTracks().map((t) => t.kind + '=' + t.enabled);
-      return {
-        tracks,
-        micBtn: document.getElementById('mic-btn').textContent,
-        camBtn: document.getElementById('cam-btn').textContent,
-      };
-    });
-    check('mic toggle disables the audio track', toggled.tracks.includes('audio=false') && /off/.test(toggled.micBtn),
-      toggled.tracks.join(',') + ' buttons=' + toggled.micBtn + '/' + toggled.camBtn);
-    check('camera toggle disables the video track', toggled.tracks.includes('video=false') && /off/.test(toggled.camBtn),
-      toggled.tracks.join(','));
+    const toggled = await pageA.evaluate(() => ({
+      micTrack: state.micTrack ? state.micTrack.enabled : null,
+      camTrack: state.camTrack ? state.camTrack.enabled : null,
+      micBtn: document.getElementById('mic-btn').textContent,
+      camBtn: document.getElementById('cam-btn').textContent,
+      prefs: [localStorage.getItem('rooms.mic'), localStorage.getItem('rooms.cam')],
+    }));
+    check('mic toggle disables the audio track', toggled.micTrack === false && /off/.test(toggled.micBtn),
+      JSON.stringify(toggled));
+    check('camera toggle disables the video track', toggled.camTrack === false && /off/.test(toggled.camBtn),
+      JSON.stringify(toggled));
+    check('the toggles are remembered', toggled.prefs[0] === '0' && toggled.prefs[1] === '0', JSON.stringify(toggled.prefs));
     await pageA.click('#mic-btn');
     await pageA.click('#cam-btn');
 
@@ -319,6 +409,96 @@ async function stats(page) {
     check('all room-listing paths 404 from the browser', bad.length === 0, JSON.stringify(probe));
     const leak = Object.entries(probe).filter(([, v]) => v.hasRoom);
     check('no response body contains the room id', leak.length === 0, leak.map(([k]) => k).join(',') || 'clean');
+
+    // ---- the lost connection cue: one calm loop, no stacking, seamless
+    const cue = await pageA.evaluate(() => {
+      const info = {};
+      startLost();
+      const src = state.lostSource;
+      info.started = !!src;
+      startLost();
+      info.same = !!src && state.lostSource === src;
+      info.loop = src ? src.loop : null;
+      info.dur = src && src.buffer ? src.buffer.duration : null;
+      info.channels = src && src.buffer ? src.buffer.numberOfChannels : null;
+      info.rate = src && src.buffer ? src.buffer.sampleRate : null;
+      if (src && src.buffer) {
+        const d = src.buffer.getChannelData(0);
+        const a = Math.round(src.loopStart * src.buffer.sampleRate);
+        const b = Math.round(src.loopEnd * src.buffer.sampleRate);
+        info.seam = Math.abs(d[a] - d[b - 1]);
+        let local = 0;
+        for (let i = a + 1; i < a + 2000; i++) local = Math.max(local, Math.abs(d[i] - d[i - 1]));
+        info.local = local;
+        info.window = Math.round((b - a) / src.buffer.sampleRate * 1000);
+      }
+      stopLost();
+      info.stopped = state.lostSource === null;
+      return info;
+    });
+    check('the lost connection cue is a 4 s loop of one calm pad',
+      cue.started && cue.loop === true && cue.dur >= 4 && cue.dur <= 5, JSON.stringify(cue));
+    check('the lost cue is mono and band limited', cue.channels === 1 && cue.rate === 48000,
+      cue.channels + 'ch ' + cue.rate + ' Hz, window ' + cue.window + ' ms');
+    check('a second reconnect attempt does not stack a second cue', cue.same === true);
+    check('the loop point is seamless (no step bigger than the waveform itself)',
+      cue.seam <= cue.local, 'seam=' + cue.seam + ' local=' + cue.local);
+    check('stopping the cue releases it', cue.stopped === true);
+
+    await pageA.evaluate(() => { state.ws.close(); });
+    const down = await until(pageA, () => (state.lostSource ? 'playing' : ''), null, 5000, 'lost cue');
+    check('a lost connection starts the pad', down === 'playing');
+    const recovered = await until(pageA, () => (state.ws && state.ws.readyState === 1 && !state.lostSource ? 'back' : ''),
+      null, 60000, 'reconnect after the dropped socket');
+    check('the pad stops as soon as the client is connected again', recovered === 'back');
+    await until(pageA, () => [...state.peers.values()].some((p) => p.state === 'connected'), null, 60000, 'A reconnected to B');
+
+    // ---- remembered choice: a camera off visit comes back with the camera off
+    // and does not ask for it again
+    await pageA.evaluate(() => { if (state.cam) disableCam(); });
+    await pageA.addInitScript(() => {
+      window.__gum = [];
+      const md = navigator.mediaDevices;
+      if (!md || !md.getUserMedia) return;
+      const orig = md.getUserMedia.bind(md);
+      md.getUserMedia = (constraints) => {
+        window.__gum.push(JSON.stringify(constraints));
+        return orig(constraints);
+      };
+    });
+    await pageA.goto(BASE + '/#r=' + room, { waitUntil: 'load', timeout: 60000 });
+    const restored = await pageA.evaluate(() => ({
+      prefMic: state.prefMic,
+      prefCam: state.prefCam,
+      path: document.getElementById('path').value,
+      room: document.getElementById('room').value,
+      name: document.getElementById('name').value,
+    }));
+    check('the camera off choice is stored and comes back', restored.prefCam === false && restored.prefMic === true,
+      JSON.stringify(restored));
+    check('the room and the name still prefill', restored.room === room && restored.name === 'alice', JSON.stringify(restored));
+    await pageA.click('#enter-btn');
+    await until(pageA, () => [...state.peers.values()].some((p) => p.state === 'connected'), null, 60000, 'A rejoined the room');
+    const rejoin = await pageA.evaluate(() => {
+      const range = document.querySelector('.tile[data-peer] .vol-range');
+      const peer = [...state.peers.values()][0];
+      const box = document.getElementById('stage-error');
+      return {
+        gum: window.__gum,
+        mic: state.micTrack ? state.micTrack.enabled : null,
+        cam: state.camTrack ? state.camTrack.enabled : null,
+        camBtn: document.getElementById('cam-btn').textContent,
+        volume: range ? range.value : '',
+        gain: peer && peer.gain ? peer.gain.gain.value : null,
+        status: box && !box.hidden ? box.textContent : '',
+      };
+    });
+    check('a camera off visit asks for the microphone only',
+      rejoin.gum.length === 1 && /"audio"/.test(rejoin.gum[0]) && !/"video"/.test(rejoin.gum[0]), JSON.stringify(rejoin.gum));
+    check('a camera off visit joins with the mic on and the camera off',
+      rejoin.mic === true && rejoin.cam === null && /off/.test(rejoin.camBtn) && rejoin.status === '', JSON.stringify(rejoin));
+    check('the per peer volume came back after the reload',
+      rejoin.volume === '140' && Math.abs((rejoin.gain || 0) - 1.4) < 1e-6, rejoin.volume + ' gain=' + rejoin.gain);
 
     // ---- screenshots
     const shots = [];

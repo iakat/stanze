@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <title>stanze</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=20261121b">
 </head>
 <body>
 
@@ -67,12 +67,29 @@
       <span class="muted" id="link-text">connected</span>
     </div>
 
-    <section id="grid" class="grid"></section>
+    <div class="room-row">
+      <section id="grid" class="grid"></section>
+
+      <aside id="stats-panel" class="stats" hidden>
+        <div class="stats-head">stats (kbit/s up/down)</div>
+        <div id="stats-body" class="stats-body"></div>
+      </aside>
+
+      <aside class="chat">
+        <div class="chat-head">chat</div>
+        <ol id="chat-log" class="chat-log"></ol>
+        <form id="chat-form" class="chat-form" autocomplete="off">
+          <input id="chat-text" maxlength="500" placeholder="say something" spellcheck="false" autocomplete="off">
+          <button type="submit">send</button>
+        </form>
+      </aside>
+    </div>
 
     <footer class="controls">
       <button id="mic-btn" type="button" class="ctrl" aria-pressed="true">mic on</button>
       <button id="cam-btn" type="button" class="ctrl" aria-pressed="true">camera on</button>
       <button id="share-btn" type="button" class="ctrl" aria-pressed="false">share screen</button>
+      <button id="stats-btn" type="button" class="ctrl" aria-pressed="false">stats</button>
       <label class="pick">quality
         <select id="quality">
           <option value="640x360@30">360p 30</option>
@@ -91,6 +108,6 @@
   </div>
 </main>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=20261121b"></script>
 </body>
 </html>

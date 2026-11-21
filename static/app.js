@@ -17,20 +17,24 @@ const state = {
   name: '',
   ice: [],
   peers: new Map(),
+  admins: new Set(),  // filled by `joined`; empty until then
   raw: null,          // camera + microphone from getUserMedia
   camTrack: null,
   micTrack: null,
   outStream: null,    // what is sent to peers
-  audioCtx: null,
+  audioCtx: null,     // the microphone graph
   mixer: null,
   micGain: null,
   micSource: null,
   rnnoise: null,
   rnnoiseOn: false,
+  playCtx: null,      // the remote audio graph, so a peer can go over 100%
   screen: null,       // display stream while sharing
   screenSource: null,
-  mic: true,
-  cam: true,
+  mic: false,         // live in this call
+  cam: false,
+  prefMic: true,      // the choice kept in localStorage
+  prefCam: true,
   path: 'auto',
   quality: '1280x720@30',
   mirror: true,
@@ -39,6 +43,13 @@ const state = {
   reconnectTimer: null,
   reconnectDelay: 500,
   fatal: '',
+  statsTimer: null,
+  statsBusy: false,
+  sfxCtx: null,
+  sfxSource: null,
+  lostSource: null,   // the loop that plays while the socket is down
+  lostGain: null,
+  lostWanted: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -75,6 +86,41 @@ function say(text) {
   const box = state.room ? $('stage-error') : $('lobby-error');
   box.textContent = text;
   box.hidden = !text;
+}
+
+// ---------------------------------------------------------------- preferences
+
+// The browser keeps a few small strings: the name, the room, the last
+// microphone and camera choice, the media path, rnnoise, and the volume of
+// each peer by name. An unreadable storage (private mode) simply keeps nothing.
+function store(key, value) {
+  if (!window.localStorage) return;
+  try { localStorage.setItem('rooms.' + key, String(value)); } catch { /* private mode */ }
+}
+
+function load(key) {
+  if (!window.localStorage) return '';
+  try { return localStorage.getItem('rooms.' + key) || ''; } catch { return ''; }
+}
+
+// isAdmin answers "does this peer hold the role". It is safe before the first
+// `joined` message, when no role is known yet.
+function isAdmin(id) {
+  return !!(id && state.admins && state.admins.has(id));
+}
+
+// setAdmins replaces the role list in place, so every reader of the same set
+// sees the new list. It also rebuilds a missing set instead of throwing.
+function setAdmins(list) {
+  if (!(state.admins instanceof Set)) state.admins = new Set();
+  state.admins.clear();
+  for (const id of list || []) state.admins.add(id);
+}
+
+// joinWords renders a short list for the status line ("a, b and c").
+function joinWords(list) {
+  if (list.length <= 1) return list[0] || '';
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
 }
 
 function suggestRoom() {
@@ -124,6 +170,10 @@ function makeTile(id, name, local = false) {
   tile.innerHTML = `
     <video autoplay playsinline${local ? ' muted' : ''}></video>
     <div class="avatar"></div>
+    ${local ? '' : `<div class="vol">
+      <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
+      <span class="vol-num">100%</span>
+    </div>`}
     <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span></div>
     ${local ? '' : '<button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
   tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
@@ -131,6 +181,39 @@ function makeTile(id, name, local = false) {
   if (!local) wireDots(tile);
   $('grid').appendChild(tile);
   return tile;
+}
+
+// ---------------------------------------------------------------- volume
+
+// The volume of one participant is a percent from 0 (silent) to 200, kept per
+// name, so the same visitor sounds the same on the next visit.
+function storedVolume(name) {
+  const raw = load(`vol.${name}`);
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return 100;
+  return Math.max(0, Math.min(200, n));
+}
+
+// wireVolume connects one tile slider to one peer. The gain and the label are
+// painted from peer.vol, which the audio path and the slider share.
+function wireVolume(peer) {
+  const range = peer.tile.querySelector('.vol-range');
+  const num = peer.tile.querySelector('.vol-num');
+  if (!range || !num) return;
+  const paint = () => {
+    num.textContent = `${peer.vol}%`;
+    if (peer.gain) peer.gain.gain.value = peer.vol / 100;
+    // The element path is only a fallback and can not go over 100 percent.
+    if (peer.audioEl) peer.audioEl.volume = Math.min(peer.vol / 100, 1);
+  };
+  range.value = String(peer.vol);
+  range.addEventListener('input', () => {
+    const n = parseInt(range.value, 10);
+    peer.vol = Number.isFinite(n) ? Math.max(0, Math.min(200, n)) : 100;
+    paint();
+    store(`vol.${peer.name}`, peer.vol);
+  });
+  paint();
 }
 
 function setTileState(peer, text) {
@@ -193,13 +276,14 @@ function wireDots(tile) {
 // markAdmins redraws the host chip on every tile and hides the menus from
 // peers that are not the admin.
 function markAdmins() {
-  document.body.classList.toggle('is-admin', state.isAdmin);
+  const mine = isAdmin(state.self);
+  document.body.classList.toggle('is-admin', mine);
   for (const peer of state.peers.values()) {
-    peer.admin = peer.id === state.adminID;
+    peer.admin = isAdmin(peer.id);
     applyFlags(peer.tile, peer.mic, peer.cam, peer.admin);
   }
   const self = document.querySelector('.tile[data-local="yes"]');
-  applyFlags(self, state.mic, state.cam, state.isAdmin);
+  applyFlags(self, state.mic, state.cam, mine);
 }
 
 function updateCount() {
@@ -211,10 +295,88 @@ function updateCount() {
 // ---------------------------------------------------------------- media
 
 const MIC_AUDIO = { echoCancellation: true, noiseSuppression: false, autoGainControl: true };
+const CAM_VIDEO = { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' };
+
+// ask opens one getUserMedia request and never throws, so the join can always
+// go on with whatever the browser gives.
+async function ask(constraints) {
+  try {
+    return { stream: await navigator.mediaDevices.getUserMedia(constraints) };
+  } catch (err) {
+    return { err };
+  }
+}
+
+// requestLocal asks for the camera and the microphone when the join button is
+// pressed: one prompt when both are wanted, and the call starts with both on.
+// A refusal or a missing device never stops the join; the devices that did not
+// open stay off and a short status line says which ones.
+async function requestLocal() {
+  state.mic = false;
+  state.cam = false;
+  const wantMic = state.prefMic;
+  const wantCam = state.prefCam;
+  if (!wantMic && !wantCam) {
+    updateButtons();
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    say('this browser offers no camera and no microphone: you joined to watch and listen');
+    updateButtons();
+    return;
+  }
+
+  const missing = [];
+  const refused = [];
+  const noteErr = (err, list) => {
+    if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) refused.push(list);
+    else missing.push(list);
+  };
+
+  if (wantMic && wantCam) {
+    const both = await ask({ audio: MIC_AUDIO, video: CAM_VIDEO });
+    if (both.stream) {
+      await adoptMic(both.stream.getAudioTracks()[0]);
+      await adoptCam(both.stream.getVideoTracks()[0]);
+    } else if (both.err && (both.err.name === 'NotAllowedError' || both.err.name === 'SecurityError')) {
+      // The visitor answered the prompt with no. Asking twice would not prompt.
+      refused.push('camera and microphone');
+    } else {
+      // One of the two may be missing or busy: ask for each of them alone, so
+      // the other one still starts.
+      const parts = await Promise.all([ask({ audio: MIC_AUDIO }), ask({ video: CAM_VIDEO })]);
+      const mic = parts[0].stream ? parts[0].stream.getAudioTracks()[0] : null;
+      const cam = parts[1].stream ? parts[1].stream.getVideoTracks()[0] : null;
+      await adoptMic(mic);
+      await adoptCam(cam);
+      if (!mic) noteErr(parts[0].err, 'microphone');
+      if (!cam) noteErr(parts[1].err, 'camera');
+    }
+  } else if (wantMic) {
+    const mic = await ask({ audio: MIC_AUDIO });
+    const track = mic.stream ? mic.stream.getAudioTracks()[0] : null;
+    await adoptMic(track);
+    if (!track) noteErr(mic.err, 'microphone');
+  } else {
+    const cam = await ask({ video: CAM_VIDEO });
+    const track = cam.stream ? cam.stream.getVideoTracks()[0] : null;
+    await adoptCam(track);
+    if (!track) noteErr(cam.err, 'camera');
+  }
+
+  state.mic = !!state.micTrack;
+  state.cam = !!state.camTrack;
+  if (refused.length) {
+    say(`the ${joinWords(refused)} ${refused.length > 1 ? 'were' : 'was'} refused; you joined without ${refused.length > 1 ? 'them' : 'it'}`);
+  } else if (missing.length) {
+    say(`no ${joinWords(missing)}; you joined without ${missing.length > 1 ? 'them' : 'it'}`);
+  }
+  refreshSelf();
+}
 
 // prepareLocal builds the empty local side: the output stream, the own tile
-// and the buttons. It asks for no permission. The microphone and the camera
-// are requested on their first click, so a visitor only watches by default.
+// and the buttons. The permission prompt belongs to requestLocal, which runs
+// right after this and fills state.mic and state.cam.
 function prepareLocal() {
   state.outStream = new MediaStream();
   // The own tile exists even with no camera and no microphone, so the mirror
@@ -222,8 +384,15 @@ function prepareLocal() {
   const self = makeTile(state.name, state.name, true);
   self.dataset.state = 'connected';
   self.querySelector('.state').textContent = 'you';
-  applyFlags(self, state.mic, state.cam, state.isAdmin);
+  applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   applyMirror();
+  updateButtons();
+}
+
+// refreshSelf paints the own tile flags and the buttons from the live state.
+function refreshSelf() {
+  const self = document.querySelector('.tile[data-local="yes"]');
+  applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   updateButtons();
 }
 
@@ -242,26 +411,60 @@ function publishTrack(track) {
   }
 }
 
+// adoptMic makes one microphone track the live input: it goes through RNNoise
+// and the gain into the mixer, and the mixer track is what peers receive.
+async function adoptMic(track) {
+  if (!track) return;
+  state.micTrack = track;
+  track.enabled = true;
+  if (!state.audioCtx) await buildAudio();
+  if (!state.micSource && state.audioCtx) {
+    state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
+    await setNoise(state.noiseWanted);
+  }
+  const out = state.mixer && state.mixer.stream.getAudioTracks()[0];
+  if (out && state.outStream && !state.outStream.getAudioTracks().includes(out)) {
+    state.outStream.addTrack(out);
+  }
+  publishTrack(out);
+}
+
+// adoptCam makes one camera track the live video. While a screen is shared the
+// screen stays what peers receive, so only the preview would change later.
+async function adoptCam(track) {
+  if (!track) return;
+  state.camTrack = track;
+  track.contentHint = 'motion';
+  track.enabled = true;
+  const self = document.querySelector('.tile[data-local="yes"]');
+  if (self && !state.screen) {
+    self.querySelector('video').srcObject = new MediaStream([track]);
+    self.classList.add('playing');
+    self.querySelector('video').play().catch(() => {});
+  }
+  if (state.screen) return;
+  if (state.outStream && !state.outStream.getVideoTracks().includes(track)) {
+    state.outStream.addTrack(track);
+  }
+  publishTrack(track);
+  applyMirror();
+}
+
 async function enableMic() {
   if (!state.micTrack) {
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO });
-    } catch {
-      say('the microphone is not available or was refused');
+    const mic = await ask({ audio: MIC_AUDIO });
+    const track = mic.stream ? mic.stream.getAudioTracks()[0] : null;
+    if (!track) {
+      say(mic.err && mic.err.name === 'NotAllowedError'
+        ? 'the microphone was refused'
+        : 'the microphone is not available');
       return;
     }
-    state.micTrack = stream.getAudioTracks()[0] || null;
-    if (!state.micTrack) {
-      say('the microphone is not available');
-      return;
-    }
-    if (!state.audioCtx) await buildAudio();
-    const track = state.mixer && state.mixer.stream.getAudioTracks()[0];
-    if (track && state.outStream) state.outStream.addTrack(track);
-    publishTrack(track);
+    await adoptMic(track);
   }
   state.mic = true;
+  state.prefMic = true;
+  store('mic', 1);
   playSfx('timp');
   if (state.micGain) state.micGain.gain.value = 1;
   if (state.micTrack) state.micTrack.enabled = true;
@@ -272,6 +475,8 @@ async function enableMic() {
 function disableMic() {
   playSfx('hammer');
   state.mic = false;
+  state.prefMic = false;
+  store('mic', 0);
   if (state.micGain) state.micGain.gain.value = 0;
   updateButtons();
   sendState();
@@ -279,32 +484,19 @@ function disableMic() {
 
 async function enableCam() {
   if (!state.camTrack) {
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      });
-    } catch {
-      say('the camera is not available or was refused');
+    const cam = await ask({ video: CAM_VIDEO });
+    const track = cam.stream ? cam.stream.getVideoTracks()[0] : null;
+    if (!track) {
+      say(cam.err && cam.err.name === 'NotAllowedError'
+        ? 'the camera was refused'
+        : 'the camera is not available');
       return;
     }
-    state.camTrack = stream.getVideoTracks()[0] || null;
-    if (!state.camTrack) {
-      say('the camera is not available');
-      return;
-    }
-    state.camTrack.contentHint = 'motion';
-    const self = document.querySelector('.tile[data-local="yes"]');
-    if (self) {
-      self.querySelector('video').srcObject = new MediaStream([state.camTrack]);
-      self.classList.add('playing');
-      self.querySelector('video').play().catch(() => {});
-    }
-    if (state.outStream) state.outStream.addTrack(state.camTrack);
-    publishTrack(state.camTrack);
-    applyMirror();
+    await adoptCam(track);
   }
   state.cam = true;
+  state.prefCam = true;
+  store('cam', 1);
   if (state.camTrack) state.camTrack.enabled = true;
   updateButtons();
   sendState();
@@ -312,6 +504,8 @@ async function enableCam() {
 
 function disableCam() {
   state.cam = false;
+  state.prefCam = false;
+  store('cam', 0);
   if (state.camTrack) state.camTrack.enabled = false;
   updateButtons();
   sendState();
@@ -385,11 +579,84 @@ function resumeAudio() {
   }
 }
 
+// ---------------------------------------------------------------- remote audio
+
+// Remote audio does not play from the video element: one gain node per peer
+// takes it to the output, so 100 percent is unity and 200 is a real boost.
+// The context is created while the join click is still the last gesture, and a
+// suspended context resumes on the next click.
+function ensurePlayback() {
+  if (state.playCtx) {
+    resumePlayback();
+    return state.playCtx;
+  }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  try {
+    state.playCtx = new Ctx({ latencyHint: 'interactive' });
+  } catch {
+    state.playCtx = null;
+    return null;
+  }
+  resumePlayback();
+  return state.playCtx;
+}
+
+function resumePlayback() {
+  const ctx = state.playCtx;
+  if (!ctx || ctx.state !== 'suspended') return;
+  ctx.resume().catch(() => {
+    document.addEventListener('click', () => ctx.resume().catch(() => {}), { once: true });
+  });
+}
+
+// routeAudio sends one incoming audio track through the gain of its peer. The
+// element path is only used when the browser has no Web Audio; it can not go
+// over 100 percent.
+function routeAudio(peer, track) {
+  const ctx = ensurePlayback();
+  if (!ctx) {
+    const el = peer.audioEl || new Audio();
+    el.autoplay = true;
+    el.srcObject = new MediaStream([track]);
+    el.volume = Math.min(peer.vol / 100, 1);
+    el.play().catch(() => {});
+    peer.audioEl = el;
+    return;
+  }
+  dropAudio(peer);
+  peer.gain = ctx.createGain();
+  peer.gain.gain.value = peer.vol / 100;
+  peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
+  peer.audioSrc.connect(peer.gain);
+  peer.gain.connect(ctx.destination);
+  resumePlayback();
+}
+
+// dropAudio unhooks one peer from the output, so a closed peer is silent and
+// its nodes can be collected.
+function dropAudio(peer) {
+  if (!peer) return;
+  if (peer.audioSrc) {
+    try { peer.audioSrc.disconnect(); } catch { /* already gone */ }
+    peer.audioSrc = null;
+  }
+  if (peer.gain) {
+    try { peer.gain.disconnect(); } catch { /* already gone */ }
+    peer.gain = null;
+  }
+  if (peer.audioEl) {
+    try { peer.audioEl.pause(); } catch { /* already gone */ }
+    peer.audioEl.srcObject = null;
+    peer.audioEl = null;
+  }
+}
+
 // sendState tells the room that the microphone or the camera changed. The
 // other clients show it as a small flag on the tile.
 function sendState() {
   const self = document.querySelector('.tile[data-local="yes"]');
-  applyFlags(self, state.mic, state.cam, state.isAdmin);
+  applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
     send({ t: 'state', mic: state.mic, cam: state.cam });
   }
@@ -403,7 +670,9 @@ function updateButtons() {
   $('share-btn').textContent = state.screen ? 'stop share' : 'share screen';
   $('share-btn').setAttribute('aria-pressed', String(!!state.screen));
   $('mirror').checked = state.mirror;
-  $('noise-live').checked = state.rnnoiseOn;
+  // Without a microphone the switch still shows what the next microphone will
+  // get, which is the stored choice.
+  $('noise-live').checked = state.micSource ? state.rnnoiseOn : state.noiseWanted;
 }
 
 function applyMirror() {
@@ -544,19 +813,27 @@ function ensurePeer(id, name, mic, cam) {
     name: name || 'guest',
     mic: mic === undefined ? true : mic,
     cam: cam === undefined ? true : cam,
+    vol: 100,
     pc: null,
     tile: null,
+    gain: null,
+    audioSrc: null,
+    audioEl: null,
+    statLast: new Map(),
     polite: String(state.self) > String(id),
     makingOffer: false,
+    settingAnswer: false,
     ignoreOffer: false,
     tracksAdded: false,
     pending: [],
     state: 'new',
     initiator: false,
   };
+  peer.vol = storedVolume(peer.name);
   peer.tile = makeTile(peer.name, peer.name);
   peer.tile.dataset.peer = id;
   applyFlags(peer.tile, peer.mic, peer.cam);
+  wireVolume(peer);
   state.peers.set(id, peer);
   updateCount();
   return peer;
@@ -611,8 +888,17 @@ function connectPeer(id, name, initiator, mic, cam) {
   };
 
   pc.ontrack = (event) => {
+    const track = event.track;
+    if (track.kind === 'audio') {
+      // Audio is played through this peer gain, not through the video element,
+      // so it can be louder than the browser maximum and silent at 0 percent.
+      routeAudio(peer, track);
+      track.addEventListener('ended', () => dropAudio(peer));
+      return;
+    }
     const video = peer.tile.querySelector('video');
-    if (video.srcObject !== event.streams[0]) video.srcObject = event.streams[0];
+    const stream = new MediaStream([track]);
+    if (video.srcObject !== stream) video.srcObject = stream;
     peer.tile.classList.add('playing');
     video.play().catch(() => {});
   };
@@ -695,6 +981,7 @@ async function onCandidate(peer, candidate) {
 function dropPeer(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
+  dropAudio(peer);
   if (peer.pc) peer.pc.close();
   if (peer.tile) peer.tile.remove();
   state.peers.delete(id);
@@ -747,6 +1034,7 @@ function connectWS() {
   ws.onopen = () => {
     state.reconnectDelay = 500;
     $('link-dot').className = 'dot on';
+    stopLost();
     send({ t: 'join', room: state.room, pass: state.pass, name: state.name });
   };
 
@@ -772,6 +1060,7 @@ function connectWS() {
       return;
     }
     say('connection lost, reconnecting');
+    startLost();
     scheduleReconnect();
   };
 
@@ -786,26 +1075,28 @@ function handle(msg) {
       state.self = msg.self;
       state.ice = msg.ice || [];
       say('');
-      state.adminID = msg.admin || '';
-      state.isAdmin = state.adminID === msg.self;
+      setAdmins(msg.admins);
       for (const peer of msg.peers || []) connectPeer(peer.id, peer.name, true, peer.mic, peer.cam);
       markAdmins();
-      // Tell the room the real microphone and camera state right away: a new
-      // visitor shares neither until a button is pressed.
+      renderChat(msg.chat);
+      // Tell the room the real microphone and camera state right away.
       sendState();
       break;
     }
     case 'peer-joined': {
       ensurePeer(msg.peer.id, msg.peer.name, msg.peer.mic, msg.peer.cam);
-      if (msg.peer.admin) state.adminID = msg.peer.id;
+      if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
       playSfx('pop');
       break;
     }
     case 'admin': {
-      state.adminID = msg.admin || '';
-      state.isAdmin = state.adminID === state.self;
+      setAdmins(msg.admins);
       markAdmins();
+      break;
+    }
+    case 'chat': {
+      addChatLine(msg.kind, msg.name, msg.text, msg.ts, msg.from);
       break;
     }
     case 'mod': {
@@ -824,14 +1115,20 @@ function handle(msg) {
     case 'state': {
       const peer = state.peers.get(msg.from);
       if (peer) {
+        const wasMic = peer.mic;
         if (msg.mic !== undefined) peer.mic = msg.mic;
         if (msg.cam !== undefined) peer.cam = msg.cam;
-        applyFlags(peer.tile, peer.mic, peer.cam);
+        applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+        if (wasMic !== peer.mic) {
+          addChatLine('note', '', `${peer.name} ${peer.mic ? 'turned the microphone on' : 'turned the microphone off'}`);
+        }
       }
       break;
     }
     case 'peer-left': {
       dropPeer(msg.from);
+      state.admins.delete(msg.from);
+      markAdmins();
       playSfx('bonk');
       break;
     }
@@ -871,11 +1168,13 @@ async function enterRoom(room, pass) {
   state.noiseWanted = $('noise').checked;
   state.mirror = true;
   state.leaving = false;
-  state.mic = false;
-  state.cam = false;
-  if (window.localStorage) {
-    try { localStorage.setItem('rooms.name', state.name); } catch { /* private mode */ }
-  }
+  // The call starts with what the visitor chose last time.
+  state.mic = state.prefMic;
+  state.cam = state.prefCam;
+  store('name', state.name);
+  store('room', state.room);
+  store('path', state.path);
+  store('noise', state.noiseWanted ? 1 : 0);
 
   $('lobby').hidden = true;
   $('stage').hidden = false;
@@ -884,10 +1183,19 @@ async function enterRoom(room, pass) {
   setHash(room);
 
   prepareLocal();
+  // The join click asks for the camera and the microphone. The signaling
+  // socket waits for the answer, so the first offer already carries the tracks.
+  try {
+    await requestLocal();
+  } catch {
+    // Devices are optional; joining the room is not.
+  }
+  ensurePlayback();
   connectWS();
 }
 
 function leave(message) {
+  const was = state.room;
   state.leaving = true;
   cancelReconnect();
   if (state.ws) {
@@ -917,6 +1225,11 @@ function leave(message) {
     state.audioCtx.close().catch(() => {});
     state.audioCtx = null;
   }
+  if (state.playCtx) {
+    state.playCtx.close().catch(() => {});
+    state.playCtx = null;
+  }
+  stopLost();
   if (state.sfxCtx) {
     state.sfxCtx.close().catch(() => {});
     state.sfxCtx = null;
@@ -931,6 +1244,10 @@ function leave(message) {
   state.outStream = null;
   state.camTrack = null;
   state.micTrack = null;
+  stopStats();
+  clearStatsPanel();
+  $('stats-panel').hidden = true;
+  $('stats-btn').setAttribute('aria-pressed', 'false');
   $('grid').replaceChildren();
   $('stage').hidden = true;
   $('lobby').hidden = false;
@@ -943,12 +1260,86 @@ function leave(message) {
   state.ice = [];
   state.fatal = '';
   state.reconnectDelay = 500;
-  state.mic = true;
-  state.cam = true;
+  state.mic = false;
+  state.cam = false;
+  setAdmins([]);
+  state.peers.clear();
+  if ($('chat-log')) $('chat-log').replaceChildren();
   setHash('');
-  suggestRoom();
+  // The room field keeps the room the visitor was just in, so another try
+  // needs no retyping.
+  if (was) $('room').value = was;
+  else suggestRoom();
   state.reconnectDelay = 500;
   if (message) say(message);
+}
+
+// ---------------------------------------------------------------- chat
+
+// The room log carries text lines and events in one shape. Events are drawn in
+// a duller colour, so the talk stays readable.
+const CHAT_MAX = 200;
+const chatNames = new Map();
+
+function chatTime(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function chatEventText(kind, name, text) {
+  switch (kind) {
+    case 'join': return `${name} joined`;
+    case 'leave': return `${name} left`;
+    case 'kick': return `${text} removed ${name}`;
+    case 'mute': return `${text} muted ${name}`;
+    case 'admin': return `${name} is now host`;
+    case 'note': return text;
+    default: return '';
+  }
+}
+
+function addChatLine(kind, name, text, ts, from) {
+  const log = $('chat-log');
+  if (!log) return;
+  const fill = () => {
+    const li = document.createElement('li');
+    if (kind !== 'text') li.className = 'event';
+    const when = document.createElement('span');
+    when.className = 'when';
+    when.textContent = chatTime(ts);
+    li.appendChild(when);
+    if (kind === 'text') {
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = `${name || 'guest'}:`;
+      li.appendChild(who);
+      li.appendChild(document.createTextNode(` ${text}`));
+    } else {
+      li.appendChild(document.createTextNode(chatEventText(kind, name, text)));
+    }
+    log.appendChild(li);
+    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+  };
+  if (from) chatNames.set(from, name);
+  fill();
+}
+
+function renderChat(lines) {
+  const log = $('chat-log');
+  if (!log) return;
+  log.replaceChildren();
+  for (const line of lines || []) {
+    addChatLine(line.kind, line.name, line.text, line.ts, line.from);
+  }
+}
+
+function sendChat() {
+  const input = $('chat-text');
+  const text = (input.value || '').trim();
+  if (!text) return;
+  send({ t: 'chat', text });
+  input.value = '';
 }
 
 // ---------------------------------------------------------------- sound effects
@@ -957,8 +1348,17 @@ function leave(message) {
 // is on archive.org. They are stored as 48 kHz mono Opus, which is about 27 kB
 // for all four files together. An mp3 copy stays next to each one for a
 // browser that can not decode Opus.
-const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer'];
+//
+// The fifth cue is the lost connection pad: it is synthesized here, so it has
+// no source sample to credit, and it is a seamless loop instead of a one shot.
+const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
 const SFX_RATE = 0.35;
+// The pad sits under the room for as long as the socket is down, so it plays
+// quieter than a one shot cue.
+const LOST_RATE = 0.2;
+// The lost cue is 4.32 s long and loops the middle 4.0 s of it.
+const LOST_LOOP_START = 0.16;
+const LOST_LOOP_END = 4.16;
 const sfxCache = new Map();
 let sfxExt = '';
 
@@ -993,7 +1393,7 @@ function ensureSfx() {
   }
 }
 
-// preloadSfx decodes the four cues once, so a click never waits for a fetch.
+// preloadSfx decodes the cues once, so a click never waits for a fetch.
 function preloadSfx() {
   ensureSfx();
   const ctx = state.sfxCtx;
@@ -1004,7 +1404,11 @@ function preloadSfx() {
     fetch(`sfx/${name}.${ext}`)
       .then((r) => r.arrayBuffer())
       .then((b) => ctx.decodeAudioData(b))
-      .then((buffer) => sfxCache.set(name, buffer))
+      .then((buffer) => {
+        sfxCache.set(name, buffer);
+        // A lost connection may already have asked for the pad.
+        if (name === 'lost' && state.lostWanted) startLost();
+      })
       .catch(() => {});
   }
 }
@@ -1042,6 +1446,235 @@ function playSfx(name) {
   }
 }
 
+// startLost loops the calm pad while the signaling socket is down. A second
+// call while it already plays does nothing, so a chain of reconnect attempts
+// can never stack copies of it.
+function startLost() {
+  state.lostWanted = true;
+  if (state.lostSource) return;
+  const ctx = state.sfxCtx;
+  const buffer = sfxCache.get('lost');
+  if (!ctx || !buffer) return;
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  try {
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    // The file carries a little head and tail around the 4.0 s loop, so the
+    // codec padding at the file edges stays outside the loop point: the pad
+    // runs on with no gap and no click.
+    if (buffer.duration >= LOST_LOOP_END) {
+      src.loopStart = LOST_LOOP_START;
+      src.loopEnd = LOST_LOOP_END;
+    }
+    const gain = ctx.createGain();
+    gain.gain.value = LOST_RATE;
+    src.connect(gain);
+    gain.connect(ctx.destination);
+    src.start();
+    state.lostSource = src;
+    state.lostGain = gain;
+  } catch {
+    state.lostSource = null;
+    state.lostGain = null;
+  }
+}
+
+// stopLost cuts the pad as soon as the client is connected again.
+function stopLost() {
+  state.lostWanted = false;
+  const src = state.lostSource;
+  state.lostSource = null;
+  if (state.lostGain) {
+    try { state.lostGain.disconnect(); } catch { /* already gone */ }
+    state.lostGain = null;
+  }
+  if (!src) return;
+  try { src.stop(); } catch { /* already finished */ }
+  try { src.disconnect(); } catch { /* already gone */ }
+}
+
+// ---------------------------------------------------------------- telemetry
+
+// The stats panel is read at 1 Hz from getStats deltas: two byte counters give
+// a bitrate, and the selected candidate pair gives the round trip time and the
+// path. Polling stops when the panel is closed or the tab is hidden.
+const STATS_MS = 1000;
+
+function statsOpen() {
+  const panel = $('stats-panel');
+  return !!panel && !panel.hidden;
+}
+
+function startStats() {
+  if (state.statsTimer || !statsOpen()) return;
+  for (const peer of state.peers.values()) peer.statLast.clear();
+  clearStatsPanel();
+  updateStats();
+  state.statsTimer = setInterval(() => updateStats(), STATS_MS);
+}
+
+function stopStats() {
+  if (state.statsTimer) clearInterval(state.statsTimer);
+  state.statsTimer = null;
+}
+
+function clearStatsPanel() {
+  const body = $('stats-body');
+  if (body) body.replaceChildren();
+}
+
+// bitrate turns two samples of one byte counter into kbit/s. The first sample
+// of a counter yields 0, which is honest: nothing was measured yet.
+function bitrate(last, report, field) {
+  const bytes = report[field] || 0;
+  const ts = report.timestamp || 0;
+  const key = `${report.id || report.type + ':' + report.kind}:${field}`;
+  const prev = last.get(key);
+  last.set(key, { bytes, ts });
+  if (!prev || !(ts > prev.ts)) return 0;
+  const kbit = ((bytes - prev.bytes) * 8) / (ts - prev.ts);
+  return kbit > 0 ? Math.round(kbit) : 0;
+}
+
+function isDirectType(type) {
+  return type === 'host' || type === 'srflx' || type === 'prflx';
+}
+
+// peerStats reads one report of one peer. Every access is guarded: a peer that
+// closed between two ticks must not throw.
+async function peerStats(peer) {
+  const pc = peer.pc;
+  if (!pc || typeof pc.getStats !== 'function') return null;
+  if (pc.connectionState === 'closed' || pc.signalingState === 'closed') return null;
+  let report;
+  try {
+    report = await pc.getStats();
+  } catch {
+    return null;
+  }
+  if (!report || typeof report.forEach !== 'function') return null;
+  if (!(peer.statLast instanceof Map)) peer.statLast = new Map();
+
+  const out = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 }, rtt: null, path: '' };
+  let pairId = null;
+  const pairs = new Map();
+  const cands = new Map();
+  try {
+    report.forEach((r) => {
+      if (r.type === 'outbound-rtp' && (r.kind === 'audio' || r.kind === 'video')) {
+        out.up[r.kind] += bitrate(peer.statLast, r, 'bytesSent');
+      } else if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.kind === 'video')) {
+        out.down[r.kind] += bitrate(peer.statLast, r, 'bytesReceived');
+      } else if (r.type === 'transport' && r.selectedCandidatePairId) {
+        pairId = r.selectedCandidatePairId;
+      } else if (r.type === 'candidate-pair') {
+        pairs.set(r.id, r);
+      } else if (r.type === 'local-candidate' || r.type === 'remote-candidate') {
+        cands.set(r.id, r);
+      }
+    });
+  } catch {
+    // A report can change under the loop; the next tick reads a fresh one.
+  }
+
+  let pair = pairId ? pairs.get(pairId) : null;
+  if (!pair) {
+    for (const p of pairs.values()) {
+      if (p.selected || p.nominated) { pair = p; break; }
+    }
+  }
+  if (!pair) {
+    for (const p of pairs.values()) {
+      if (p.state === 'succeeded') { pair = p; break; }
+    }
+  }
+  if (pair) {
+    if (typeof pair.currentRoundTripTime === 'number') {
+      out.rtt = Math.round(pair.currentRoundTripTime * 1000);
+    }
+    const local = cands.get(pair.localCandidateId);
+    const remote = cands.get(pair.remoteCandidateId);
+    const lt = local ? local.candidateType || local.type || '' : '';
+    const rt = remote ? remote.candidateType || remote.type || '' : '';
+    const relays = [];
+    if (lt === 'relay') relays.push('you');
+    if (rt === 'relay') relays.push('them');
+    if (relays.length) out.path = `relay (${relays.join(' + ')})`;
+    else if (isDirectType(lt) && isDirectType(rt)) out.path = 'p2p';
+  }
+  return out;
+}
+
+// ownMediaLine describes the local devices: rnnoise, the microphone rate and
+// the camera resolution, which is what the own tile contributes.
+function ownMediaLine() {
+  const parts = [];
+  if (!state.micTrack) parts.push('rnnoise off');
+  else parts.push(state.rnnoiseOn ? 'rnnoise on' : 'rnnoise off');
+  const mic = state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
+  if (mic && mic.sampleRate) parts.push(`mic ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`);
+  else parts.push('mic off');
+  const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
+  if (cam && cam.width && cam.height) parts.push(`camera ${cam.width}x${cam.height}`);
+  else parts.push('camera off');
+  return parts.join(' | ');
+}
+
+function pathLine(s) {
+  const bits = [];
+  if (s.rtt !== null) bits.push(`${s.rtt} ms`);
+  if (s.path) bits.push(s.path);
+  return bits.join(' | ') || 'no pair yet';
+}
+
+function rateLine(s) {
+  return `video ${s.up.video}/${s.down.video} | audio ${s.up.audio}/${s.down.audio}`;
+}
+
+function statsRow(title, lines) {
+  const row = document.createElement('div');
+  row.className = 'srow';
+  const head = document.createElement('div');
+  head.className = 'sname';
+  head.textContent = title;
+  row.appendChild(head);
+  for (const text of lines) {
+    const line = document.createElement('div');
+    line.className = 'sline';
+    line.textContent = text;
+    row.appendChild(line);
+  }
+  return row;
+}
+
+// updateStats draws one round. The totals of the own tile are the sums of the
+// per peer numbers across every connection.
+async function updateStats() {
+  if (!statsOpen() || state.statsBusy) return;
+  const body = $('stats-body');
+  if (!body) return;
+  state.statsBusy = true;
+  try {
+    const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
+    const rows = [];
+    for (const peer of state.peers.values()) {
+      const s = await peerStats(peer);
+      if (!s) {
+        rows.push(statsRow(peer.name, ['connecting']));
+        continue;
+      }
+      for (const dir of ['up', 'down']) {
+        for (const kind of ['audio', 'video']) total[dir][kind] += s[dir][kind];
+      }
+      rows.push(statsRow(peer.name, [pathLine(s), rateLine(s)]));
+    }
+    body.replaceChildren(statsRow('you', [ownMediaLine(), rateLine(total)]), ...rows);
+  } finally {
+    state.statsBusy = false;
+  }
+}
+
 // ---------------------------------------------------------------- relay badge
 
 async function pollRelay() {
@@ -1071,17 +1704,32 @@ async function pollRelay() {
 
 function init() {
   const fromHash = roomFromHash();
+  const last = load('room');
   if (fromHash) {
     $('room').value = fromHash;
+  } else if (last && ROOM_RE.test(last)) {
+    $('room').value = last;
   } else {
     suggestRoom();
   }
-  if (window.localStorage) {
-    try {
-      const last = localStorage.getItem('rooms.name');
-      if (last) $('name').value = last;
-    } catch { /* private mode */ }
+  const lastName = load('name');
+  if (lastName) $('name').value = lastName;
+
+  // The last microphone, camera, path and rnnoise choice comes back, like the
+  // name. No stored value means on: the join asks for both by default. A
+  // stored off is honoured, and that device is not asked for at all.
+  state.prefMic = load('mic') !== '0';
+  state.prefCam = load('cam') !== '0';
+  state.mic = state.prefMic;
+  state.cam = state.prefCam;
+  const storedPath = load('path');
+  if (['auto', 'p2p', 'relay'].includes(storedPath)) {
+    state.path = storedPath;
+    $('path').value = storedPath;
   }
+  state.noiseWanted = load('noise') !== '0';
+  $('noise').checked = state.noiseWanted;
+  $('noise-live').checked = state.noiseWanted;
 
   $('newid-btn').addEventListener('click', (event) => {
     event.preventDefault();
@@ -1106,8 +1754,16 @@ function init() {
     enterRoom(room, $('pass').value || '');
   });
 
+  $('chat-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    sendChat();
+  });
+
   $('noise-live').addEventListener('change', async () => {
     const on = $('noise-live').checked;
+    state.noiseWanted = on;
+    store('noise', on ? 1 : 0);
+    $('noise').checked = on;
     const applied = await setNoise(on);
     if (applied !== on) say('noise suppression is not available');
     updateButtons();
@@ -1120,6 +1776,26 @@ function init() {
 
   $('quality').addEventListener('change', () => {
     state.quality = $('quality').value;
+  });
+
+  $('path').addEventListener('change', () => {
+    state.path = $('path').value;
+    store('path', state.path);
+  });
+
+  $('stats-btn').addEventListener('click', () => {
+    const open = !statsOpen();
+    $('stats-panel').hidden = !open;
+    $('stats-btn').setAttribute('aria-pressed', String(open));
+    if (open && !document.hidden) startStats();
+    else stopStats();
+  });
+
+  // A hidden tab has no one to read the numbers, so the polling sleeps until
+  // it comes back.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopStats();
+    else if (statsOpen()) startStats();
   });
 
   $('share-btn').addEventListener('click', () => {

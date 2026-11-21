@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -18,6 +19,10 @@ type Peer struct {
 	// indicators for the other tiles; the media itself decides the truth.
 	mic bool
 	cam bool
+
+	// kicked marks a peer that was removed by an admin, so the room log
+	// shows the kick and not a second, plain leave.
+	kicked atomic.Bool
 
 	send      chan []byte
 	closeOnce sync.Once
@@ -95,10 +100,14 @@ type clientMsg struct {
 
 	// action is the admin command: kick, mute or admin.
 	Action string `json:"action,omitempty"`
+
+	// text is one chat line.
+	Text string `json:"text,omitempty"`
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
-// peer-left, offer, answer, ice-candidate, error, pong.
+// peer-left, offer, answer, ice-candidate, state, admin, mod, kicked, chat,
+// error, pong.
 type serverMsg struct {
 	T         string          `json:"t"`
 	Self      string          `json:"self,omitempty"`
@@ -109,8 +118,13 @@ type serverMsg struct {
 	Candidate json.RawMessage `json:"candidate,omitempty"`
 	Mic       *bool           `json:"mic,omitempty"`
 	Cam       *bool           `json:"cam,omitempty"`
-	Admin     string          `json:"admin,omitempty"`
+	Admins    []string        `json:"admins,omitempty"`
 	Action    string          `json:"action,omitempty"`
+	Kind      string          `json:"kind,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	TS        int64           `json:"ts,omitempty"`
+	Chat      []chatLine      `json:"chat,omitempty"`
 	Code      string          `json:"code,omitempty"`
 	Ice       []iceServer     `json:"ice,omitempty"`
 }
