@@ -810,7 +810,11 @@ function refreshSelf() {
 function sealOne(peer, side, dir, kind) {
   try {
     side.transform = new RTCRtpScriptTransform(state.worker, {
+      // `from` is the sender of the frames this transform sees: this page on a
+      // sender, the peer on a receiver. The associated data names it, so both
+      // ends build the same bytes and a frame can not be moved or reflected.
       pair: pairLabel(peer.id), peer: peer.id, dir, kind,
+      from: dir === 'send' ? state.self : peer.id,
     });
   } catch (err) {
     state.workerErrors.push(dir + ' transform: ' + err);
@@ -3849,14 +3853,18 @@ async function runLab() {
 
   for (const track of stream.getTracks()) {
     const sender = pc1.addTrack(track, stream);
-    sender.transform = new RTCRtpScriptTransform(worker, { pair: 'lab', peer: 'lab', dir: 'send' });
+    sender.transform = new RTCRtpScriptTransform(worker, {
+      pair: 'lab', peer: 'lab', dir: 'send', kind: track.kind, from: 'lab',
+    });
   }
 
   await pc1.setLocalDescription();
   await gathered(pc1);
   await pc2.setRemoteDescription(pc1.localDescription);
   for (const receiver of pc2.getReceivers()) {
-    receiver.transform = new RTCRtpScriptTransform(worker, { pair: 'lab', peer: 'lab', dir: 'recv' });
+    receiver.transform = new RTCRtpScriptTransform(worker, {
+      pair: 'lab', peer: 'lab', dir: 'recv', kind: receiver.track.kind, from: 'lab',
+    });
   }
   await pc2.setLocalDescription();
   await gathered(pc2);
