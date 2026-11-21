@@ -117,6 +117,11 @@ type Room struct {
 	peers   map[string]*Peer
 	created time.Time
 	emptyAt time.Time
+	// admin is the peer that may mute, remove or promote others. The first
+	// peer in the room gets it, and it moves on when that peer leaves.
+	admin string
+	// order keeps the join order, so the next admin is the oldest peer.
+	order []string
 }
 
 type Hub struct {
@@ -256,8 +261,12 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 		p.id = id
 	}
 	room.peers[p.id] = p
+	room.order = append(room.order, p.id)
 	room.emptyAt = time.Time{}
 	p.room = room
+	if room.admin == "" {
+		room.admin = p.id
+	}
 	return room, nil
 }
 
@@ -269,8 +278,23 @@ func (h *Hub) leave(p *Peer) {
 		return
 	}
 	delete(room.peers, p.id)
+	for i, id := range room.order {
+		if id == p.id {
+			room.order = append(room.order[:i], room.order[i+1:]...)
+			break
+		}
+	}
 	if len(room.peers) == 0 {
 		room.emptyAt = time.Now()
+	}
+	if room.admin == p.id {
+		room.admin = ""
+		for _, id := range room.order {
+			if _, ok := room.peers[id]; ok {
+				room.admin = id
+				break
+			}
+		}
 	}
 	p.room = nil
 }
@@ -305,6 +329,47 @@ func (h *Hub) relay(p *Peer, to string, payload []byte) {
 		return
 	}
 	target.enqueue(payload)
+}
+
+// adminOf reports the current admin id of a room.
+func (h *Hub) adminOf(room *Room) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room == nil {
+		return ""
+	}
+	return room.admin
+}
+
+// setAdmin hands the role to another peer of the same room.
+func (h *Hub) setAdmin(room *Room, id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room == nil {
+		return false
+	}
+	if _, ok := room.peers[id]; !ok {
+		return false
+	}
+	room.admin = id
+	return true
+}
+
+// peerOf looks one peer up inside a room.
+func (h *Hub) peerOf(room *Room, id string) *Peer {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room == nil {
+		return nil
+	}
+	return room.peers[id]
+}
+
+// broadcastTo sends one message to every peer in the room, the admin too.
+func (h *Hub) broadcastTo(room *Room, payload []byte) {
+	for _, p := range h.peersOf(room, "") {
+		p.enqueue(payload)
+	}
 }
 
 // broadcast sends one message to every other peer in the room.

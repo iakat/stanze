@@ -65,10 +65,11 @@ func (p *Peer) close() {
 }
 
 type peerInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Mic  bool   `json:"mic"`
-	Cam  bool   `json:"cam"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Mic   bool   `json:"mic"`
+	Cam   bool   `json:"cam"`
+	Admin bool   `json:"admin,omitempty"`
 }
 
 type iceServer struct {
@@ -91,6 +92,9 @@ type clientMsg struct {
 	// mic and cam are pointers so "not sent" and "false" differ.
 	Mic *bool `json:"mic,omitempty"`
 	Cam *bool `json:"cam,omitempty"`
+
+	// action is the admin command: kick, mute or admin.
+	Action string `json:"action,omitempty"`
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
@@ -105,6 +109,8 @@ type serverMsg struct {
 	Candidate json.RawMessage `json:"candidate,omitempty"`
 	Mic       *bool           `json:"mic,omitempty"`
 	Cam       *bool           `json:"cam,omitempty"`
+	Admin     string          `json:"admin,omitempty"`
+	Action    string          `json:"action,omitempty"`
 	Code      string          `json:"code,omitempty"`
 	Ice       []iceServer     `json:"ice,omitempty"`
 }
