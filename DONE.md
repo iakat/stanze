@@ -32,3 +32,11 @@ One line per work item, newest last.
 - The rnnoise output goes through a ring buffer, so no frame tail is dropped: 480 is not a multiple of the 128 sample render quantum.
 - The rnnoise worklet has a safety net: if loud input comes out near silent for 300 ms, it passes the dry signal for 5 s and then tries again.
 - QUEUE.md and DONE.md are served by the server from the binary, and a copy is published at https://ocbot-files.ch-test.katia.sh/stanze/.
+- Pressing enter asks for the camera and the microphone in one prompt and starts the call with both on; a refusal or a missing device still joins, with the devices that did not open off and a short status line (this replaces the earlier watch-only default).
+- The browser remembers the microphone, camera, media path and rnnoise choice beside the name; a stored camera off joins without asking for the camera at all.
+- Every remote tile has a volume slider from 0 to 200 percent on its own Web Audio gain, 100 is unity, the percent is kept per peer name.
+- A stats panel in the call toolbar reads getStats once a second: audio and video bitrates up and down, round trip time, p2p or relay plus the relaying side, and the own rnnoise state, microphone rate and camera resolution. It stops polling when it is closed or the tab is hidden.
+- A dropped signaling socket starts a calm synthesized pad on a seamless loop (a 4.0 s window inside a 4.32 s file); it is mono Opus like the other cues, cannot stack on a later reconnect attempt, and stops on the first open socket. The leave cue is unchanged.
+- The own tile no longer throws before the first joined message: state.admins starts as an empty set, the reset clears it in place and every role read is guarded.
+- index.html asks for app.js and style.css with a version query, so a returning browser fetches the new client; the selftest checks both references and the query form.
+- The join flow, per peer volume, telemetry and the disconnect pad were proven in headless Chromium: join with camera and microphone on, gain 0 and 175 percent, 1 Hz stats text, a seamless loop point and a camera off reload that asks for the microphone only.

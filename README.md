@@ -54,6 +54,15 @@ typed in the same form becomes the room passphrase when the room is created. The
 room id is placed in the URL fragment (`#r=...`), so it never travels in an HTTP
 request, a proxy log or a `Referer` header.
 
+Pressing enter asks for the camera and the microphone and starts the call with
+both on. A refusal or a missing device still joins, with the devices that did not
+open off, and a short status line says which ones. The browser remembers the
+microphone and camera choice, the media path and the rnnoise switch, and a stored
+camera off joins without asking for the camera again. Every remote tile carries a
+volume slider from 0 to 200 percent (100 is normal, above 100 is a real boost),
+kept per participant name, and the stats button shows per participant audio and
+video bitrates, the round trip time and whether the path is direct or relayed.
+
 The client keeps the camera and the microphone open and reconnects on its own
 with a capped backoff if the signaling socket drops in the middle of a call.
 
@@ -203,12 +212,15 @@ python3 tools/wsjoin.py http://127.0.0.1:8095 <room-id>
 `tools/browser-e2e.js` is the browser test. It opens two Chromium contexts
 (separate users, fake camera and microphone), has one create a room and the
 other join it through the shared link, and then asserts what a user would see:
-two tiles on both sides, the joined name on the remote tile, `connected`, a
-remote video with decoded frames whose playhead keeps advancing, audio and
-video RTP packets arriving on both peer connections, working mute and camera
-toggles, no console or CSP errors, and that `/rooms`, `/api/rooms`, `/metrics`
-and friends answer 404 from inside the page without ever containing the room
-id. It writes one screenshot per user.
+two tiles on both sides, both joined with camera and microphone on, the joined
+name on the remote tile, `connected`, a remote video with decoded frames whose
+playhead keeps advancing, audio and video RTP packets arriving on both peer
+connections, working mute and camera toggles, a 0 and 175 percent volume on the
+remote gain, a 1 Hz stats panel with milliseconds, path and bitrates, a seamless
+lost connection loop, a camera off reload that asks for the microphone only, a
+relay only join, no console or CSP errors, and that `/rooms`, `/api/rooms`,
+`/metrics` and friends answer 404 from inside the page without ever containing
+the room id. It writes one screenshot per user.
 
 ```sh
 npm install --prefix /tmp/pw playwright-core@1.47.0   # or use a Playwright image
@@ -227,8 +239,6 @@ without a camera. Note that a strict `script-src 'self'` CSP blocks Playwright's
 
 - Mesh topology: upload bandwidth grows with the number of peers, which is why
   the default room cap is 8. There is no SFU by design.
-- No screen sharing, chat, recording, transcription, server side mixing or
-  moderation beyond the room password.
-- No reconnect logic in the browser client: a dropped WebSocket asks the user
-  to rejoin.
+- No recording, transcription, server side mixing or moderation beyond the room
+  password. Screen share and a text chat live in the client.
 - No TLS in the binary; terminate it in a proxy.
