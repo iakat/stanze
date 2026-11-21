@@ -21,4 +21,6 @@ One line per work item, newest last.
 - The client has a 1990s window look: grey panels, bevelled edges, navy title bars, no rounded corners.
 - `go.mod` declares Go 1.27 and the tree builds with the 1.27.4 toolchain.
 - The selftest matches the room name policy: an id with characters outside the set is refused, a plain name is created.
+- RNNoise works: the wasm bundle and the processor are served as one worklet module with a `self` shim, and the offline test passes audio (in rms 0.142, out 0.108).
+- The client carries the name stanze: the page title and both title bars.
 - QUEUE.md and DONE.md are served by the server from the binary, and a copy is published at https://ocbot-files.ch-test.katia.sh/stanze/.
