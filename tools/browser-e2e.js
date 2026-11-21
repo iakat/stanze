@@ -320,10 +320,18 @@ async function stats(page) {
         return {
           gain: peer.gain ? peer.gain.gain.value : null,
           label: num.textContent,
-          stored: localStorage.getItem('rooms.vol.' + peer.name),
+          stored: peer.fp ? localStorage.getItem('rooms.vol.fp.' + peer.fp) : '',
         };
       };
-      const snap = { normal: { gain: peer.gain ? peer.gain.gain.value : null, label: num.textContent }, name: peer.name };
+      const named = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i) || '';
+        if (key.startsWith('rooms.vol.') && !key.startsWith('rooms.vol.fp.')) named.push(key);
+      }
+      const snap = {
+        normal: { gain: peer.gain ? peer.gain.gain.value : null, label: num.textContent },
+        name: peer.name, fp: peer.fp, named, keys: localStorage.length,
+      };
       snap.zero = set(0);
       snap.loud = set(175);
       snap.kept = set(140);
@@ -337,7 +345,9 @@ async function stats(page) {
     check('the own tile has no volume slider', vol.ownTile === false);
     check('volume 0 mutes that peer', vol.zero.gain === 0 && vol.zero.label === '0%' && vol.zero.stored === '0', JSON.stringify(vol.zero));
     check('volume 175 is a real boost above unity gain', Math.abs(vol.loud.gain - 1.75) < 1e-6 && vol.loud.label === '175%', JSON.stringify(vol.loud));
-    check('the volume is kept per peer name', vol.kept.stored === '140' && vol.kept.label === '140%', JSON.stringify(vol.kept));
+    check('the volume is kept under the peer key fingerprint', !!vol.fp && vol.kept.stored === '140' && vol.kept.label === '140%',
+      JSON.stringify({ fp: vol.fp, kept: vol.kept }));
+    check('no volume key carries a guest name', vol.named.length === 0, JSON.stringify(vol.named));
     check('remote audio runs through the playback graph', vol.ctx === 'running' || vol.ctx === 'suspended', vol.ctx);
 
     // ---- telemetry: a toolbar toggle and a panel that polls getStats

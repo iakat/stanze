@@ -350,13 +350,38 @@ function setSpotlight(id) {
 
 // ---------------------------------------------------------------- volume
 
-// The volume of one participant is a percent from 0 (silent) to 200, kept per
-// name, so the same visitor sounds the same on the next visit.
-function storedVolume(name) {
-  const raw = load(`vol.${name}`);
-  const n = parseInt(raw, 10);
+// The volume of one participant is a percent from 0 (silent) to 200. It is
+// kept under the key fingerprint of a peer that proved its key, never under a
+// name, so a machine that several people use keeps no list of who was called.
+// A peer without a proven key keeps its setting in memory for this call only.
+const volCall = new Map();   // peer id -> percent, this call only
+
+// purgeNamedVolume deletes the keys of older builds, which held the guest name
+// in the key itself. A machine that ran one of them loses that list now.
+function purgeNamedVolume() {
+  if (!window.localStorage) return;
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith('rooms.vol.') && !key.startsWith('rooms.vol.fp.')) localStorage.removeItem(key);
+    }
+  } catch { /* private mode */ }
+}
+
+// storedVolume reads the kept percent of one peer: from the disk under its
+// fingerprint once that key is proven, and from memory before that.
+function storedVolume(peer) {
+  const raw = peer && peer.fp ? load(`vol.fp.${peer.fp}`) : '';
+  const n = parseInt(raw || (peer ? volCall.get(peer.id) : ''), 10);
   if (!Number.isFinite(n)) return 100;
   return Math.max(0, Math.min(200, n));
+}
+
+// saveVolume keeps the percent of one peer. A proven guest is remembered on
+// the disk by fingerprint; a guest without a key lives for this call only.
+function saveVolume(peer) {
+  if (!peer) return;
+  volCall.set(peer.id, peer.vol);
+  if (peer.fp) store(`vol.fp.${peer.fp}`, peer.vol);
 }
 
 // paintVolume draws the percent of one peer on its slider, its label and the
@@ -383,7 +408,7 @@ function wireVolume(peer) {
     const n = parseInt(range.value, 10);
     peer.vol = Number.isFinite(n) ? Math.max(0, Math.min(200, n)) : 100;
     paintVolume(peer);
-    store(`vol.${peer.name}`, peer.vol);
+    saveVolume(peer);
   });
   paintVolume(peer);
 }
@@ -1597,7 +1622,7 @@ function ensurePeer(id, mic, cam) {
     desc: null,        // the description chain of this pair
     announcedName: '',
   };
-  peer.vol = storedVolume(peer.name);
+  peer.vol = storedVolume(peer);
   peer.tile = makeTile(peer.name, peer.name);
   peer.video = peer.tile.querySelector('video');
   peer.tile.dataset.peer = id;
@@ -4488,6 +4513,10 @@ function sealedProved(peer) {
   peer.proven = true;
   peer.fp = fingerprint(peer.pub.id);
   paintPin(peer);
+  // The key is proven now, so the kept volume of this guest can load, and a
+  // later move of this guest under the same key finds it again.
+  peer.vol = storedVolume(peer);
+  paintVolume(peer);
 }
 
 // wipeKeys zeroes one pair's secrets. They are the only copies outside the
@@ -4828,14 +4857,13 @@ function sendSealedChat() {
   }
 }
 
-// sealedSetName paints the decrypted name and moves the stored volume to it.
+// sealedSetName paints the decrypted name. The volume is kept under the peer
+// key, so a name that arrives late never moves it.
 function sealedSetName(peer, raw) {
   const name = cleanSealedName(raw);
   if (!name || peer.name === name) return;
   peer.name = name;
   if (peer.tile) paintName(peer.tile, name, false);
-  peer.vol = storedVolume(name);
-  paintVolume(peer);
 }
 
 // sealedSetE2E paints the key state and the short code on one tile.
@@ -5368,6 +5396,9 @@ async function paintRelay(peer) {
 // ---------------------------------------------------------------- boot
 
 function init() {
+  // Older builds kept a volume under the guest name. That is a list of the
+  // people who used this machine, so it goes before anything else reads it.
+  purgeNamedVolume();
   const fromHash = roomFromHash();
   const last = load('room');
   if (fromHash) {
