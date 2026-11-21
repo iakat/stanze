@@ -20,6 +20,7 @@ const text = new TextEncoder();
 
 const KEYS = new Map(); // pair -> { enc?: CryptoKey, dec?: CryptoKey }
 const STATS = new Map(); // pair|dir -> counters
+const SEND = new Map(); // pair|kind -> send transformer, for the key frame ask
 const FLUSH_EVERY = 30;
 
 function b64d(s) {
@@ -61,6 +62,11 @@ function report(pair, dir, kind, st, force) {
 
 self.onmessage = async (event) => {
   const msg = event.data || {};
+  if (msg.type === 'keyframe') {
+    // Only video carries key frames; the sender builds the frame.
+    try { SEND.get(msg.pair + '|video').generateKeyFrame(); } catch (_err) { /* no encoder yet */ }
+    return;
+  }
   if (msg.type !== 'keys') return;
   let slot = KEYS.get(msg.pair);
   if (!slot) {
@@ -199,18 +205,9 @@ async function transformFrame(frame, controller, options) {
 self.onrtctransform = (event) => {
   const transformer = event.transformer;
   const options = transformer.options || {};
-  // Safari does not always start a video encoder on a key frame, and a sealed
-  // receiver can not decode delta frames. Two local asks, one now and one after
-  // the encoder settles, cover a slow start. Nothing travels on the wire.
-  if ((options.dir || '') === 'send' && (options.kind || '') === 'video') {
-    const nudge = () => {
-      try {
-        if (typeof transformer.generateKeyFrame === 'function') transformer.generateKeyFrame();
-      } catch (_err) { /* this browser can not nudge the encoder */ }
-    };
-    nudge();
-    setTimeout(nudge, 700);
-  }
+  // The page asks for one key frame once the pair is connected, over the sealed
+  // channel. This map is how the worker answers: the sender builds the frame.
+  if (options.dir === 'send') SEND.set(options.pair + '|' + options.kind, transformer);
   const stream = new TransformStream({
     transform(frame, controller) {
       return transformFrame(frame, controller, options);
