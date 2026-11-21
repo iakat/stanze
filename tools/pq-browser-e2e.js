@@ -56,6 +56,21 @@ async function joinPage(context, name, room) {
   const page = await context.newPage();
   const errors = [];
   attach(page, errors);
+  // Keep the last sealed chat frame this page put on the wire, so the probe can
+  // replay it and watch the other side drop it.
+  await page.addInitScript(() => {
+    if (window.__appFrameHook) return;
+    window.__appFrameHook = true;
+    window.__appFrame = '';
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (raw) {
+      try {
+        const m = typeof raw === 'string' ? JSON.parse(raw) : null;
+        if (m && m.t === 'enc' && atob(m.b).includes('"k":"app"')) window.__appFrame = raw;
+      } catch (_err) { /* not a frame of ours */ }
+      return send.apply(this, arguments);
+    };
+  });
   let app = null;
   // A join can occasionally miss its first websocket; retry once by reloading.
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -367,6 +382,25 @@ async function frameDump(page, label) {
       [...document.querySelectorAll('#chat-log li')].some((li) => li.textContent.includes(needle)), chatFromB, 20000, 'A chat');
     check('sealed chat A -> B', true, chatFromA);
     check('sealed chat B -> A', true, chatFromB);
+
+    // A relay that records a sealed app frame and sends it again must not make
+    // the line appear twice: the sequence number is in the AAD and the receiver
+    // only opens the next one.
+    const replayBefore = await b.page.evaluate(() => ({
+      chat: window.e2eApp.counters().chatRecv, drops: window.e2eApp.counters().replayDrops,
+    }));
+    const replayed = await a.page.evaluate(() => {
+      if (!window.__appFrame) return false;
+      window.e2eApp.state.ws.send(window.__appFrame);
+      return true;
+    });
+    await sleep(800);
+    const replayAfter = await b.page.evaluate(() => ({
+      chat: window.e2eApp.counters().chatRecv, drops: window.e2eApp.counters().replayDrops,
+    }));
+    check('a replayed sealed chat frame is dropped, not shown twice',
+      replayed && replayAfter.chat === replayBefore.chat && replayAfter.drops === replayBefore.drops + 1,
+      JSON.stringify({ replayed, replayBefore, replayAfter }));
 
     // No name or chat text ever appeared in a signaling frame.
     const auditA = await a.page.evaluate(() => ({ leaks: window.e2eApp.state.wireLeaks, frames: window.e2eApp.state.wireFrames }));
