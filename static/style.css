@@ -578,3 +578,63 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   .ctrl { min-width: 0; flex: 1; }
   .pick { width: 100%; justify-content: space-between; }
 }
+
+/* ------------------------------------------------------------- identity pins */
+
+/* A pin is a small word on the tile and a line on the code card. The colours are
+   written out rather than taken from the sheet above, so this block keeps its
+   contrast if the rest of the palette is redrawn: each is at least 7:1 on the
+   grey panel. Nothing here is rounded, because nothing else is. */
+.badge.pincount {
+  margin-left: 6px;
+  color: #1a1a1a;
+  background: #dfdfdf;
+  border: 1px solid #808080;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.pin {
+  color: #1a1a1a;
+  background: #dfdfdf;
+  border: 1px solid #808080;
+  padding: 0 3px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pin[data-pin="known"] { color: #003a00; }
+.pin[data-pin="changed"] { color: #6b0000; border-color: #6b0000; }
+
+.id-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+.id-state { color: #1a1a1a; }
+.id-state[data-pin="known"] { color: #003a00; }
+.id-state[data-pin="changed"],
+.id-state[data-pin="rollback"] { color: #6b0000; }
+
+.id-fp {
+  color: #2b2b2b;
+  font-family: "Stanze Mono", "Courier New", monospace;
+  letter-spacing: 0.02em;
+}
+
+.pin-btn {
+  color: #1a1a1a;
+  background: #c0c0c0;
+  border: 2px outset #dfdfdf;
+  padding: 0 5px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pin-btn:active { border-style: inset; }
+.pin-btn:focus-visible { outline: 2px solid #000080; outline-offset: 1px; }

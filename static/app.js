@@ -66,7 +66,13 @@ const state = {
   // the frame counters belong to one join and die with it.
   wasmOk: false,       // /pq.wasm loaded and the self test passed once
   wasmTest: null,      // the result of that self test, for the stats panel
-  identity: null,      // our key bundle for one call
+  identity: null,      // our per-call key bundle, wiped in leave
+  idKey: null,         // our long-term Ed25519 identity, kept by the browser
+  device: '',          // kept, fresh (a reset record) or session (nothing kept)
+  sid: '',             // session id of this call, public, never a secret
+  pins: new Map(),     // local label -> {label, fp, first, last}
+  revoked: new Map(),  // fingerprint -> {fp, label, at}, a pin that was replaced
+  identityFailures: 0, // a peer that sent no identity or could not prove one
   worker: null,        // /e2e-transform.js, one per sealed call
   keyWait: new Map(),  // pair -> resolve, waiting for the worker to import keys
   frames: {},          // pair|dir|kind -> last counter message of the worker
@@ -95,6 +101,7 @@ const state = {
  *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
  *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, 'link-dot': HTMLElement,
  *   'link-text': HTMLElement, 'sealed-badge': HTMLElement, grid: HTMLElement,
+ *   'pin-count': HTMLElement,
  *   'stats-panel': HTMLElement,
  *   'stats-body': HTMLElement, 'chat-log': HTMLElement, 'chat-form': HTMLFormElement,
  *   'chat-text': HTMLInputElement, 'chat-note': HTMLElement, 'mic-btn': HTMLButtonElement,
@@ -250,7 +257,7 @@ function makeTile(id, name, local = false) {
       <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
       <span class="vol-num">100%</span>
     </div>`}
-    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span></div>
+    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${local ? '' : '<span class="pin" hidden></span>'}</div>
     ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
   paintName(tile, name, local);
   // A remote guest is heard through its own gain node, so the video element
@@ -372,6 +379,7 @@ function updateCount() {
   const total = state.peers.size + 1;
   const live = [...state.peers.values()].filter((p) => p.state === 'connected').length + 1;
   $('peer-count').textContent = total === 1 ? '1 peer' : `${live}/${total} peers`;
+  updatePinCount();
 }
 
 // ---------------------------------------------------------------- call clock
@@ -1483,6 +1491,12 @@ function ensurePeer(id, mic, cam) {
     myConfirm: '',
     sentConfirm: false,
     keyPromise: null,
+    keysInstalled: false,
+    mySig: '',
+    fp: '',            // fingerprint once the peer proved its identity
+    pin: '',           // 'changed' when a label here holds another key
+    pinLabel: '',      // the local label this guest is pinned under
+    proven: false,
     desc: null,        // the description chain of this pair
     announcedName: '',
   };
@@ -1664,6 +1678,8 @@ function dropPeer(id) {
   dropAudio(peer);
   if (peer.pc) peer.pc.close();
   if (peer.tile) peer.tile.remove();
+  // The pair secrets go with the peer, zeroed: no later join can resume them.
+  wipeKeys(peer);
   state.peers.delete(id);
   updateSealedBadge();
   updateCount();
@@ -1879,11 +1895,11 @@ async function enterRoom(room, pass) {
   $('sealed-note').textContent = 'loading the post-quantum module';
   try {
     try {
-      await ensureWasm();
-      $('sealed-note').textContent = 'pq-e2e ready';
+      await ensureReady();
+      $('sealed-note').textContent = 'pq-e2e ready, ' + deviceNote();
     } catch (err) {
       const why = err && err.message ? err.message : String(err);
-      $('sealed-note').textContent = 'the post-quantum module did not load: ' + why;
+      $('sealed-note').textContent = 'the sealed client did not start: ' + why;
       // No silent fallback: the lobby says what failed and the visitor decides.
       state.room = '';
       state.pass = '';
@@ -1892,7 +1908,10 @@ async function enterRoom(room, pass) {
     }
 
     startSealedWorker();
-    state.identity = JSON.parse(pqModule().gen());
+    const made = JSON.parse(pqModule().gen());
+    // The secret halves stay Uint8Arrays, so leave can zero them.
+    state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
+    state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
     canary(state.name);
     if (!sealingAvailable()) {
       state.sealFault = 'this browser cannot seal media frames, so no media is sent';
@@ -1954,12 +1973,17 @@ function leave(message) {
   }
   dropPeers();
   // The sealed worker holds the pair keys; it dies with the call. The module
-  // itself stays loaded, so the next sealed join needs no second download.
+  // itself stays loaded, so the next sealed join needs no second download. The
+  // per-call identity is wiped, not just dropped: the X25519 and ML-KEM secret
+  // halves are zeroed in their buffers, and nothing on this page can resume a
+  // call after it ended. The long-term key and the pins survive, by design.
   if (state.worker) {
     state.worker.terminate();
     state.worker = null;
   }
-  state.identity = null;
+  wipeIdentity();
+  state.sid = '';
+  state.identityFailures = 0;
   state.keyWait.clear();
   state.frames = {};
   state.encryptFrames = 0;
@@ -1976,6 +2000,7 @@ function leave(message) {
   $('sealed-badge').hidden = true;
   $('sealed-badge').textContent = '';
   $('sealed-badge').removeAttribute('title');
+  updatePinCount();
   $('chat-note').hidden = true;
   $('link-text').textContent = 'connected';
   if (state.micTrack) {
@@ -2517,8 +2542,10 @@ function verifyNames(code) {
   return verifyEmojis(code).map((pair) => pair[1]).join(', ');
 }
 
+// The associated data names the protocol version and the pair, so a blob sealed
+// for one pair can not be replayed into another.
 function chatAAD(peerId) {
-  return sealUtf8.encode('pq-e2e v1 chat ' + pairLabel(peerId));
+  return sealUtf8.encode('pq-e2e v2 chat ' + pairLabel(peerId));
 }
 
 // sealingAvailable answers the only question that matters for the media: can
@@ -2593,21 +2620,38 @@ function pqSelfTest() {
   const pq = pqModule();
   const a = JSON.parse(pq.gen());
   const b = JSON.parse(pq.gen());
+  const k1 = JSON.parse(pq.idgen());
+  const k2 = JSON.parse(pq.idgen());
+  const sidA = b64e(crypto.getRandomValues(new Uint8Array(16)));
+  const sidB = b64e(crypto.getRandomValues(new Uint8Array(16)));
   const off = JSON.parse(pq.initiate(JSON.stringify({
-    self: 'a', peer: 'b', selfX: a.xpub, selfK: a.ek, peerX: b.xpub, peerK: b.ek,
+    self: 'a', peer: 'b',
+    selfX: a.xpub, selfK: a.ek, selfID: k1.pub, selfSID: sidA,
+    peerX: b.xpub, peerK: b.ek, peerID: k2.pub, peerSID: sidB,
   })));
+  const helloSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k1.seed, msg: off.transcript })));
   const acc = JSON.parse(pq.respond(JSON.stringify({
-    self: 'b', peer: 'a', selfX: b.xpub, selfSK: b.xsk, selfK: b.ek, selfDK: b.dk,
-    peerX: a.xpub, peerK: a.ek, epk: off.epk, ct: off.ct,
+    self: 'b', peer: 'a',
+    selfX: b.xpub, selfSK: b.xsk, selfK: b.ek, selfDK: b.dk, selfID: k2.pub, selfSID: sidB,
+    peerX: a.xpub, peerK: a.ek, peerID: k1.pub, peerSID: sidA,
+    epk: off.epk, ct: off.ct, sig: helloSig.sig,
   })));
-  const verifyA = JSON.parse(pq.verify(JSON.stringify({
+  const okSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k2.seed, msg: acc.transcript })));
+  // Both sides pass the same gate: the peer's identity signature and its
+  // confirmation tag. A missing signature on either side is refused.
+  const verifyA = JSON.parse(pq.proved(JSON.stringify({
     key: off.keys.recvMedia, transcript: off.transcript, tag: acc.confirm,
+    id: k2.pub, sig: okSig.sig,
   })));
-  const verifyB = JSON.parse(pq.verify(JSON.stringify({
+  const verifyB = JSON.parse(pq.proved(JSON.stringify({
     key: acc.keys.recvMedia, transcript: off.transcript, tag: off.confirm,
+    id: k1.pub, sig: helloSig.sig,
+  })));
+  const verifyNoSig = JSON.parse(pq.proved(JSON.stringify({
+    key: off.keys.recvMedia, transcript: off.transcript, tag: acc.confirm, id: k2.pub, sig: '',
   })));
   const pt = b64e(sealUtf8.encode('sealed hello'));
-  const aad = b64e(sealUtf8.encode('pq-e2e v1 chat a|b'));
+  const aad = b64e(sealUtf8.encode('pq-e2e v2 chat a|b'));
   const sealed = JSON.parse(pq.seal(JSON.stringify({ key: off.keys.sendChat, aad, pt })));
   const opened = JSON.parse(pq.open(JSON.stringify({
     key: acc.keys.recvChat, aad, b: sealed.b,
@@ -2615,12 +2659,32 @@ function pqSelfTest() {
   const wrong = JSON.parse(pq.open(JSON.stringify({
     key: b64e(crypto.getRandomValues(new Uint8Array(32))), aad, b: sealed.b,
   })));
+  // The identity half: one key signs the transcript, the other does not verify
+  // it, and a tampered message never verifies. The same check runs here, so a
+  // broken bridge shows up in the stats panel before a call starts.
+  const idOk = JSON.parse(pq.idverify(JSON.stringify({ id: k1.pub, msg: off.transcript, sig: helloSig.sig })));
+  const idOther = JSON.parse(pq.idverify(JSON.stringify({ id: k2.pub, msg: off.transcript, sig: helloSig.sig })));
+  const idOk2 = JSON.parse(pq.idverify(JSON.stringify({ id: k2.pub, msg: acc.transcript, sig: okSig.sig })));
+  const idTampered = JSON.parse(pq.idverify(JSON.stringify({
+    id: k1.pub, msg: b64e(sealUtf8.encode('another transcript')), sig: helloSig.sig,
+  })));
+  const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
+  // A hello without a signature is refused, which is the downgrade path.
+  const noSig = JSON.parse(pq.respond(JSON.stringify({
+    self: 'b', peer: 'a',
+    selfX: b.xpub, selfSK: b.xsk, selfK: b.ek, selfDK: b.dk, selfID: k2.pub, selfSID: sidB,
+    peerX: a.xpub, peerK: a.ek, peerID: k1.pub, peerSID: sidA,
+    epk: off.epk, ct: off.ct,
+  })));
   return {
     sas: off.keys.sas,
     sasMatch: off.keys.sas === acc.keys.sas,
-    confirm: !!(verifyA.ok && verifyB.ok),
+    confirm: !!(verifyA.ok && verifyB.ok && !verifyNoSig.ok),
     open: opened.pt === pt,
     wrongKeyRefused: !!wrong.error,
+    idSign: idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
+    idUnsigned: !!noSig.error,
+    idFp: /^[a-z2-7]{4}(-[a-z2-7]{4}){4}$/.test(idFp.fp || ''),
   };
 }
 
@@ -2637,7 +2701,8 @@ function ensureWasm() {
     .then(() => {
       const test = pqSelfTest();
       state.wasmTest = test;
-      if (!test.sasMatch || !test.confirm || !test.open || !test.wrongKeyRefused) {
+      if (!test.sasMatch || !test.confirm || !test.open || !test.wrongKeyRefused ||
+        !test.idSign || !test.idUnsigned || !test.idFp) {
         throw new Error('crypto self test failed');
       }
       state.wasmOk = true;
@@ -2655,16 +2720,328 @@ function ensureWasm() {
 function preloadSealed() {
   $('sealed-note').hidden = false;
   $('sealed-note').textContent = 'loading the post-quantum module';
-  ensureWasm()
+  ensureReady()
     .then(() => {
-      if (!$('lobby').hidden) $('sealed-note').textContent = 'pq-e2e ready';
+      if (!$('lobby').hidden) $('sealed-note').textContent = 'pq-e2e ready, ' + deviceNote();
     })
     .catch((err) => {
       if (!$('lobby').hidden) {
-        $('sealed-note').textContent = 'the post-quantum module did not load: '
+        $('sealed-note').textContent = 'the sealed client did not start: '
           + (err && err.message ? err.message : err);
       }
     });
+}
+
+// ensureReady is everything a sealed join needs before it draws the stage: the
+// module, the long-term identity and the pins.
+function ensureReady() {
+  return ensureWasm().then(ensureIdentity);
+}
+
+// ------------------------------------------------------------- identity and pins
+//
+// The long-term identity is Ed25519 and signing only: it signs the handshake
+// transcript and is never a KDF input, never does static ECDH and never takes a
+// KEM encapsulation, so a stolen copy can impersonate a pinned peer and can
+// decrypt nothing. It lives in IndexedDB, non-extractable where the browser can
+// hold such a key, and never in localStorage, a cookie or the server. A browser
+// that can not keep a key gets a fresh one per page load and says so.
+
+const ID_DB = 'stanze-identity';
+const ID_CHALLENGE = 'stanze identity';
+const ID_NOTE = {
+  kept: 'the identity is kept in this browser',
+  fresh: 'the stored identity could not be reopened: a new key for this page',
+  session: 'this browser keeps no identity: a new key each load, the device stays unverified',
+};
+
+let idDb = null;
+
+// idStore opens the one local database: the identity, the pins this guest made
+// and the fingerprints a pin replaced. No session material is ever written.
+function idStore() {
+  if (idDb) return idDb;
+  idDb = new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error('no indexeddb'));
+      return;
+    }
+    const req = indexedDB.open(ID_DB, 1);
+    req.onupgradeneeded = () => {
+      for (const name of ['id', 'pins', 'revoked']) {
+        if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('indexeddb refused'));
+  });
+  // A failed open is not remembered, so a later attempt can still work.
+  idDb.catch(() => { idDb = null; });
+  return idDb;
+}
+
+function idbRequest(store, mode, fn) {
+  return idStore().then((db) => new Promise((resolve, reject) => {
+    const req = fn(db.transaction(store, mode).objectStore(store));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }));
+}
+
+function idbGet(store, key) { return idbRequest(store, 'readonly', (s) => s.get(key)); }
+
+function idbAll(store) { return idbRequest(store, 'readonly', (s) => s.getAll()); }
+
+function idbPut(store, key, value) { return idbRequest(store, 'readwrite', (s) => s.put(value, key)); }
+
+function idbDelete(store, key) { return idbRequest(store, 'readwrite', (s) => s.delete(key)); }
+
+function fingerprint(pub) {
+  const out = pqCall((json) => pqModule().idfp(json), { id: pub });
+  return out && out.fp ? out.fp : '';
+}
+
+// provesKey checks that a stored record still signs for its own public key. A
+// browser that kept a CryptoKey it can not use (Safari has done that) fails here
+// rather than in the first handshake.
+async function provesKey(pub, sign) {
+  if (!pub || typeof sign !== 'function') return false;
+  const msg = b64e(sealUtf8.encode(ID_CHALLENGE));
+  let sig = '';
+  try { sig = await sign(msg); } catch { /* an unusable key */ }
+  const res = pqCall((json) => pqModule().idverify(json), { id: pub, msg, sig });
+  return !!(res && res.ok);
+}
+
+// subtleIdentity is the preferred shape: WebCrypto holds a non-extractable
+// Ed25519 key and no script can export it, not even this origin.
+function subtleIdentity(key, pub) {
+  return {
+    kind: 'webcrypto', pub, fp: fingerprint(pub),
+    sign: (msg) => crypto.subtle.sign({ name: 'Ed25519' }, key, b64d(msg)).then(b64e),
+    store: () => ({ kind: 'webcrypto', key, pub }),
+  };
+}
+
+// seedIdentity is the fallback: the wasm module signs with a 32 byte seed, and
+// the record on disk keeps that seed sealed under a non-extractable AES-GCM key,
+// so an offline copy of the database is useless without this profile.
+function seedIdentity(seed, pub, kind) {
+  return {
+    kind, pub, fp: fingerprint(pub), seed,
+    sign: async (msg) => {
+      const out = pqCall((json) => pqModule().idsign(json), { seed: b64e(seed), msg });
+      return out && out.sig ? out.sig : '';
+    },
+    store: async () => {
+      const wrap = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrap, seed));
+      return { kind: 'sealed', wrap, iv, ct, pub };
+    },
+  };
+}
+
+function createIdentity() {
+  return Promise.resolve()
+    .then(() => crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']))
+    .then(async (pair) => subtleIdentity(pair.privateKey, b64e(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)))))
+    .catch(() => {
+      // No WebCrypto Ed25519 (Chromium before 137, older Safari): the module
+      // draws the identity and keeps the seed for as long as this page lives.
+      const made = pqCall((json) => pqModule().idgen(json), {});
+      return made && made.pub && made.seed ? seedIdentity(b64d(made.seed), made.pub, 'sealed') : null;
+    });
+}
+
+async function reopenIdentity(rec) {
+  if (!rec || !rec.pub) return null;
+  let key = null;
+  try {
+    if (rec.kind === 'webcrypto' && rec.key) {
+      key = subtleIdentity(rec.key, rec.pub);
+    } else if (rec.kind === 'sealed' && rec.wrap && rec.iv && rec.ct) {
+      const seed = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv }, rec.wrap, rec.ct));
+      key = seedIdentity(seed, rec.pub, 'sealed');
+    }
+  } catch {
+    return null;
+  }
+  return key && await provesKey(rec.pub, key.sign) ? key : null;
+}
+
+function loadPins() {
+  return Promise.all([idbAll('pins'), idbAll('revoked')])
+    .then(([pins, revoked]) => {
+      for (const rec of pins || []) if (rec && rec.label && rec.fp) state.pins.set(rec.label, rec);
+      for (const rec of revoked || []) if (rec && rec.fp) state.revoked.set(rec.fp, rec);
+    })
+    .catch(() => { /* no local database: the pins live in this page only */ });
+}
+
+let identityLoad = null;
+
+// ensureIdentity loads or creates the long-term key and the pins, once per page.
+function ensureIdentity() {
+  if (identityLoad) return identityLoad;
+  identityLoad = (async () => {
+    await loadPins();
+    let rec = null;
+    try { rec = await idbGet('id', 'self'); } catch { /* no local database */ }
+    let key = await reopenIdentity(rec);
+    if (key) {
+      state.device = 'kept';
+    } else {
+      key = await createIdentity();
+      if (!key) throw new Error('no identity key');
+      state.device = rec ? 'fresh' : 'kept';
+      try {
+        await idbPut('id', 'self', await key.store());
+        if (navigator.storage && typeof navigator.storage.persist === 'function') {
+          navigator.storage.persist().catch(() => {});
+        }
+      } catch {
+        // Private mode, or a browser that refuses the record: the key still
+        // works for this page, and the device is honest about not being kept.
+        key.kind = 'session';
+        state.device = 'session';
+      }
+    }
+    state.idKey = key;
+    return key;
+  })().catch((err) => {
+    identityLoad = null;
+    throw err;
+  });
+  return identityLoad;
+}
+
+function deviceNote() {
+  return ID_NOTE[state.device] || ID_NOTE.session;
+}
+
+// pinState says what the fingerprint a peer proved means here. A pin is stored
+// by fingerprint, never by a name the peer chose, so nobody can claim a label.
+// A fingerprint this browser revoked and now sees again is the alarm: a key
+// that was replaced can not come back unless something replays it.
+function pinState(peer) {
+  if (peer.pin === 'changed') return 'changed';
+  if (!peer.fp) return 'new';
+  if (state.revoked.has(peer.fp)) return 'rollback';
+  for (const rec of state.pins.values()) if (rec.fp === peer.fp) return 'known';
+  return 'new';
+}
+
+function pinLabelOf(peer) {
+  for (const rec of state.pins.values()) if (rec.fp === peer.fp) return rec.label;
+  return peer.pinLabel || '';
+}
+
+// pinPeer attaches the fingerprint a guest is showing to a local label. A label
+// that already holds another fingerprint is the changed state, and the guest
+// decides what happens next; nothing is overwritten in silence.
+function pinPeer(peer, label) {
+  if (!peer || !peer.fp) return 'new';
+  const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+  const held = state.pins.get(name);
+  if (held && held.fp !== peer.fp) {
+    peer.pin = 'changed';
+    peer.pinLabel = name;
+    paintPin(peer);
+    return 'changed';
+  }
+  const now = Date.now();
+  const rec = { label: name, fp: peer.fp, first: held ? held.first : now, last: now };
+  state.pins.set(name, rec);
+  idbPut('pins', name, rec).catch(() => {});
+  if (state.revoked.has(peer.fp)) {
+    state.revoked.delete(peer.fp);
+    idbDelete('revoked', peer.fp).catch(() => {});
+  }
+  peer.pin = '';
+  peer.pinLabel = name;
+  paintPin(peer);
+  return 'known';
+}
+
+// resetDevice is the calm path of a changed identity: the guest was told that
+// the other device was reset, so the old fingerprint stays remembered as revoked
+// and the new one takes the label. It is a deliberate click, never automatic.
+function resetDevice(peer, label) {
+  const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+  const held = state.pins.get(name);
+  if (held && held.fp && held.fp !== peer.fp) {
+    const gone = { fp: held.fp, label: name, at: Date.now() };
+    state.revoked.set(gone.fp, gone);
+    idbPut('revoked', gone.fp, gone).catch(() => {});
+    state.pins.delete(name);
+    idbDelete('pins', name).catch(() => {});
+  }
+  peer.pin = '';
+  const state_ = pinPeer(peer, name);
+  // A pair that was closed for a changed identity gets one more handshake, now
+  // that the guest has said the other device was reset.
+  if (!peer.proven) sealedRestart(peer, true);
+  return state_;
+}
+
+function verifiedPeers() {
+  let n = 0;
+  for (const peer of state.peers.values()) if (peer.fp && pinState(peer) === 'known') n++;
+  return n;
+}
+
+// updatePinCount is the room summary: how many guests this browser can name by
+// identity, out of the guests present. Each pair still has its own code.
+function updatePinCount() {
+  const el = $('pin-count');
+  if (!el) return;
+  const total = state.peers.size;
+  const known = verifiedPeers();
+  el.textContent = total ? `verified ${known} of ${total}` : '';
+  el.title = total
+    ? `${known} of ${total} guests present an identity this browser pinned; each pair has its own code`
+    : '';
+}
+
+function paintPin(peer) {
+  updatePinCount();
+  paintState(peer);
+  const chip = peer.tile ? peer.tile.querySelector('.pin') : null;
+  if (!chip) return;
+  const what = pinState(peer);
+  chip.hidden = !peer.fp;
+  chip.dataset.pin = what === 'rollback' ? 'changed' : what;
+  chip.textContent = what === 'known' ? pinLabelOf(peer)
+    : what === 'changed' ? 'identity changed'
+      : what === 'rollback' ? 'old key came back'
+        : 'unverified';
+  chip.title = peer.fp ? 'identity ' + peer.fp : '';
+}
+
+// storageAudit lists what this page keeps on disk, so the browser test can say
+// plainly that no session secret is in it.
+async function storageAudit() {
+  const out = { local: Object.keys(localStorage), stores: {}, keys: 0 };
+  try {
+    const db = await idStore();
+    for (const name of db.objectStoreNames) {
+      const rows = await idbAll(name);
+      out.stores[name] = rows.map((row) => {
+        const shape = {};
+        for (const [k, v] of Object.entries(row || {})) {
+          if (v instanceof Uint8Array) shape[k] = 'bytes:' + v.length;
+          else if (v && v.type) shape[k] = 'key:' + v.type;
+          else if (typeof v === 'string') shape[k] = v.length > 40 ? 'string:' + v.length : v;
+          else shape[k] = typeof v;
+        }
+        return shape;
+      });
+    }
+  } catch {
+    out.stores = null;
+  }
+  return out;
 }
 
 // ------------------------------------------------------------- wire audit
@@ -2750,34 +3127,134 @@ function paintFrameCounters() {
 }
 
 // ------------------------------------------------------------- handshake
+//
+// The bundle carries the per-call keys, the long-term identity and a session id
+// that is fresh on every join. Both sides sign the same transcript and each one
+// checks the other's signature and confirmation tag in one gate, so there is no
+// half-proven pair: the initiator knows who answered, and the responder knows
+// who asked. The keys themselves are still HKDF over the ephemeral secrets
+// alone, and they only reach the worker once that gate has passed.
 
 function sealedSendPub(peer) {
-  if (!state.identity) return;
-  sealedSendOpaque(peer.id, { k: 'pub', x: state.identity.xpub, m: state.identity.ek });
+  if (!state.identity || !state.idKey) return;
+  sealedSendOpaque(peer.id, {
+    k: 'pub', x: state.identity.xpub, m: state.identity.ek, id: state.idKey.pub, sid: state.sid,
+  });
+}
+
+// sealedRefuse closes a pair for good. There is no path that continues without
+// an identity: a relay that strips the fields would otherwise leave a working
+// pair with no authentication at all, which is exactly the downgrade.
+function sealedRefuse(peer, why) {
+  if (!state.peers.has(peer.id)) return;
+  state.identityFailures++;
+  if (peer.pc) {
+    peer.pc.close();
+    peer.pc = null;
+  }
+  wipeKeys(peer);
+  sealedSetE2E(peer, 'failed');
+  say(shortPeer(peer.id) + ' ' + why + '; the link stays closed');
+  updateSealedBadge();
+}
+
+// sealedRestart drops a pair's state so a new handshake can run. The deliberate
+// case is "this device was reset", which re-pins and starts over; the automatic
+// case is a peer that comes back with a fresh session id.
+function sealedRestart(peer, resend) {
+  wipeKeys(peer);
+  peer.pub = null;
+  peer.transcript = null;
+  peer.sas = '';
+  peer.confirmed = false;
+  peer.myConfirm = '';
+  peer.mySig = '';
+  peer.sentConfirm = false;
+  peer.fp = '';
+  peer.proven = false;
+  peer.ready = '';
+  peer.keyPromise = null;
+  peer.announcedName = '';
+  if (peer.pc) {
+    peer.pc.close();
+    peer.pc = null;
+  }
+  if (peer.tile) peer.tile.dataset.sas = '';
+  sealedSetE2E(peer, 'new');
+  if (resend) sealedSendPub(peer);
 }
 
 // sealedOnPub decides which side initiates: the lower peer id. The other side
-// answers the hello. A duplicate bundle is harmless.
+// answers the hello. A duplicate bundle is harmless; a bundle with a new session
+// id is the same guest on a fresh call, so the old pair goes first.
 function sealedOnPub(peer, msg) {
-  peer.pub = { x: msg.x, m: msg.m };
+  if (peer.pub && peer.pub.sid && msg.sid && peer.pub.sid !== msg.sid) sealedRestart(peer, false);
+  peer.pub = { x: msg.x, m: msg.m, id: msg.id || '', sid: msg.sid || '' };
   if (peer.keys || peer.keyPromise) return;
-  if (String(state.self) < String(peer.id)) {
-    sealedInitiate(peer);
+  if (!peer.pub.id || !peer.pub.sid) {
+    sealedRefuse(peer, 'sent no identity');
     return;
   }
+  if (String(state.self) < String(peer.id)) {
+    sealedInitiate(peer).catch(() => sealedRefuse(peer, 'handshake failed'));
+  }
+}
+
+// sealedProved records that the peer's signature over this transcript checked
+// out. It is the only moment a fingerprint of that peer means anything.
+function sealedProved(peer) {
+  peer.proven = true;
+  peer.fp = fingerprint(peer.pub.id);
+  paintPin(peer);
+}
+
+// wipeKeys zeroes one pair's secrets. They are the only copies outside the
+// worker and the module, and they last as long as the pair does.
+function wipeKeys(peer) {
+  if (!peer || !peer.keys) return;
+  for (const value of Object.values(peer.keys)) {
+    if (value instanceof Uint8Array) value.fill(0);
+  }
+  peer.keys = null;
+  peer.keysInstalled = false;
+}
+
+// wipeIdentity zeroes the per-call X25519 and ML-KEM secret halves.
+function wipeIdentity() {
+  if (!state.identity) return;
+  for (const name of ['xsk', 'dk']) {
+    const value = state.identity[name];
+    if (value instanceof Uint8Array) value.fill(0);
+  }
+  state.identity = null;
+}
+
+// sealedHoldKeys keeps the agreed pair keys in this page until the peer has
+// proved itself. They are not handed to the worker yet, so no frame of this
+// pair can be opened before the identity is checked.
+function sealedHoldKeys(peer, out) {
+  wipeKeys(peer);
+  peer.keys = {
+    sendMedia: b64d(out.keys.sendMedia),
+    recvMedia: b64d(out.keys.recvMedia),
+    sendChat: b64d(out.keys.sendChat),
+    recvChat: b64d(out.keys.recvChat),
+  };
+  peer.transcript = out.transcript;
+  peer.sas = out.keys.sas;
+  peer.myConfirm = out.confirm;
+  peer.ready = 'handshake';
+  if (peer.tile) peer.tile.dataset.sas = peer.sas;
+  sealedSetE2E(peer, 'handshake');
 }
 
 // sealedInstallKeys hands the pair keys to the worker and returns a promise that
 // the import resolves. The connection is built on that promise, so the first
-// frame always meets a key. A worker that fails resolves false and says so.
-function sealedInstallKeys(peer, out) {
-  peer.keys = out.keys;
-  peer.transcript = out.transcript;
-  peer.sas = out.keys.sas;
-  peer.ready = 'handshake';
-  if (peer.tile) peer.tile.dataset.sas = peer.sas;
+// frame always meets a key.
+function sealedInstallKeys(peer) {
+  peer.keysInstalled = true;
   const pair = pairLabel(peer.id);
-  const ready = new Promise((resolve) => {
+  return new Promise((resolve) => {
     if (!state.worker) {
       state.workerErrors.push('sealed worker missing');
       resolve(false);
@@ -2785,87 +3262,143 @@ function sealedInstallKeys(peer, out) {
     }
     state.keyWait.set(pair, resolve);
     state.worker.postMessage({
-      type: 'keys', pair, peer: peer.id, enc: out.keys.sendMedia, dec: out.keys.recvMedia,
+      type: 'keys', pair, peer: peer.id, enc: b64e(peer.keys.sendMedia), dec: b64e(peer.keys.recvMedia),
     });
   });
-  sealedSetE2E(peer, 'handshake');
-  return ready;
 }
 
-function sealedInitiate(peer) {
-  if (!state.identity) return;
+// sealedProve runs the one gate the module offers: the peer's identity
+// signature over this transcript and its confirmation tag, both or neither.
+function sealedProve(peer, msg) {
+  return pqCall((json) => pqModule().proved(json), {
+    key: b64e(peer.keys.recvMedia),
+    transcript: peer.transcript,
+    tag: msg.c || '',
+    id: msg.id || '',
+    sig: msg.sig || '',
+  });
+}
+
+async function sealedInitiate(peer) {
+  if (!state.identity || !state.idKey || !peer.pub) return;
   const out = pqCall((json) => pqModule().initiate(json), {
     self: state.self,
     peer: peer.id,
     selfX: state.identity.xpub,
     selfK: state.identity.ek,
+    selfID: state.idKey.pub,
+    selfSID: state.sid,
     peerX: peer.pub.x,
     peerK: peer.pub.m,
+    peerID: peer.pub.id,
+    peerSID: peer.pub.sid,
   });
-  if (!out) {
-    say('handshake failed: the post-quantum module refused the key bundle');
+  if (!out || out.error) {
+    sealedRefuse(peer, 'refused the key bundle');
     return;
   }
-  if (out.error) {
-    say('handshake failed: ' + out.error);
+  const sig = await state.idKey.sign(out.transcript);
+  if (!state.peers.has(peer.id) || state.leaving) return;
+  if (!sig) {
+    sealedRefuse(peer, 'could not sign the handshake');
     return;
   }
-  peer.keyPromise = sealedInstallKeys(peer, out);
-  peer.myConfirm = out.confirm;
-  peer.lastHello = { k: 'hello', epk: out.epk, ct: out.ct };
-  sealedSendOpaque(peer.id, peer.lastHello);
+  sealedHoldKeys(peer, out);
+  peer.mySig = sig;
+  sealedSendOpaque(peer.id, {
+    k: 'hello', epk: out.epk, ct: out.ct, id: state.idKey.pub, sid: state.sid, sig,
+  });
+  // Our own confirmation and signature go out at once, so the responder can
+  // check us as soon as it has its keys. The same transcript covers both sides.
+  peer.sentConfirm = true;
+  sealedSendOpaque(peer.id, {
+    k: 'ok', c: out.confirm, id: state.idKey.pub, sid: state.sid, sig,
+  });
 }
 
-function sealedRespond(peer, msg) {
-  if (!state.identity) return;
+async function sealedRespond(peer, msg) {
+  if (!state.identity || !state.idKey || !peer.pub) return;
+  // The hello must describe the bundle the peer broadcast. The signature over
+  // the transcript would fail anyway; this refusal just names the reason.
+  if (msg.id !== peer.pub.id || msg.sid !== peer.pub.sid) {
+    sealedRefuse(peer, 'sent a hello for another identity');
+    return;
+  }
   const out = pqCall((json) => pqModule().respond(json), {
     self: state.self,
     peer: peer.id,
     selfX: state.identity.xpub,
-    selfSK: state.identity.xsk,
+    selfSK: b64e(state.identity.xsk),
     selfK: state.identity.ek,
-    selfDK: state.identity.dk,
+    selfDK: b64e(state.identity.dk),
+    selfID: state.idKey.pub,
+    selfSID: state.sid,
     peerX: peer.pub.x,
     peerK: peer.pub.m,
+    peerID: peer.pub.id,
+    peerSID: peer.pub.sid,
     epk: msg.epk,
     ct: msg.ct,
+    sig: msg.sig || '',
   });
-  if (!out) {
-    say('handshake failed: the post-quantum module refused the hello');
+  if (!out || out.error) {
+    sealedRefuse(peer, 'refused the hello');
     return;
   }
-  if (out.error) {
-    say('handshake failed: ' + out.error);
+  const sig = await state.idKey.sign(out.transcript);
+  if (!state.peers.has(peer.id) || state.leaving) return;
+  if (!sig) {
+    sealedRefuse(peer, 'could not sign the handshake');
     return;
   }
-  peer.keyPromise = sealedInstallKeys(peer, out);
-  // Our confirmation lets the initiator check that we decapsulated the same
-  // secret; we start media right away because our own keys are final.
-  peer.myConfirm = out.confirm;
-  sealedSendOpaque(peer.id, { k: 'ok', c: out.confirm });
+  sealedHoldKeys(peer, out);
+  peer.mySig = sig;
   peer.sentConfirm = true;
-  sealedSetE2E(peer, 'ready');
-  sealedAnnounceName(peer);
-  // The initiator owns the offer; this side answers it.
+  sealedSendOpaque(peer.id, {
+    k: 'ok', c: out.confirm, id: state.idKey.pub, sid: state.sid, sig,
+  });
+  // The pair is not ready yet: the initiator's own ok still has to prove it,
+  // which is the half that used to be missing.
 }
 
-function sealedOnConfirm(peer, msg) {
-  if (!peer.keys) return;
-  const res = pqCall((json) => pqModule().verify(json), {
-    key: peer.keys.recvMedia, transcript: peer.transcript, tag: msg.c,
-  });
+// sealedOnProof is an `ok` from the peer, on either side. Nothing about the
+// pair is announced as established until this passes: the signature names the
+// peer, the tag shows that both ends hold the same keys, and the pin state
+// decides whether that name is one this browser already trusts.
+async function sealedOnProof(peer, msg) {
+  if (!peer.keys || !peer.pub || !peer.transcript) return;
+  if (peer.confirmed) return;
+  if (msg.id !== peer.pub.id || msg.sid !== peer.pub.sid) {
+    sealedRefuse(peer, 'answered with another identity');
+    return;
+  }
+  const res = sealedProve(peer, msg);
   if (!res || !res.ok) {
-    state.confirmFailures++;
-    sealedSetE2E(peer, 'failed');
-    say('key confirmation failed for ' + shortPeer(peer.id) + ': keys do not match');
+    const why = res && res.error ? res.error : 'the proof did not check out';
+    if (/confirmation tag/.test(why)) {
+      state.confirmFailures++;
+      sealedSetE2E(peer, 'failed');
+      say('key confirmation failed for ' + shortPeer(peer.id) + ': keys do not match');
+      return;
+    }
+    sealedRefuse(peer, 'did not prove its identity');
     return;
   }
   peer.confirmed = true;
-  sealedSetE2E(peer, 'ready');
-  if (!peer.sentConfirm && peer.myConfirm) {
-    peer.sentConfirm = true;
-    sealedSendOpaque(peer.id, { k: 'ok', c: peer.myConfirm });
+  sealedProved(peer);
+  // The pin is the answer to "who", and it is checked before anything is
+  // established. A revoked key that comes back is an alarm, and a label that
+  // already holds another key is the changed state: both close the pair, and
+  // the guest can say that the device was reset.
+  const pin = pinState(peer);
+  if (pin === 'rollback' || pin === 'changed') {
+    sealedRefuse(peer, pin === 'rollback'
+      ? 'came back with an identity this browser revoked'
+      : 'proved an identity another label here holds');
+    return;
   }
+  peer.keyPromise = sealedInstallKeys(peer);
+  sealedSetE2E(peer, 'ready');
   sealedAnnounceName(peer);
   if (!peer.pc && String(state.self) < String(peer.id)) {
     // The initiator builds the connection once the keys are in the worker.
@@ -2893,10 +3426,10 @@ function sealedHandleOpaque(from, b) {
       if (!peer.pub) return;
       if (String(state.self) < String(from)) return; // we are the initiator
       if (peer.keys || peer.keyPromise) return; // duplicate hello, keys already set
-      sealedRespond(peer, msg);
+      sealedRespond(peer, msg).catch(() => sealedRefuse(peer, 'handshake failed'));
       break;
     case 'ok':
-      sealedOnConfirm(peer, msg);
+      sealedOnProof(peer, msg).catch(() => sealedRefuse(peer, 'handshake failed'));
       break;
     case 'key':
       // One request, one answer: ask our own worker for a key frame on the
@@ -2904,7 +3437,7 @@ function sealedHandleOpaque(from, b) {
       if (state.worker) state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id) });
       break;
     case 'app':
-      if (!peer.keys) return;
+      if (!peer.keys || !peer.keysInstalled || !msg.b) return;
       sealedOnApp(peer, msg.b);
       break;
     default:
@@ -2914,7 +3447,7 @@ function sealedHandleOpaque(from, b) {
 
 function sealedOnApp(peer, b) {
   const out = pqCall((json) => pqModule().open(json), {
-    key: peer.keys.recvChat, aad: b64e(chatAAD(peer.id)), b,
+    key: b64e(peer.keys.recvChat), aad: b64e(chatAAD(peer.id)), b,
   });
   if (!out || out.error) return;
   let obj;
@@ -2940,7 +3473,7 @@ function sealedAnnounceName(peer) {
 function sealedSend(peer, obj) {
   if (!peer.keys) return;
   const out = pqCall((json) => pqModule().seal(json), {
-    key: peer.keys.sendChat,
+    key: b64e(peer.keys.sendChat),
     aad: b64e(chatAAD(peer.id)),
     pt: b64e(sealUtf8.encode(JSON.stringify(obj))),
   });
@@ -2977,12 +3510,8 @@ function sealedSetE2E(peer, status) {
   updateSealedBadge();
   if (!peer.tile) return;
   peer.tile.dataset.e2e = status;
-  const badge = peer.tile.querySelector('.state');
-  if (badge) {
-    badge.textContent = status === 'ready' ? 'e2e ready'
-      : status === 'failed' ? 'e2e FAILED'
-        : status;
-  }
+  paintState(peer);
+  paintPin(peer);
   const sas = /** @type {HTMLElement} */ (peer.tile.querySelector('.sas'));
   if (!sas) return;
   if (!peer.sas) {
@@ -2992,16 +3521,31 @@ function sealedSetE2E(peer, status) {
     return;
   }
   sas.hidden = false;
-  sas.replaceChildren(...sealedCodePanel(peer.sas));
+  sas.replaceChildren(...sealedCodePanel(peer));
   // The names behind the drawings are a title, so a screen reader and a
   // nervous guest can both tell what they are looking at.
   sas.title = verifyNames(peer.sas) + ' (' + peer.sas + ')';
 }
 
+// paintState is the one place a tile says how far the link is. A ready link is
+// called verified only when its fingerprint is one this browser pinned: a
+// signature proves continuity inside the call, which is a weaker claim.
+function paintState(peer) {
+  if (!peer.tile) return;
+  const badge = peer.tile.querySelector('.state');
+  if (!badge) return;
+  badge.textContent = peer.ready === 'ready' ? (pinState(peer) === 'known' ? 'e2e ready' : 'e2e unverified')
+    : peer.ready === 'failed' ? 'e2e FAILED'
+      : peer.ready;
+}
+
 // sealedCodePanel builds the code card of one guest: a small heading, the six
-// OpenMoji drawings, and the code in groups of four. The card is opaque text
-// and images, so it needs no font of its own.
-function sealedCodePanel(code) {
+// OpenMoji drawings, the code in groups of four, and the identity line. The two
+// prove different things and the card keeps them apart: the code proves that
+// this pair shares one secret now, the fingerprint names who the peer is.
+// Neither tells how long the secret will live, which is one call.
+function sealedCodePanel(peer) {
+  const code = peer.sas;
   const head = document.createElement('span');
   head.className = 'sas-head';
   head.textContent = 'sealed code';
@@ -3020,7 +3564,42 @@ function sealedCodePanel(code) {
   const text = document.createElement('span');
   text.className = 'sas-code';
   text.textContent = String(code || '').replace(/(.{4})(?=.)/g, '$1 ');
-  return [head, row, text];
+  return [head, row, text, sealedIdentityRow(peer)];
+}
+
+// sealedIdentityRow is the who of one pair, in the words the tile uses. The
+// guest can pin the fingerprint under a label of their own, and can say that a
+// changed device was reset, which keeps the old fingerprint on a revoked list.
+function sealedIdentityRow(peer) {
+  const row = document.createElement('span');
+  row.className = 'id-row';
+  const what = pinState(peer);
+  const state = document.createElement('span');
+  state.className = 'id-state';
+  state.dataset.pin = what;
+  state.textContent = what === 'known' ? 'identity pinned'
+    : what === 'changed' ? 'identity changed'
+      : what === 'rollback' ? 'old key came back'
+        : 'identity unverified';
+  const which = document.createElement('span');
+  which.className = 'id-fp';
+  which.textContent = peer.fp || 'no fingerprint yet';
+  row.append(state, which);
+  if (what === 'new' && peer.fp) {
+    row.append(pinButton('pin this device', () => pinPeer(peer, prompt('label for this device', peer.name) || '')));
+  } else if (what === 'changed' || what === 'rollback') {
+    row.append(pinButton('this device was reset', () => resetDevice(peer, peer.pinLabel)));
+  }
+  return row;
+}
+
+function pinButton(text, onclick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'pin-btn';
+  button.textContent = text;
+  button.addEventListener('click', onclick);
+  return button;
 }
 
 // ------------------------------------------------------------- sealed signaling
@@ -3114,18 +3693,27 @@ function sealedStatsRows() {
   const rows = [];
   const available = sealingAvailable();
   rows.push(statsRow('pq-e2e', [
-    'suite pq-e2e v1 | X25519 + ML-KEM-768 | HKDF-SHA256 | AES-256-GCM',
+    'suite pq-e2e v2 | X25519 + ML-KEM-768 + Ed25519 identity | HKDF-SHA256 | AES-256-GCM',
+    'session keys come from ephemeral halves only, inside this page, for this call',
     available
       ? 'media sealing available: every frame leaves through the worker'
       : 'media sealing NOT available in this browser: no media is sent',
   ], available));
   if (state.sealFault) rows.push(statsRow('sealing fault', [state.sealFault], false));
 
+  const me = state.idKey;
+  rows.push(statsRow('identity', [
+    me ? `${me.kind} | ${me.fp}` : 'none',
+    deviceNote(),
+    `(a pin proves who a peer is; the ephemeral key proves the call is closed)`,
+  ], me ? true : false));
+
   const wt = state.wasmTest;
   if (wt) {
-    const ok = !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused);
+    const ok = !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused &&
+      wt.idSign && wt.idUnsigned && wt.idFp);
     rows.push(statsRow('self test', [
-      `${ok ? 'pass' : 'FAIL'} | sas ${wt.sasMatch ? 'match' : 'no'} | confirm ${wt.confirm ? 'ok' : 'no'} | open ${wt.open ? 'ok' : 'no'} | wrong key ${wt.wrongKeyRefused ? 'refused' : 'OPENED'} | code ${wt.sas || '-'}`,
+      `${ok ? 'pass' : 'FAIL'} | sas ${wt.sasMatch ? 'match' : 'no'} | confirm ${wt.confirm ? 'ok' : 'no'} | open ${wt.open ? 'ok' : 'no'} | wrong key ${wt.wrongKeyRefused ? 'refused' : 'OPENED'} | id ${wt.idSign ? 'signs' : 'BROKEN'} | unsigned ${wt.idUnsigned ? 'refused' : 'ACCEPTED'} | fp ${wt.idFp ? 'ok' : 'BROKEN'} | code ${wt.sas || '-'}`,
     ], ok));
   }
 
@@ -3152,9 +3740,11 @@ function sealedStatsRows() {
 
   for (const peer of state.peers.values()) {
     const c = sealedPairCount(peer.id);
+    const pin = pinState(peer);
     rows.push(statsRow('peer ' + shortPeer(peer.id), [
       `${peer.name || 'unnamed'} | ${verifyText(peer.sas) || 'code -'}`,
       `keys ${peer.keys ? 'yes' : 'no'} | link ${peer.pc ? peer.pc.connectionState : 'none'} | confirmed ${peer.confirmed ? 'yes' : 'no'}`,
+      `identity ${peer.proven ? peer.fp : 'unproven'} | pin ${pin === 'known' ? pinLabelOf(peer) : pin}`,
       `sealed out ${c.out} in ${c.inn} | refused ${c.refused}`,
     ], peer.keys && peer.sas && peer.confirmed ? true : undefined));
   }
@@ -3170,8 +3760,8 @@ function sealedStatsRows() {
     `frames ${state.wireFrames} | canaries ${state.canaries.length} | plaintext leaks ${state.wireLeaks.length}`,
   ], state.wireLeaks.length === 0));
   rows.push(statsRow('sealed chat', [
-    `out ${state.chatSent} | in ${state.chatRecv} | confirm failures ${state.confirmFailures}`,
-  ], state.confirmFailures === 0));
+    `out ${state.chatSent} | in ${state.chatRecv} | confirm failures ${state.confirmFailures} | identity refusals ${state.identityFailures}`,
+  ], state.confirmFailures === 0 && state.identityFailures === 0));
 
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
@@ -3332,6 +3922,9 @@ win().e2eApp = {
     id: p.id,
     name: p.name,
     sas: p.sas || '',
+    fp: p.fp || '',
+    pin: pinState(p),
+    proven: !!p.proven,
     confirmed: !!p.confirmed,
     ready: p.tile ? (p.tile.dataset.e2e || p.ready) : p.ready,
     pc: p.pc ? p.pc.connectionState : 'none',
@@ -3339,12 +3932,32 @@ win().e2eApp = {
     videoT: p.video ? p.video.currentTime : 0,
     video: p.video,
   })),
+  identity: () => (state.idKey
+    ? { kind: state.idKey.kind, fp: state.idKey.fp, device: state.device, note: deviceNote(), sid: state.sid }
+    : null),
+  pins: () => [...state.pins.values()].map((r) => ({ label: r.label, fp: r.fp })),
+  revoked: () => [...state.revoked.values()].map((r) => ({ label: r.label, fp: r.fp })),
+  pin: (peerId, label) => {
+    const peer = state.peers.get(peerId);
+    return peer ? pinPeer(peer, label) : 'no peer';
+  },
+  resetDevice: (peerId, label) => {
+    const peer = state.peers.get(peerId);
+    return peer ? resetDevice(peer, label) : 'no peer';
+  },
+  storageAudit,
+  pinCount: () => ({ verified: verifiedPeers(), total: state.peers.size }),
+  pinState: (peerId) => {
+    const peer = state.peers.get(peerId);
+    return peer ? pinState(peer) : 'no peer';
+  },
   counters: () => ({
     encryptFrames: state.encryptFrames,
     decryptFrames: state.decryptFrames,
     chatSent: state.chatSent,
     chatRecv: state.chatRecv,
     confirmFailures: state.confirmFailures,
+    identityFailures: state.identityFailures,
     workerErrors: state.workerErrors,
     wireFrames: state.wireFrames,
     wireLeaks: state.wireLeaks,
@@ -3417,6 +4030,13 @@ function init() {
   // The module is warming before the first click, so a failure is visible in
   // the lobby and the join is only a microphone prompt.
   preloadSealed();
+
+  // The pin summary sits next to the room badge. It is made here rather than in
+  // the page, so the count is never part of the markup a guest reads first.
+  const pinCount = document.createElement('span');
+  pinCount.id = 'pin-count';
+  pinCount.className = 'badge pincount';
+  $('sealed-badge').after(pinCount);
 
   $('newid-btn').addEventListener('click', (event) => {
     event.preventDefault();
