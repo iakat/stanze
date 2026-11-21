@@ -233,6 +233,9 @@ func assetNames() []string {
 	return []string{
 		"index.html", "app.js", "style.css", "favicon.svg",
 		"rnnoise-sync.js", "rnnoise-worklet.js", workletBundle,
+		// The four cues are Opus for size; the mp3 stays as a fallback.
+		"sfx/pop.webm", "sfx/bonk.webm", "sfx/timp.webm", "sfx/hammer.webm",
+		"sfx/pop.ogg", "sfx/bonk.ogg", "sfx/timp.ogg", "sfx/hammer.ogg",
 		"sfx/pop.mp3", "sfx/bonk.mp3", "sfx/timp.mp3", "sfx/hammer.mp3",
 	}
 }
@@ -273,6 +276,10 @@ func contentType(name string) string {
 		return "image/svg+xml"
 	case strings.HasSuffix(name, ".mp3"):
 		return "audio/mpeg"
+	case strings.HasSuffix(name, ".webm"):
+		return "audio/webm"
+	case strings.HasSuffix(name, ".ogg"):
+		return "audio/ogg"
 	}
 	return "application/octet-stream"
 }

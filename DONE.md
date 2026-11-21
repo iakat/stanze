@@ -25,7 +25,10 @@ One line per work item, newest last.
 - The client carries the name stanze: the page title and both title bars.
 - Every tile carries a mute flag and a camera flag, sent over the signaling socket as a `state` message on each toggle and on join.
 - The own tile is always drawn, with an avatar, the name and the flags, even when the browser gives no camera.
-- Cartoon sound cues on join, leave, mic on and mic off, from the Hanna-Barbera sound effects library on archive.org (four mp3 files, each played for a short window).
+- Host controls from a three dot menu on a remote tile, shown on hover to the admin only: give admin, mute, remove from room.
+- The first peer in a room is the admin; when the admin leaves, the role moves to the peer that has been in the room longest.
+- Cartoon sound cues on join, leave, mic on and mic off, from the Hanna-Barbera sound effects library on archive.org, stored as mono Opus (27 kB for all four, mp3 kept as a fallback).
+- A sound cue never waits in a line: a new one replaces the one that plays, and each cue plays in full.
 - The microphone and the camera are off until their button is pressed; the first press asks for the permission, and a visitor can watch without sharing.
 - The rnnoise output goes through a ring buffer, so no frame tail is dropped: 480 is not a multiple of the 128 sample render quantum.
 - The rnnoise worklet has a safety net: if loud input comes out near silent for 300 ms, it passes the dry signal for 5 s and then tries again.

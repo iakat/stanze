@@ -124,9 +124,11 @@ function makeTile(id, name, local = false) {
   tile.innerHTML = `
     <video autoplay playsinline${local ? ' muted' : ''}></video>
     <div class="avatar"></div>
-    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span></div>`;
+    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span></div>
+    ${local ? '' : '<button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
   tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
   tile.querySelector('.avatar').textContent = (name || '?').slice(0, 2);
+  if (!local) wireDots(tile);
   $('grid').appendChild(tile);
   return tile;
 }
@@ -139,11 +141,12 @@ function setTileState(peer, text) {
 
 // applyFlags shows the mute and camera state of one tile. A tile with neither
 // flag shows nothing extra.
-function applyFlags(tile, mic, cam) {
+function applyFlags(tile, mic, cam, admin) {
   if (!tile) return;
   const box = tile.querySelector('.flags');
   if (!box) return;
   const out = [];
+  if (admin) out.push('host');
   if (mic === false) out.push('muted');
   if (cam === false) out.push('no cam');
   box.innerHTML = '';
@@ -152,6 +155,51 @@ function applyFlags(tile, mic, cam) {
     chip.textContent = text;
     box.appendChild(chip);
   }
+}
+
+// ---------------------------------------------------------------- host control
+
+// wireDots opens the small menu on a remote tile. Only the admin sees it; the
+// CSS shows it on hover. The server checks the role again on every command.
+function wireDots(tile) {
+  const dots = tile.querySelector('.dots');
+  const menu = tile.querySelector('.menu');
+  if (!dots || !menu) return;
+  dots.addEventListener('click', (event) => {
+    event.stopPropagation();
+    for (const other of document.querySelectorAll('.tile .menu:not([hidden])')) {
+      if (other !== menu) other.hidden = true;
+    }
+    if (!menu.hidden) {
+      menu.hidden = true;
+      return;
+    }
+    menu.replaceChildren();
+    for (const [action, label] of [['admin', 'give admin'], ['mute', 'mute'], ['kick', 'remove from room']]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        menu.hidden = true;
+        send({ t: 'mod', to: tile.dataset.peer, action });
+      });
+      menu.appendChild(b);
+    }
+    menu.hidden = false;
+  });
+  document.addEventListener('click', () => { menu.hidden = true; });
+}
+
+// markAdmins redraws the host chip on every tile and hides the menus from
+// peers that are not the admin.
+function markAdmins() {
+  document.body.classList.toggle('is-admin', state.isAdmin);
+  for (const peer of state.peers.values()) {
+    peer.admin = peer.id === state.adminID;
+    applyFlags(peer.tile, peer.mic, peer.cam, peer.admin);
+  }
+  const self = document.querySelector('.tile[data-local="yes"]');
+  applyFlags(self, state.mic, state.cam, state.isAdmin);
 }
 
 function updateCount() {
@@ -174,7 +222,7 @@ function prepareLocal() {
   const self = makeTile(state.name, state.name, true);
   self.dataset.state = 'connected';
   self.querySelector('.state').textContent = 'you';
-  applyFlags(self, state.mic, state.cam);
+  applyFlags(self, state.mic, state.cam, state.isAdmin);
   applyMirror();
   updateButtons();
 }
@@ -341,7 +389,7 @@ function resumeAudio() {
 // other clients show it as a small flag on the tile.
 function sendState() {
   const self = document.querySelector('.tile[data-local="yes"]');
-  applyFlags(self, state.mic, state.cam);
+  applyFlags(self, state.mic, state.cam, state.isAdmin);
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
     send({ t: 'state', mic: state.mic, cam: state.cam });
   }
@@ -507,6 +555,7 @@ function ensurePeer(id, name, mic, cam) {
     initiator: false,
   };
   peer.tile = makeTile(peer.name, peer.name);
+  peer.tile.dataset.peer = id;
   applyFlags(peer.tile, peer.mic, peer.cam);
   state.peers.set(id, peer);
   updateCount();
@@ -737,7 +786,10 @@ function handle(msg) {
       state.self = msg.self;
       state.ice = msg.ice || [];
       say('');
+      state.adminID = msg.admin || '';
+      state.isAdmin = state.adminID === msg.self;
       for (const peer of msg.peers || []) connectPeer(peer.id, peer.name, true, peer.mic, peer.cam);
+      markAdmins();
       // Tell the room the real microphone and camera state right away: a new
       // visitor shares neither until a button is pressed.
       sendState();
@@ -745,7 +797,28 @@ function handle(msg) {
     }
     case 'peer-joined': {
       ensurePeer(msg.peer.id, msg.peer.name, msg.peer.mic, msg.peer.cam);
+      if (msg.peer.admin) state.adminID = msg.peer.id;
+      markAdmins();
       playSfx('pop');
+      break;
+    }
+    case 'admin': {
+      state.adminID = msg.admin || '';
+      state.isAdmin = state.adminID === state.self;
+      markAdmins();
+      break;
+    }
+    case 'mod': {
+      // The host asked for a mute. It is a request to this client; the server
+      // can not mute a track, so this client turns its own gain down.
+      if (msg.action === 'mute') {
+        disableMic();
+        say('the host muted your microphone');
+      }
+      break;
+    }
+    case 'kicked': {
+      leave('the host removed you from the room');
       break;
     }
     case 'state': {
@@ -787,6 +860,7 @@ function handle(msg) {
 
 async function enterRoom(room, pass) {
   ensureSfx();
+  preloadSfx();
   cancelReconnect();
   state.fatal = '';
   state.room = room;
@@ -848,6 +922,7 @@ function leave(message) {
     state.sfxCtx = null;
   }
   sfxCache.clear();
+  state.sfxSource = null;
   state.mixer = null;
   state.micGain = null;
   state.micSource = null;
@@ -879,16 +954,33 @@ function leave(message) {
 // ---------------------------------------------------------------- sound effects
 
 // The four cartoon cues come from the Hanna-Barbera sound effects library that
-// is on archive.org. They are small, and the browser decodes them once.
-// The pop file holds two pops and a long silence, so each cue plays only a
-// short window of its file.
-const SFX = {
-  pop: { url: 'sfx/pop.mp3', offset: 0.35, dur: 0.9 },
-  bonk: { url: 'sfx/bonk.mp3', offset: 0, dur: 1.2 },
-  timp: { url: 'sfx/timp.mp3', offset: 0, dur: 0.8 },
-  hammer: { url: 'sfx/hammer.mp3', offset: 0, dur: 0.9 },
-};
+// is on archive.org. They are stored as 48 kHz mono Opus, which is about 27 kB
+// for all four files together. An mp3 copy stays next to each one for a
+// browser that can not decode Opus.
+const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer'];
+const SFX_RATE = 0.35;
 const sfxCache = new Map();
+let sfxExt = '';
+
+// pickSfxExt returns the first container the browser plays. Chrome, Firefox and
+// Edge take WebM; the rest fall back to Ogg, then to mp3.
+function pickSfxExt() {
+  if (sfxExt) return sfxExt;
+  const probe = document.createElement('audio');
+  const tries = [
+    ['webm', 'audio/webm; codecs=opus'],
+    ['ogg', 'audio/ogg; codecs=opus'],
+    ['mp3', 'audio/mpeg'],
+  ];
+  for (const [ext, type] of tries) {
+    if (probe.canPlayType && probe.canPlayType(type)) {
+      sfxExt = ext;
+      return ext;
+    }
+  }
+  sfxExt = 'webm';
+  return sfxExt;
+}
 
 function ensureSfx() {
   if (state.sfxCtx) return;
@@ -901,37 +993,53 @@ function ensureSfx() {
   }
 }
 
+// preloadSfx decodes the four cues once, so a click never waits for a fetch.
+function preloadSfx() {
+  ensureSfx();
+  const ctx = state.sfxCtx;
+  if (!ctx) return;
+  const ext = pickSfxExt();
+  for (const name of SFX_NAMES) {
+    if (sfxCache.has(name)) continue;
+    fetch(`sfx/${name}.${ext}`)
+      .then((r) => r.arrayBuffer())
+      .then((b) => ctx.decodeAudioData(b))
+      .then((buffer) => sfxCache.set(name, buffer))
+      .catch(() => {});
+  }
+}
+
+// playSfx plays one cue in full. A cue never waits in a line: it replaces the
+// one that is playing, so the newest event is the one that is heard.
 function playSfx(name) {
-  const cue = SFX[name];
-  if (!cue || !state.sfxCtx) return;
+  if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
   const ctx = state.sfxCtx;
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-  const start = (buffer) => {
-    try {
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      const gain = ctx.createGain();
-      gain.gain.value = 0.35;
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      src.start(0, cue.offset, cue.dur);
-    } catch {
-      // The context is gone; the next click builds a new one.
-    }
-  };
-  const cached = sfxCache.get(name);
-  if (cached) {
-    start(cached);
+  const buffer = sfxCache.get(name);
+  if (!buffer) {
+    // Not decoded yet: this cue is dropped, the file is tiny and the next
+    // click finds it ready.
     return;
   }
-  fetch(cue.url)
-    .then((r) => r.arrayBuffer())
-    .then((b) => ctx.decodeAudioData(b))
-    .then((buffer) => {
-      sfxCache.set(name, buffer);
-      start(buffer);
-    })
-    .catch(() => {});
+  if (state.sfxSource) {
+    try { state.sfxSource.stop(); } catch { /* already finished */ }
+    state.sfxSource = null;
+  }
+  try {
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.value = SFX_RATE;
+    src.connect(gain);
+    gain.connect(ctx.destination);
+    src.onended = () => {
+      if (state.sfxSource === src) state.sfxSource = null;
+    };
+    state.sfxSource = src;
+    src.start();
+  } catch {
+    // The context is gone; the next join builds a new one.
+  }
 }
 
 // ---------------------------------------------------------------- relay badge

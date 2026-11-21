@@ -133,13 +133,20 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		close(done)
 		conn.Close()
 		var peers []*Peer
-		if p.room != nil {
-			peers = s.hub.peersOf(p.room, p.id)
+		room := p.room
+		if room != nil {
+			peers = s.hub.peersOf(room, p.id)
 			s.hub.leave(p)
 		}
 		left, _ := json.Marshal(serverMsg{T: "peer-left", From: p.id})
 		for _, other := range peers {
 			other.enqueue(left)
+		}
+		if next := s.hub.adminOf(room); next != "" && next != p.id {
+			adminMsg := mustJSON(serverMsg{T: "admin", Admin: next})
+			for _, other := range peers {
+				other.enqueue(adminMsg)
+			}
 		}
 		if p.id != "" {
 			s.log.Debug("peer left")
@@ -202,11 +209,46 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			s.hub.broadcast(p, mustJSON(serverMsg{
 				T: "state", From: p.id, Mic: &mic, Cam: &cam,
 			}))
+		case "mod":
+			s.handleMod(p, m)
 		case "leave":
 			return
 		case "ping":
 			p.enqueueJSON(serverMsg{T: "pong"})
 		}
+	}
+}
+
+// handleMod runs one admin command. The server is the authority: a peer that
+// is not the admin is ignored, and the target must be in the same room.
+func (s *server) handleMod(p *Peer, m clientMsg) {
+	room := p.room
+	if room == nil || m.To == "" || m.To == p.id {
+		return
+	}
+	if s.hub.adminOf(room) != p.id {
+		return
+	}
+	switch m.Action {
+	case "admin":
+		if s.hub.setAdmin(room, m.To) {
+			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admin", Admin: m.To}))
+		}
+	case "mute":
+		if target := s.hub.peerOf(room, m.To); target != nil {
+			target.enqueueJSON(serverMsg{T: "mod", From: p.id, Action: "mute"})
+		}
+	case "kick":
+		target := s.hub.peerOf(room, m.To)
+		if target == nil {
+			return
+		}
+		target.enqueueJSON(serverMsg{T: "kicked", From: p.id})
+		// Give the notice a moment to leave the queue, then close the socket.
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			target.close()
+		}()
 	}
 }
 
@@ -247,9 +289,13 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 
 	existing := s.hub.peersOf(room, p.id)
+	admin := s.hub.adminOf(room)
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
-		peers = append(peers, peerInfo{ID: other.id, Name: other.name, Mic: other.mic, Cam: other.cam})
+		peers = append(peers, peerInfo{
+			ID: other.id, Name: other.name, Mic: other.mic, Cam: other.cam,
+			Admin: other.id == admin,
+		})
 	}
 
 	// Fresh, time limited relay credentials for this connection only.
@@ -263,11 +309,12 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		Self:  p.id,
 		Peers: peers,
 		Ice:   ice,
+		Admin: admin,
 	})
 
 	joinedMsg := mustJSON(serverMsg{
 		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Name: p.name, Mic: p.mic, Cam: p.cam},
+		Peer: &peerInfo{ID: p.id, Name: p.name, Mic: p.mic, Cam: p.cam, Admin: admin == p.id},
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)
