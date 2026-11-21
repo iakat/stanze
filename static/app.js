@@ -38,10 +38,8 @@ const state = {
   playCtx: null,      // the remote audio graph, so a peer can go over 100%
   screen: null,       // display stream while sharing
   screenSource: null,
-  mic: false,         // live in this call
+  mic: false,         // live in this call, and the stored choice
   cam: false,
-  prefMic: true,      // the choice kept in localStorage
-  prefCam: true,
   camId: '',          // deviceId of the chosen camera, '' = the system device
   micId: '',          // the same for the microphone
   devCams: [],        // last enumerateDevices() video inputs
@@ -757,10 +755,10 @@ function onDeviceChange() {
 // A refusal or a missing device never stops the join; the devices that did not
 // open stay off and a short status line says which ones.
 async function requestLocal() {
+  const wantMic = state.mic;
+  const wantCam = state.cam;
   state.mic = false;
   state.cam = false;
-  const wantMic = state.prefMic;
-  const wantCam = state.prefCam;
   if (!wantMic && !wantCam) {
     updateButtons();
     return;
@@ -997,7 +995,6 @@ async function enableMic() {
     refreshDevices();
   }
   state.mic = true;
-  state.prefMic = true;
   store('mic', 1);
   playSfx('timp');
   if (state.micGain) state.micGain.gain.value = 1;
@@ -1009,7 +1006,6 @@ async function enableMic() {
 function disableMic() {
   playSfx('hammer');
   state.mic = false;
-  state.prefMic = false;
   store('mic', 0);
   if (state.micGain) state.micGain.gain.value = 0;
   updateButtons();
@@ -1034,7 +1030,6 @@ async function enableCam() {
     refreshDevices();
   }
   state.cam = true;
-  state.prefCam = true;
   store('cam', 1);
   if (state.camTrack) state.camTrack.enabled = true;
   if (!state.screen) paintSelfCam(true);
@@ -1044,7 +1039,6 @@ async function enableCam() {
 
 function disableCam() {
   state.cam = false;
-  state.prefCam = false;
   store('cam', 0);
   // A disabled track keeps the device open, so the camera light stays on. Stop
   // the track and drop it: enableCam asks the device again, and the video
@@ -2008,8 +2002,8 @@ async function enterRoom(room, pass) {
   state.mirror = true;
   state.leaving = false;
   // The call starts with what the visitor chose last time.
-  state.mic = state.prefMic;
-  state.cam = state.prefCam;
+  state.mic = load('mic') !== '0';
+  state.cam = load('cam') !== '0';
   store('name', state.name);
   store('room', state.room);
   store('path', state.path);
@@ -3638,10 +3632,8 @@ function init() {
   // The last microphone, camera, path and rnnoise choice comes back, like the
   // name. No stored value means on: the join asks for both by default. A
   // stored off is honoured, and that device is not asked for at all.
-  state.prefMic = load('mic') !== '0';
-  state.prefCam = load('cam') !== '0';
-  state.mic = state.prefMic;
-  state.cam = state.prefCam;
+  state.mic = load('mic') !== '0';
+  state.cam = load('cam') !== '0';
   // The chosen devices come back like the on and off choices. An id is opaque
   // and only meaningful inside this browser profile, so a stale one is simply
   // not found and the system device is used.
