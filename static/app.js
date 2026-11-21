@@ -1344,6 +1344,9 @@ function routeAudio(peer, track) {
   peer.meter.fftSize = 1024;
   peer.audioSrc.connect(peer.meter);
   resumePlayback();
+  // A context that is still suspended after a resume attempt plays nothing.
+  // Say it, because the video looks correct and only the sound is missing.
+  if (ctx.state === 'suspended') say('the browser holds the audio output; tap the page once to hear the room');
 }
 
 // dropAudio unhooks one peer from the output, so a closed peer is silent and
@@ -2628,6 +2631,7 @@ function ownMediaLine() {
   if (live) parts.push(micLevelLine());
   parts.push(state.rnnoiseOn ? 'rnnoise on' : 'rnnoise off');
   parts.push(`audio ${state.audioCtx ? state.audioCtx.state : 'none'}`);
+  parts.push(`out ${state.playCtx ? state.playCtx.state : 'none'}`);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
   if (cam && cam.width && cam.height) parts.push(`camera ${cam.width}x${cam.height}`);
   else parts.push('camera off');
@@ -3913,6 +3917,10 @@ function init() {
 
   $('join-form').addEventListener('submit', (event) => {
     event.preventDefault();
+    // Chrome ties the audio context to the click that created it. Create the
+    // playback context here, before the first await, or the join starts with a
+    // suspended context and the room stays silent while the video plays.
+    ensurePlayback();
     const room = normalizeRoom($('room').value);
     if (!room) {
       // Nothing typed: the suggested id is used.

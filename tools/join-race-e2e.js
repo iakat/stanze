@@ -372,19 +372,35 @@ function probe(page) {
   });
 }
 
-function pairView(page, id) {
-  return page.evaluate((peerId) => {
-    const p = window.e2eApp.state.peers.get(peerId);
-    if (!p) return { missing: true };
-    if (!p.video) return { missing: true, noVideo: true };
-    return {
-      w: p.video.videoWidth, h: p.video.videoHeight, t: p.video.currentTime,
-      ready: p.video.readyState, paused: p.video.paused,
+function pairView(page, target) {
+  return page.evaluate((want) => {
+    const s = window.e2eApp.state;
+    const race = window.__race || { ws: [] };
+    const list = [...s.peers.values()];
+    let p = null;
+    if (want && want.id) p = list.find((x) => x.id === want.id) || null;
+    if (!p && want && want.name) p = list.find((x) => x.name === want.name) || null;
+    if (!p && list.length === 1) p = list[0];
+    const base = {
+      self: s.self,
+      peers: list.length,
+      opens: (race.ws || []).filter((x) => x.dir === 'open').length,
+      closes: (race.ws || []).filter((x) => x.dir === 'close').length,
+      ids: list.map((x) => x.id),
+      names: list.map((x) => x.name),
+    };
+    if (!p) return Object.assign(base, { missing: true });
+    return Object.assign(base, {
+      id: p.id, name: p.name,
+      w: p.video ? p.video.videoWidth : 0, h: p.video ? p.video.videoHeight : 0,
+      t: p.video ? p.video.currentTime : 0,
+      ready: p.video ? p.video.readyState : -1, paused: p.video ? p.video.paused : null,
       keys: !!p.keys, readyState: p.ready, confirmed: !!p.confirmed,
       conn: p.pc ? p.pc.connectionState : 'none',
       sig: p.pc ? p.pc.signalingState : 'none',
-    };
-  }, id);
+      e2e: p.tile ? (p.tile.dataset.e2e || '') : '',
+    });
+  }, target || {});
 }
 
 function rtp(page, id) {
@@ -414,21 +430,37 @@ function rtp(page, id) {
 
 // waitPair is the assertion of this suite: both pages must show the other
 // peer's tile with a picture whose clock advances, within VIDEO_MS.
-async function waitPair(pageA, idA, pageB, idB, ms) {
+//
+// A socket that is replaced during the wait (a rollout of the host, a killed
+// pod, a network drop) gives the pair a fresh budget: the reconnect path is a
+// product feature and is not the race under test. The reconnect is counted and
+// reported, so a run that only passes thanks to it is visible as such.
+async function waitPair(pageA, targetA, pageB, targetB, ms) {
   const start = Date.now();
+  let budget = start;
+  let reconnects = 0;
   let last = null;
-  while (Date.now() - start < ms) {
-    const a1 = await pairView(pageA, idB).catch((e) => ({ err: String(e) }));
-    const b1 = await pairView(pageB, idA).catch((e) => ({ err: String(e) }));
+  let seenA = null;
+  let seenB = null;
+  while (Date.now() - budget < ms) {
+    const a1 = await pairView(pageA, targetB).catch((e) => ({ err: String(e) }));
+    const b1 = await pairView(pageB, targetA).catch((e) => ({ err: String(e) }));
     await sleep(700);
-    const a2 = await pairView(pageA, idB).catch((e) => ({ err: String(e) }));
-    const b2 = await pairView(pageB, idA).catch((e) => ({ err: String(e) }));
+    const a2 = await pairView(pageA, targetB).catch((e) => ({ err: String(e) }));
+    const b2 = await pairView(pageB, targetA).catch((e) => ({ err: String(e) }));
     last = { a: { first: a1, now: a2 }, b: { first: b1, now: b2 } };
+    if ((seenA && seenA !== a2.self) || (seenB && seenB !== b2.self)) {
+      reconnects++;
+      budget = Date.now();
+      console.log('RECONNECT during pair wait: self ' + seenA + '->' + a2.self + ' / ' + seenB + '->' + b2.self);
+    }
+    seenA = a2.self;
+    seenB = b2.self;
     const aOk = !!(a2 && a2.w > 0 && a2.t > (a1.t || 0) + 0.02);
     const bOk = !!(b2 && b2.w > 0 && b2.t > (b1.t || 0) + 0.02);
-    if (aOk && bOk) return { ok: true, waited: Date.now() - start, view: last };
+    if (aOk && bOk) return { ok: true, waited: Date.now() - start, view: last, reconnects };
   }
-  return { ok: false, waited: Date.now() - start, view: last };
+  return { ok: false, waited: Date.now() - start, view: last, reconnects };
 }
 
 function roomName(tag) {
@@ -489,21 +521,32 @@ async function runAttempt(browser, scenario, cycle) {
 
     if (scenario.after) await scenario.after(pages).catch((e) => { rec.afterError = String(e).slice(0, 200); });
 
-    // With a reload the peer id of B changes; the id is read fresh below.
+    // With a reload the peer id of B changes; the id is read fresh below and
+    // the wait also matches on the sealed name, so a reconnect is not mistaken
+    // for a missing peer.
     const idA = await pages.a.page.evaluate(() => window.e2eApp.state.self);
     const idB = await pages.b.page.evaluate(() => window.e2eApp.state.self);
     rec.idA = idA;
     rec.idB = idB;
 
-    const waited = await waitPair(pages.a.page, idA, pages.b.page, idB, VIDEO_MS);
+    const waited = await waitPair(pages.a.page, { id: idB, name: 'bo' }, pages.b.page, { id: idA, name: 'ana' }, VIDEO_MS);
     rec.view = waited.view;
     rec.mediaMs = waited.waited;
+    rec.reconnects = waited.reconnects;
     if (!waited.ok) {
       rec.how = 'no-video';
-      rec.rtpA = await rtp(pages.a.page, idB).catch((e) => ({ err: String(e) }));
-      rec.rtpB = await rtp(pages.b.page, idA).catch((e) => ({ err: String(e) }));
+      const nowA = await pages.a.page.evaluate(() => window.e2eApp.state.self).catch(() => '?');
+      const nowB = await pages.b.page.evaluate(() => window.e2eApp.state.self).catch(() => '?');
+      rec.selfNow = { a: nowA, b: nowB };
+      rec.rtpA = await rtp(pages.a.page, (rec.view.a.now || {}).id || idB).catch((e) => ({ err: String(e) }));
+      rec.rtpB = await rtp(pages.b.page, (rec.view.b.now || {}).id || idA).catch((e) => ({ err: String(e) }));
       return { ok: false, rec, pages, errors: { A: errorsA, B: errorsB, C: errorsC } };
     }
+
+    const idNowA = (rec.view.a.now || {}).id || idA;
+    const idNowB = (rec.view.b.now || {}).id || idB;
+    rec.idNowA = idNowA;
+    rec.idNowB = idNowB;
 
     // The counters must move in both directions too: a picture that decodes
     // while the sealed frame path is idle is not the path under test.
@@ -516,8 +559,8 @@ async function runAttempt(browser, scenario, cycle) {
       a: { enc: c2A.encryptFrames, dec: c2A.decryptFrames, movedEnc: c2A.encryptFrames > c1A.encryptFrames, movedDec: c2A.decryptFrames > c1A.decryptFrames, errors: c2A.workerErrors },
       b: { enc: c2B.encryptFrames, dec: c2B.decryptFrames, movedEnc: c2B.encryptFrames > c1B.encryptFrames, movedDec: c2B.decryptFrames > c1B.decryptFrames, errors: c2B.workerErrors },
     };
-    rec.rtpA = await rtp(pages.a.page, idB).catch((e) => ({ err: String(e) }));
-    rec.rtpB = await rtp(pages.b.page, idA).catch((e) => ({ err: String(e) }));
+    rec.rtpA = await rtp(pages.a.page, idNowB).catch((e) => ({ err: String(e) }));
+    rec.rtpB = await rtp(pages.b.page, idNowA).catch((e) => ({ err: String(e) }));
     const countersOk = rec.counters.a.movedEnc && rec.counters.b.movedEnc
       && rec.counters.a.movedDec && rec.counters.b.movedDec;
     if (!countersOk) {
