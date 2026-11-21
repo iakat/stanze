@@ -3605,10 +3605,10 @@ function sealedIdentityRow(peer) {
   const state = document.createElement('span');
   state.className = 'id-state';
   state.dataset.pin = what;
-  state.textContent = what === 'known' ? 'identity pinned'
-    : what === 'changed' ? 'identity changed'
-      : what === 'rollback' ? 'old key came back'
-        : 'identity unverified';
+  state.textContent = what === 'known' ? 'pinned'
+    : what === 'changed' ? 'changed'
+      : what === 'rollback' ? 'old key back'
+        : 'unverified';
   const which = document.createElement('span');
   which.className = 'id-fp';
   which.textContent = peer.fp || 'no fingerprint yet';

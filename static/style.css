@@ -429,8 +429,8 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  max-width: calc(100% - 12px);
-  padding: 5px 9px 6px;
+  max-width: calc(100% - 2px);
+  padding: 5px 6px 6px;
   background: var(--panel);
   border: 2px solid;
   border-color: #fff var(--edge) var(--edge) #fff;
@@ -631,11 +631,8 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .id-state[data-pin="changed"],
 .id-state[data-pin="rollback"] { color: #6b0000; }
 
-.id-fp {
-  color: #2b2b2b;
-  font-family: "Stanze Mono", "Courier New", monospace;
-  letter-spacing: 0.02em;
-}
+.id-fp { white-space: nowrap; color: #2b2b2b;
+  font-family: "Stanze Mono", "Courier New", monospace; letter-spacing: 0.02em; }
 
 .pin-btn {
   color: #1a1a1a;
