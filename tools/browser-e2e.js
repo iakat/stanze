@@ -481,13 +481,13 @@ async function stats(page) {
     // same fragment would only scroll.
     await pageA.reload({ waitUntil: 'load', timeout: 60000 });
     const restored = await pageA.evaluate(() => ({
-      prefMic: state.prefMic,
-      prefCam: state.prefCam,
+      mic: state.mic,
+      cam: state.cam,
       path: document.getElementById('path').value,
       room: document.getElementById('room').value,
       name: document.getElementById('name').value,
     }));
-    check('the camera off choice is stored and comes back', restored.prefCam === false && restored.prefMic === true,
+    check('the camera off choice is stored and comes back', restored.cam === false && restored.mic === true,
       JSON.stringify(restored));
     check('the room and the name still prefill', restored.room === room && restored.name === 'alice', JSON.stringify(restored));
     await pageA.click('#enter-btn');
