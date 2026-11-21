@@ -263,10 +263,20 @@ function send(msg) {
   // line in the clear.
   if (state.sealed) auditWire('out', raw);
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    // A key frame request is a hint, not a step: a second request for the same
+    // peer says the same thing, so the newer one takes the older slot and the
+    // queue never fills with requests that a later one makes moot.
+    if (msg.t === 'keyframe' && msg.to) {
+      const at = state.outbox.findIndex((item) => item.t === 'keyframe' && item.to === msg.to);
+      if (at !== -1) {
+        state.outbox[at] = { t: msg.t, to: msg.to, raw };
+        return;
+      }
+    }
     // Keep the newest frames: an offer outranks the ICE of a peer that the
     // close already dropped.
     if (state.outbox.length >= OUTBOX_MAX) state.outbox.shift();
-    state.outbox.push(raw);
+    state.outbox.push({ t: msg.t || '', to: msg.to || '', raw });
     return;
   }
   state.ws.send(raw);
@@ -278,9 +288,9 @@ function flushOutbox() {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const queued = state.outbox.splice(0);
-  for (const raw of queued) {
+  for (const item of queued) {
     try {
-      ws.send(raw);
+      ws.send(item.raw);
     } catch {
       break;
     }
