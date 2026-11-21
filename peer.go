@@ -90,7 +90,7 @@ type iceServer struct {
 }
 
 // clientMsg is the whole client to server vocabulary: join, offer, answer,
-// ice-candidate, leave.
+// ice-candidate, keyframe request, leave.
 type clientMsg struct {
 	T         string          `json:"t"`
 	Room      string          `json:"room,omitempty"`
@@ -120,8 +120,8 @@ type clientMsg struct {
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
-// peer-left, offer, answer, ice-candidate, state, admin, mod, kicked, chat,
-// error, pong.
+// peer-left, offer, answer, ice-candidate, keyframe request, state, admin, mod,
+// kicked, chat, error, pong.
 type serverMsg struct {
 	T         string          `json:"t"`
 	Self      string          `json:"self,omitempty"`

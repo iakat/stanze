@@ -198,6 +198,13 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.hub.relay(p, m.To, mustJSON(serverMsg{T: "ice", From: p.id, Candidate: m.Candidate}))
+		case "keyframe":
+			// A receiver without a picture asks the sender for a key frame.
+			// The message carries no media and no room content.
+			if m.To == "" {
+				continue
+			}
+			s.hub.relay(p, m.To, mustJSON(serverMsg{T: "keyframe", From: p.id}))
 		case "state":
 			// A mute or camera toggle is a small indicator for the other
 			// tiles. It carries no media, and the server keeps the last value
