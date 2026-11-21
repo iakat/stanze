@@ -18,7 +18,6 @@ func main() {
 		"gen":      js.FuncOf(gen),
 		"initiate": js.FuncOf(initiate),
 		"respond":  js.FuncOf(respond),
-		"verify":   js.FuncOf(verify),
 		// One gate for a pair: the peer's identity signature and its key
 		// confirmation tag, both or neither.
 		"proved":   js.FuncOf(proved),
@@ -340,31 +339,6 @@ func idfp(_ js.Value, args []js.Value) any {
 		return fail(pq.ErrShape)
 	}
 	return reply(map[string]string{"fp": pq.Fingerprint(id)})
-}
-
-func verify(_ js.Value, args []js.Value) any {
-	var in struct {
-		Key        string `json:"key"`
-		Transcript string `json:"transcript"`
-		Tag        string `json:"tag"`
-	}
-	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
-		return reply(map[string]any{"ok": false, "error": err.Error()})
-	}
-	key, err := b64d(in.Key)
-	if err != nil {
-		return reply(map[string]any{"ok": false, "error": err.Error()})
-	}
-	tr, err := b64d(in.Transcript)
-	if err != nil {
-		return reply(map[string]any{"ok": false, "error": err.Error()})
-	}
-	tag, err := b64d(in.Tag)
-	if err != nil {
-		return reply(map[string]any{"ok": false, "error": err.Error()})
-	}
-	ok := pq.VerifyConfirm(pq.Keys{RecvMedia: key}, tr, tag)
-	return reply(map[string]any{"ok": ok})
 }
 
 func seal(_ js.Value, args []js.Value) any {
