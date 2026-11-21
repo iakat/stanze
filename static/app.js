@@ -281,13 +281,10 @@ function makeTile(id, name, local = false) {
     </div>`}
     <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span></div>
     ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
-  tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
-  tile.querySelector('.avatar').textContent = name || '?';
-  if (!local) {
-    // A remote guest is heard through its own gain node, so the video element
-    // only ever carries pictures and stays muted.
-    tile.querySelector('video').muted = true;
-  }
+  paintName(tile, name, local);
+  // A remote guest is heard through its own gain node, so the video element
+  // only ever carries pictures and stays muted.
+  if (!local) tile.querySelector('video').muted = true;
   if (!local) wireDots(tile);
   $('grid').appendChild(tile);
   return tile;
@@ -394,8 +391,7 @@ function markAdmins() {
   const mine = isAdmin(state.self);
   document.body.classList.toggle('is-admin', mine);
   for (const peer of state.peers.values()) {
-    peer.admin = isAdmin(peer.id);
-    applyFlags(peer.tile, peer.mic, peer.cam, peer.admin);
+    applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
   }
   const self = document.querySelector('.tile[data-local="yes"]');
   applyFlags(self, state.mic, state.cam, mine);
@@ -1365,8 +1361,7 @@ function dropAudio(peer) {
 // sendState tells the room that the microphone or the camera changed. The
 // other clients show it as a small flag on the tile.
 function sendState() {
-  const self = document.querySelector('.tile[data-local="yes"]');
-  applyFlags(self, state.mic, state.cam, isAdmin(state.self));
+  refreshSelf();
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
     send({ t: 'state', mic: state.mic, cam: state.cam });
   }
@@ -2195,7 +2190,6 @@ function leave(message) {
   // needs no retyping.
   if (was) $('room').value = was;
   else suggestRoom();
-  state.reconnectDelay = 500;
   if (message) say(message);
 }
 
