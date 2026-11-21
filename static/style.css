@@ -3,9 +3,9 @@
  * one every window manager shipped.
  *
  * Two rules hold the whole sheet, and they are measured, not eyeballed:
- * the body is 15 px and nothing is smaller than 12 px, and every text pair
- * reaches 7:1 or better, down to the smallest label. On the grey panel that
- * means ink of #2b2b2b or darker, so the secondary text is a dark grey and
+ * the body is 16 px and nothing is smaller than 13 px, and every text pair
+ * reaches 8:1 or better, down to the smallest label. On the grey panel that
+ * means ink of #262626 or darker, so the secondary text is a dark grey and
  * not a mid grey. */
 
 :root {
@@ -13,18 +13,18 @@
   --panel-hi: #dfdfdf;
   --panel-lo: #808080;
   --edge: #404040;
-  --ink: #1a1a1a;      /* 9.6:1 on the panel, 16.9:1 on white */
-  --soft: #2b2b2b;     /* 7.8:1 on the panel, 14.2:1 on white */
-  --grey: #565656;     /* 7.4:1 on white */
+  --ink: #141414;      /* 10.1:1 on the panel, 18.4:1 on white */
+  --soft: #262626;     /* 8.3:1 on the panel, 15.1:1 on white */
+  --grey: #4a4a4a;     /* 8.9:1 on white */
   --navy: #000080;     /* 8.8:1 on the panel, 16:1 on white */
-  --navy-soft: #dcebff; /* 7.6:1 at the light end of the title bar */
-  --green: #003a00;    /* 7.2:1 on the panel, 13.1:1 on white */
-  --red: #6b0000;      /* 7.1:1 on the panel, 12.9:1 on white */
-  --amber: #442c00;    /* 7.2:1 on the panel */
-  --fs: 15px;
-  --fs-small: 14px;
-  --fs-smaller: 13px;
-  --fs-tiny: 12px;
+  --navy-soft: #f6faff; /* 8.7:1 at the light end of the title bar */
+  --green: #002b00;    /* 8.6:1 on the panel, 15.6:1 on white */
+  --red: #520000;      /* 8.5:1 on the panel, 15.5:1 on white */
+  --amber: #301e00;    /* 8.8:1 on the panel */
+  --fs: 16px;
+  --fs-small: 15px;
+  --fs-smaller: 14px;
+  --fs-tiny: 13px;
 }
 
 /* Arial metrics, because Arial was the desktop sans of the era, but shipped
@@ -95,7 +95,7 @@ body {
   border-color: #fff #000 #000 #fff;
   display: inline-block;
 }
-.tbcap.close { text-align: center; line-height: 14px; font-size: var(--fs-smaller); color: var(--ink); }
+.tbcap.close { text-align: center; line-height: 15px; font-size: var(--fs-smaller); color: var(--ink); }
 
 .window-body { padding: 12px 14px 10px; }
 
@@ -143,6 +143,9 @@ input, select {
   min-height: 26px;
 }
 select { padding: 2px 3px; }
+/* The placeholder is text, so it is measured like text: 8.9:1 on the white
+ * field, and never left at the browser default that fades to a mid grey. */
+::placeholder { color: var(--grey); opacity: 1; }
 input:focus, select:focus { outline: 1px dotted var(--ink); outline-offset: -3px; }
 
 label {
@@ -239,7 +242,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #eaffef;
-  background: #1c5b2a;
+  background: #17501f;
   border: 1px solid #2f8b45;
   white-space: nowrap;
   overflow: hidden;
@@ -272,7 +275,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   padding: 1px;
 }
 .chat { width: 290px; }
-.stats { width: 260px; }
+.stats { width: 300px; }
 .chat-head, .stats-head {
   background: var(--navy);
   color: #fff;
@@ -340,7 +343,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .file-fill { display: block; height: 100%; width: 0; background: var(--navy); }
 .file-status { display: block; color: var(--soft); font-size: var(--fs-tiny); }
 .file-acts { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
-.file-acts button { font-size: var(--fs-tiny); min-height: 20px; padding: 1px 6px; }
+.file-acts button { font-size: var(--fs-tiny); min-height: 22px; padding: 1px 6px; }
 .file-save { color: var(--navy); font-weight: bold; font-size: var(--fs-tiny); }
 .file-save:focus-visible { outline: 1px dotted var(--ink); outline-offset: 1px; }
 
@@ -375,20 +378,20 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 }
 .tile.mirrored video { transform: scaleX(-1); }
 .tile.screenshare video { object-fit: contain; }
-/* The centre name stands on a black tile, so it is light: 8:1 on #101010. */
+/* The centre name stands on a black tile, so it is light: 9.2:1 on #101010. */
 .tile .avatar {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
   padding: 12px 16px;
-  font-size: clamp(15px, 2.2vw, 26px);
+  font-size: clamp(16px, 2.2vw, 28px);
   line-height: 1.2;
   letter-spacing: 1px;
   text-align: center;
   text-transform: uppercase;
   overflow-wrap: anywhere;
-  color: #a8a8a8;
+  color: #b4b4b4;
 }
 .tile.playing .avatar { display: none; }
 /* The camera is off: the tile keeps the black frame of a disabled track out
@@ -494,7 +497,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   padding: 2px 6px;
   background: #000;
   color: #fff;
-  font-size: 11px;
+  font-size: var(--fs-tiny);
   line-height: 1.3;
   letter-spacing: .04em;
   white-space: nowrap;
@@ -532,7 +535,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   border: 1px solid;
   border-color: #fff var(--edge) var(--edge) #fff;
   font-size: var(--fs-tiny);
-  line-height: 14px;
+  line-height: 16px;
   color: var(--ink);
 }
 .tile .vol-range {
@@ -555,7 +558,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   min-width: 24px;
   min-height: 22px;
   padding: 0 4px;
-  line-height: 18px;
+  line-height: 1.2;
   font-size: var(--fs);
   display: none;
 }
@@ -586,9 +589,30 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 .tile .menu button:hover { background: var(--navy); color: #fff; }
 
-.srow { margin-bottom: 7px; }
-.sname { font-weight: bold; color: var(--navy); }
-.sline { color: var(--ink); }
+/* One card per person or per group: a name, then key/value lines. The key is
+   small and quiet on the left, the value sits on the right in tabular figures,
+   so a column of numbers reads in one look and nothing has to be parsed out of
+   a sentence. */
+.srow {
+  padding: 6px 0 3px;
+  border-top: 1px solid #0000001f;
+}
+.stats-body > .srow:first-child { border-top: 0; padding-top: 0; }
+.sname { font-weight: bold; color: var(--navy); margin-bottom: 1px; }
+.sline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink);
+  line-height: 1.55;
+}
+.sline .sk { flex: none; min-width: 54px; color: var(--soft); }
+.sline .sv {
+  margin-left: auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
 .sline.good { color: var(--green); }
 .sline.bad { color: var(--red); }
 
@@ -651,32 +675,32 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 
 /* A pin is a small word on the tile and a line on the code card. The colours are
    written out rather than taken from the sheet above, so this block keeps its
-   contrast if the rest of the palette is redrawn: each is at least 7:1 on the
+   contrast if the rest of the palette is redrawn: each is at least 8:1 on the
    grey panel. Nothing here is rounded, because nothing else is. */
 .badge.pincount {
   margin-left: 6px;
-  color: #1a1a1a;
+  color: #141414;
   background: #dfdfdf;
   border: 1px solid #808080;
   padding: 0 4px;
-  font-size: 12px;
+  font-size: var(--fs-tiny);
 }
 
 .pin {
-  color: #1a1a1a;
+  color: #141414;
   background: #dfdfdf;
   border: 1px solid #808080;
   padding: 0 3px;
-  font-size: 12px;
+  font-size: var(--fs-tiny);
   white-space: nowrap;
 }
 
 /* An unverified guest is red: the code proved that a secret is shared, not who
    holds it. A pinned guest is green and carries the local name. */
 .pin[data-pin="new"],
-.pin[data-pin="rollback"] { color: #8a0000; border-color: #8a0000; background: #f0d8d8; }
-.pin[data-pin="known"] { color: #003a00; border-color: #1c5b2a; background: #d7ead7; }
-.pin[data-pin="changed"] { color: #6b0000; border-color: #6b0000; background: #f0d8d8; }
+.pin[data-pin="rollback"] { color: #770000; border-color: #770000; background: #f0d8d8; }
+.pin[data-pin="known"] { color: #002b00; border-color: #17501f; background: #d7ead7; }
+.pin[data-pin="changed"] { color: #520000; border-color: #520000; background: #f0d8d8; }
 
 /* Only a named pin takes the pointer, because only it does something: a click
    asks for a new name for a device that is already known. */
@@ -686,22 +710,22 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 /* The tile words say unverified in red, and they are gone once the pin names
    the guest. These two selectors sit after the connection colours, so they win
    on a link that is also connected. */
-.tile .state[data-e2e="unverified"] { color: #8a0000; }
-.tile .state[data-e2e="failed"] { color: #a00000; }
+.tile .state[data-e2e="unverified"] { color: #520000; }
+.tile .state[data-e2e="failed"] { color: #520000; }
 
 .id-row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
-  margin-top: 3px; font-size: 12px; }
+  margin-top: 3px; font-size: var(--fs-tiny); }
 
-.id-state { color: #1a1a1a; }
-.id-state[data-pin="new"] { color: #8a0000; }
+.id-state { color: #141414; }
+.id-state[data-pin="new"] { color: #520000; }
 .id-state[data-pin="changed"],
-.id-state[data-pin="rollback"] { color: #6b0000; }
+.id-state[data-pin="rollback"] { color: #520000; }
 
-.id-fp { white-space: nowrap; color: #2b2b2b;
+.id-fp { white-space: nowrap; color: #242424;
   font-family: "Stanze Mono", "Courier New", monospace; }
 
-.pin-btn { color: #1a1a1a; background: #c0c0c0; border: 2px outset #dfdfdf;
-  padding: 0 4px; font: inherit; font-size: 12px; cursor: pointer; }
+.pin-btn { color: #141414; background: #c0c0c0; border: 2px outset #dfdfdf;
+  padding: 0 4px; font: inherit; font-size: var(--fs-tiny); cursor: pointer; }
 
 .pin-btn:active { border-style: inset; }
 .pin-btn:focus-visible { outline: 2px solid #000080; outline-offset: 1px; }
