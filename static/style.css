@@ -649,15 +649,8 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .id-fp { white-space: nowrap; color: #2b2b2b;
   font-family: "Stanze Mono", "Courier New", monospace; }
 
-.pin-btn {
-  color: #1a1a1a;
-  background: #c0c0c0;
-  border: 2px outset #dfdfdf;
-  padding: 0 4px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
+.pin-btn { color: #1a1a1a; background: #c0c0c0; border: 2px outset #dfdfdf;
+  padding: 0 4px; font: inherit; font-size: 12px; cursor: pointer; }
 
 .pin-btn:active { border-style: inset; }
 .pin-btn:focus-visible { outline: 2px solid #000080; outline-offset: 1px; }
