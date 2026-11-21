@@ -299,7 +299,7 @@ func assetNames() []string {
 		// The house typeface: Arial metrics, shipped with the page so every
 		// browser puts the same letters on the same pixels.
 		"lsans.woff2", "lsans-bold.woff2",
-		"rnnoise-sync.js", "rnnoise-worklet.js", workletBundle,
+		"rnnoise-sync.js", "rnnoise-worklet.js", "rnnoise.wasm", workletBundle,
 		// The sealed half of the one client: the frame worker and the
 		// WebAssembly build of the key agreement. The old e2e page is gone.
 		"e2e-transform.js", "wasm_exec.js", "pq.wasm",

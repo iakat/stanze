@@ -1,5 +1,6 @@
-/* RNNoise AudioWorklet. The wasm module is inlined in rnnoise-sync.js and
- * loaded synchronously here, which is the only way a worklet can get wasm.
+/* RNNoise AudioWorklet. The wasm module is a separate binary file; the page
+ * fetches it and hands the bytes over in processorOptions, because a worklet
+ * can only instantiate wasm synchronously from bytes it already holds.
  *
  * RNNoise works on 480 sample frames (10 ms at 48 kHz). The worklet buffers
  * the 128 sample render quanta into 480 sample frames and pads the output
@@ -10,9 +11,10 @@
 const FRAME = 480;
 
 class RNNoiseProcessor extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
-    this.module = self.createRNNWasmModuleSync();
+    const wasm = options && options.processorOptions && options.processorOptions.wasm;
+    this.module = self.createRNNWasmModuleSync({ wasmBinary: wasm });
     this.state = this.module._rnnoise_create(0);
     this.inPtr = this.module._malloc(FRAME * 4);
     this.outPtr = this.module._malloc(FRAME * 4);
