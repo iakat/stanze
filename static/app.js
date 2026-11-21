@@ -1347,6 +1347,16 @@ function routeAudio(peer, track) {
     return;
   }
   dropAudio(peer);
+  // A silent element is the decode sink for the remote track. Chromium does not
+  // always pull the decoder for a source node alone, and then every node reads
+  // zeros while the packets arrive. A muted element adds no sound.
+  const pump = new Audio();
+  pump.muted = true;
+  pump.volume = 0;
+  pump.autoplay = true;
+  pump.srcObject = new MediaStream([track]);
+  pump.play().catch(() => {});
+  peer.pump = pump;
   peer.gain = ctx.createGain();
   peer.gain.gain.value = peer.vol / 100;
   peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
@@ -1378,6 +1388,11 @@ function dropAudio(peer) {
   if (peer.gain) {
     try { peer.gain.disconnect(); } catch { /* already gone */ }
     peer.gain = null;
+  }
+  if (peer.pump) {
+    try { peer.pump.pause(); } catch { /* already gone */ }
+    peer.pump.srcObject = null;
+    peer.pump = null;
   }
   if (peer.audioEl) {
     try { peer.audioEl.pause(); } catch { /* already gone */ }
