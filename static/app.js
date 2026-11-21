@@ -1686,6 +1686,7 @@ function connectPeer(id, initiator, mic, cam) {
     if (pc.connectionState === 'connected') {
       // The encodings exist now, so a cap that was too early applies here.
       capCameraSenders(pc);
+      paintRelay(peer);
     }
   };
 
@@ -3615,26 +3616,20 @@ win().e2eApp = {
 
 // ---------------------------------------------------------------- relay badge
 
-async function pollRelay() {
-  for (const peer of state.peers.values()) {
-    if (!peer.pc || peer.pc.connectionState !== 'connected') continue;
-    try {
-      const stats = await peer.pc.getStats();
-      let pairId = null;
-      const candidates = new Map();
-      stats.forEach((report) => {
-        if (report.type === 'transport' && report.selectedCandidatePairId) {
-          pairId = report.selectedCandidatePairId;
-        }
-        if (report.type === 'candidate-pair' && report.selected) pairId = pairId || report.id;
-        if (report.type === 'local-candidate') candidates.set(report.id, report);
-      });
-      const pair = pairId ? stats.get(pairId) : null;
-      const local = pair ? candidates.get(pair.localCandidateId) : null;
-      peer.tile.dataset.relay = local && local.candidateType === 'relay' ? 'yes' : 'no';
-    } catch {
-      /* stats are best effort */
-    }
+// paintRelay marks a tile when the link to that peer runs through the TURN
+// relay. The selected pair is read once, when the link comes up; a reconnect
+// runs this again.
+async function paintRelay(peer) {
+  try {
+    let pair = null;
+    const stats = await peer.pc.getStats();
+    stats.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.selected) pair = r;
+    });
+    const local = pair && stats.get(pair.localCandidateId);
+    peer.tile.dataset.relay = local && local.candidateType === 'relay' ? 'yes' : 'no';
+  } catch {
+    /* stats are best effort */
   }
 }
 
@@ -3793,7 +3788,6 @@ function init() {
     }
   });
 
-  setInterval(pollRelay, 5000);
   // The form shows a picker before the first permission: the labels are hidden,
   // so the options are numbered until a request has succeeded once.
   refreshDevices();
