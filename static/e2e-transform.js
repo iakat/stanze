@@ -9,10 +9,12 @@
 //
 // Frame layout on the wire:
 //   [1 byte version=1][12 byte random IV][ciphertext][16 byte GCM tag]
-// The GCM associated data binds the frame to the peer pair. A frame from
-// another pair, or one modified in flight, fails authentication.
+// The GCM associated data binds the frame to the peer pair, to the sender and
+// to the track it belongs to. A frame from another pair, a frame moved to
+// another track, a frame reflected to its sender, or one modified in flight,
+// fails authentication.
 
-const VERSION = 0x80;       // upper bits tag a pq-e2e v1 frame
+const VERSION = 0x80;       // upper bits tag a pq-e2e v2 frame
 const VERSION_MASK = 0xfe;  // bit 0 is free: it carries the codec key bit
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
@@ -36,8 +38,10 @@ function hex(bytes) {
   return out;
 }
 
-function aad(pair) {
-  return text.encode('pq-e2e v1 media ' + pair);
+function aad(pair, from, kind) {
+  // Both ends must build the same bytes, so this names the sender, not the
+  // local direction: the sender knows itself, the receiver knows its peer.
+  return text.encode('pq-e2e v2 media ' + pair + ' from ' + (from || '?') + ' ' + (kind || 'any'));
 }
 
 function counters(pair, dir, kind) {
@@ -91,6 +95,7 @@ async function transformFrame(frame, controller, options) {
   const dir = options.dir;
   const kind = options.kind || '';
   const slot = KEYS.get(pair);
+  const from = options.from || '';
   const st = counters(pair, dir, kind);
   const data = new Uint8Array(frame.data);
 
@@ -102,7 +107,7 @@ async function transformFrame(frame, controller, options) {
     }
     const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
     const sealed = new Uint8Array(await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: aad(pair), tagLength: 128 },
+      { name: 'AES-GCM', iv, additionalData: aad(pair, from, kind), tagLength: 128 },
       slot.enc,
       data,
     ));
@@ -145,7 +150,7 @@ async function transformFrame(frame, controller, options) {
     if (slot && slot.dec) {
       try {
         await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: data.slice(1, 1 + IV_BYTES), additionalData: aad(pair), tagLength: 128 },
+          { name: 'AES-GCM', iv: data.slice(1, 1 + IV_BYTES), additionalData: aad(pair, from, kind), tagLength: 128 },
           slot.dec,
           data.slice(1 + IV_BYTES),
         );
@@ -173,7 +178,7 @@ async function transformFrame(frame, controller, options) {
 
   try {
     const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: data.slice(1, 1 + IV_BYTES), additionalData: aad(pair), tagLength: 128 },
+      { name: 'AES-GCM', iv: data.slice(1, 1 + IV_BYTES), additionalData: aad(pair, from, kind), tagLength: 128 },
       slot.dec,
       data.slice(1 + IV_BYTES),
     );
