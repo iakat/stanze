@@ -2941,6 +2941,7 @@ function pinState(peer) {
   return 'new';
 }
 
+// pinLabelOf is the label this browser pinned under the fingerprint of a peer.
 function pinLabelOf(peer) {
   for (const rec of state.pins.values()) if (rec.fp === peer.fp) return rec.label;
   return peer.pinLabel || '';
@@ -2967,6 +2968,28 @@ function pinPeer(peer, label) {
     state.revoked.delete(peer.fp);
     idbDelete('revoked', peer.fp).catch(() => {});
   }
+  peer.pin = '';
+  peer.pinLabel = name;
+  paintPin(peer);
+  return 'known';
+}
+
+// renamePin moves a pin to a new label and keeps its fingerprint and first
+// sighting. A name that already holds another key goes through pinPeer, so a
+// rename can never hide a swapped device.
+function renamePin(peer, label) {
+  if (!peer || pinState(peer) !== 'known') return 'new';
+  const old = pinLabelOf(peer);
+  const name = String(label || '').trim().slice(0, 32);
+  if (!name || name === old) return 'known';
+  const held = state.pins.get(name);
+  if (held && held.fp !== peer.fp) return pinPeer(peer, name);
+  const was = state.pins.get(old);
+  state.pins.delete(old);
+  idbDelete('pins', old).catch(() => {});
+  const now = Date.now();
+  state.pins.set(name, { label: name, fp: peer.fp, first: was ? was.first : now, last: now });
+  idbPut('pins', name, state.pins.get(name)).catch(() => {});
   peer.pin = '';
   peer.pinLabel = name;
   paintPin(peer);
@@ -3028,6 +3051,16 @@ function paintPin(peer) {
       : what === 'rollback' ? 'old key came back'
         : 'unverified';
   chip.title = peer.fp ? 'identity ' + peer.fp : '';
+  // A named device keeps its pin, so the name can change later without asking
+  // for the fingerprint again. The click is the whole interface.
+  const named = what === 'known';
+  chip.dataset.action = named ? 'rename' : '';
+  if (named) {
+    chip.title = (chip.title ? chip.title + ' | ' : '') + 'click to rename';
+    chip.onclick = () => renamePin(peer, prompt('new name for this device', pinLabelOf(peer)) || '');
+  } else {
+    chip.onclick = null;
+  }
 }
 
 // storageAudit lists what this page keeps on disk, so the browser test can say
@@ -3556,15 +3589,24 @@ function sealedSetE2E(peer, status) {
 }
 
 // paintState is the one place a tile says how far the link is. A ready link is
-// called verified only when its fingerprint is one this browser pinned: a
-// signature proves continuity inside the call, which is a weaker claim.
+// called unverified, in red, until its fingerprint is one this browser pinned.
+// Once it is pinned the words go away: the tile then carries the guest's own
+// label and a green chip, and a second label beside the name says nothing new.
+// A signature alone proves continuity inside the call, which is a weaker claim.
 function paintState(peer) {
   if (!peer.tile) return;
   const badge = peer.tile.querySelector('.state');
   if (!badge) return;
-  badge.textContent = peer.ready === 'ready' ? (pinState(peer) === 'known' ? 'e2e ready' : 'e2e unverified')
-    : peer.ready === 'failed' ? 'e2e FAILED'
-      : peer.ready;
+  const known = peer.ready === 'ready' && pinState(peer) === 'known';
+  badge.hidden = known;
+  badge.dataset.e2e = known ? 'known'
+    : peer.ready === 'ready' ? 'unverified'
+      : peer.ready === 'failed' ? 'failed'
+        : '';
+  badge.textContent = known ? ''
+    : peer.ready === 'ready' ? 'e2e unverified'
+      : peer.ready === 'failed' ? 'e2e FAILED'
+        : peer.ready || '';
 }
 
 // sealedCodePanel builds the code card of one guest: a small heading, the six
@@ -3605,14 +3647,17 @@ function sealedIdentityRow(peer) {
   const state = document.createElement('span');
   state.className = 'id-state';
   state.dataset.pin = what;
-  state.textContent = what === 'known' ? 'pinned'
-    : what === 'changed' ? 'changed'
-      : what === 'rollback' ? 'old key back'
-        : 'unverified';
+  state.textContent = what === 'changed' ? 'changed'
+    : what === 'rollback' ? 'old key back' : 'unverified';
   const which = document.createElement('span');
   which.className = 'id-fp';
   which.textContent = peer.fp || 'no fingerprint yet';
-  row.append(state, which);
+  // a pinned pair shows its label as the button: one click renames it
+  if (what === 'known') {
+    row.append(pinButton(pinLabelOf(peer) || 'pinned',
+      () => renamePin(peer, prompt('new name for this device', pinLabelOf(peer)) || '')));
+  } else row.append(state);
+  row.append(which);
   if (what === 'new' && peer.fp) {
     row.append(pinButton('pin this device', () => pinPeer(peer, prompt('label for this device', peer.name) || '')));
   } else if (what === 'changed' || what === 'rollback') {
@@ -3976,6 +4021,10 @@ win().e2eApp = {
   resetDevice: (peerId, label) => {
     const peer = state.peers.get(peerId);
     return peer ? resetDevice(peer, label) : 'no peer';
+  },
+  rename: (peerId, label) => {
+    const peer = state.peers.get(peerId);
+    return peer ? renamePin(peer, label) : 'no peer';
   },
   storageAudit,
   pinCount: () => ({ verified: verifiedPeers(), total: state.peers.size }),
