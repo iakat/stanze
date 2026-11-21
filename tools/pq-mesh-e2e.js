@@ -253,14 +253,31 @@ async function dump(page, label, errors) {
       }, bobPeer.id)) === 'bob');
     check('the pin is stored with its fingerprint, not a name',
       (await a.page.evaluate(() => window.e2eApp.pins())).some((r) => r.label === 'bob' && r.fp === bobPeer.fp));
-    check('the pinned guest reads ready, the other does not',
+    // The words on the tile are for the doubt only: a pinned guest keeps the
+    // green named chip and loses the e2e line, an unpinned one keeps it in red.
+    check('a pinned guest drops the e2e words from the tile',
       (await a.page.evaluate((id) => {
         const t = document.querySelector('.tile[data-peer="' + id + '"] .state');
-        return t ? t.textContent : '';
-      }, bobPeer.id)) === 'e2e ready'
-      && (await a.page.evaluate(() => [...document.querySelectorAll('.tile')]
+        return !!t && t.hidden === true && t.textContent === '';
+      }, bobPeer.id)) === true);
+    check('no tile calls itself e2e ready any more',
+      (await a.page.evaluate(() => [...document.querySelectorAll('.tile')]
         .filter((t) => t.dataset.peer && t.querySelector('.state')
-          && t.querySelector('.state').textContent === 'e2e ready').length)) === 1);
+          && t.querySelector('.state').textContent === 'e2e ready').length)) === 0);
+    check('an unpinned guest says e2e unverified, in the unverified colour',
+      (await a.page.evaluate(() => [...document.querySelectorAll('.tile .state')]
+        .filter((s) => s.textContent === 'e2e unverified' && s.dataset.e2e === 'unverified'
+          && !s.hidden).length)) >= 1);
+    const renamed = await a.page.evaluate((id) => window.e2eApp.rename(id, 'bob at the studio'), bobPeer.id);
+    check('a click on a known pin renames it and keeps the key',
+      renamed === 'known'
+      && (await a.page.evaluate((id) => {
+        const chip = document.querySelector('.tile[data-peer="' + id + '"] .pin');
+        return chip ? chip.textContent + '|' + chip.dataset.action : '';
+      }, bobPeer.id)) === 'bob at the studio|rename'
+      && (await a.page.evaluate(() => window.e2eApp.pins())).some((r) => r.label === 'bob at the studio' && r.fp === bobPeer.fp)
+      && !(await a.page.evaluate(() => window.e2eApp.pins())).some((r) => r.label === 'bob'));
+    await a.page.evaluate((id) => window.e2eApp.rename(id, 'bob'), bobPeer.id);
 
     // Both survive a reload: the identity comes back from the local database,
     // and so does the pin, which is how a changed key later becomes visible.

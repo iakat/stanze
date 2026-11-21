@@ -620,14 +620,30 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   white-space: nowrap;
 }
 
-.pin[data-pin="known"] { color: #003a00; }
-.pin[data-pin="changed"] { color: #6b0000; border-color: #6b0000; }
+/* An unverified guest is red: the code proved that a secret is shared, not who
+   holds it. A pinned guest is green and carries the local name. */
+.pin[data-pin="new"],
+.pin[data-pin="rollback"] { color: #8a0000; border-color: #8a0000; background: #f0d8d8; }
+.pin[data-pin="known"] { color: #003a00; border-color: #1c5b2a; background: #d7ead7; }
+.pin[data-pin="changed"] { color: #6b0000; border-color: #6b0000; background: #f0d8d8; }
+
+/* Only a named pin takes the pointer, because only it does something: a click
+   asks for a new name for a device that is already known. */
+.tile .pin[data-action="rename"] { pointer-events: auto; cursor: pointer; }
+.tile .pin[data-action="rename"]:hover { background: #e6f4e6; }
+
+/* The tile words say unverified in red, and they are gone once the pin names
+   the guest. These two selectors sit after the connection colours, so they win
+   on a link that is also connected. */
+.tile .state[data-e2e="unverified"] { color: #8a0000; }
+.tile .state[data-e2e="failed"] { color: #a00000; }
 
 .id-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
   margin-top: 3px; font-size: 12px; }
 
 .id-state { color: #1a1a1a; }
 .id-state[data-pin="known"] { color: #003a00; }
+.id-state[data-pin="new"] { color: #8a0000; }
 .id-state[data-pin="changed"],
 .id-state[data-pin="rollback"] { color: #6b0000; }
 
