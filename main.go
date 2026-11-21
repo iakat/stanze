@@ -296,6 +296,9 @@ func loadOpenmoji(dir string, out map[string][]byte) error {
 func assetNames() []string {
 	return []string{
 		"index.html", "app.js", "style.css", "favicon.svg",
+		// The house typeface: Arial metrics, shipped with the page so every
+		// browser puts the same letters on the same pixels.
+		"lsans.woff2", "lsans-bold.woff2",
 		"rnnoise-sync.js", "rnnoise-worklet.js", workletBundle,
 		// The sealed half of the one client: the frame worker and the
 		// WebAssembly build of the key agreement. The old e2e page is gone.
@@ -343,6 +346,8 @@ func contentType(name string) string {
 		return "text/css; charset=utf-8"
 	case strings.HasSuffix(name, ".svg"):
 		return "image/svg+xml"
+	case strings.HasSuffix(name, ".woff2"):
+		return "font/woff2"
 	case strings.HasSuffix(name, ".wasm"):
 		return "application/wasm"
 	case strings.HasSuffix(name, ".mp3"):
@@ -359,7 +364,7 @@ func contentType(name string) string {
 // live only in the URL fragment, so no path or query ever carries them.
 func securityHeaders(next http.Handler, log *slog.Logger) http.Handler {
 	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; " +
-		"media-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'none'; " +
+		"media-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'self'; " +
 		"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
