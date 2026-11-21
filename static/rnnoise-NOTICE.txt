@@ -1,8 +1,0 @@
-rnnoise-sync.js is the synchronous wasm build of RNNoise.
-
-RNNoise is Copyright (c) 2017 Jean-Marc Valin, Xiph.Org Foundation,
-licensed under the BSD 3-Clause licence.
-
-The wasm wrapper (rnnoise-wasm) is Copyright (c) 2019 Jitsi, licensed
-under the Apache License 2.0. The wrapper's ES module export was renamed
-so the file can be loaded as an AudioWorklet script.

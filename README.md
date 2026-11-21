@@ -63,8 +63,11 @@ create route and no room can ever wait with nobody in it.
 Pressing enter asks for the camera and the microphone and starts the call with
 both on. A refusal or a missing device still joins, with the devices that did not
 open off, and a short status line says which ones. The browser remembers the
-microphone and camera choice, the media path and the rnnoise switch, and a stored
-camera off joins without asking for the camera again. Every remote tile carries a
+microphone and camera choice, the media path and the denoise switch, and a stored
+camera off joins without asking for the camera again. The noise filter is GTCRN:
+an MIT streaming model of 192 KiB in WebAssembly, with the model, the STFT and
+the inverse inside the one file, run from an `AudioWorkletNode` at the 48 kHz
+rate the microphone graph asks for. Every remote tile carries a
 volume slider from 0 to 200 percent (100 is normal, above 100 is a real boost),
 kept per participant name, and the stats button shows per participant audio and
 video bitrates, the round trip time and whether the path is direct or relayed.
