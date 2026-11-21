@@ -3447,14 +3447,15 @@ async function sealedOnProof(peer, msg) {
   }
   peer.keyPromise = sealedInstallKeys(peer);
   sealedSetE2E(peer, 'ready');
-  sealedAnnounceName(peer);
-  if (!peer.pc && String(state.self) < String(peer.id)) {
-    // The initiator builds the connection once the keys are in the worker.
-    Promise.resolve(peer.keyPromise).then((ok) => {
-      if (!ok || !state.peers.has(peer.id) || peer.pc || state.leaving) return;
-      connectPeer(peer.id, true);
-    });
-  }
+  // The name and the offer both wait for the keys in the worker: a name sent
+  // before that point is dropped by the guard and would never be sent again.
+  Promise.resolve(peer.keyPromise).then((ok) => {
+    if (!ok || !state.peers.has(peer.id) || state.leaving) return;
+    sealedAnnounceName(peer);
+    for (const held of peer.appPending || []) sealedHandleOpaque(peer.id, encOpaque(held));
+    peer.appPending = [];
+    if (!peer.pc && String(state.self) < String(peer.id)) connectPeer(peer.id, true);
+  });
 }
 
 function sealedHandleOpaque(from, b) {
@@ -3485,7 +3486,14 @@ function sealedHandleOpaque(from, b) {
       if (state.worker) state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id) });
       break;
     case 'app': {
-      if (!peer.keys || !peer.keysInstalled || !msg.b) return;
+      if (!msg.b) return;
+      // A frame can arrive while our own keys are still being installed. It is
+      // the only copy, and a drop would desync both counters for the whole
+      // pair, so hold it and fire it once the keys are in.
+      if (!peer.keys || !peer.keysInstalled) {
+        if ((peer.appPending = peer.appPending || []).length < 64) peer.appPending.push(msg);
+        return;
+      }
       // Both directions have their own counter. The socket is ordered, so the
       // next number is the only one that can be current; anything else is a
       // replay, a reorder or a forgery, and it is dropped before decryption.
@@ -3558,9 +3566,9 @@ function sendSealedChat() {
 // sealedSetName paints the decrypted name and moves the stored volume to it.
 function sealedSetName(peer, raw) {
   const name = cleanSealedName(raw);
-  if (!name || !peer.tile || peer.name === name) return;
+  if (!name || peer.name === name) return;
   peer.name = name;
-  paintName(peer.tile, name, false);
+  if (peer.tile) paintName(peer.tile, name, false);
   peer.vol = storedVolume(name);
   paintVolume(peer);
 }
@@ -3637,9 +3645,7 @@ function sealedCodePanel(peer) {
   return [head, row, text, sealedIdentityRow(peer)];
 }
 
-// sealedIdentityRow is the who of one pair, in the words the tile uses. The
-// guest can pin the fingerprint under a label of their own, and can say that a
-// changed device was reset, which keeps the old fingerprint on a revoked list.
+// sealedIdentityRow is the who of one pair: the pin label and the fingerprint.
 function sealedIdentityRow(peer) {
   const row = document.createElement('span');
   row.className = 'id-row';
