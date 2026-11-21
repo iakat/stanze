@@ -4,9 +4,6 @@ One line per work item. The top item is the most important.
 
 ## In work, not live yet
 
-- Fix the centre name of a tile: turn the camera on and then off, and the name in the middle of the tile is gone (coderobe 16:42).
-- Show the sealed code of a guest only while the pointer is over that tile (coderobe 16:42).
-- Make the sealed code panel look better: it is one long clipped line today (coderobe 16:42).
 
 ## Open
 
