@@ -22,6 +22,10 @@ const KEYS = new Map(); // pair -> { enc?: CryptoKey, dec?: CryptoKey }
 const STATS = new Map(); // pair|dir -> counters
 const FLUSH_EVERY = 30;
 
+// One entry per live transform. A pair has one per direction and kind, so the
+// key includes both: a video receiver and an audio receiver share pair and dir.
+const TRANSFORMS = new Map(); // pair|dir|kind -> { transformer, kind }
+
 function b64d(s) {
   const raw = atob(s);
   const out = new Uint8Array(raw.length);
@@ -59,8 +63,35 @@ function report(pair, dir, kind, st, force) {
   });
 }
 
+// keyFrame asks an encoder for a fresh key frame through the standard encoded
+// transform call. A receiving transformer sends the request over the media
+// path; a sending one has its own encoder emit the frame. Only video has key
+// frames, so an audio transform is skipped.
+function keyFrame(msg) {
+  let asked = 0;
+  for (const [key, entry] of TRANSFORMS) {
+    const parts = key.split('|');
+    if (parts[0] !== msg.pair) continue;
+    if (msg.dir && parts[1] !== msg.dir) continue;
+    if (entry.kind && entry.kind !== 'video') continue;
+    try {
+      if (typeof entry.transformer.generateKeyFrame === 'function') {
+        entry.transformer.generateKeyFrame();
+        asked++;
+      }
+    } catch (_err) {
+      /* this transformer can not nudge the encoder */
+    }
+  }
+  self.postMessage({ type: 'keyframe', pair: msg.pair, peer: msg.peer, dir: msg.dir || '', ok: asked > 0 });
+}
+
 self.onmessage = async (event) => {
   const msg = event.data || {};
+  if (msg.type === 'keyframe') {
+    keyFrame(msg);
+    return;
+  }
   if (msg.type !== 'keys') return;
   let slot = KEYS.get(msg.pair);
   if (!slot) {
@@ -199,6 +230,8 @@ async function transformFrame(frame, controller, options) {
 self.onrtctransform = (event) => {
   const transformer = event.transformer;
   const options = transformer.options || {};
+  const key = (options.pair || '') + '|' + (options.dir || '') + '|' + (options.kind || '');
+  TRANSFORMS.set(key, { transformer, kind: options.kind || '' });
   const stream = new TransformStream({
     transform(frame, controller) {
       return transformFrame(frame, controller, options);
@@ -207,5 +240,6 @@ self.onrtctransform = (event) => {
   transformer.readable
     .pipeThrough(stream)
     .pipeTo(transformer.writable)
-    .catch((err) => self.postMessage({ type: 'error', where: 'pipe', msg: String(err) }));
+    .catch((err) => self.postMessage({ type: 'error', where: 'pipe', msg: String(err) }))
+    .finally(() => TRANSFORMS.delete(key));
 };

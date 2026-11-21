@@ -60,6 +60,8 @@ const state = {
   fatal: '',
   statsTimer: null,
   statsBusy: false,
+  callStart: 0,       // ms at the join, for the header timer
+  callTimer: null,
   sfxCtx: null,
   sfxSource: null,
   lostSource: null,   // the loop that plays while the socket is down
@@ -67,6 +69,7 @@ const state = {
   lostWanted: false,
   speakTimer: null,   // the green light on each tile while a person talks
   ownSpoke: null,
+  outbox: [],         // signaling frames held while the socket is connecting
 
   // Sealed room state. Every field is inert until a sealed join: the plain
   // path never reads the worker, the identity or the frame counters.
@@ -108,7 +111,7 @@ const state = {
  *   'chat-text': HTMLInputElement, 'chat-note': HTMLElement, 'mic-btn': HTMLButtonElement,
  *   'cam-btn': HTMLButtonElement, 'share-btn': HTMLButtonElement,
  *   'stats-btn': HTMLButtonElement, 'stats-close': HTMLButtonElement,
- *   'leave-btn': HTMLButtonElement,
+ *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   quality: HTMLSelectElement, mirror: HTMLInputElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
@@ -247,14 +250,41 @@ function wsURL() {
   return proto + location.host + '/ws';
 }
 
+// A socket that is still connecting has no send path, and a frame dropped in
+// that window can cost the join: the offer produced right after `joined` may be
+// ready before the socket reports OPEN. Signals wait in one bounded queue
+// instead, and the queue is flushed once, after the join frame.
+const OUTBOX_MAX = 64;
+
 function send(msg) {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
   const raw = JSON.stringify(msg);
   // The audit sees every frame the relay sees, in both directions. It is the
   // client half of the proof that a sealed room never sends a name or a chat
   // line in the clear.
   if (state.sealed) auditWire('out', raw);
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    // Keep the newest frames: an offer outranks the ICE of a peer that the
+    // close already dropped.
+    if (state.outbox.length >= OUTBOX_MAX) state.outbox.shift();
+    state.outbox.push(raw);
+    return;
+  }
   state.ws.send(raw);
+}
+
+// flushOutbox hands the connecting window's frames to the socket in order. It
+// runs after the join frame, so the server never sees a peer frame first.
+function flushOutbox() {
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const queued = state.outbox.splice(0);
+  for (const raw of queued) {
+    try {
+      ws.send(raw);
+    } catch {
+      break;
+    }
+  }
 }
 
 // ---------------------------------------------------------------- tiles
@@ -413,10 +443,69 @@ function updateCount() {
   $('peer-count').textContent = total === 1 ? '1 peer' : `${live}/${total} peers`;
 }
 
+// ---------------------------------------------------------------- call clock
+
+// clockText renders a duration as h:mm:ss.
+function clockText(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// startCallClock counts from the moment the call UI appears, so the header
+// always shows how long the call has lasted.
+function startCallClock() {
+  stopCallClock();
+  state.callStart = Date.now();
+  $('call-timer').textContent = clockText(0);
+  state.callTimer = setInterval(() => {
+    if (!state.callStart) return;
+    $('call-timer').textContent = clockText(Date.now() - state.callStart);
+  }, 1000);
+}
+
+// stopCallClock ends the count and clears the field when the call ends.
+function stopCallClock() {
+  if (state.callTimer) clearInterval(state.callTimer);
+  state.callTimer = null;
+  state.callStart = 0;
+  const el = $('call-timer');
+  if (el) el.textContent = '';
+}
+
 // ---------------------------------------------------------------- media
 
 const MIC_AUDIO = { echoCancellation: true, noiseSuppression: false, autoGainControl: true };
-const CAM_VIDEO = { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' };
+
+// The encoder ceiling for each quality step. A size alone would let the encoder
+// spend the same bandwidth on 360p as on 1440p, so each step carries a cap.
+const CAM_BITRATE = {
+  '640x360@30': 400000,
+  '1280x720@30': 1500000,
+  '1920x1080@30': 3000000,
+  '1920x1080@60': 5000000,
+  '2560x1440@30': 6000000,
+};
+
+// qualityNow is the chosen step, with the default for a value this build does
+// not know (a stored string from an older page, for example).
+function qualityNow() {
+  return QUALITY[state.quality] || QUALITY['1280x720@30'];
+}
+
+// camVideo builds the camera request for one quality step. The join and every
+// later camera switch go through this, so the picker is in effect from the
+// first frame and not only after a change.
+function camVideo(quality) {
+  const q = quality || qualityNow();
+  return {
+    width: { ideal: q.w, max: q.w },
+    height: { ideal: q.h, max: q.h },
+    frameRate: { ideal: q.fps, max: q.fps },
+  };
+}
 
 // ask opens one getUserMedia request and never throws, so the join can always
 // go on with whatever the browser gives.
@@ -426,6 +515,70 @@ async function ask(constraints) {
   } catch (err) {
     return { err };
   }
+}
+
+// capVideoSender sets the encoder ceiling on one video sender. The parameters
+// object comes back from the sender and is copied, because a sender refuses a
+// reused one. A sender has no encodings until its description exists, so an
+// empty list is skipped; the same call runs again when the pair connects.
+async function capVideoSender(sender) {
+  if (!sender || !sender.getParameters || !sender.setParameters) return true;
+  let params;
+  try {
+    params = sender.getParameters();
+  } catch {
+    return true;
+  }
+  if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return true;
+  const max = CAM_BITRATE[state.quality] || CAM_BITRATE['1280x720@30'];
+  const next = {
+    ...params,
+    encodings: params.encodings.map((enc) => ({ ...enc, maxBitrate: max })),
+  };
+  try {
+    await sender.setParameters(next);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// capCameraSenders caps every sender that carries the camera. A sender for the
+// screen share is left alone, because the share keeps its own quality.
+function capCameraSenders(pc) {
+  if (!pc || !state.camTrack) return;
+  for (const sender of pc.getSenders()) {
+    if (sender.track !== state.camTrack) continue;
+    capVideoSender(sender);
+  }
+}
+
+// applyQuality pushes the chosen step into the live camera: the raw track gets
+// the new size and frame rate, and every peer's encoder gets the matching
+// ceiling. The screen share is not touched; it carries its own quality.
+async function applyQuality() {
+  const q = qualityNow();
+  let refused = false;
+  const track = state.camTrack;
+  if (track && track.readyState === 'live') {
+    try {
+      await track.applyConstraints({
+        width: { ideal: q.w },
+        height: { ideal: q.h },
+        frameRate: { ideal: q.fps, max: q.fps },
+      });
+    } catch {
+      refused = true;
+    }
+  }
+  for (const peer of state.peers.values()) {
+    if (!peer.pc) continue;
+    for (const sender of peer.pc.getSenders()) {
+      if (!sender.track || sender.track !== track) continue;
+      if (!(await capVideoSender(sender))) refused = true;
+    }
+  }
+  if (refused) say('the browser refused the new camera quality; the old one stays in effect');
 }
 
 // ---------------------------------------------------------------- devices
@@ -536,7 +689,7 @@ async function refreshDevices() {
 // plain camera request, because a deviceId already names the exact lens.
 function constraintsFor(kind, pick) {
   if (kind === 'video') {
-    const base = { width: CAM_VIDEO.width, height: CAM_VIDEO.height };
+    const base = camVideo(qualityNow());
     return pick ? { ...base, deviceId: { exact: pick } } : { ...base, facingMode: 'user' };
   }
   return pick ? { ...MIC_AUDIO, deviceId: { exact: pick } } : { ...MIC_AUDIO };
@@ -736,7 +889,12 @@ function refreshSelf() {
 function addTrackToPeer(peer, track) {
   if (!peer.pc || !track) return;
   if (!state.sealed) {
-    try { peer.pc.addTrack(track, state.outStream); } catch { /* closing */ }
+    try {
+      const sender = peer.pc.addTrack(track, state.outStream);
+      // A fresh sender may report no encodings yet; the connection event caps
+      // it once the description is in place.
+      if (track === state.camTrack) capVideoSender(sender);
+    } catch { /* closing */ }
     return;
   }
   if (!sealingAvailable() || !state.worker) return;
@@ -747,6 +905,7 @@ function addTrackToPeer(peer, track) {
     // The connection is closing; it is replaced by a reconnect.
     return;
   }
+  if (track === state.camTrack) capVideoSender(sender);
   try {
     sender.transform = new RTCRtpScriptTransform(state.worker, {
       pair: pairLabel(peer.id), peer: peer.id, dir: 'send', kind: track.kind,
@@ -761,7 +920,11 @@ function addTrackToPeer(peer, track) {
     state.sealFault = 'this browser ignored the frame transform, so no media is sent';
     state.workerErrors.push('sender transform not accepted for ' + track.kind);
     say(state.sealFault);
+    return;
   }
+  // A fresh sender transform starts on a delta frame that the remote can not
+  // decode before its own keys exist; ask our encoder for a key frame now.
+  forceKeyFrame(peer);
 }
 
 // publishTrack offers one new track to every peer. addTrack triggers the
@@ -1250,6 +1413,13 @@ function applyMirror() {
 // can be stopped again.
 async function replaceOutVideo(track) {
   if (!state.outStream) return;
+  // A sealed room never sends a clear frame: without the worker there is no
+  // transform, so the screen track is not offered at all.
+  if (state.sealed && track && (!sealingAvailable() || !state.worker)) {
+    state.sealFault = 'this browser cannot seal media frames, so no screen is sent';
+    say(state.sealFault);
+    return;
+  }
   for (const old of state.outStream.getVideoTracks()) {
     state.outStream.removeTrack(old);
   }
@@ -1266,6 +1436,28 @@ async function replaceOutVideo(track) {
     }
     if (sender) {
       await sender.replaceTrack(track || null).catch(() => {});
+      if (state.sealed && track) {
+        // replaceTrack keeps a transform that is already set; a sender without
+        // one (published before the share) gets it now, and is cleared again if
+        // the browser ignores the setter.
+        if (!sender.transform) {
+          try {
+            sender.transform = new RTCRtpScriptTransform(state.worker, {
+              pair: pairLabel(peer.id), peer: peer.id, dir: 'send', kind: 'video',
+            });
+          } catch (err) {
+            state.workerErrors.push('sender transform: ' + err);
+          }
+          if (!sender.transform) {
+            try { await sender.replaceTrack(null); } catch { /* closing */ }
+            state.sealFault = 'this browser ignored the frame transform, so no media is sent';
+            state.workerErrors.push('sender transform not accepted for the screen track');
+            say(state.sealFault);
+            continue;
+          }
+        }
+        forceKeyFrame(peer);
+      }
     } else if (track) {
       addTrackToPeer(peer, track);
     }
@@ -1417,6 +1609,11 @@ function ensurePeer(id, name, mic, cam) {
     keyPromise: null,
     helloTimer: null,
     recvSet: new Set(),
+    recvFaulted: false,
+    desc: null,        // the description chain of this pair
+    keyFrameAt: 0,     // last key frame request, so a burst is not repeated
+    keyRetryTimer: null,
+    keyRetryDone: false,
     announcedName: '',
   };
   peer.vol = storedVolume(peer.name);
@@ -1498,6 +1695,14 @@ function connectPeer(id, name, initiator, mic, cam) {
 
   pc.onconnectionstatechange = () => {
     setPeerState(peer, pc.connectionState);
+    if (pc.connectionState === 'connected') {
+      // A join or a rejoin starts both decoders from nothing. Ask each side
+      // for a fresh key frame once the pair is up.
+      forceKeyFrame(peer);
+      requestKeyFrame(peer, true);
+      // The encodings exist now, so a cap that was too early applies here.
+      capCameraSenders(pc);
+    }
   };
 
   pc.oniceconnectionstatechange = () => {
@@ -1546,14 +1751,39 @@ async function flushPending(peer) {
   }
 }
 
-async function onDescription(peer, type, sdp) {
+// Duplicate answers arrive after a rejoin and have nothing to complete; only
+// an answer to our own local offer is applied.
+function answerFits(pc) {
+  return pc.signalingState === 'have-local-offer';
+}
+
+// onDescription queues one description per peer. Two offers, or an answer that
+// races a rejoin, would interleave setRemoteDescription and
+// setLocalDescription and leave the pair at "new"; the chain makes them run one
+// after the other in arrival order.
+function onDescription(peer, type, sdp) {
+  const run = () => applyDescription(peer, type, sdp);
+  peer.desc = (peer.desc || Promise.resolve()).then(run, run);
+  return peer.desc;
+}
+
+async function applyDescription(peer, type, sdp) {
   const pc = peer.pc;
+  if (!pc || pc.signalingState === 'closed') return;
   const readyForOffer = !peer.makingOffer && (pc.signalingState === 'stable' || peer.settingAnswer);
   const collision = type === 'offer' && !readyForOffer;
+  // The impolite side keeps its own offer and drops the incoming one; the
+  // polite side gives way instead.
   peer.ignoreOffer = !peer.polite && collision;
   if (peer.ignoreOffer) return;
+  if (type === 'answer' && !answerFits(pc)) return;
 
   try {
+    // Perfect negotiation: the polite side rolls its offer back, so the remote
+    // offer can be applied; without this the pair stays at "new".
+    if (collision && peer.polite && pc.signalingState === 'have-local-offer') {
+      await pc.setRemoteDescription({ type: 'rollback' });
+    }
     peer.settingAnswer = type === 'answer';
     await pc.setRemoteDescription({ type, sdp });
     peer.settingAnswer = false;
@@ -1569,7 +1799,11 @@ async function onDescription(peer, type, sdp) {
       send({ t: 'answer', to: peer.id, sdp: pc.localDescription.sdp });
     }
     await flushPending(peer);
+    // The description is in place, so the encodings exist; a camera cap set
+    // before the negotiation can land now.
+    capCameraSenders(pc);
   } catch (err) {
+    peer.settingAnswer = false;
     console.warn('description failed', err);
   }
 }
@@ -1591,6 +1825,7 @@ function dropPeer(id) {
   const peer = state.peers.get(id);
   if (!peer) return;
   if (peer.helloTimer) clearTimeout(peer.helloTimer);
+  if (peer.keyRetryTimer) clearTimeout(peer.keyRetryTimer);
   dropAudio(peer);
   if (peer.pc) peer.pc.close();
   if (peer.tile) peer.tile.remove();
@@ -1632,6 +1867,8 @@ function connectWS() {
     old.onclose = null;
     try { old.close(); } catch { /* already gone */ }
   }
+  // Frames of the previous socket name peers that no longer exist.
+  state.outbox.length = 0;
 
   let ws;
   try {
@@ -1649,6 +1886,8 @@ function connectWS() {
     // A sealed room never sends a name: the server announces every peer as its
     // placeholder, and the real name travels sealed once the keys exist.
     send({ t: 'join', room: state.room, pass: state.pass, name: state.sealed ? '' : state.name, sealed: state.sealed });
+    // Only after the join: the server refuses any other type before it.
+    flushOutbox();
   };
 
   ws.onmessage = (event) => {
@@ -1664,6 +1903,7 @@ function connectWS() {
 
   ws.onclose = () => {
     if (state.ws === ws) state.ws = null;
+    state.outbox.length = 0;
     $('link-dot').className = 'dot off';
     if (state.leaving) return;
     // The old peer id dies with the old socket, so the remote connections go
@@ -1780,6 +2020,12 @@ function handle(msg) {
       if (peer) onCandidate(peer, msg.candidate);
       break;
     }
+    case 'keyframe': {
+      // The other side has no picture: emit a fresh key frame.
+      const peer = state.peers.get(msg.from);
+      if (peer) forceKeyFrame(peer);
+      break;
+    }
   }
 }
 
@@ -1823,6 +2069,7 @@ async function enterRoom(room, pass) {
   $('room-label').textContent = room;
   $('room-label').title = room;
   setHash(room);
+  startCallClock();
   startSpeaking();
 
   prepareLocal();
@@ -1898,6 +2145,7 @@ async function enterSealedRoom() {
     updateSealedBadge();
     $('link-text').textContent = 'sealed, connecting';
     setHash(room);
+    startCallClock();
     startSpeaking();
 
     prepareLocal();
@@ -1927,6 +2175,7 @@ function leave(message) {
   const was = state.room;
   state.leaving = true;
   cancelReconnect();
+  state.outbox.length = 0;
   if (state.ws) {
     const ws = state.ws;
     state.ws = null;
@@ -2006,6 +2255,7 @@ function leave(message) {
   $('stats-panel').hidden = true;
   $('stats-btn').setAttribute('aria-pressed', 'false');
   $('grid').replaceChildren();
+  stopCallClock();
   $('stage').hidden = true;
   $('lobby').hidden = false;
   $('room-label').textContent = '';
@@ -2760,6 +3010,19 @@ function startSealedWorker() {
         state.keyWait.delete(msg.pair);
         resolve();
       }
+      // The pair can decrypt now. Everything the sender encoded before this
+      // point is a delta frame the decoder can not use, so ask both encoders
+      // for a key frame.
+      const peer = peerByPair(msg.pair);
+      if (peer) {
+        forceKeyFrame(peer);
+        requestKeyFrame(peer);
+      }
+    } else if (msg.type === 'keyframe') {
+      // Only a failed receive request is worth a signaling round trip: the
+      // sender side has nothing to ask the peer for, and a reply there would
+      // bounce between two browsers that both lack the call.
+      if (!msg.ok && msg.peer && msg.dir === 'recv') send({ t: 'keyframe', to: msg.peer });
     } else if (msg.type === 'sample') {
       if (state.samples.length < 40) state.samples.push(msg);
     } else if (msg.type === 'error') {
@@ -2788,16 +3051,107 @@ function paintFrameCounters() {
 function installSealedReceivers(peer) {
   const pc = peer.pc;
   if (!pc || !state.sealed || !state.worker) return;
+  let attached = 0;
   for (const receiver of pc.getReceivers()) {
     if (peer.recvSet.has(receiver)) continue;
-    peer.recvSet.add(receiver);
+    let transform = null;
     try {
-      receiver.transform = new RTCRtpScriptTransform(state.worker, {
+      transform = new RTCRtpScriptTransform(state.worker, {
         pair: pairLabel(peer.id), peer: peer.id, dir: 'recv', kind: receiver.track.kind,
       });
+      receiver.transform = transform;
     } catch (err) {
+      transform = null;
       state.workerErrors.push('receiver transform: ' + err);
     }
+    // A setter can be accepted and ignored. Only a transform that reads back
+    // marks the receiver, so a later call tries this one again.
+    if (transform && receiver.transform) {
+      peer.recvSet.add(receiver);
+      attached++;
+    } else if (!peer.recvFaulted) {
+      peer.recvFaulted = true;
+      state.sealFault = 'this browser did not keep the receive transform, so incoming frames stay sealed';
+      state.workerErrors.push('receiver transform not accepted');
+      say(state.sealFault);
+    }
+  }
+  // A receiver that was added by a renegotiation has missed the frames before
+  // its transform existed; start it again on a key frame. A connection that is
+  // not up yet asks on its first "connected" instead.
+  if (attached > 0 && pc.connectionState === 'connected') requestKeyFrame(peer);
+}
+
+// peerByPair finds the peer whose pair label the worker named.
+function peerByPair(pair) {
+  for (const peer of state.peers.values()) {
+    if (pairLabel(peer.id) === pair) return peer;
+  }
+  return null;
+}
+
+// One key frame request per pair per half second: a burst of joins must not
+// turn into a burst of requests.
+const KEY_FRAME_MIN_MS = 500;
+// A request that arrives before the sender's encoder has a frame to repeat is
+// lost. One delayed second ask per peer covers that without a poll.
+const KEY_FRAME_RETRY_MS = 1500;
+
+// requestKeyFrame asks the sender for a fresh key frame, so a decoder that
+// started on delta frames gets a picture. The preferred path is the receiving
+// transform: RTCRtpScriptTransformer.generateKeyFrame asks over the media path
+// and needs no signaling. A build that exposes the call on the receiver is used
+// when present. If neither exists the request travels over the signaling
+// channel and the sender asks its own encoder there. No bitrate is touched.
+function requestKeyFrame(peer, force) {
+  if (!peer.pc) return;
+  const now = Date.now();
+  if (!force && peer.keyFrameAt && now - peer.keyFrameAt < KEY_FRAME_MIN_MS) return;
+  peer.keyFrameAt = now;
+  let handled = false;
+  for (const receiver of peer.pc.getReceivers()) {
+    if (!receiver.track || receiver.track.kind !== 'video') continue;
+    const recv = /** @type {any} */ (receiver);
+    if (typeof recv.requestKeyFrame === 'function') {
+      try {
+        recv.requestKeyFrame();
+        handled = true;
+      } catch { /* this receiver can not be nudged */ }
+    }
+  }
+  if (!handled && state.sealed && state.worker) {
+    state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id), peer: peer.id, dir: 'recv' });
+    handled = true;
+  }
+  if (!handled) send({ t: 'keyframe', to: peer.id });
+  if (!peer.keyRetryTimer && !peer.keyRetryDone) {
+    peer.keyRetryTimer = setTimeout(() => {
+      peer.keyRetryTimer = null;
+      peer.keyRetryDone = true;
+      if (state.peers.get(peer.id) === peer && peer.pc) requestKeyFrame(peer, true);
+    }, KEY_FRAME_RETRY_MS);
+  }
+}
+
+// forceKeyFrame asks our own encoder for a key frame, for the peer that just
+// got the keys or just had the send transform attached. The send transform is
+// the standard place for the call; a build that exposes it on the sender is
+// used as well. A browser with neither keeps encoding on its own schedule.
+function forceKeyFrame(peer) {
+  if (!peer.pc) return;
+  let handled = false;
+  for (const sender of peer.pc.getSenders()) {
+    if (!sender.track || sender.track.kind !== 'video') continue;
+    const out = /** @type {any} */ (sender);
+    if (typeof out.generateKeyFrame === 'function') {
+      try {
+        out.generateKeyFrame();
+        handled = true;
+      } catch { /* this sender can not be nudged */ }
+    }
+  }
+  if (!handled && state.sealed && state.worker) {
+    state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id), peer: peer.id, dir: 'send' });
   }
 }
 
@@ -2826,7 +3180,12 @@ function sealedOnPub(peer, msg) {
 
 // sealedInstallKeys hands the pair keys to the worker and waits for the import.
 // The peer connection is not built before that: a first frame without a key
-// would be dropped, and a dropped key frame costs seconds of video.
+// would be dropped, and a dropped key frame costs seconds of video. A worker
+// that does not confirm gets the keys again; a timeout is never taken as a
+// successful install.
+const KEY_IMPORT_MS = 1500;
+const KEY_IMPORT_TRIES = 4;
+
 function sealedInstallKeys(peer, out) {
   peer.keys = out.keys;
   peer.transcript = out.transcript;
@@ -2835,16 +3194,37 @@ function sealedInstallKeys(peer, out) {
   if (peer.tile) peer.tile.dataset.sas = peer.sas;
   const pair = pairLabel(peer.id);
   const ready = new Promise((resolve) => {
-    state.keyWait.set(pair, resolve);
-    setTimeout(() => resolve(null), 5000);
+    let tries = 0;
+    let timer = 0;
+    const onKeys = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const attempt = () => {
+      if (!state.worker) {
+        state.workerErrors.push('sealed worker missing');
+        resolve(false);
+        return;
+      }
+      state.keyWait.set(pair, onKeys);
+      state.worker.postMessage({
+        type: 'keys', pair, peer: peer.id, enc: out.keys.sendMedia, dec: out.keys.recvMedia,
+      });
+      timer = setTimeout(() => {
+        if (state.keyWait.get(pair) !== onKeys) return;
+        tries++;
+        if (tries < KEY_IMPORT_TRIES) {
+          attempt();
+          return;
+        }
+        state.keyWait.delete(pair);
+        state.workerErrors.push('frame keys did not install for ' + shortPeer(peer.id));
+        say('the frame keys did not install for ' + shortPeer(peer.id) + '; the link stays without video');
+        resolve(false);
+      }, KEY_IMPORT_MS);
+    };
+    attempt();
   });
-  if (state.worker) {
-    state.worker.postMessage({
-      type: 'keys', pair, peer: peer.id, enc: out.keys.sendMedia, dec: out.keys.recvMedia,
-    });
-  } else {
-    state.workerErrors.push('sealed worker missing');
-  }
   sealedSetE2E(peer, 'handshake');
   return ready;
 }
@@ -2924,8 +3304,10 @@ function sealedOnConfirm(peer, msg) {
   }
   sealedAnnounceName(peer);
   if (!peer.pc && String(state.self) < String(peer.id)) {
-    Promise.resolve(peer.keyPromise).then(() => {
-      if (!peer.pc && !state.leaving) connectPeer(peer.id, null, true);
+    Promise.resolve(peer.keyPromise).then((ok) => {
+      // A timed out key install must not start a connection that can only
+      // drop frames; the retry inside the install is the recovery path.
+      if (ok !== false && !peer.pc && !state.leaving) connectPeer(peer.id, null, true);
     });
   }
 }
@@ -3128,15 +3510,17 @@ function updateSealedBadge() {
   const code = sealedRoomCode();
   badge.textContent = code ? 'pq-e2e ' + verifyText(code) + ' ' + code : 'pq-e2e handshaking';
   badge.title = code ? verifyNames(code) + ' (' + code + ')' : 'no peer code yet';
-}async function sealedOnOffer(peer, sdp) {
+}
+
+async function sealedOnOffer(peer, sdp) {
   if (state.leaving) return;
   // Wait for our transform keys so the first frames decrypt without a gap.
   if (peer.keyPromise) {
-    try {
-      await peer.keyPromise;
-    } catch {
-      // A key import that failed is reported by the worker; answer anyway so
-      // the link itself can still come up.
+    const ok = await peer.keyPromise.catch(() => false);
+    if (ok === false) {
+      // Answer anyway, so the link itself can still come up; the worker error
+      // and the status line already say why no picture arrives.
+      state.workerErrors.push('answered an offer without frame keys');
     }
   }
   const target = connectPeer(peer.id, null, false);
@@ -3252,6 +3636,12 @@ function handleSealed(msg) {
     case 'ice': {
       const peer = state.peers.get(msg.from);
       if (peer && msg.candidate) onCandidate(peer, msg.candidate);
+      break;
+    }
+    case 'keyframe': {
+      // Carries no room content: just "emit a key frame".
+      const peer = state.peers.get(msg.from);
+      if (peer) forceKeyFrame(peer);
       break;
     }
     case 'state': {
@@ -3595,6 +3985,13 @@ function init() {
     state.path = storedPath;
     $('path').value = storedPath;
   }
+  // The quality step comes back like the devices, and the picker shows it, so
+  // the first camera request is already the chosen size.
+  const storedQuality = load('quality');
+  if (QUALITY[storedQuality]) {
+    state.quality = storedQuality;
+    $('quality').value = storedQuality;
+  }
   state.noiseWanted = load('noise') !== '0';
   $('noise').checked = state.noiseWanted;
   $('noise-live').checked = state.noiseWanted;
@@ -3660,8 +4057,10 @@ function init() {
     applyMirror();
   });
 
-  $('quality').addEventListener('change', () => {
+  $('quality').addEventListener('change', async () => {
     state.quality = $('quality').value;
+    store('quality', state.quality);
+    await applyQuality();
   });
 
   $('path').addEventListener('change', () => {
