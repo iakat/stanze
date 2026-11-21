@@ -157,7 +157,7 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 		}
 		serve("index.html")(w, r)
 	})
-	for _, name := range assetNames() {
+	for _, name := range routeNames() {
 		mux.Handle("/"+name, serve(name))
 	}
 	// The queue and the done list are plain files on disk, so an update is a
@@ -204,27 +204,57 @@ func loadAssets(dir string) (map[string][]byte, error) {
 	if dir != "" {
 		out := make(map[string][]byte)
 		for _, name := range assetNames() {
+			if name == workletBundle {
+				continue
+			}
 			b, err := os.ReadFile(path.Join(dir, name))
 			if err != nil {
 				return nil, err
 			}
 			out[name] = b
 		}
-		return out, nil
+		return withWorkletBundle(out), nil
 	}
 	out := make(map[string][]byte)
 	for _, name := range assetNames() {
+		if name == workletBundle {
+			continue
+		}
 		b, err := fs.ReadFile(embeddedFS, "static/"+name)
 		if err != nil {
 			return nil, err
 		}
 		out[name] = b
 	}
-	return out, nil
+	return withWorkletBundle(out), nil
 }
 
 func assetNames() []string {
-	return []string{"index.html", "app.js", "style.css", "favicon.svg", "rnnoise-sync.js", "rnnoise-worklet.js"}
+	return []string{"index.html", "app.js", "style.css", "favicon.svg", "rnnoise-sync.js", "rnnoise-worklet.js", workletBundle}
+}
+
+// workletBundle is the one module the audio worklet loads. A worklet module
+// has its own scope, so a second module can not share its globals: the wasm
+// bundle and the processor must be served as a single file.
+const workletBundle = "rnnoise-node.js"
+
+// routeNames is every served asset, sources and the combined worklet.
+func routeNames() []string {
+	return assetNames()
+}
+
+// withWorkletBundle glues the wasm bundle and the processor into the single
+// module that /rnnoise-node.js serves.
+func withWorkletBundle(in map[string][]byte) map[string][]byte {
+	// The wasm bundle ends with `self.createRNNWasmModuleSync = ...`, but a
+	// worklet module scope does not define `self` here, so alias it first.
+	shim := []byte("var self = globalThis;\n")
+	joined := make([]byte, 0, len(shim)+len(in["rnnoise-sync.js"])+len(in["rnnoise-worklet.js"]))
+	joined = append(joined, shim...)
+	joined = append(joined, in["rnnoise-sync.js"]...)
+	joined = append(joined, in["rnnoise-worklet.js"]...)
+	in[workletBundle] = joined
+	return in
 }
 
 func contentType(name string) string {

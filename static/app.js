@@ -218,7 +218,9 @@ async function setNoise(on) {
   }
   if (on && !state.rnnoise) {
     try {
-      await state.audioCtx.audioWorklet.addModule('/rnnoise-worklet.js');
+      // A worklet module has its own scope, so the wasm bundle and the
+      // processor come as one file: /rnnoise-node.js.
+      await state.audioCtx.audioWorklet.addModule('/rnnoise-node.js');
       state.rnnoise = new AudioWorkletNode(state.audioCtx, 'rnnoise', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
