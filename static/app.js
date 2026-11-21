@@ -326,6 +326,9 @@ function setTileState(peer, text) {
 // flag shows nothing extra.
 function applyFlags(tile, mic, cam, admin) {
   if (!tile) return;
+  // A camera that is off must show the centre name again. The last frame of a
+  // disabled track is black, so the tile can not stay in the playing state.
+  tile.classList.toggle('camoff', cam === false);
   const box = tile.querySelector('.flags');
   if (!box) return;
   const out = [];
@@ -563,6 +566,25 @@ async function adoptMic(track) {
   publishTrack(out);
 }
 
+// paintSelfCam paints the local preview from the camera state. A disabled
+// track gives black frames, so the element is emptied and the tile leaves the
+// playing state: the centre name is back until the camera works again.
+function paintSelfCam(on) {
+  const self = document.querySelector('.tile[data-local="yes"]');
+  if (!self) return;
+  const video = self.querySelector('video');
+  if (on && state.camTrack) {
+    const stream = new MediaStream([state.camTrack]);
+    if (video.srcObject !== stream) video.srcObject = stream;
+    self.classList.add('playing');
+    video.play().catch(() => {});
+    return;
+  }
+  self.classList.remove('playing');
+  try { video.pause(); } catch { /* not playing */ }
+  video.srcObject = null;
+}
+
 // adoptCam makes one camera track the live video. While a screen is shared the
 // screen stays what peers receive, so only the preview would change later.
 async function adoptCam(track) {
@@ -570,12 +592,7 @@ async function adoptCam(track) {
   state.camTrack = track;
   track.contentHint = 'motion';
   track.enabled = true;
-  const self = document.querySelector('.tile[data-local="yes"]');
-  if (self && !state.screen) {
-    self.querySelector('video').srcObject = new MediaStream([track]);
-    self.classList.add('playing');
-    self.querySelector('video').play().catch(() => {});
-  }
+  if (!state.screen) paintSelfCam(true);
   if (state.screen) return;
   if (state.outStream && !state.outStream.getVideoTracks().includes(track)) {
     state.outStream.addTrack(track);
@@ -641,6 +658,7 @@ async function enableCam() {
   state.prefCam = true;
   store('cam', 1);
   if (state.camTrack) state.camTrack.enabled = true;
+  if (!state.screen) paintSelfCam(true);
   updateButtons();
   sendState();
 }
@@ -650,6 +668,7 @@ function disableCam() {
   state.prefCam = false;
   store('cam', 0);
   if (state.camTrack) state.camTrack.enabled = false;
+  if (!state.screen) paintSelfCam(false);
   updateButtons();
   sendState();
 }
