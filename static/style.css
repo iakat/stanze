@@ -429,8 +429,8 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  max-width: calc(100% - 2px);
-  padding: 5px 6px 6px;
+  max-width: 100%;
+  padding: 5px 4px 6px;
   background: var(--panel);
   border: 2px solid;
   border-color: #fff var(--edge) var(--edge) #fff;
@@ -638,23 +638,22 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .tile .state[data-e2e="unverified"] { color: #8a0000; }
 .tile .state[data-e2e="failed"] { color: #a00000; }
 
-.id-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+.id-row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
   margin-top: 3px; font-size: 12px; }
 
 .id-state { color: #1a1a1a; }
-.id-state[data-pin="known"] { color: #003a00; }
 .id-state[data-pin="new"] { color: #8a0000; }
 .id-state[data-pin="changed"],
 .id-state[data-pin="rollback"] { color: #6b0000; }
 
 .id-fp { white-space: nowrap; color: #2b2b2b;
-  font-family: "Stanze Mono", "Courier New", monospace; letter-spacing: 0.02em; }
+  font-family: "Stanze Mono", "Courier New", monospace; }
 
 .pin-btn {
   color: #1a1a1a;
   background: #c0c0c0;
   border: 2px outset #dfdfdf;
-  padding: 0 5px;
+  padding: 0 4px;
   font: inherit;
   font-size: 12px;
   cursor: pointer;
