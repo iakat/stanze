@@ -63,7 +63,6 @@ const state = {
   lostWanted: false,
   speakTimer: null,   // the green light on each tile while a person talks
   ownSpoke: null,
-  outbox: [],         // signaling frames held while the socket is connecting
 
   // Sealed room state, live for the whole call: the worker, the identity and
   // the frame counters belong to one join and die with it.
@@ -220,41 +219,15 @@ function wsURL() {
   return proto + location.host + '/ws';
 }
 
-// A socket that is still connecting has no send path, and a frame dropped in
-// that window can cost the join: the offer produced right after `joined` may be
-// ready before the socket reports OPEN. Signals wait in one bounded queue
-// instead, and the queue is flushed once, after the join frame.
-const OUTBOX_MAX = 64;
-
 function send(msg) {
   const raw = JSON.stringify(msg);
   // The audit sees every frame the relay sees, in both directions. It is the
   // client half of the proof that a room never sends a name or a chat line in
   // the clear.
   auditWire('out', raw);
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    // Keep the newest frames: an offer outranks the ICE of a peer that the
-    // close already dropped.
-    if (state.outbox.length >= OUTBOX_MAX) state.outbox.shift();
-    state.outbox.push({ t: msg.t || '', to: msg.to || '', raw });
-    return;
-  }
-  state.ws.send(raw);
-}
-
-// flushOutbox hands the connecting window's frames to the socket in order. It
-// runs after the join frame, so the server never sees a peer frame first.
-function flushOutbox() {
-  const ws = state.ws;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const queued = state.outbox.splice(0);
-  for (const item of queued) {
-    try {
-      ws.send(item.raw);
-    } catch {
-      break;
-    }
-  }
+  // Every frame follows the join frame of an open socket; one that meets a
+  // closed socket names a peer that the close already dropped.
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(raw);
 }
 
 // ---------------------------------------------------------------- tiles
@@ -1803,8 +1776,6 @@ function connectWS() {
     old.onclose = null;
     try { old.close(); } catch { /* already gone */ }
   }
-  // Frames of the previous socket name peers that no longer exist.
-  state.outbox.length = 0;
 
   let ws;
   try {
@@ -1822,8 +1793,6 @@ function connectWS() {
     // The join carries no name: the server announces every peer as its
     // placeholder, and the real name travels sealed once the keys exist.
     send({ t: 'join', room: state.room, pass: state.pass });
-    // Only after the join: the server refuses any other type before it.
-    flushOutbox();
   };
 
   ws.onmessage = (event) => {
@@ -1839,7 +1808,6 @@ function connectWS() {
 
   ws.onclose = () => {
     if (state.ws === ws) state.ws = null;
-    state.outbox.length = 0;
     $('link-dot').className = 'dot off';
     if (state.leaving) return;
     // The old peer id dies with the old socket, so the remote connections go
@@ -2046,7 +2014,6 @@ function leave(message) {
   const was = state.room;
   state.leaving = true;
   cancelReconnect();
-  state.outbox.length = 0;
   if (state.ws) {
     const ws = state.ws;
     state.ws = null;
