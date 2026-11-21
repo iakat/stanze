@@ -10,49 +10,85 @@
 </head>
 <body>
 
-<main id="lobby" class="lobby">
-  <h1>rooms</h1>
-  <p class="hint">Peer to peer audio and video. Nothing is stored and nothing is recorded.</p>
+<main id="lobby" class="window lobby">
+  <div class="titlebar">
+    <span class="tbicon">▣</span>
+    <span class="tbtitle">rooms</span>
+    <span class="tbbuttons"><span class="tbcap"></span><span class="tbcap"></span><span class="tbcap close">×</span></span>
+  </div>
+  <div class="window-body">
+    <p class="hint">Peer to peer audio and video. Nothing is stored and nothing is recorded.</p>
 
-  <form id="join-form" autocomplete="off">
-    <label>your name
-      <input id="name" maxlength="32" placeholder="name" spellcheck="false">
-    </label>
-    <label>room
-      <input id="room" maxlength="26" placeholder="paste a room id or link, or leave empty for a new room" spellcheck="false" autocapitalize="off">
-    </label>
-    <label>passphrase
-      <input id="pass" type="password" maxlength="128" placeholder="only if the room has one">
-    </label>
-    <div class="row">
-      <button id="enter-btn" type="submit">enter</button>
-    </div>
-  </form>
+    <form id="join-form" autocomplete="off">
+      <label>your name
+        <input id="name" maxlength="32" placeholder="name" spellcheck="false">
+      </label>
+      <label>room
+        <span class="with-button">
+          <input id="room" maxlength="64" placeholder="new room" spellcheck="false" autocapitalize="off">
+          <button id="newid-btn" type="button" title="suggest another random room id">new id</button>
+        </span>
+      </label>
+      <p class="note">Any name works. The suggested id is random and hard to guess; a name you type is easy to guess.</p>
+      <label>passphrase
+        <input id="pass" type="password" maxlength="128" placeholder="only if the room has one">
+      </label>
+      <label>media path
+        <select id="path">
+          <option value="auto">automatic: direct, relay if needed</option>
+          <option value="p2p">direct only: no relay</option>
+          <option value="relay">relay only: hides your address</option>
+        </select>
+      </label>
+      <label class="check"><input id="noise" type="checkbox" checked> noise suppression (RNNoise)</label>
+      <div class="row">
+        <button id="enter-btn" type="submit">enter</button>
+      </div>
+    </form>
 
-  <p id="lobby-error" class="error" hidden></p>
+    <p id="lobby-error" class="error" hidden></p>
+    <p class="foot"><a href="/QUEUE.md">queue</a> | <a href="/DONE.md">done</a></p>
+  </div>
 </main>
 
-<main id="stage" class="stage" hidden>
-  <header class="bar">
-    <div class="ident">
+<main id="stage" class="window stage" hidden>
+  <div class="titlebar">
+    <span class="tbicon">▣</span>
+    <span class="tbtitle">rooms - <code id="room-label"></code></span>
+    <span class="tbbuttons">
+      <span id="peer-count" class="peercount"></span>
+      <button id="copy-btn" type="button">copy link</button>
+    </span>
+  </div>
+
+  <div class="stage-body">
+    <div class="statusline">
       <span class="dot" id="link-dot"></span>
-      <code id="room-label"></code>
+      <span class="muted" id="link-text">connected</span>
     </div>
-    <div class="bar-right">
-      <span id="peer-count" class="muted"></span>
-      <button id="copy-btn" type="button" class="ghost">copy link</button>
-    </div>
-  </header>
 
-  <section id="grid" class="grid"></section>
+    <section id="grid" class="grid"></section>
 
-  <footer class="controls">
-    <button id="mic-btn" type="button" class="ctrl" aria-pressed="true">mic on</button>
-    <button id="cam-btn" type="button" class="ctrl" aria-pressed="true">camera on</button>
-    <button id="leave-btn" type="button" class="ctrl danger">leave</button>
-  </footer>
+    <footer class="controls">
+      <button id="mic-btn" type="button" class="ctrl" aria-pressed="true">mic on</button>
+      <button id="cam-btn" type="button" class="ctrl" aria-pressed="true">camera on</button>
+      <button id="share-btn" type="button" class="ctrl" aria-pressed="false">share screen</button>
+      <label class="pick">quality
+        <select id="quality">
+          <option value="640x360@30">360p 30</option>
+          <option value="1280x720@30" selected>720p 30</option>
+          <option value="1920x1080@30">1080p 30</option>
+          <option value="1920x1080@60">1080p 60</option>
+          <option value="2560x1440@30">1440p 30</option>
+        </select>
+      </label>
+      <label class="pick check"><input id="mirror" type="checkbox" checked> mirror me</label>
+      <label class="pick check"><input id="noise-live" type="checkbox" checked> rnnoise</label>
+      <button id="leave-btn" type="button" class="ctrl danger">leave</button>
+    </footer>
 
-  <p id="stage-error" class="error" hidden></p>
+    <p id="stage-error" class="error" hidden></p>
+  </div>
 </main>
 
 <script src="/app.js"></script>
