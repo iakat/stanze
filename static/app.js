@@ -2821,9 +2821,11 @@ function sealedCodePanel(code) {
 
 // ------------------------------------------------------------- sealed signaling
 
-// The room code is the code of the peers, never the code of the local self
-// test: that one is ours alone and proves nothing about the other side. Two
-// peers with two different codes is the alarm, so it is said out loud.
+// The code of a pair is derived from the keys of that pair, never from the
+// local self test: that one is ours alone and proves nothing about the other
+// side. A mesh has one pair per two guests, so two different codes in one room
+// are normal and only the code of one pair can be checked by voice. A pair
+// whose key confirmation failed is the alarm, and it stays on that pair.
 function sealedRoomCodes() {
   const codes = new Set();
   for (const peer of state.peers.values()) if (peer.sas) codes.add(peer.sas);
@@ -2835,13 +2837,19 @@ function sealedRoomCode() {
   return codes.size === 1 ? [...codes][0] : '';
 }
 
-function sealedCodesDiffer() {
-  return sealedRoomCodes().size > 1;
+function sealedFailedPairs() {
+  const out = [];
+  for (const peer of state.peers.values()) if (peer.ready === 'failed') out.push(peer);
+  return out;
+}
+
+function sealedPairNames(pairs) {
+  return pairs.map((peer) => peer.name || shortPeer(peer.id)).join(', ');
 }
 
 // updateSealedBadge keeps the badge and the stats row on the same code. It is
-// called whenever a peer code appears or a peer leaves, so the two can never
-// disagree.
+// called whenever a peer code appears, a peer state changes or a peer leaves,
+// so the two can never disagree.
 function updateSealedBadge() {
   const badge = $('sealed-badge');
   if (!badge) return;
@@ -2852,9 +2860,16 @@ function updateSealedBadge() {
     return;
   }
   badge.hidden = false;
-  if (sealedCodesDiffer()) {
-    badge.textContent = 'pq-e2e codes differ';
-    badge.title = 'the peers derived different codes, so do not trust this call';
+  const failed = sealedFailedPairs();
+  if (failed.length > 0) {
+    badge.textContent = 'pq-e2e key mismatch';
+    badge.title = 'the keys do not match with ' + sealedPairNames(failed) + ', so do not trust this call';
+    return;
+  }
+  const codes = sealedRoomCodes();
+  if (codes.size > 1) {
+    badge.textContent = 'pq-e2e one code per pair';
+    badge.title = state.peers.size + ' guests: each pair has its own code, compare the code on that guest tile by voice';
     return;
   }
   const code = sealedRoomCode();
@@ -3047,11 +3062,18 @@ function sealedStatsRows() {
 
   const code = sealedRoomCode();
   const codes = sealedRoomCodes();
-  if (codes.size > 1) {
+  const failed = sealedFailedPairs();
+  if (failed.length > 0) {
+    const tags = failed.map((peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || 'no code'}`);
     rows.push(statsRow('room code', [
-      'CODES DIFFER ' + [...codes].map((c) => verifyText(c) + ' ' + c).join(' vs '),
-      'the peers did not derive the same key, so do not trust this call',
+      'KEY MISMATCH ' + tags.join(', '),
+      'the keys of that pair do not match, so do not trust this call',
     ], false));
+  } else if (codes.size > 1) {
+    rows.push(statsRow('room code', [
+      `one code per pair | ${state.peers.size} guests | ` + [...codes].map((c) => verifyText(c) + ' ' + c).join(', '),
+      'a mesh has one code per pair: compare each code on its guest tile by voice',
+    ], true));
   } else {
     rows.push(statsRow('room code', [
       `${verifyText(code) || '-'}  ${code || 'pending'}`,

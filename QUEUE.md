@@ -7,7 +7,6 @@ One line per work item. The top item is the most important.
 
 ## Open
 
-- Fix the sealed badge in a room with three or more guests: the code is derived per pair, so every pair has its own code and the badge says `pq-e2e codes differ` although the call is correct. The badge must show the code of one peer, or say that a mesh has one code per pair, and the alarm must stay per pair (coderobe 17:19).
 - Show the per peer volume slider and the `e2e ready` badge only while the pointer is over that tile, so a full room is a picture and not a panel. On a touch screen there is no hover, so the control must open on a tap (coderobe 17:40).
 - Give the per peer volume slider a natural scale: today the gain is linear in amplitude, so the top half of the travel changes little and the bottom half jumps to silence. Map the slider position to loudness, for example a power curve, keep 100 percent at unity, and keep the stored setting in the same unit (coderobe 17:40).
 - Decide the policy for custom room names: a guessed name lets people drop in, and the point of random ids is that they cannot (coderobe).
