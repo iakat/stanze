@@ -1491,22 +1491,13 @@ async function stopShare() {
 
 // ---------------------------------------------------------------- peers
 
+// iceServers drops the TURN servers on a direct only path. A relay only path
+// needs no filter: the transport policy below already drops every other
+// candidate.
 function iceServers() {
   const all = state.ice || [];
-  const hasTurn = (server) => {
-    const urls = Array.isArray(server.urls) ? server.urls : [server.urls || ''];
-    return urls.every((u) => /^turns?:/i.test(u));
-  };
-  if (state.path === 'p2p') {
-    // Direct only: hand over STUN servers and nothing that could relay.
-    return all.filter((server) => !hasTurn(server));
-  }
-  if (state.path === 'relay') {
-    // Relay only: a STUN server that is unreachable would only stall the
-    // gathering and leave the peer with no candidate at all.
-    return all.filter(hasTurn);
-  }
-  return all;
+  if (state.path !== 'p2p') return all;
+  return all.filter((server) => !/^turns?:/i.test(String(server.urls)));
 }
 
 /**
