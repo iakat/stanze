@@ -30,9 +30,7 @@ const state = {
   micGain: null,
   micSource: null,
   micAnalyser: null,  // tap on the microphone input, for the stats level
-  meterBuf: null,     // one reusable buffer for the analyser
   meterPeak: 0,       // decaying peak, so one tick per second can see a word
-  meterTimer: null,
   rnnoise: null,
   rnnoiseOn: false,
   playCtx: null,      // the remote audio graph, so a peer can go over 100%
@@ -1030,51 +1028,14 @@ async function buildAudio() {
   resumeAudio();
 }
 
-// startMeter reads the microphone before the gain, on a second branch of the
+// startMeter taps the microphone before the gain, on a second branch of the
 // source, so the stats show a live device even while the local mute is on. It
-// does not touch the path to the peers: a muted gain still sends silence.
-const METER_MS = 50;
-
+// does not touch the path to the peers: speakTick reads that tap.
 function startMeter() {
-  if (!state.audioCtx || !state.micSource) return;
-  if (!state.micAnalyser) {
-    try {
-      state.micAnalyser = state.audioCtx.createAnalyser();
-      state.micAnalyser.fftSize = 1024;
-      state.micSource.connect(state.micAnalyser);
-    } catch {
-      state.micAnalyser = null;
-      return;
-    }
-  }
-  if (state.meterTimer) return;
-  state.meterTimer = setInterval(readMeter, METER_MS);
-}
-
-// readMeter keeps a peak that falls slowly: the stats panel is read once a
-// second, and a 50 ms sample of speech is mostly gaps.
-function readMeter() {
-  const a = state.micAnalyser;
-  if (!a) return;
-  if (!state.meterBuf || state.meterBuf.length !== a.fftSize) {
-    state.meterBuf = new Float32Array(a.fftSize);
-  }
-  a.getFloatTimeDomainData(state.meterBuf);
-  let sum = 0;
-  for (let i = 0; i < state.meterBuf.length; i++) {
-    const v = state.meterBuf[i];
-    sum += v * v;
-  }
-  const rms = Math.sqrt(sum / state.meterBuf.length);
-  state.meterPeak = Math.max(rms, state.meterPeak * 0.9);
-}
-
-function stopMeter() {
-  if (state.meterTimer) clearInterval(state.meterTimer);
-  state.meterTimer = null;
-  state.micAnalyser = null;
-  state.meterBuf = null;
-  state.meterPeak = 0;
+  if (!state.audioCtx || !state.micSource || state.micAnalyser) return;
+  state.micAnalyser = state.audioCtx.createAnalyser();
+  state.micAnalyser.fftSize = 1024;
+  state.micSource.connect(state.micAnalyser);
 }
 
 // ------------------------------------------------------------- talking light
@@ -1114,9 +1075,13 @@ function paintSpeaking(tile, level, hold) {
 
 function speakTick() {
   const own = document.querySelector('.tile[data-local="yes"]');
+  // One read of the microphone tap feeds the talking light and the stats row.
+  // The peak falls slowly, so one stats tick can still see a word.
+  const level = analyserLevel(state.micAnalyser);
+  state.meterPeak = Math.max(level, state.meterPeak * 0.9);
   if (own && state.ownSpoke) {
     // A muted microphone sends silence, so the guest is not shown as talking.
-    paintSpeaking(own, state.mic ? analyserLevel(state.micAnalyser) : 0, state.ownSpoke);
+    paintSpeaking(own, state.mic ? level : 0, state.ownSpoke);
   }
   for (const peer of state.peers.values()) {
     // One read per tick feeds the light and the stats line. The light follows
@@ -2078,7 +2043,8 @@ function leave(message) {
   state.micSource = null;
   state.rnnoise = null;
   state.rnnoiseOn = false;
-  stopMeter();
+  state.micAnalyser = null;
+  state.meterPeak = 0;
   stopSpeaking();
   state.outStream = null;
   state.camTrack = null;
