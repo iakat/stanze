@@ -20,8 +20,15 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
     this.pending = new Float32Array(FRAME + 256);
     this.pendingLen = 0;
 
+    // Output ring: 480 is not a multiple of the 128 sample render quantum, so
+    // the processed frames go through a FIFO. Without it the tail of every
+    // frame was dropped and the result sounded robotic.
+    this.ring = new Float32Array(4096);
+    this.ringRead = 0;
+    this.ringWrite = 0;
+    this.ringFill = 0;
+
     this.frameOut = new Float32Array(FRAME);
-    this.outPos = FRAME;
 
     this.vad = 0;
     this.alive = true;
@@ -52,7 +59,6 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
       this.frameOut[i] = v;
       outEnergy += v * v;
     }
-    this.outPos = 0;
 
     const inRms = Math.sqrt(inEnergy / FRAME);
     const outRms = Math.sqrt(outEnergy / FRAME);
@@ -68,6 +74,37 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
       this.bypassLeft--;
       this.frameOut.set(frame);
     }
+    this.push(this.frameOut);
+  }
+
+  push(frame) {
+    for (let i = 0; i < FRAME; i++) {
+      if (this.ringFill === this.ring.length) {
+        // Full: drop the oldest sample instead of overwriting the queue.
+        this.ringRead = (this.ringRead + 1) % this.ring.length;
+        this.ringFill--;
+      }
+      this.ring[this.ringWrite] = frame[i];
+      this.ringWrite = (this.ringWrite + 1) % this.ring.length;
+      if (this.ringFill < this.ring.length) this.ringFill++;
+    }
+  }
+
+  pull(n) {
+    const out = new Float32Array(n);
+    const take = Math.min(n, this.ringFill);
+    for (let i = 0; i < take; i++) {
+      out[i] = this.ring[this.ringRead];
+      this.ringRead = (this.ringRead + 1) % this.ring.length;
+    }
+    this.ringFill -= take;
+    // Keep the latency near one frame if the two clocks drift apart.
+    if (this.ringFill > FRAME * 2) {
+      const drop = this.ringFill - FRAME;
+      this.ringRead = (this.ringRead + drop) % this.ring.length;
+      this.ringFill = FRAME;
+    }
+    return out;
   }
 
   process(inputs, outputs) {
@@ -97,13 +134,8 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
       }
     }
 
-    let done = 0;
-    while (done < out.length && this.outPos < FRAME) {
-      const take = Math.min(out.length - done, FRAME - this.outPos);
-      out.set(this.frameOut.subarray(this.outPos, this.outPos + take), done);
-      this.outPos += take;
-      done += take;
-    }
+    const pcm = this.pull(out.length);
+    out.set(pcm);
     return true;
   }
 }
