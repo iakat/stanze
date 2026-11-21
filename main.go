@@ -179,6 +179,11 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	for _, name := range routeNames() {
 		mux.Handle("/"+name, serve(name))
 	}
+	// The drawings of the short code are one folder of small files. The map
+	// holds only the listed names, so any other path still gets a 404.
+	mux.HandleFunc("/openmoji/", func(w http.ResponseWriter, r *http.Request) {
+		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
+	})
 	// The old sealed page is gone: its links land on the one join form with the
 	// sealed toggle on. The redirect keeps no fragment of its own, so a link
 	// like /e2e#r=<room> keeps its room and gains the flag.
@@ -226,8 +231,8 @@ func docHandler(dir, name string) http.HandlerFunc {
 // loadAssets reads the embedded client, or a directory override for hacking on
 // the frontend.
 func loadAssets(dir string) (map[string][]byte, error) {
+	out := make(map[string][]byte)
 	if dir != "" {
-		out := make(map[string][]byte)
 		for _, name := range assetNames() {
 			if name == workletBundle {
 				continue
@@ -238,9 +243,11 @@ func loadAssets(dir string) (map[string][]byte, error) {
 			}
 			out[name] = b
 		}
+		if err := loadOpenmoji(dir, out); err != nil {
+			return nil, err
+		}
 		return withWorkletBundle(out), nil
 	}
-	out := make(map[string][]byte)
 	for _, name := range assetNames() {
 		if name == workletBundle {
 			continue
@@ -251,7 +258,39 @@ func loadAssets(dir string) (map[string][]byte, error) {
 		}
 		out[name] = b
 	}
+	if err := loadOpenmoji("", out); err != nil {
+		return nil, err
+	}
 	return withWorkletBundle(out), nil
+}
+
+// loadOpenmoji reads the drawings of the short code. One directory of small
+// SVG files, so a glob is shorter than a second list that could drift from
+// the client, and a missing drawing fails the build, not a call.
+func loadOpenmoji(dir string, out map[string][]byte) error {
+	var names []string
+	var err error
+	if dir != "" {
+		names, err = filepath.Glob(filepath.Join(dir, "openmoji", "*.svg"))
+	} else {
+		names, err = fs.Glob(embeddedFS, "static/openmoji/*.svg")
+	}
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		var b []byte
+		if dir != "" {
+			b, err = os.ReadFile(name)
+		} else {
+			b, err = fs.ReadFile(embeddedFS, name)
+		}
+		if err != nil {
+			return err
+		}
+		out["openmoji/"+filepath.Base(name)] = b
+	}
+	return nil
 }
 
 func assetNames() []string {
