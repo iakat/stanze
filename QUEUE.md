@@ -14,3 +14,4 @@ One line per work item. The top item is the most important.
 - Add a sound switch: the four cues and the lost connection chime are always on, they can only be made quiet by hand.
 - Extend the stats panel with jitter, packet loss and a short history graph; today it shows bitrates, round trip time and the path.
 - Give the per peer volume a stable identity beyond the name: two guests with the same name share one stored setting.
+- Client side mesh transcription: one volunteer peer runs ASR on the incoming streams inside the page and sends the text as sealed chat, with a label that says who transcribed. Model: vosk small is 68 MB and is the cheap default; moonshine base is 274 MB and was asked for in the channel, so its size needs a pass before it ships (channel 17:22).
