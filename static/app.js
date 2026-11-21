@@ -121,11 +121,11 @@ const $ = (id) => /** @type {Elements[K]} */ (document.getElementById(id));
 const ROOM_RE = /^[a-z0-9._-]{1,64}$/;
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const QUALITY = {
-  '640x360@30': { w: 640, h: 360, fps: 30 },
-  '1280x720@30': { w: 1280, h: 720, fps: 30 },
-  '1920x1080@30': { w: 1920, h: 1080, fps: 30 },
-  '1920x1080@60': { w: 1920, h: 1080, fps: 60 },
-  '2560x1440@30': { w: 2560, h: 1440, fps: 30 },
+  '640x360@30': { w: 640, h: 360, fps: 30, max: 400000 },
+  '1280x720@30': { w: 1280, h: 720, fps: 30, max: 1500000 },
+  '1920x1080@30': { w: 1920, h: 1080, fps: 30, max: 3000000 },
+  '1920x1080@60': { w: 1920, h: 1080, fps: 60, max: 5000000 },
+  '2560x1440@30': { w: 2560, h: 1440, fps: 30, max: 6000000 },
 };
 
 // newRoomID builds a 128 bit room id in the client, so the lobby can suggest
@@ -439,27 +439,16 @@ function stopCallClock() {
 
 const MIC_AUDIO = { echoCancellation: true, noiseSuppression: false, autoGainControl: true };
 
-// The encoder ceiling for each quality step. A size alone would let the encoder
-// spend the same bandwidth on 360p as on 1440p, so each step carries a cap.
-const CAM_BITRATE = {
-  '640x360@30': 400000,
-  '1280x720@30': 1500000,
-  '1920x1080@30': 3000000,
-  '1920x1080@60': 5000000,
-  '2560x1440@30': 6000000,
-};
-
-// qualityNow is the chosen step, with the default for a value this build does
-// not know (a stored string from an older page, for example).
+// qualityNow is the chosen step, with its encoder ceiling, or the default for a
+// value this build does not know (a stored string from an older page).
 function qualityNow() {
   return QUALITY[state.quality] || QUALITY['1280x720@30'];
 }
 
-// camVideo builds the camera request for one quality step. The join and every
-// later camera switch go through this, so the picker is in effect from the
-// first frame and not only after a change.
-function camVideo(quality) {
-  const q = quality || qualityNow();
+// camVideo builds the camera request for the chosen step. The join, every later
+// camera switch and the screen share go through it.
+function camVideo() {
+  const q = qualityNow();
   return {
     width: { ideal: q.w, max: q.w },
     height: { ideal: q.h, max: q.h },
@@ -490,7 +479,7 @@ async function capVideoSender(sender) {
     return true;
   }
   if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return true;
-  const max = CAM_BITRATE[state.quality] || CAM_BITRATE['1280x720@30'];
+  const max = qualityNow().max;
   const next = {
     ...params,
     encodings: params.encodings.map((enc) => ({ ...enc, maxBitrate: max })),
@@ -517,16 +506,11 @@ function capCameraSenders(pc) {
 // the new size and frame rate, and every peer's encoder gets the matching
 // ceiling. The screen share is not touched; it carries its own quality.
 async function applyQuality() {
-  const q = qualityNow();
   let refused = false;
   const track = state.camTrack;
   if (track && track.readyState === 'live') {
     try {
-      await track.applyConstraints({
-        width: { ideal: q.w },
-        height: { ideal: q.h },
-        frameRate: { ideal: q.fps, max: q.fps },
-      });
+      await track.applyConstraints(camVideo());
     } catch {
       refused = true;
     }
@@ -649,7 +633,7 @@ async function refreshDevices() {
 // plain camera request, because a deviceId already names the exact lens.
 function constraintsFor(kind, pick) {
   if (kind === 'video') {
-    const base = camVideo(qualityNow());
+    const base = camVideo();
     return pick ? { ...base, deviceId: { exact: pick } } : { ...base, facingMode: 'user' };
   }
   return pick ? { ...MIC_AUDIO, deviceId: { exact: pick } } : { ...MIC_AUDIO };
@@ -1457,13 +1441,9 @@ async function startShare() {
     say('this browser cannot seal media frames, so screen sharing stays off');
     return;
   }
-  const q = QUALITY[state.quality] || QUALITY['1280x720@30'];
   let display;
   try {
-    display = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: q.fps, max: q.fps }, width: { ideal: q.w }, height: { ideal: q.h } },
-      audio: true,
-    });
+    display = await navigator.mediaDevices.getDisplayMedia({ video: camVideo(), audio: true });
   } catch (err) {
     if (err && err.name === 'NotAllowedError') return;
     say('screen sharing failed');
