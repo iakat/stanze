@@ -86,6 +86,13 @@ runs in a WebAssembly module (`pq.wasm`) built from `internal/pq`. Both sides
 show the same 13 character short code and six emoji on each tile, for comparison
 over the call.
 
+A file offer uses the same two paths. The name, the size and the type travel as
+a sealed `app` payload on the chat key of the pair, and the bytes go over one
+ordered data channel per pair, one sealed chunk at a time. The receiving browser
+keeps the file in memory and shows a save link, so the server never sees a byte
+and nothing is written to the disk of a guest until that guest clicks save. A
+cancel, a refusal or a guest who leaves ends the transfer and drops the buffers.
+
 ### Identity and pins
 
 Each browser makes a long-term Ed25519 identity the first time it runs here and
@@ -331,6 +338,14 @@ ROOMSBASE=http://127.0.0.1:8095 OUTDIR=/tmp/shots \
 guest, a fake peer that runs the module and answers without signing, another
 that signs but is not pinned, and a bundle with the identity fields stripped.
 Each one has to be refused or shown as unverified.
+
+`tools/pq-file-e2e.js` is the file transfer suite. Three contexts join one
+sealed room, and the test drops a file of a few KB, a file over the chunk path,
+an empty file, a refused offer, a cancelled offer and an offer whose guest
+leaves before accepting. It saves each accepted file through the link and
+compares the SHA-256 with the bytes that went in. It also sums every signaling
+frame and asserts that no file name appeared there and that the data channel
+carried the bytes.
 
 `tools/smoke.js` is the quick client check. It is small on purpose: a fresh
 page joins a new room with fake devices, and the test fails on the first

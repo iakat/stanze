@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261121u">
+<link rel="stylesheet" href="/style.css?v=20261121v">
 </head>
 <body>
 
@@ -98,13 +98,15 @@
         <div id="stats-body" class="stats-body"></div>
       </aside>
 
-      <aside class="chat">
+      <aside class="chat" id="chat-panel">
         <div class="chat-head">chat <span id="chat-note" class="muted" hidden>(sealed, no server history)</span></div>
         <ol id="chat-log" class="chat-log"></ol>
         <form id="chat-form" class="chat-form" autocomplete="off">
           <input id="chat-text" maxlength="500" placeholder="say something" spellcheck="false" autocomplete="off">
+          <button id="file-btn" type="button" title="offer a file to the room, peer to peer">file</button>
           <button type="submit">send</button>
         </form>
+        <input id="file-input" type="file" multiple hidden>
       </aside>
     </div>
 
@@ -137,6 +139,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261121u"></script>
+<script src="/app.js?v=20261121v"></script>
 </body>
 </html>

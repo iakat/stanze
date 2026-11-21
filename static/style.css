@@ -321,6 +321,28 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 }
 .chat-form input { flex: 1; min-width: 0; font-size: var(--fs-smaller); }
 .chat-form button { min-width: 50px; padding: 2px 6px; }
+.chat.drop { outline: 2px dashed var(--navy); outline-offset: -3px; }
+
+/* A file offer is a chat line with a head, a bar and the buttons of that one
+ * transfer. The colours are the panel and title bar variables, so the row
+ * holds the old desktop look. */
+.chat-log li.chat-file { margin: 3px 0; }
+.file-head { display: block; }
+.file-name { color: var(--navy); font-weight: bold; }
+.file-size { color: var(--soft); margin-left: 4px; }
+.file-bar {
+  display: block;
+  height: 8px;
+  margin: 2px 0;
+  background: #fff;
+  border: 1px solid var(--edge);
+}
+.file-fill { display: block; height: 100%; width: 0; background: var(--navy); }
+.file-status { display: block; color: var(--soft); font-size: var(--fs-tiny); }
+.file-acts { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
+.file-acts button { font-size: var(--fs-tiny); min-height: 20px; padding: 1px 6px; }
+.file-save { color: var(--navy); font-weight: bold; font-size: var(--fs-tiny); }
+.file-save:focus-visible { outline: 1px dotted var(--ink); outline-offset: 1px; }
 
 .grid {
   flex: 1;
