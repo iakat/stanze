@@ -2,9 +2,10 @@
 
 One line per work item. New work goes to the bottom.
 
+- Add post-quantum end-to-end encryption for all media and metadata: audio, video, the text in the room, and the names (katia, top priority).
 - Keep queued work items durable under load: many requests in one turn must not drop them (coderobe).
 - Decide the policy for custom room names: a guessed name lets people drop in, and the point of random ids is that they cannot (coderobe).
-- Port the voice bridge to the rooms server, or state that rooms have no bot participant: a stanze room carries browser peers only, so ocbot can not join one with audio (from the jitsi port).
+- Decide if a bot or a text peer can take part in a room: today only browsers join one, so the voice bridge from the jitsi port has no place here yet (open question, not started).
 - Funny sound effects for the room events: join, leave, mic on, mic off (katia).
 - Show the own tile with a placeholder when the camera is refused, so the mirror preview and the own badge are always visible (seen in Chromium without a camera).
 - Add host controls: mute or remove one peer from the room.
