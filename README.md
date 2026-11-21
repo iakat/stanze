@@ -9,8 +9,8 @@ server relays encrypted packets without being able to read them.
 
 - One binary, no database, no external services, no third-party JS or fonts.
 - Room ids are 128 bit random ids (26 characters of base32) that live only in
-  memory. The first join creates the room, and a room is forgotten a couple of
-  minutes after its last participant leaves.
+  memory. The first join creates the room, and the room is forgotten the moment
+  its last participant leaves.
 - Optional per-room passphrase, hashed with PBKDF2-HMAC-SHA256 in memory.
 - No route lists, counts or names rooms. Not even at debug level.
 - Mesh audio is Opus by default (whatever the browsers agree on), video VP8/VP9
@@ -53,6 +53,14 @@ new room: the id is built in the browser and the join creates it. The passphrase
 typed in the same form becomes the room passphrase when the room is created. The
 room id is placed in the URL fragment (`#r=...`), so it never travels in an HTTP
 request, a proxy log or a `Referer` header.
+
+A room that nobody is in does not exist. The last peer to leave takes the room
+with it, so the same id joined later is a new room: the guest types the
+passphrase again and starts a fresh call with nothing carried over. `POST
+/api/new` is the only way to make a room ahead of the first join; such a room
+waits for its first peer for `-empty-room-ttl` (2 minutes) and is then forgotten
+too, passphrase included. The browser never calls that route: a link from the
+lobby is just an id, and the first join makes the room.
 
 Pressing enter asks for the camera and the microphone and starts the call with
 both on. A refusal or a missing device still joins, with the devices that did not
@@ -118,7 +126,7 @@ Every flag has an environment variable equivalent. Flags win.
 | `-max-rooms` | `MAX_ROOMS` | `200` | rooms alive at the same time |
 | `-create-per-min` | `CREATE_PER_MIN` | `10` | room creations per client IP per minute |
 | `-max-msg-bytes` | `MAX_MSG_BYTES` | `262144` | largest accepted WebSocket message (SDP + ICE) |
-| `-empty-room-ttl` | `EMPTY_ROOM_TTL` | `2m` | how long an empty room is remembered |
+| `-empty-room-ttl` | `EMPTY_ROOM_TTL` | `2m` | how long a room created before the first join waits for its first peer |
 | `-join-timeout` | `JOIN_TIMEOUT` | `10s` | WebSocket must send `join` within this time |
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
@@ -164,8 +172,11 @@ well.
 
 - A room id is 16 random bytes from `crypto/rand`, rendered as lowercase
   base32 (26 characters). Guessing one is not feasible.
-- Rooms exist only in memory. An empty room is forgotten after
-  `-empty-room-ttl`; nothing is ever written to disk.
+- Rooms exist only in memory. A room is dropped in the same step that removes
+  its last peer, and the passphrase digest and the chat buffer go with it: a
+  later join of the same id starts a new room, with no history. A room made with
+  `POST /api/new` and not yet joined waits `-empty-room-ttl` for its first peer.
+  Nothing is ever written to disk.
 - There is no route that lists, counts or describes rooms. The only endpoints
   are `GET /`, `GET /app.js`, `GET /style.css`, `GET /favicon.svg`,
   `POST /api/new` and `GET /ws`. Anything else returns `404`.
@@ -227,7 +238,8 @@ start at the same time without glare. Mute and camera toggles only flip
 It checks: the embedded client is served, every obvious room-listing path
 (`/rooms`, `/api/rooms`, `/metrics`, `/debug`, ...) is a 404, a room id never
 appears in any GET response, unknown rooms and wrong passphrases get byte
-identical errors, offer/answer/ICE are relayed verbatim, `peer-left` works, the
+identical errors, offer/answer/ICE are relayed verbatim, `peer-left` works, a
+room id is joinable again as a new room the moment its last peer leaves, the
 room cap is enforced, cross-room relaying is dropped, oversized messages close
 the connection, and two pion peers establish a data channel plus an Opus audio
 track both directly and forced through the embedded TURN relay with the

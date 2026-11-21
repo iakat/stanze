@@ -110,12 +110,14 @@ func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	return out[:keyLen]
 }
 
-// Room lives only in memory and is dropped once it has been empty for a while.
+// Room lives only in memory and is dropped with its last peer.
 type Room struct {
-	id      string
-	pass    *passHash
-	peers   map[string]*Peer
-	created time.Time
+	id    string
+	pass  *passHash
+	peers map[string]*Peer
+	// emptyAt is set when the room is made, cleared by the first join and
+	// never set again: the last leave drops the room, so only a room that
+	// was created ahead of the first join waits in the map while empty.
 	emptyAt time.Time
 	// admins are the peers that may mute, remove or promote others. The first
 	// peer in the room gets the role, and a room can have several admins.
@@ -146,6 +148,7 @@ type Hub struct {
 	maxRooms     int
 	emptyRoomTTL time.Duration
 	rnd          func() (string, error)
+	now          func() time.Time
 	hashSem      chan struct{}
 }
 
@@ -163,6 +166,7 @@ func newHub(cfg *Config) *Hub {
 		maxRooms:     cfg.MaxRooms,
 		emptyRoomTTL: cfg.EmptyRoomTTL,
 		rnd:          newRoomID,
+		now:          time.Now,
 		hashSem:      make(chan struct{}, 4),
 	}
 }
@@ -194,13 +198,12 @@ func (h *Hub) create(passphrase string) (string, error) {
 		if _, taken := h.rooms[id]; taken {
 			continue
 		}
-		now := time.Now()
+		now := h.now()
 		h.rooms[id] = &Room{
 			id:      id,
 			pass:    pass,
 			peers:   make(map[string]*Peer),
 			admins:  make(map[string]bool),
-			created: now,
 			emptyAt: now,
 		}
 		return id, nil
@@ -255,13 +258,12 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 		if len(h.rooms) >= h.maxRooms {
 			return nil, errRoomUnavailable
 		}
-		now := time.Now()
+		now := h.now()
 		room = &Room{
 			id:      roomID,
 			pass:    pass,
 			peers:   make(map[string]*Peer),
 			admins:  make(map[string]bool),
-			created: now,
 			emptyAt: now,
 		}
 		h.rooms[roomID] = room
@@ -301,10 +303,16 @@ func (h *Hub) leave(p *Peer) {
 			break
 		}
 	}
-	if len(room.peers) == 0 {
-		room.emptyAt = time.Now()
-	}
 	delete(room.admins, p.id)
+	if len(room.peers) == 0 {
+		// The last peer takes the room with it. The passphrase digest and the
+		// chat buffer die here, so a later join starts from nothing.
+		if h.rooms[room.id] == room {
+			delete(h.rooms, room.id)
+		}
+		p.room = nil
+		return
+	}
 	if len(room.admins) == 0 {
 		for _, id := range room.order {
 			if _, ok := room.peers[id]; ok {
@@ -441,20 +449,19 @@ func (h *Hub) broadcast(p *Peer, payload []byte) {
 	}
 }
 
-// reap drops rooms that stayed empty for longer than the grace period.
+// reap drops rooms that stayed empty for longer than the grace period. The
+// last leave already drops a room at once, so this catches a room that was
+// created ahead of the first join, and any room that went empty some other
+// way: a zero emptyAt is older than any ttl and is dropped on the next tick.
 func (h *Hub) reap() {
-	now := time.Now()
+	now := h.now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, room := range h.rooms {
 		if len(room.peers) > 0 {
 			continue
 		}
-		since := room.emptyAt
-		if since.IsZero() {
-			since = room.created
-		}
-		if now.Sub(since) > h.emptyRoomTTL {
+		if now.Sub(room.emptyAt) > h.emptyRoomTTL {
 			delete(h.rooms, id)
 		}
 	}
