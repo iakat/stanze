@@ -186,13 +186,17 @@ function send(msg) {
 
 // ---------------------------------------------------------------- tiles
 
+// Every video element is muted, remote tiles too: the sound of a peer is
+// played through its own gain node, and a muted video is the only kind that
+// an autoplay policy lets play without a gesture, so remote tiles are not
+// black on strict browsers.
 function makeTile(id, name, local = false) {
   const tile = document.createElement('div');
   tile.className = 'tile';
   tile.dataset.state = 'new';
   if (local) tile.dataset.local = 'yes';
   tile.innerHTML = `
-    <video autoplay playsinline${local ? ' muted' : ''}></video>
+    <video autoplay playsinline muted></video>
     <div class="avatar"></div>
     ${local ? '' : `<div class="vol">
       <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
