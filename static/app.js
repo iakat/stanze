@@ -3669,14 +3669,21 @@ function sealedCodePanel(peer) {
   const row = document.createElement('span');
   row.className = 'sas-row';
   for (const [emoji, name, hex] of verifyEmojis(code)) {
+    // Each drawing carries its own name in a card of its own: the six of them
+    // are easy to mix up at a glance, so pointing at one says which it is.
+    // The name is drawn here rather than left to the native title bubble,
+    // because the card lets the pointer through to the tile underneath.
+    const cell = document.createElement('span');
+    cell.className = 'sas-cell';
     const img = document.createElement('img');
     img.className = 'sas-emoji';
     img.src = `/openmoji/${hex}.svg`;
     img.alt = emoji;
-    img.title = name;
-    img.width = 22;
-    img.height = 22;
-    row.appendChild(img);
+    const tip = document.createElement('span');
+    tip.className = 'sas-tip';
+    tip.textContent = name;
+    cell.append(img, tip);
+    row.appendChild(cell);
   }
   const text = document.createElement('span');
   text.className = 'sas-code';

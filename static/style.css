@@ -452,8 +452,37 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   text-transform: uppercase;
   color: var(--soft);
 }
-.tile .sas-row { display: flex; gap: 3px; }
-.tile .sas-emoji { width: 24px; height: 24px; display: block; }
+.tile .sas-row { display: flex; gap: 4px; }
+/* One drawing plus its name: the emoji is a target in its own right, so it
+ * can be pointed at even though the card as a whole lets the pointer through. */
+.tile .sas-cell {
+  position: relative;
+  display: block;
+  pointer-events: auto;
+  padding: 1px;
+}
+.tile .sas-emoji { width: 30px; height: 30px; display: block; }
+.tile .sas-cell:hover .sas-emoji { outline: 2px solid var(--ink); outline-offset: 1px; }
+.tile .sas-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 3px);
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 2px 6px;
+  background: #000;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.3;
+  letter-spacing: .04em;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 70ms linear;
+}
+.tile .sas-cell:hover .sas-tip,
+.tile .sas-cell:focus-within .sas-tip { opacity: 1; visibility: visible; }
 .tile .sas-code {
   letter-spacing: 1px;
   font-weight: 700;
