@@ -275,36 +275,14 @@ func testHTTPSurface() {
 		report("asset "+path, errOr(err, code != 200, fmt.Sprintf("status %d", code)))
 	}
 
-	// The old sealed page is gone: its links land on the one join form. The
-	// redirect is checked without following it, and the three removed files
-	// must be 404 like any other unknown path.
-	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
-	if req, err := http.NewRequest(http.MethodGet, httpBase+"/e2e", nil); err != nil {
-		report("/e2e redirect", err)
-	} else if res, err := noFollow.Do(req); err != nil {
-		report("/e2e redirect", err)
-	} else {
-		loc := res.Header.Get("Location")
-		io.Copy(io.Discard, res.Body)
-		res.Body.Close()
-		report("/e2e redirects to the one join form", errOr(nil,
-			res.StatusCode != http.StatusFound, fmt.Sprintf("status %d", res.StatusCode),
-			loc != "/", "location "+loc))
-	}
-	for _, gone := range []string{"/e2e.html", "/e2e.js", "/e2e.css"} {
-		code, _, err := httpDo(http.MethodGet, gone, "")
-		report("old sealed asset "+gone+" is gone", errOr(err, code != http.StatusNotFound, fmt.Sprintf("status %d", code)))
-	}
-
-	// No route may list, count or describe rooms.
+	// No route may list, count or describe rooms, and the retired paths of the
+	// old sealed page are 404 like any other unknown path.
 	leaks := 0
 	paths := []string{
 		"/rooms", "/api/rooms", "/api/rooms/list", "/rooms.json", "/metrics",
 		"/debug", "/debug/pprof", "/debug/vars", "/status", "/stats", "/api",
 		"/api/list", "/directory", "/room", "/.well-known/rooms", "/robots.txt",
-		"/admin", "/healthz",
+		"/admin", "/healthz", "/e2e", "/e2e.html", "/e2e.js", "/e2e.css",
 	}
 	for _, p := range paths {
 		code, body, err := httpDo(http.MethodGet, p, "")

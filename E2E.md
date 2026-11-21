@@ -3,7 +3,6 @@
 The room server carries only sealed rooms: every join is end to end encrypted,
 and the join form says so without a toggle. The sealed room uses the same stage,
 tiles, chat and stats panel as any other call, and the old separate page is gone
-(`/e2e` answers a `302` to `/`, so an old link lands on the one join form).
 
 Live proof: <https://stanze.ch-test.katia.sh/> is the merged build on the
 classic host, and its sealed rooms passed the two browser suites there
@@ -110,7 +109,7 @@ manifest is `deploy/deployment.json`.
   server, including the live URL: the peer list carries no name, there is no
   plaintext chat path, the handshake agrees, and an observer with no key opens
   nothing.
-- `cmd/selftest` — 42 checks, 0 failed, including the `/e2e` redirect and the
+- `cmd/selftest` — 42 checks, 0 failed, including the join form, the blind relay and the
   three removed page assets.
 - `tools/pq-browser-e2e.js` — two real headless browsers on the one join form:
   video and audio play through the transform, chat and names decrypt, the short
