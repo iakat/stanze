@@ -2469,6 +2469,10 @@ async function updateStats() {
 // frame goes through an AES-GCM transform in a worker. The keys come from the
 // WebAssembly build of X25519 + ML-KEM-768 (static/pq.wasm) through the JSON
 // bridge in wasm_exec.js, so the relay only ever sees opaque blobs.
+// The wasm and its shim must be the build this page is. app.js carries the
+// build query, so both fetches inherit it and a cached old pair can never meet
+// a newer page, which would fail every handshake without a word.
+const BUILD_Q = '?' + ((document.currentScript && document.currentScript.src.split('?')[1]) || 'v=1');
 
 // The short code is 13 base32 characters, which is fine to compare on a screen
 // but clumsy to read aloud. The same bits are shown as six OpenMoji drawings
@@ -2572,15 +2576,10 @@ function sealingAvailable() {
 
 // ------------------------------------------------------------- wasm loading
 
-// wasm_exec.js is fetched when the lobby opens, not at page load, so the join
-// form paints first. The script defines the Go class; the module then starts
-// the JSON bridge.
+// wasm_exec.js is fetched when the lobby opens, so the join form paints first.
 function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
-    if (win().Go) {
-      resolve(null);
-      return;
-    }
+    if (win().Go) return resolve(null);
     const el = document.createElement('script');
     el.src = src;
     el.onload = () => resolve(null);
@@ -2592,18 +2591,15 @@ function loadScriptOnce(src) {
 function loadWasmModule() {
   return new Promise((resolve, reject) => {
     const Go = win().Go;
-    if (!window.WebAssembly || typeof Go !== 'function') {
-      reject(new Error('webassembly unavailable'));
-      return;
-    }
+    if (!window.WebAssembly || typeof Go !== 'function') return reject(new Error('webassembly unavailable'));
     const go = new Go();
-    fetch('/pq.wasm')
+    fetch('/pq.wasm' + BUILD_Q)
       .then((res) => {
         if (!res.ok) throw new Error('wasm ' + res.status);
         return WebAssembly.instantiateStreaming(res, go.importObject);
       })
       .catch(async () => {
-        const res = await fetch('/pq.wasm');
+        const res = await fetch('/pq.wasm' + BUILD_Q);
         if (!res.ok) throw new Error('wasm ' + res.status);
         const buf = await res.arrayBuffer();
         return WebAssembly.instantiate(buf, go.importObject);
@@ -2708,7 +2704,7 @@ let wasmLoad = null;
 function ensureWasm() {
   if (state.wasmOk) return Promise.resolve();
   if (wasmLoad) return wasmLoad;
-  wasmLoad = loadScriptOnce('/wasm_exec.js')
+  wasmLoad = loadScriptOnce('/wasm_exec.js' + BUILD_Q)
     .then(loadWasmModule)
     .then(() => {
       const test = pqSelfTest();
