@@ -431,32 +431,31 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   gap: 2px;
   max-width: calc(100% - 12px);
   padding: 5px 9px 6px;
-  background: #04120a;
-  border: 1px solid #2f8f4a;
-  box-shadow: 0 0 0 1px #08160c, 0 4px 12px rgba(0, 0, 0, 0.65);
+  background: var(--panel);
+  border: 2px solid;
+  border-color: #fff var(--edge) var(--edge) #fff;
   font-family: monospace;
   font-size: var(--fs-tiny);
   line-height: 1.25;
-  color: #9cf0b0;
+  color: var(--ink);
   opacity: 0;
   visibility: hidden;
   transition: opacity 90ms linear;
   pointer-events: none;
 }
-.tile .sas[hidden] { display: none; }
 .tile:hover .sas,
 .tile:focus-within .sas { opacity: 1; visibility: visible; }
 .tile .sas-head {
-  font-size: var(--fs-tiny);
   letter-spacing: 1px;
   text-transform: uppercase;
-  color: #6fbf85;
+  color: var(--soft);
 }
 .tile .sas-row { display: flex; gap: 3px; }
 .tile .sas-emoji { width: 24px; height: 24px; display: block; }
 .tile .sas-code {
   letter-spacing: 1px;
-  color: #d6ffe2;
+  font-weight: 700;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
