@@ -50,7 +50,7 @@ async function joinPage(context, name, room) {
   const page = await context.newPage();
   const errors = [];
   attach(page, errors);
-  await page.goto(BASE + '/?sealed=1' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
+  await page.goto(BASE + '/' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
   await until(page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 45000, 'wasm self test');
   await page.fill('#name', name);
   if (room) await page.fill('#room', room);
@@ -116,7 +116,7 @@ async function measure(page, label) {
 
   // B reloads and joins the same sealed room again. A stays in the room and
   // must recover its incoming video without a manual gesture.
-  await b.page.goto(BASE + '/?sealed=1#r=' + room, { waitUntil: 'load', timeout: 60000 });
+  await b.page.reload({ waitUntil: 'load', timeout: 60000 });
   await until(b.page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 45000, 'rejoin wasm test');
   await b.page.fill('#name', 'bob');
   await b.page.click('#enter-btn', { timeout: 20000 });

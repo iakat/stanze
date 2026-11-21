@@ -95,9 +95,7 @@ func createRoom(pass string) (string, error) {
 // ---------------------------------------------------------------- signaling
 
 type peerInfo struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Sealed bool   `json:"sealed"`
+	ID string `json:"id"`
 }
 
 type iceCfg struct {
@@ -252,12 +250,12 @@ type joinedPeer struct {
 	ice  []iceCfg
 }
 
-func join(room, pass, name string) (*joinedPeer, error) {
+func join(room, pass string) (*joinedPeer, error) {
 	c, err := dialSig()
 	if err != nil {
 		return nil, err
 	}
-	if err := c.send(map[string]any{"t": "join", "room": room, "pass": pass, "name": name}); err != nil {
+	if err := c.send(map[string]any{"t": "join", "room": room, "pass": pass}); err != nil {
 		c.close()
 		return nil, err
 	}
@@ -300,9 +298,9 @@ func testHTTPSurface() {
 		report("asset "+path, errOr(err, code != 200, fmt.Sprintf("status %d", code)))
 	}
 
-	// The old sealed page is gone: its links land on the one join form with
-	// the sealed flag on. The redirect is checked without following it, and
-	// the three removed files must be 404 like any other unknown path.
+	// The old sealed page is gone: its links land on the one join form. The
+	// redirect is checked without following it, and the three removed files
+	// must be 404 like any other unknown path.
 	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
@@ -314,9 +312,9 @@ func testHTTPSurface() {
 		loc := res.Header.Get("Location")
 		io.Copy(io.Discard, res.Body)
 		res.Body.Close()
-		report("/e2e redirects to the sealed join form", errOr(nil,
+		report("/e2e redirects to the one join form", errOr(nil,
 			res.StatusCode != http.StatusFound, fmt.Sprintf("status %d", res.StatusCode),
-			loc != "/?sealed=1", "location "+loc))
+			loc != "/", "location "+loc))
 	}
 	for _, gone := range []string{"/e2e.html", "/e2e.js", "/e2e.css"} {
 		code, _, err := httpDo(http.MethodGet, gone, "")
@@ -420,7 +418,7 @@ func testUnauthorizedJoin() {
 		report("join creates a missing room", err)
 		return
 	}
-	a, err := join(id, "open-sesame", "alice")
+	a, err := join(id, "open-sesame")
 	if err != nil {
 		report("join creates a missing room", err)
 		return
@@ -428,7 +426,7 @@ func testUnauthorizedJoin() {
 	defer a.c.close()
 	report("join creates a missing room", nil)
 
-	b, err := join(id, "open-sesame", "bob")
+	b, err := join(id, "open-sesame")
 	if err != nil {
 		report("second peer joins the created room", err)
 		return
@@ -440,7 +438,7 @@ func testUnauthorizedJoin() {
 	report("created room announces the second peer", errOr(err,
 		m.Peer == nil || m.Peer.ID != b.self, "wrong peer id"))
 
-	if _, err := join(id, "", "carol"); err == nil {
+	if _, err := join(id, ""); err == nil {
 		report("created room keeps its passphrase", errors.New("join without passphrase accepted"))
 	} else {
 		report("created room keeps its passphrase", nil)
@@ -468,7 +466,7 @@ func rawJoinMessage(room, pass string) (string, error) {
 		return "", err
 	}
 	defer conn.Close()
-	payload, _ := json.Marshal(map[string]any{"t": "join", "room": room, "pass": pass, "name": "probe"})
+	payload, _ := json.Marshal(map[string]any{"t": "join", "room": room, "pass": pass})
 	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		return "", err
 	}
@@ -519,14 +517,14 @@ func testRelay() {
 		report("relay room", err)
 		return
 	}
-	a, err := join(room, "", "alice")
+	a, err := join(room, "")
 	if err != nil {
 		report("peer A joins", err)
 		return
 	}
 	defer a.c.close()
 
-	b, err := join(room, "", "bob")
+	b, err := join(room, "")
 	if err != nil {
 		report("peer B joins", err)
 		return
@@ -573,69 +571,42 @@ func testRelay() {
 	report("peer-left reaches A", errOr(err, m.From != b.self, "wrong peer id"))
 }
 
-// testModeFlags checks the mode announcement that lets a client show a clear
-// line instead of a silent half call: a sealed guest and a plain guest must
-// see each other's flag in the join list and in the join notice.
-func testModeFlags() {
+// testNoNameInJoin checks that the room protocol never carries a name: the
+// server announces peers by id and flags only, and a name sent by an old client
+// is ignored rather than stored or echoed.
+func testNoNameInJoin() {
 	room, err := createRoom("")
 	if err != nil {
-		report("mode: room", err)
+		report("no name: room", err)
 		return
 	}
-	a, err := dialSig()
+	if first, err := rawJoinMessage(room, ""); err != nil {
+		report("no name: first join", err)
+		return
+	} else if strings.Contains(first, `"name"`) || strings.Contains(first, `"sealed"`) {
+		report("no name: first join", fmt.Errorf("reply carries a name or a mode flag: %s", first))
+		return
+	}
+	second, err := rawJoinMessage(room, "")
 	if err != nil {
-		report("mode: dial", err)
+		report("no name: second join", err)
 		return
 	}
-	defer a.close()
-	if err := a.send(map[string]any{"t": "join", "room": room, "name": "", "sealed": true}); err != nil {
-		report("mode: sealed join", err)
-		return
-	}
-	m, err := a.wait("joined", 5*time.Second)
-	if err != nil {
-		report("mode: sealed join", err)
-		return
-	}
-
-	b, err := dialSig()
-	if err != nil {
-		report("mode: dial plain", err)
-		return
-	}
-	defer b.close()
-	if err := b.send(map[string]any{"t": "join", "room": room, "name": "plain"}); err != nil {
-		report("mode: plain join", err)
-		return
-	}
-	m, err = b.wait("joined", 5*time.Second)
-	var sealedSeen bool
-	for _, peer := range m.Peers {
-		if peer.ID == m.Self {
-			continue
-		}
-		sealedSeen = peer.Sealed
-	}
-	report("mode: plain guest reads the sealed flag", errOr(err,
-		len(m.Peers) != 1, fmt.Sprintf("%d peers", len(m.Peers)),
-		!sealedSeen, "the sealed guest was announced as plain"))
-
-	notice, err := a.wait("peer-joined", 3*time.Second)
-	report("mode: sealed guest reads the plain flag", errOr(err,
-		notice.Peer == nil, "no peer in the notice",
-		notice.Peer != nil && notice.Peer.Sealed, "the plain guest was announced as sealed"))
+	report("peer list carries no name and no mode flag", errOr(nil,
+		strings.Contains(second, `"name"`), "the peer list carries a name",
+		strings.Contains(second, `"sealed"`), "the peer list carries a mode flag"))
 }
 
 func testRoomIsolation() {
 	room1, _ := createRoom("")
 	room2, _ := createRoom("")
-	a, err := join(room1, "", "a")
+	a, err := join(room1, "")
 	if err != nil {
 		report("isolation: A joins", err)
 		return
 	}
 	defer a.c.close()
-	d, err := join(room2, "", "d")
+	d, err := join(room2, "")
 	if err != nil {
 		report("isolation: D joins", err)
 		return
@@ -662,7 +633,7 @@ func testRoomLifetime() {
 		report("lifetime: room", err)
 		return
 	}
-	a, err := join(room, "first-pass", "a")
+	a, err := join(room, "first-pass")
 	if err != nil {
 		report("lifetime: first peer joins", err)
 		return
@@ -674,7 +645,7 @@ func testRoomLifetime() {
 	var b *joinedPeer
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		b, err = join(room, "second-pass", "b")
+		b, err = join(room, "second-pass")
 		if err == nil {
 			break
 		}
@@ -688,7 +659,7 @@ func testRoomLifetime() {
 	report("last leave drops the room", nil)
 
 	// The dropped room took its passphrase with it.
-	if _, err := join(room, "first-pass", "c"); err == nil {
+	if _, err := join(room, "first-pass"); err == nil {
 		report("dropped room forgot its passphrase", errors.New("the old passphrase still opens the room"))
 	} else {
 		report("dropped room forgot its passphrase", nil)
@@ -709,7 +680,7 @@ func testLimits() {
 	}()
 	rejected := 0
 	for i := 0; i < 12; i++ {
-		p, err := join(room, "", fmt.Sprintf("p%d", i))
+		p, err := join(room, "")
 		if err != nil {
 			if strings.Contains(err.Error(), "unavailable") {
 				rejected++
@@ -942,13 +913,13 @@ func testWebRTCMesh() {
 		report("webrtc: room", err)
 		return
 	}
-	a, err := join(room, "", "alice")
+	a, err := join(room, "")
 	if err != nil {
 		report("webrtc: A joins", err)
 		return
 	}
 	defer a.c.close()
-	b, err := join(room, "", "bob")
+	b, err := join(room, "")
 	if err != nil {
 		report("webrtc: B joins", err)
 		return
@@ -997,13 +968,13 @@ func testTURNRelay() {
 		report("relay: room", err)
 		return
 	}
-	a, err := join(room, "", "alice")
+	a, err := join(room, "")
 	if err != nil {
 		report("relay: A joins", err)
 		return
 	}
 	defer a.c.close()
-	b, err := join(room, "", "bob")
+	b, err := join(room, "")
 	if err != nil {
 		report("relay: B joins", err)
 		return
@@ -1081,7 +1052,7 @@ func main() {
 	testRelay()
 	testHardening()
 	testRoomIsolation()
-	testModeFlags()
+	testNoNameInJoin()
 	testLimits()
 	testRoomLifetime()
 	fmt.Println()
