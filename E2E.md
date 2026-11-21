@@ -1,13 +1,12 @@
 # Post-quantum end-to-end encryption (proof of concept)
 
-The room server carries a sealed mode beside the classic one, and the join form asks for it with a box that is on by default. The
-merge is in the client: the sealed join is a checkbox on the one join form, the
-sealed room uses the same stage, tiles, chat and stats panel as a plain room,
-and the old separate page is gone (`/e2e` answers a `302` to `/?sealed=1`, so an
-old link lands on the form with the box on).
+The room server carries only sealed rooms: every join is end to end encrypted,
+and the join form says so without a toggle. The sealed room uses the same stage,
+tiles, chat and stats panel as any other call, and the old separate page is gone
+(`/e2e` answers a `302` to `/`, so an old link lands on the one join form).
 
-Live proof: <https://stanze.ch-test.katia.sh/?sealed=1> is the merged build on
-the classic host, and its sealed rooms passed the two browser suite there
+Live proof: <https://stanze.ch-test.katia.sh/> is the merged build on the
+classic host, and its sealed rooms passed the two browser suites there
 (29 checks, 0 failed). That host is now the only deployment; the old
 `stanze-e2e` instance has stopped serving.
 
@@ -82,21 +81,16 @@ messages, so they never appear in signaling in clear.
 ## Blind relay behaviour
 
 The relay forwards an opaque `enc` message between peers and never parses it.
-This happens in both modes: a sealed room is a choice of the client, not a flag
-of the process, so one server serves plain and sealed rooms and no deployment
-needs `-e2e` for sealing to work.
+This is the only path for a name, a chat line or a media frame, so the process
+has no plaintext mode to switch off and no flag is involved.
 
-The `-e2e` flag is still there for a host that wants the server blind even for
-plain clients:
+The wire carries no name and no chat field at all:
 
-- peer names in the peer list are forced to `guest`;
-- plaintext `chat` messages are ignored, so there is no plaintext chat path;
-- there is no join or leave history and no message history;
+- a `join` has a room and a passphrase, nothing else;
+- a peer entry in `joined` or `peer-joined` has an id, the microphone and camera
+  flags and the admin flag;
 - logs carry paths, status, an eight-hex room fingerprint and peer counts, but
   no names, no room id, and no chat text.
-
-A normal deployment runs without the flag. A sealed client works either way,
-because its names, chat lines and media frames are `enc` blobs.
 
 ## Deployment
 
@@ -105,26 +99,25 @@ server: host networking, HTTP on 8096, TURN on 3479, relay range 49310-49400,
 public address 152.53.49.131.
 
 The merged build needs no second deployment: the single `stanze` process serves
-plain and sealed rooms from one binary, and a sealed link says
-`#r=<room>&sealed=1` so the box comes up on the one join form. The separate
-`stanze-e2e` deployment, service and route are retired; the classic host is the
-only server, and its deployment manifest is `deploy/deployment.json`.
+every room from one binary. The separate `stanze-e2e` deployment, service and
+route are retired; the classic host is the only server, and its deployment
+manifest is `deploy/deployment.json`.
 
 ## Verification
 
 - `go test ./internal/pq` — handshake, HKDF, confirmation, SAS, seal/open.
 - `cmd/pqprobe -addr <url>` — relay and observer proof against a running
-  server, including the live URL: names are `guest`, history is empty, plaintext
-  chat has no path, the handshake agrees, and an observer with no key opens
+  server, including the live URL: the peer list carries no name, there is no
+  plaintext chat path, the handshake agrees, and an observer with no key opens
   nothing.
-- `cmd/selftest` — 41 checks, 0 failed, including the `/e2e` redirect and the
+- `cmd/selftest` — 42 checks, 0 failed, including the `/e2e` redirect and the
   three removed page assets.
-- `tools/pq-browser-e2e.js` — two real headless browsers against the one join
-  form with `?sealed=1`: video and audio play through the transform, chat and
-  names decrypt, the short codes match and the badge carries the peer code, every
-  sampled frame is exactly 29 bytes larger, no name or chat text appears in
-  signaling, and an isolated frame lab proves that a wrong key decodes nothing
-  while a correct key installed live starts decoding.
+- `tools/pq-browser-e2e.js` — two real headless browsers on the one join form:
+  video and audio play through the transform, chat and names decrypt, the short
+  codes match and the badge carries the peer code, every sampled frame is
+  exactly 29 bytes larger, no name or chat text appears in signaling, and an
+  isolated frame lab proves that a wrong key decodes nothing while a correct key
+  installed live starts decoding.
 
 Measured on the live deployment: video plays at both peers, audio RMS is about
 0.38, roughly 240 frames per direction are sealed and opened in the short run,
