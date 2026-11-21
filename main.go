@@ -166,12 +166,6 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/openmoji/", func(w http.ResponseWriter, r *http.Request) {
 		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
 	})
-	// The old sealed page is gone: a link from before the merge lands on the
-	// one join form. The redirect keeps no fragment of its own, so a link like
-	// /e2e#r=<room> keeps its room.
-	mux.HandleFunc("/e2e", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/", http.StatusFound)
-	})
 	// The queue and the done list are plain files on disk, so an update is a
 	// file write and needs no new binary.
 	mux.HandleFunc("/QUEUE.md", docHandler(cfg.DocsDir, "QUEUE.md"))
