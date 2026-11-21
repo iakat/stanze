@@ -10,7 +10,7 @@ One line per work item. New work goes to the bottom.
 - Choose P2P only or relay only before the join (katia).
 - Screen sharing with audio, plus a choice of resolution and frame rate (katia).
 - Funny sound effects for the room events: join, leave, mic on, mic off (katia).
-- Give the client a 1990s software look; katia said noooo just after the ask, so confirm first (katia).
+- Give the client a 1990s software look (katia, confirmed GO 12:52).
 - Add host controls: mute or remove one peer from the room.
 - Test TURN allocations over plain HTTP, not only through the TLS proxy.
 - Add a camera and microphone picker; the client joins watch-only when both are refused.
