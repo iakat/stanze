@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>rooms</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<main id="lobby" class="lobby">
+  <h1>rooms</h1>
+  <p class="hint">Peer to peer audio and video. Nothing is stored and nothing is recorded.</p>
+
+  <form id="join-form" autocomplete="off">
+    <label>your name
+      <input id="name" maxlength="32" placeholder="name" spellcheck="false">
+    </label>
+    <label>room
+      <input id="room" maxlength="26" placeholder="paste a room id or link, or leave empty for a new room" spellcheck="false" autocapitalize="off">
+    </label>
+    <label>passphrase
+      <input id="pass" type="password" maxlength="128" placeholder="only if the room has one">
+    </label>
+    <div class="row">
+      <button id="enter-btn" type="submit">enter</button>
+    </div>
+  </form>
+
+  <p id="lobby-error" class="error" hidden></p>
+</main>
+
+<main id="stage" class="stage" hidden>
+  <header class="bar">
+    <div class="ident">
+      <span class="dot" id="link-dot"></span>
+      <code id="room-label"></code>
+    </div>
+    <div class="bar-right">
+      <span id="peer-count" class="muted"></span>
+      <button id="copy-btn" type="button" class="ghost">copy link</button>
+    </div>
+  </header>
+
+  <section id="grid" class="grid"></section>
+
+  <footer class="controls">
+    <button id="mic-btn" type="button" class="ctrl" aria-pressed="true">mic on</button>
+    <button id="cam-btn" type="button" class="ctrl" aria-pressed="true">camera on</button>
+    <button id="leave-btn" type="button" class="ctrl danger">leave</button>
+  </footer>
+
+  <p id="stage-error" class="error" hidden></p>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

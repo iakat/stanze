@@ -1,0 +1,60 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "stanze",
+    "namespace": "ocbot2",
+    "labels": {"app": "stanze"}
+  },
+  "spec": {
+    "replicas": 1,
+    "selector": {"matchLabels": {"app": "stanze"}},
+    "strategy": {"type": "Recreate"},
+    "template": {
+      "metadata": {"labels": {"app": "stanze"}},
+      "spec": {
+        "hostNetwork": true,
+        "dnsPolicy": "ClusterFirstWithHostNet",
+        "enableServiceLinks": false,
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "name": "stanze",
+            "image": "alpine:3.20",
+            "command": ["/bin/sh", "-c"],
+            "args": [
+              "install -m 0755 /files/rooms-server /tmp/rooms && exec /tmp/rooms -listen 0.0.0.0:8095 -behind-proxy -create-per-min 30 -allowed-origin https://stanze.ch-test.katia.sh -turn-public-ip 152.53.49.131 -turn-port 3478 -turn-min-port 49200 -turn-max-port 49300"
+            ],
+            "env": [
+              {"name": "TURN_SECRET", "valueFrom": {"secretKeyRef": {"name": "stanze-env", "key": "TURN_SECRET"}}}
+            ],
+            "ports": [
+              {"name": "http", "containerPort": 8095, "protocol": "TCP"},
+              {"name": "turn", "containerPort": 3478, "protocol": "UDP"}
+            ],
+            "resources": {
+              "requests": {"cpu": "50m", "memory": "64Mi"},
+              "limits": {"cpu": "500m", "memory": "256Mi"}
+            },
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 65534,
+              "runAsGroup": 65534,
+              "allowPrivilegeEscalation": false,
+              "readOnlyRootFilesystem": true,
+              "capabilities": {"drop": ["ALL"]}
+            },
+            "volumeMounts": [
+              {"name": "files", "mountPath": "/files", "readOnly": true},
+              {"name": "tmp", "mountPath": "/tmp"}
+            ]
+          }
+        ],
+        "volumes": [
+          {"name": "files", "hostPath": {"path": "/srv/ocbot-files/rooms", "type": "Directory"}},
+          {"name": "tmp", "emptyDir": {"sizeLimit": "16Mi"}}
+        ]
+      }
+    }
+  }
+}

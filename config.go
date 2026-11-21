@@ -1,0 +1,172 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Config holds everything that can be set from the command line or the
+// environment. Flags win over environment variables.
+type Config struct {
+	Listen        string
+	Debug         bool
+	StunURLs      []string
+	TurnPublicIP  string
+	TurnPort      int
+	TurnTCPPort   int
+	TurnRealm     string
+	TurnSecret    string
+	TurnTTL       time.Duration
+	TurnURLs      []string
+	TurnMinPort   int
+	TurnMaxPort   int
+	MaxPeers      int
+	MaxRooms      int
+	MaxMsgBytes   int64
+	EmptyRoomTTL  time.Duration
+	JoinTimeout   time.Duration
+	CreatePerMin  int
+	BehindProxy   bool
+	StaticDir     string
+	DocsDir       string
+	AllowedOrigin string
+}
+
+func envStr(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func envDur(key string, def time.Duration) time.Duration {
+	if v, ok := os.LookupEnv(key); ok {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
+			return d
+		}
+	}
+	return def
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+type stringList struct {
+	values *[]string
+}
+
+func (s stringList) String() string {
+	if s.values == nil {
+		return ""
+	}
+	return strings.Join(*s.values, ",")
+}
+func (s stringList) Set(v string) error {
+	for _, p := range splitList(v) {
+		*s.values = append(*s.values, p)
+	}
+	return nil
+}
+
+func loadConfig(args []string) (*Config, error) {
+	cfg := &Config{}
+
+	stun := splitList(envStr("STUN_URLS", "stun:stun.l.google.com:19302"))
+	turnURLs := splitList(envStr("TURN_URLS", ""))
+	var stunFlags []string
+
+	fs := flag.NewFlagSet("rooms", flag.ContinueOnError)
+	fs.StringVar(&cfg.Listen, "listen", envStr("LISTEN", ":8095"), "address to listen on for HTTP (put a TLS proxy in front for production)")
+	fs.BoolVar(&cfg.Debug, "debug", envStr("DEBUG", "") != "", "verbose logging (never logs room ids)")
+	fs.Var(stringList{&stunFlags}, "stun", "STUN URL handed to browsers (repeatable, comma separated; env STUN_URLS)")
+	fs.StringVar(&cfg.TurnPublicIP, "turn-public-ip", envStr("TURN_PUBLIC_IP", ""), "public IP advertised to clients for the embedded TURN relay; empty disables TURN")
+	fs.IntVar(&cfg.TurnPort, "turn-port", envInt("TURN_PORT", 3478), "UDP port for the embedded TURN server")
+	fs.IntVar(&cfg.TurnTCPPort, "turn-tcp-port", envInt("TURN_TCP_PORT", 0), "optional TCP port for TURN (0 = off)")
+	fs.StringVar(&cfg.TurnRealm, "turn-realm", envStr("TURN_REALM", "rooms"), "TURN realm")
+	fs.StringVar(&cfg.TurnSecret, "turn-secret", envStr("TURN_SECRET", ""), "shared secret for ephemeral TURN credentials (env TURN_SECRET); required to enable TURN")
+	fs.DurationVar(&cfg.TurnTTL, "turn-ttl", envDur("TURN_TTL", time.Hour), "lifetime of issued TURN credentials")
+	fs.Var(stringList{&turnURLs}, "turn-url", "extra TURN URL to advertise, e.g. turns:example.com:5349?transport=tcp (repeatable; env TURN_URLS)")
+	fs.IntVar(&cfg.TurnMinPort, "turn-min-port", envInt("TURN_MIN_PORT", 49200), "lowest relay port for TURN allocations")
+	fs.IntVar(&cfg.TurnMaxPort, "turn-max-port", envInt("TURN_MAX_PORT", 49300), "highest relay port for TURN allocations")
+	fs.IntVar(&cfg.MaxPeers, "max-peers", envInt("MAX_PEERS", 8), "maximum peers in one room")
+	fs.IntVar(&cfg.MaxRooms, "max-rooms", envInt("MAX_ROOMS", 200), "maximum simultaneously existing rooms")
+	fs.IntVar(&cfg.CreatePerMin, "create-per-min", envInt("CREATE_PER_MIN", 10), "room creations allowed per client IP per minute")
+	fs.Int64Var(&cfg.MaxMsgBytes, "max-msg-bytes", int64(envInt("MAX_MSG_BYTES", 256*1024)), "maximum websocket message size in bytes")
+	fs.DurationVar(&cfg.EmptyRoomTTL, "empty-room-ttl", envDur("EMPTY_ROOM_TTL", 2*time.Minute), "how long an empty room is kept before it is forgotten")
+	fs.DurationVar(&cfg.JoinTimeout, "join-timeout", envDur("JOIN_TIMEOUT", 10*time.Second), "time a websocket may stay open before sending join")
+	fs.BoolVar(&cfg.BehindProxy, "behind-proxy", envStr("BEHIND_PROXY", "") != "", "trust X-Forwarded-For for rate limiting (only behind a proxy you control)")
+	fs.StringVar(&cfg.StaticDir, "static-dir", envStr("STATIC_DIR", ""), "serve the web client from this directory instead of the embedded copy")
+	fs.StringVar(&cfg.DocsDir, "docs-dir", envStr("DOCS_DIR", ""), "serve QUEUE.md and DONE.md from this directory (empty disables the routes)")
+	fs.StringVar(&cfg.AllowedOrigin, "allowed-origin", envStr("ALLOWED_ORIGIN", ""), "extra allowed websocket Origin (default: same host only)")
+
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+
+	// A -stun flag replaces the environment default instead of appending to it.
+	if len(stunFlags) > 0 {
+		stun = stunFlags
+	}
+	cfg.StunURLs = stun
+	cfg.TurnURLs = turnURLs
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (c *Config) validate() error {
+	if c.Listen == "" {
+		return errors.New("-listen must not be empty")
+	}
+	if c.MaxPeers < 2 {
+		return fmt.Errorf("-max-peers must be at least 2 (got %d)", c.MaxPeers)
+	}
+	if c.MaxPeers > 32 {
+		return fmt.Errorf("-max-peers above 32 makes the mesh pointless, refusing %d", c.MaxPeers)
+	}
+	if c.MaxRooms < 1 {
+		return errors.New("-max-rooms must be positive")
+	}
+	if c.MaxMsgBytes < 4096 || c.MaxMsgBytes > 8*1024*1024 {
+		return fmt.Errorf("-max-msg-bytes must be between 4096 and 8388608 (got %d)", c.MaxMsgBytes)
+	}
+	if c.TurnMaxPort <= c.TurnMinPort {
+		return errors.New("-turn-max-port must be greater than -turn-min-port")
+	}
+	return nil
+}
+
+func (c *Config) turnEnabled() bool {
+	return c.TurnPublicIP != "" && c.TurnSecret != ""
+}
+
+func (c *Config) logLevel() slog.Level {
+	if c.Debug {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
+}
