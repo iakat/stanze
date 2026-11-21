@@ -238,15 +238,16 @@ func main() {
 	}
 	check("three peers joined", a.id != "" && b.id != "" && eve.id != "", a.id+","+b.id+","+eve.id)
 
-	// The server must not know any peer name, and must not keep a chat line.
+	// The server must not know any peer name, and must not keep a chat line. The
+	// field is empty because the client never sends a name at all.
 	joinedB, _ := b.until(func(m sigMsg) bool { return m.T == "joined" }, 2*time.Second)
 	namesOK := len(joinedB.Peers) == 1
 	for _, p := range joinedB.Peers {
-		if p.Name != "guest" {
+		if p.Name != "" {
 			namesOK = false
 		}
 	}
-	check("peer list carries no real names", namesOK, fmt.Sprintf("%v", joinedB.Peers))
+	check("peer list carries no names", namesOK, fmt.Sprintf("%v", joinedB.Peers))
 	check("join history is empty", len(joinedB.Chat) == 0, fmt.Sprintf("%d lines", len(joinedB.Chat)))
 
 	// A plaintext chat message must be dropped entirely in this mode.
@@ -272,48 +273,88 @@ func main() {
 		fmt.Println("FAIL  keygen:", err)
 		os.Exit(1)
 	}
+	signA, err := pq.NewSigningKey()
+	if err != nil {
+		fmt.Println("FAIL  keygen:", err)
+		os.Exit(1)
+	}
+	signB, err := pq.NewSigningKey()
+	if err != nil {
+		fmt.Println("FAIL  keygen:", err)
+		os.Exit(1)
+	}
+	sidA := make([]byte, pq.SIDSize)
+	sidB := make([]byte, pq.SIDSize)
+	if _, err := rand.Read(sidA); err != nil {
+		fmt.Println("FAIL  sid:", err)
+		os.Exit(1)
+	}
+	if _, err := rand.Read(sidB); err != nil {
+		fmt.Println("FAIL  sid:", err)
+		os.Exit(1)
+	}
+	pubA := ida.Public()
+	pubA.ID, pubA.SID = signA.PublicKey(), sidA
+	pubB := idb.Public()
+	pubB.ID, pubB.SID = signB.PublicKey(), sidB
 	_ = a.send(map[string]any{"t": "enc", "to": b.id, "b": enc(map[string]string{
-		"k": "pub", "x": b64(ida.XPub), "m": b64(ida.EK),
+		"k": "pub", "x": b64(pubA.X), "m": b64(pubA.KEM), "id": b64(pubA.ID), "sid": b64(pubA.SID),
 	})})
 	_ = b.send(map[string]any{"t": "enc", "to": a.id, "b": enc(map[string]string{
-		"k": "pub", "x": b64(idb.XPub), "m": b64(idb.EK),
+		"k": "pub", "x": b64(pubB.X), "m": b64(pubB.KEM), "id": b64(pubB.ID), "sid": b64(pubB.SID),
 	})})
 	time.Sleep(300 * time.Millisecond)
 
 	// Use the ids the server assigned for the transcript, lowest first.
 	lo, hi := a.id, b.id
-	loID, hiID := ida, idb
+	loPub, hiPub := pubA, pubB
+	loSign, hiSign := signA, signB
+	hiID := idb
 	if lo > hi {
 		lo, hi = hi, lo
-		loID, hiID = idb, ida
+		loPub, hiPub = hiPub, loPub
+		loSign, hiSign = hiSign, loSign
+		hiID = ida
 	}
-	offer, err := pq.Initiate(lo, hi, loID.Public(), hiID.Public())
+	offer, err := pq.Initiate(lo, hi, loPub, hiPub)
 	if err != nil {
 		fmt.Println("FAIL  initiate:", err)
 		os.Exit(1)
 	}
+	helloSig := loSign.Sign(offer.Transcript)
 	helloFrom, helloTo := a, b
 	if a.id != lo {
 		helloFrom, helloTo = b, a
 	}
 	_ = helloFrom.send(map[string]any{"t": "enc", "to": helloTo.id, "b": enc(map[string]string{
 		"k": "hello", "epk": b64(offer.EPK), "ct": b64(offer.CT),
+		"id": b64(loPub.ID), "sid": b64(loPub.SID), "sig": b64(helloSig),
 	})})
 	time.Sleep(300 * time.Millisecond)
 
-	acc, err := pq.Accept(hi, lo, hiID, loID.Public(), hiID.Public(), offer.EPK, offer.CT)
+	acc, err := pq.Accept(hi, lo, hiID, loPub, hiPub, offer.EPK, offer.CT, helloSig)
 	if err != nil {
 		fmt.Println("FAIL  accept:", err)
 		os.Exit(1)
 	}
+	okSig := hiSign.Sign(acc.Transcript)
 	confirmOK := pq.VerifyConfirm(offer.Keys, offer.Transcript, acc.Confirm) &&
 		pq.VerifyConfirm(acc.Keys, offer.Transcript, offer.Confirm)
 	check("hybrid handshake through the relay agrees", confirmOK, "sas "+offer.Keys.SAS)
 	check("both sides see the same short code", offer.Keys.SAS == acc.Keys.SAS, offer.Keys.SAS)
+	check("the hello signature proves the identity",
+		pq.VerifySignature(loPub.ID, offer.Transcript, helloSig), pq.Fingerprint(loPub.ID))
+	check("the ok signature proves the responder",
+		pq.VerifySignature(hiPub.ID, acc.Transcript, okSig), pq.Fingerprint(hiPub.ID))
+	check("an unsigned hello is refused",
+		func() bool {
+			_, err := pq.Accept(hi, lo, hiID, loPub, hiPub, offer.EPK, offer.CT, nil)
+			return err != nil
+		}(), "")
 
 	// One sealed chat line, then look at everything the observer ever received.
 	plain := []byte(`{"k":"chat","n":"` + nameA + `","x":"` + canary + `"}`)
-	sealed, err := pq.Seal(offer.Keys.SendChat, []byte("pq-e2e v1 chat "+lo+"|"+hi), plain)
+	sealed, err := pq.Seal(offer.Keys.SendChat, []byte("pq-e2e v2 chat "+lo+"|"+hi), plain)
 	if err != nil {
 		fmt.Println("FAIL  seal:", err)
 		os.Exit(1)
@@ -328,9 +369,9 @@ func main() {
 	time.Sleep(400 * time.Millisecond)
 
 	// The intended receiver opens it; the observer cannot.
-	got, err := pq.Open(acc.Keys.RecvChat, []byte("pq-e2e v1 chat "+lo+"|"+hi), sealed)
+	got, err := pq.Open(acc.Keys.RecvChat, []byte("pq-e2e v2 chat "+lo+"|"+hi), sealed)
 	check("receiver opens the sealed chat", err == nil && bytes.Equal(got, plain), string(got))
-	if _, err := pq.Open(make([]byte, 32), []byte("pq-e2e v1 chat "+lo+"|"+hi), sealed); err == nil {
+	if _, err := pq.Open(make([]byte, 32), []byte("pq-e2e v2 chat "+lo+"|"+hi), sealed); err == nil {
 		check("observer with no key opens nothing", false, "random key decrypted")
 	} else {
 		check("observer with no key opens nothing", true, "")
