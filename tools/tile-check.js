@@ -118,6 +118,21 @@ function peerCount(page) {
     check('A own tile plays its own camera', ownA.playing, JSON.stringify({ playing: ownA.playing, videoW: ownA.videoW }));
     check('the tile keeps a readable name', /alice/.test(ownA.name), ownA.name);
 
+    // The house typeface is shipped with the page, so the browser draws its own
+    // copy instead of a local fallback with different side bearings.
+    const face = await a.page.evaluate(async () => {
+      await document.fonts.ready;
+      const body = getComputedStyle(document.body).fontFamily;
+      return {
+        loaded: document.fonts.check('13px "Stanze Sans"'),
+        bold: document.fonts.check('bold 13px "Stanze Sans"'),
+        family: body,
+        families: [...document.fonts].map((f) => f.family + ':' + f.status),
+      };
+    });
+    check('the page ships its own typeface', face.loaded && face.bold, JSON.stringify(face.families));
+    check('the body uses the shipped typeface first', /Stanze Sans/.test(face.family), face.family);
+
     // Camera off on A.
     await a.page.click('#cam-btn');
     await sleep(1200);
@@ -126,6 +141,9 @@ function peerCount(page) {
     check('own tile leaves the playing state with the camera off', !ownOff.playing, JSON.stringify(ownOff));
     check('own centre name is visible with the camera off', ownOff.avatarDisplay !== 'none' && ownOff.avatar.length > 0,
       ownOff.avatarDisplay + ' "' + ownOff.avatar + '"');
+    check('the centre label carries the whole name', ownOff.avatar.trim().toLowerCase() === 'alice', '"' + ownOff.avatar + '"');
+    check('the other side sees the whole name of a camera that is off',
+      seenOff.avatar.trim().toLowerCase() === 'alice', '"' + seenOff.avatar + '"');
     check('the other side sees the centre name of a camera that is off',
       seenOff.avatarDisplay !== 'none' && seenOff.avatar.length > 0,
       seenOff.avatarDisplay + ' "' + seenOff.avatar + '"');

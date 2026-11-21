@@ -61,6 +61,8 @@ const state = {
   lostSource: null,   // the loop that plays while the socket is down
   lostGain: null,
   lostWanted: false,
+  speakTimer: null,   // the green light on each tile while a person talks
+  ownSpoke: null,
 
   // Sealed room state. Every field is inert until a sealed join: the plain
   // path never reads the worker, the identity or the frame counters.
@@ -221,13 +223,13 @@ function sealedFlag() {
 }
 
 // setHash keeps the room, and the sealed flag with it, in the fragment: a
-// fragment never reaches the server, and a link carries the choice of the
-// visitor, so a plain room stays plain when the link is opened again.
+// fragment never reaches the server. Sealed is the default, so only a plain
+// room says so in the link; the flag stays readable in both directions.
 function setHash(room) {
   const params = new URLSearchParams();
   if (room) {
     params.set('r', room);
-    params.set('sealed', state.sealed ? '1' : '0');
+    if (!state.sealed) params.set('sealed', '0');
   }
   const hash = params.toString();
   history.replaceState(null, '', hash ? `#${hash}` : location.pathname);
@@ -250,6 +252,14 @@ function send(msg) {
 
 // ---------------------------------------------------------------- tiles
 
+// paintName keeps the small tag and the large centre label in step. The centre
+// label carries the whole name, so a guest without a camera is not a pair of
+// letters.
+function paintName(tile, name, local) {
+  tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
+  tile.querySelector('.avatar').textContent = name || '?';
+}
+
 function makeTile(id, name, local = false) {
   const tile = document.createElement('div');
   tile.className = 'tile';
@@ -265,7 +275,7 @@ function makeTile(id, name, local = false) {
     <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span></div>
     ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
   tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
-  tile.querySelector('.avatar').textContent = (name || '?').slice(0, 2);
+  tile.querySelector('.avatar').textContent = name || '?';
   if (state.sealed && !local) {
     // A sealed guest is heard through its own gain node, so the video element
     // only ever carries pictures and stays muted.
@@ -744,6 +754,66 @@ function stopMeter() {
   state.meterPeak = 0;
 }
 
+// ------------------------------------------------------------- talking light
+//
+// Every audio source has a small RMS tap, and a green light marks the tile of
+// the person who speaks. The tap sits before the per peer gain, so a guest
+// turned down to zero still lights up. A short hold keeps the light steady
+// between syllables instead of blinking.
+
+const SPEAK_MS = 100;
+const SPEAK_ON = 0.03;
+const SPEAK_HOLD_MS = 400;
+
+const speakBufs = new WeakMap();
+
+function analyserLevel(a) {
+  if (!a) return 0;
+  let buf = speakBufs.get(a);
+  if (!buf || buf.length !== a.fftSize) {
+    buf = new Float32Array(a.fftSize);
+    speakBufs.set(a, buf);
+  }
+  a.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  return Math.sqrt(sum / buf.length);
+}
+
+// paintSpeaking turns the light on for a level over the threshold and keeps it
+// on for the hold. The last time is kept in the given object.
+function paintSpeaking(tile, level, hold) {
+  if (!tile) return;
+  const now = performance.now();
+  if (level >= SPEAK_ON) hold.last = now;
+  tile.classList.toggle('speaking', now - (hold.last || 0) < SPEAK_HOLD_MS);
+}
+
+function speakTick() {
+  const own = document.querySelector('.tile[data-local="yes"]');
+  if (own && state.ownSpoke) {
+    // A muted microphone sends silence, so the guest is not shown as talking.
+    paintSpeaking(own, state.mic ? analyserLevel(state.micAnalyser) : 0, state.ownSpoke);
+  }
+  for (const peer of state.peers.values()) {
+    if (!peer.tile) continue;
+    if (!peer.spoke) peer.spoke = { last: 0 };
+    paintSpeaking(peer.tile, peer.mic ? analyserLevel(peer.meter) : 0, peer.spoke);
+  }
+}
+
+function startSpeaking() {
+  if (state.speakTimer) return;
+  state.ownSpoke = { last: 0 };
+  state.speakTimer = setInterval(speakTick, SPEAK_MS);
+}
+
+function stopSpeaking() {
+  if (state.speakTimer) clearInterval(state.speakTimer);
+  state.speakTimer = null;
+  state.ownSpoke = null;
+}
+
 // micLevelLine reports the peak as a percent between -60 dB and full scale,
 // with the dB value beside it, because that is what a phone's meter shows. A
 // value near zero with a live track points at the graph, not at the device.
@@ -855,6 +925,11 @@ function routeAudio(peer, track) {
   peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
   peer.audioSrc.connect(peer.gain);
   peer.gain.connect(ctx.destination);
+  // The talking light reads the source, before the gain, so a guest turned
+  // down to zero still shows that they speak.
+  peer.meter = ctx.createAnalyser();
+  peer.meter.fftSize = 1024;
+  peer.audioSrc.connect(peer.meter);
   resumePlayback();
 }
 
@@ -865,6 +940,10 @@ function dropAudio(peer) {
   if (peer.audioSrc) {
     try { peer.audioSrc.disconnect(); } catch { /* already gone */ }
     peer.audioSrc = null;
+  }
+  if (peer.meter) {
+    try { peer.meter.disconnect(); } catch { /* already gone */ }
+    peer.meter = null;
   }
   if (peer.gain) {
     try { peer.gain.disconnect(); } catch { /* already gone */ }
@@ -1042,7 +1121,7 @@ function ensurePeer(id, name, mic, cam) {
     }
     if (name && peer.name !== name) {
       peer.name = name;
-      peer.tile.querySelector('.name').textContent = name;
+      paintName(peer.tile, name, false);
     }
     return peer;
   }
@@ -1061,6 +1140,9 @@ function ensurePeer(id, name, mic, cam) {
     gain: null,
     audioSrc: null,
     audioEl: null,
+    meter: null,     // tap on the incoming audio, for the talking light
+    spoke: null,     // last time this peer was heard, for the hold
+
     statLast: new Map(),
     polite: String(state.self) > String(id),
     makingOffer: false,
@@ -1488,6 +1570,7 @@ async function enterRoom(room, pass) {
   $('room-label').textContent = room;
   $('room-label').title = room;
   setHash(room);
+  startSpeaking();
 
   prepareLocal();
   // The join click asks for the camera and the microphone. The signaling
@@ -1562,6 +1645,7 @@ async function enterSealedRoom() {
     updateSealedBadge();
     $('link-text').textContent = 'sealed, connecting';
     setHash(room);
+    startSpeaking();
 
     prepareLocal();
     if (sealingAvailable()) {
@@ -1660,6 +1744,7 @@ function leave(message) {
   state.rnnoise = null;
   state.rnnoiseOn = false;
   stopMeter();
+  stopSpeaking();
   state.outStream = null;
   state.camTrack = null;
   state.micTrack = null;
@@ -2677,7 +2762,7 @@ function sealedSetName(peer, raw) {
   const name = cleanSealedName(raw);
   if (!name || !peer.tile || peer.name === name) return;
   peer.name = name;
-  peer.tile.querySelector('.name').textContent = name;
+  paintName(peer.tile, name, false);
   peer.vol = storedVolume(name);
   paintVolume(peer);
 }
@@ -3332,11 +3417,11 @@ function init() {
   $('leave-btn').addEventListener('click', () => leave(''));
 
   $('copy-btn').addEventListener('click', async () => {
-    // A sealed link carries the flag, so the guest lands on the same kind of
-    // room instead of a plain one that can not read the keys.
+    // Sealed is the default, so its link stays clean. A plain room says so,
+    // because the guest would otherwise land in a sealed room it can not use.
     const link = state.sealed
-      ? `${location.origin}/#r=${encodeURIComponent(state.room)}&sealed=1`
-      : `${location.origin}/#r=${encodeURIComponent(state.room)}`;
+      ? `${location.origin}/#r=${encodeURIComponent(state.room)}`
+      : `${location.origin}/#r=${encodeURIComponent(state.room)}&sealed=0`;
     try {
       await navigator.clipboard.writeText(link);
       $('copy-btn').textContent = 'copied';
