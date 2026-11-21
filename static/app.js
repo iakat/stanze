@@ -2949,14 +2949,6 @@ function installSealedReceivers(peer) {
   }
 }
 
-// peerByPair finds the peer whose pair label the worker named.
-function peerByPair(pair) {
-  for (const peer of state.peers.values()) {
-    if (pairLabel(peer.id) === pair) return peer;
-  }
-  return null;
-}
-
 // ------------------------------------------------------------- handshake
 
 function sealedSendPub(peer) {
