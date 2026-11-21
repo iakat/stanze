@@ -2179,6 +2179,44 @@ function fileBytes(n) {
   return (value >= 10 ? value.toFixed(0) : value.toFixed(1)) + ' ' + units[i];
 }
 
+// fileRateText is the speed a guest reads beside a transfer. A rate is bytes
+// over a window, so it starts empty on the first chunk and becomes a number
+// once the window has run. kB/s is 1024 based, like fileBytes, and stays a
+// whole number above ten so the line does not jitter in width.
+function fileRateText(kbs) {
+  if (!kbs || !isFinite(kbs) || kbs <= 0) return '';
+  return (kbs >= 10 ? Math.round(kbs) : kbs.toFixed(1)) + ' kB/s';
+}
+
+// fileMarkRate keeps a short window per transfer, so the number is the rate
+// now and not the average since the first byte. The first chunk only starts
+// the window; until it is 500 ms old the line shows the average so far, so a
+// fast transfer still reads a speed before it ends.
+function fileMarkRate(o, bytes, now) {
+  if (!o.rateT) {
+    o.rateT = now;
+    o.rateB = bytes;
+    const secs = (now - (o.rateAt || now)) / 1000;
+    o.rate = secs > .05 ? bytes / 1024 / secs : 0;
+    return;
+  }
+  const dt = now - o.rateT;
+  if (dt < 500) return;
+  o.rate = (bytes - o.rateB) / 1024 / (dt / 1000);
+  o.rateT = now;
+  o.rateB = bytes;
+}
+
+// fileAverageRate is the one number kept after the transfer ends: the whole
+// file over the whole time it took, so a finished line still says how fast it
+// went.
+function fileAverageRate(bytes, start, now) {
+  if (!start || !bytes) return '';
+  const secs = (now - start) / 1000;
+  if (secs < .2) return '';
+  return fileRateText(bytes / 1024 / secs);
+}
+
 function fileButton(label, fn) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -2302,6 +2340,7 @@ function fileOnOffer(peer, msg) {
   const rec = {
     key, x, peerId: peer.id, name, size, type,
     status: 'offered', chunks: [], got: 0, expect: 0, el: null, url: '',
+    rateT: 0, rateB: 0, rate: 0, rateAt: 0,
   };
   state.filesIn.set(key, rec);
   canary(name);
@@ -2325,6 +2364,10 @@ function fileAccept(rec) {
   rec.got = 0;
   rec.expect = 0;
   rec.chunks = [];
+  rec.rateT = 0;
+  rec.rateB = 0;
+  rec.rate = 0;
+  rec.rateAt = performance.now();
   fileArmIn(rec);
   if (rec.el) {
     rec.el.acts.replaceChildren(fileButton('cancel', () => fileCancelIn(rec)));
@@ -2380,6 +2423,7 @@ function fileOnAccept(peer, msg) {
   const st = out.peers.get(peer.id);
   if (!st || st.status !== 'offered') return;
   st.status = 'sending';
+  st.rateAt = performance.now();
   filePaintOut(out);
   filePump(out, st).catch(() => fileCancelPeer(out, st, 'the transfer failed'));
 }
@@ -2467,6 +2511,7 @@ function fileOnChunk(peer, raw) {
   rec.got += bytes.length;
   rec.expect = q + 1;
   state.fileChunksRecv++;
+  fileMarkRate(rec, rec.got, performance.now());
   filePaintIn(rec);
   fileArmIn(rec);
   if (rec.got === rec.size) fileFinishIn(rec, 'done');
@@ -2527,6 +2572,7 @@ async function filePump(out, st) {
     }
     st.sent = q + 1;
     state.fileChunksSent++;
+    fileMarkRate(st, st.sent * FILE_CHUNK, performance.now());
     filePaintOut(out);
   }
   if (st.dead || out.cancelled) return;
@@ -2685,9 +2731,10 @@ function fileInText(rec) {
   if (rec.status === 'offered') return 'waiting for you';
   if (rec.status === 'receiving') {
     const pct = rec.size ? Math.round((rec.got / rec.size) * 100) : 0;
-    return 'receiving ' + pct + ' percent';
+    const rate = fileRateText(rec.rate);
+    return 'receiving ' + pct + ' percent' + (rate ? ', ' + rate : '');
   }
-  if (rec.status === 'done') return 'ready, click save';
+  if (rec.status === 'done') return 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
   if (rec.status === 'refused') return 'refused';
   if (rec.status === 'cancelled') return 'cancelled';
   if (rec.status === 'gone') return 'the sender left';
@@ -2712,6 +2759,7 @@ function fileFinishIn(rec, status) {
   if (status === 'done') {
     // The bytes live in this Blob only. The link hands them to the guest when
     // the guest clicks it, so nothing is written before that click.
+    rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
     const blob = new Blob(rec.chunks, { type: rec.type || 'application/octet-stream' });
     rec.chunks = [];
     if (rec.url) {
@@ -2728,7 +2776,7 @@ function fileFinishIn(rec, status) {
       link.download = rec.name;
       link.textContent = 'save ' + fileBytes(rec.size);
       rec.el.acts.replaceChildren(link);
-      rec.el.status.textContent = 'ready, click save';
+      rec.el.status.textContent = 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
     }
     state.filesIn.delete(rec.key);
     return;
@@ -2769,7 +2817,11 @@ function filePaintOut(out) {
   if (accepted.length) {
     words.push(accepted.map((s) => {
       const pct = out.size ? Math.round((Math.min(out.size, s.sent * FILE_CHUNK) / Math.max(1, out.size)) * 100) : (s.status === 'done' ? 100 : 0);
-      return s.peer.name + ' ' + (s.status === 'done' ? 'done' : pct + ' percent');
+      const sent = Math.min(out.size, s.sent * FILE_CHUNK);
+      const rate = s.status === 'done'
+        ? fileAverageRate(sent, s.rateAt, performance.now())
+        : fileRateText(s.rate);
+      return s.peer.name + ' ' + (s.status === 'done' ? 'done' : pct + ' percent') + (rate ? ', ' + rate : '');
     }).join(', '));
   }
   if (refused.length) words.push('refused ' + refused.map((s) => s.peer.name).join(', '));
