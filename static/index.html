@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <title>stanze</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/style.css?v=20261121e">
+<link rel="stylesheet" href="/style.css?v=20261121f">
 </head>
 <body>
 
@@ -40,6 +40,11 @@
           <option value="relay">relay only: hides your address</option>
         </select>
       </label>
+      <label class="check"><input id="sealed" type="checkbox"> enable post-quantum e2ee</label>
+      <p id="sealed-note" class="note" hidden></p>
+      <p class="note">Post-quantum e2ee keeps your name, the chat and the media inside the browser, with
+        X25519 + ML-KEM-768 and AES-256-GCM. The server only forwards sealed blobs. Compare the
+        emoji code with the other people to rule out a swapped key.</p>
       <label class="check"><input id="noise" type="checkbox" checked> noise suppression (RNNoise)</label>
       <div class="row">
         <button id="enter-btn" type="submit">enter</button>
@@ -65,18 +70,22 @@
     <div class="statusline">
       <span class="dot" id="link-dot"></span>
       <span class="muted" id="link-text">connected</span>
+      <span id="sealed-badge" class="badge" hidden></span>
     </div>
 
     <div class="room-row">
       <section id="grid" class="grid"></section>
 
       <aside id="stats-panel" class="stats" hidden>
-        <div class="stats-head">stats (kbit/s up/down)</div>
+        <div class="stats-head">
+          <span>stats (kbit/s up/down)</span>
+          <button id="stats-close" type="button" aria-label="close the stats">x</button>
+        </div>
         <div id="stats-body" class="stats-body"></div>
       </aside>
 
       <aside class="chat">
-        <div class="chat-head">chat</div>
+        <div class="chat-head">chat <span id="chat-note" class="muted" hidden>(sealed, no server history)</span></div>
         <ol id="chat-log" class="chat-log"></ol>
         <form id="chat-form" class="chat-form" autocomplete="off">
           <input id="chat-text" maxlength="500" placeholder="say something" spellcheck="false" autocomplete="off">
@@ -108,6 +117,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261121e"></script>
+<script src="/app.js?v=20261121f"></script>
 </body>
 </html>

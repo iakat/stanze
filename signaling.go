@@ -212,6 +212,9 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			s.hub.broadcast(p, mustJSON(serverMsg{
 				T: "state", From: p.id, Mic: &mic, Cam: &cam,
 			}))
+		case "enc":
+			// Opaque end-to-end payload: forwarded verbatim, never stored.
+			s.handleEnc(p, m)
 		case "mod":
 			s.handleMod(p, m)
 		case "chat":
@@ -270,6 +273,11 @@ func (s *server) sendAdmins(room *Room) {
 
 // logLine adds one line to the room log and sends it to everyone in the room.
 func (s *server) logLine(room *Room, line chatLine) {
+	// In blind relay mode the server has no plaintext to log: names, chat and
+	// room events stay inside the encrypted client.
+	if s.cfg.E2E {
+		return
+	}
 	line.TS = time.Now().UnixMilli()
 	s.hub.addChat(room, line)
 	s.hub.broadcastTo(room, mustJSON(serverMsg{
@@ -282,6 +290,9 @@ func (s *server) logLine(room *Room, line chatLine) {
 // It is used when the sender has just left and the room broadcast no longer
 // reaches them.
 func (s *server) logLineTo(room *Room, peers []*Peer, line chatLine) {
+	if s.cfg.E2E {
+		return
+	}
 	line.TS = time.Now().UnixMilli()
 	s.hub.addChat(room, line)
 	msg := mustJSON(serverMsg{
@@ -297,7 +308,8 @@ func (s *server) logLineTo(room *Room, peers []*Peer, line chatLine) {
 // characters are dropped, so a line can not break the layout of another client.
 func (s *server) handleChat(p *Peer, m clientMsg) {
 	room := p.room
-	if room == nil {
+	if room == nil || s.cfg.E2E {
+		// There is no plaintext chat path in blind relay mode.
 		return
 	}
 	text := strings.Map(func(r rune) rune {
@@ -317,6 +329,23 @@ func (s *server) handleChat(p *Peer, m clientMsg) {
 		text = string(runes[:chatTextMax])
 	}
 	s.logLine(room, chatLine{Kind: "text", From: p.id, Name: p.name, Text: text})
+}
+
+// handleEnc forwards one opaque blob. A target id sends it to one peer in the
+// same room, an empty target or "*" sends it to every other peer. Nothing is
+// decoded, counted or kept. The blob is blind in both directions, so a plain
+// server forwards it as well: a sealed room is a choice of the client, not a
+// flag of the process.
+func (s *server) handleEnc(p *Peer, m clientMsg) {
+	if p.room == nil || m.B == "" || len(m.B) > 96<<10 {
+		return
+	}
+	msg := mustJSON(serverMsg{T: "enc", From: p.id, B: m.B})
+	if m.To == "" || m.To == "*" {
+		s.hub.broadcast(p, msg)
+		return
+	}
+	s.hub.relay(p, m.To, msg)
 }
 
 // chatTextMax is the longest accepted chat line, in runes.
@@ -344,12 +373,19 @@ func writeNow(conn *websocket.Conn, v any) {
 // handleJoin resolves the room and announces the new peer. It returns false if
 // the connection must be dropped.
 func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
+	if s.cfg.E2E {
+		// The server has no business knowing a peer name. Every peer is
+		// announced under the same placeholder; real names travel in the
+		// encrypted channel.
+		m.Name = "guest"
+	}
 	if m.Name = sanitizeName(m.Name); m.Name == "" {
 		m.Name = "guest"
 	}
 	// The name is announced to the room, so it has to be on the peer before the
 	// join broadcast happens.
 	p.name = m.Name
+	p.sealed = m.Sealed
 	room, err := s.hub.join(m.Room, m.Pass, p)
 	if err != nil {
 		// One answer for every failure: unknown room, wrong passphrase, full
@@ -368,14 +404,17 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	for _, other := range existing {
 		peers = append(peers, peerInfo{
 			ID: other.id, Name: other.name, Mic: other.mic, Cam: other.cam,
-			Admin: isAdmin[other.id],
+			Admin: isAdmin[other.id], Sealed: other.sealed,
 		})
 	}
 
 	// The join itself is the first line of the room log, so the peer that just
 	// arrived finds it in the history it receives.
 	line := chatLine{Kind: "join", From: p.id, Name: p.name, TS: time.Now().UnixMilli()}
-	history := s.hub.addChat(room, line)
+	var history []chatLine
+	if !s.cfg.E2E {
+		history = s.hub.addChat(room, line)
+	}
 
 	// Fresh, time limited relay credentials for this connection only.
 	ice, err := iceServersFor(s.cfg)
@@ -394,14 +433,16 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 
 	joinedMsg := mustJSON(serverMsg{
 		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Name: p.name, Mic: p.mic, Cam: p.cam, Admin: isAdmin[p.id]},
+		Peer: &peerInfo{ID: p.id, Name: p.name, Mic: p.mic, Cam: p.cam, Admin: isAdmin[p.id], Sealed: p.sealed},
 	})
 	lineMsg := mustJSON(serverMsg{
 		T: "chat", Kind: line.Kind, From: line.From, Name: line.Name, TS: line.TS,
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)
-		other.enqueue(lineMsg)
+		if !s.cfg.E2E {
+			other.enqueue(lineMsg)
+		}
 	}
 
 	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))

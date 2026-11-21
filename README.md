@@ -27,7 +27,7 @@ make build
 ```
 
 The client is embedded with `go:embed`, so the binary is self contained
-(~7.5 MB with `-trimpath -ldflags "-s -w"`).
+(~15 MB with `-trimpath -ldflags "-s -w"`, because the post-quantum Wasm module is embedded too).
 
 ## Run
 
@@ -66,6 +66,34 @@ video bitrates, the round trip time and whether the path is direct or relayed.
 The client keeps the camera and the microphone open and reconnects on its own
 with a capped backoff if the signaling socket drops in the middle of a call.
 
+## Sealed rooms
+
+One join form serves both kinds of room. The `enable post-quantum e2ee` checkbox
+switches a join to post-quantum end-to-end encryption, and the choice is
+remembered in the browser like the name and the devices. There is no second
+page: `/e2e` answers a `302` to `/?sealed=1`, so a link from before the merge
+still lands on the form with the box on.
+
+In a sealed room the name, the chat and every media frame are encrypted in the
+browser. The server sees only `enc` blobs: it replaces the join name with
+`guest` on its side of the wire, never sends its own `chat` message, and keeps
+no room history. Names and chat lines travel as sealed `app` payloads, media
+frames are sealed by `RTCRtpScriptTransform` with a worker
+(`e2e-transform.js`), and the key exchange runs in a WebAssembly module
+(`pq.wasm`) built from `internal/pq`. Both sides show the same 13 character
+short code and six emoji on each tile, for comparison over the call.
+
+A sealed room never falls back to plain: the fragment link is
+`#r=<room>&sealed=1`, and a browser that cannot install a media transform
+joins without a microphone and a camera and says why instead of sending clear
+frames. The post-quantum module is fetched only when the box is on or a sealed
+link is opened.
+
+Sealed rooms do not need the `-e2e` flag. The relay forwards `enc` in both
+modes, so one process serves plain and sealed rooms. The flag still keeps the
+server blind for plain clients as well: it forces `guest` names and drops plain
+chat and history, which is why a normal deployment runs without it.
+
 `getUserMedia` requires a secure context: use `http://localhost` for local
 tests or TLS in front of the server. WebSocket upgrades also need a proxy that
 supports them; see below.
@@ -95,6 +123,7 @@ Every flag has an environment variable equivalent. Flags win.
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
+| `-e2e` | `E2E` | off | hide names, plain chat and history from the server for plain clients too; sealed rooms work without it |
 | `-debug` | `DEBUG` | off | verbose logs (room ids are still only logged as a 8 hex character hash) |
 
 Room creation and join attempts are limited per client IP. Behind a reverse
@@ -158,6 +187,7 @@ One JSON object per WebSocket text frame. Client to server:
 | `join` | `room`, `pass`, `name` |
 | `offer` / `answer` | `to`, `sdp` |
 | `ice` | `to`, `candidate` |
+| `enc` | `to` (empty or `*` for the room), `b` (base64 sealed blob) |
 | `leave` | – |
 | `ping` | – |
 
@@ -170,6 +200,7 @@ Server to client:
 | `peer-left` | `from` |
 | `offer` / `answer` | `from`, `sdp` |
 | `ice` | `from`, `candidate` |
+| `enc` | `from`, `b` (forwarded verbatim, never decoded) |
 | `error` | `code` (`unavailable`, `bad-message`) |
 | `pong` | – |
 
@@ -234,6 +265,18 @@ Launch Chromium with `--use-fake-device-for-media-stream
 without a camera. Note that a strict `script-src 'self'` CSP blocks Playwright's
 `page.waitForFunction`, which evaluates inside the page; the script polls with
 `page.evaluate` instead.
+
+`tools/pq-browser-e2e.js` is the sealed counterpart. It opens the join form
+with `?sealed=1`, joins two contexts and asserts the handshake, matching short
+codes, media through the frame transform, sealed chat both ways, that no name
+or chat text appears in a signaling frame, and that a wrong key decodes
+nothing. Run it the same way:
+
+```sh
+PW=/tmp/pw/node_modules/playwright-core \
+ROOMSBASE=http://127.0.0.1:8095 OUTDIR=/tmp/shots \
+  node tools/pq-browser-e2e.js
+```
 
 `tools/smoke.js` is the quick client check. It is small on purpose: a fresh
 page joins a new room with fake devices, and the test fails on the first

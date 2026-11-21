@@ -95,8 +95,9 @@ func createRoom(pass string) (string, error) {
 // ---------------------------------------------------------------- signaling
 
 type peerInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Sealed bool   `json:"sealed"`
 }
 
 type iceCfg struct {
@@ -297,6 +298,29 @@ func testHTTPSurface() {
 	} {
 		code, _, err := httpDo(http.MethodGet, path, "")
 		report("asset "+path, errOr(err, code != 200, fmt.Sprintf("status %d", code)))
+	}
+
+	// The old sealed page is gone: its links land on the one join form with
+	// the sealed flag on. The redirect is checked without following it, and
+	// the three removed files must be 404 like any other unknown path.
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	if req, err := http.NewRequest(http.MethodGet, httpBase+"/e2e", nil); err != nil {
+		report("/e2e redirect", err)
+	} else if res, err := noFollow.Do(req); err != nil {
+		report("/e2e redirect", err)
+	} else {
+		loc := res.Header.Get("Location")
+		io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		report("/e2e redirects to the sealed join form", errOr(nil,
+			res.StatusCode != http.StatusFound, fmt.Sprintf("status %d", res.StatusCode),
+			loc != "/?sealed=1", "location "+loc))
+	}
+	for _, gone := range []string{"/e2e.html", "/e2e.js", "/e2e.css"} {
+		code, _, err := httpDo(http.MethodGet, gone, "")
+		report("old sealed asset "+gone+" is gone", errOr(err, code != http.StatusNotFound, fmt.Sprintf("status %d", code)))
 	}
 
 	// No route may list, count or describe rooms.
@@ -547,6 +571,59 @@ func testRelay() {
 	b.c.close()
 	m, err = a.c.wait("peer-left", 5*time.Second)
 	report("peer-left reaches A", errOr(err, m.From != b.self, "wrong peer id"))
+}
+
+// testModeFlags checks the mode announcement that lets a client show a clear
+// line instead of a silent half call: a sealed guest and a plain guest must
+// see each other's flag in the join list and in the join notice.
+func testModeFlags() {
+	room, err := createRoom("")
+	if err != nil {
+		report("mode: room", err)
+		return
+	}
+	a, err := dialSig()
+	if err != nil {
+		report("mode: dial", err)
+		return
+	}
+	defer a.close()
+	if err := a.send(map[string]any{"t": "join", "room": room, "name": "", "sealed": true}); err != nil {
+		report("mode: sealed join", err)
+		return
+	}
+	m, err := a.wait("joined", 5*time.Second)
+	if err != nil {
+		report("mode: sealed join", err)
+		return
+	}
+
+	b, err := dialSig()
+	if err != nil {
+		report("mode: dial plain", err)
+		return
+	}
+	defer b.close()
+	if err := b.send(map[string]any{"t": "join", "room": room, "name": "plain"}); err != nil {
+		report("mode: plain join", err)
+		return
+	}
+	m, err = b.wait("joined", 5*time.Second)
+	var sealedSeen bool
+	for _, peer := range m.Peers {
+		if peer.ID == m.Self {
+			continue
+		}
+		sealedSeen = peer.Sealed
+	}
+	report("mode: plain guest reads the sealed flag", errOr(err,
+		len(m.Peers) != 1, fmt.Sprintf("%d peers", len(m.Peers)),
+		!sealedSeen, "the sealed guest was announced as plain"))
+
+	notice, err := a.wait("peer-joined", 3*time.Second)
+	report("mode: sealed guest reads the plain flag", errOr(err,
+		notice.Peer == nil, "no peer in the notice",
+		notice.Peer != nil && notice.Peer.Sealed, "the plain guest was announced as sealed"))
 }
 
 func testRoomIsolation() {
@@ -963,6 +1040,7 @@ func main() {
 	testRelay()
 	testHardening()
 	testRoomIsolation()
+	testModeFlags()
 	testLimits()
 	fmt.Println()
 	testWebRTCMesh()

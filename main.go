@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"embed"
 	"errors"
@@ -16,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -132,6 +135,8 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/api/new", srv.handleNew)
 	mux.HandleFunc("/ws", srv.handleWS)
 
+	var wasmGz []byte
+	var wasmOnce sync.Once
 	serve := func(name string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -146,6 +151,20 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 			}
 			w.Header().Set("Content-Type", contentType(name))
 			w.Header().Set("Cache-Control", "no-store")
+			if name == "pq.wasm" && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+				// The WebAssembly build is 5 MiB; one gzip pass makes it 1.5 MiB.
+				wasmOnce.Do(func() {
+					var buf bytes.Buffer
+					zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+					zw.Write(assets["pq.wasm"])
+					zw.Close()
+					wasmGz = buf.Bytes()
+				})
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Vary", "Accept-Encoding")
+				w.Write(wasmGz)
+				return
+			}
 			w.Write(body)
 		}
 	}
@@ -160,6 +179,12 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	for _, name := range routeNames() {
 		mux.Handle("/"+name, serve(name))
 	}
+	// The old sealed page is gone: its links land on the one join form with the
+	// sealed toggle on. The redirect keeps no fragment of its own, so a link
+	// like /e2e#r=<room> keeps its room and gains the flag.
+	mux.HandleFunc("/e2e", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/?sealed=1", http.StatusFound)
+	})
 	// The queue and the done list are plain files on disk, so an update is a
 	// file write and needs no new binary.
 	mux.HandleFunc("/QUEUE.md", docHandler(cfg.DocsDir, "QUEUE.md"))
@@ -233,6 +258,9 @@ func assetNames() []string {
 	return []string{
 		"index.html", "app.js", "style.css", "favicon.svg",
 		"rnnoise-sync.js", "rnnoise-worklet.js", workletBundle,
+		// The sealed half of the one client: the frame worker and the
+		// WebAssembly build of the key agreement. The old e2e page is gone.
+		"e2e-transform.js", "wasm_exec.js", "pq.wasm",
 		// The four cues are Opus for size; the mp3 stays as a fallback.
 		"sfx/pop.webm", "sfx/bonk.webm", "sfx/timp.webm", "sfx/hammer.webm",
 		"sfx/pop.ogg", "sfx/bonk.ogg", "sfx/timp.ogg", "sfx/hammer.ogg",
@@ -276,6 +304,8 @@ func contentType(name string) string {
 		return "text/css; charset=utf-8"
 	case strings.HasSuffix(name, ".svg"):
 		return "image/svg+xml"
+	case strings.HasSuffix(name, ".wasm"):
+		return "application/wasm"
 	case strings.HasSuffix(name, ".mp3"):
 		return "audio/mpeg"
 	case strings.HasSuffix(name, ".webm"):
@@ -289,7 +319,7 @@ func contentType(name string) string {
 // securityHeaders keeps the client dependency-free and locked down. Room ids
 // live only in the URL fragment, so no path or query ever carries them.
 func securityHeaders(next http.Handler, log *slog.Logger) http.Handler {
-	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; " +
+	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; " +
 		"media-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'none'; " +
 		"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
