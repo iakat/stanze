@@ -2223,7 +2223,7 @@ function fileButton(label, fn) {
   button.textContent = label;
   button.addEventListener('click', () => {
     button.disabled = true;
-    fn();
+    fn(button);
   });
   return button;
 }
@@ -2347,19 +2347,91 @@ function fileOnOffer(peer, msg) {
   rec.el = addFileRow(peer.name || shortPeer(peer.id), name, size);
   if (rec.el) {
     rec.el.acts.append(
-      fileButton('accept', () => fileAccept(rec)),
+      fileButton('accept', (button) => fileAccept(rec, button)),
       fileButton('refuse', () => fileRefuse(rec)),
     );
   }
   filePaintIn(rec);
 }
 
-function fileAccept(rec) {
+// A big file should not sit in the tab twice. When the browser has the File
+// System Access API the guest picks a place on disk at the accept click and
+// every chunk is written as it arrives, so the page holds one chunk and not
+// the whole file. A browser without it, or an accept the guest sends without
+// the picker, keeps the in-memory path and its save link.
+function fileDiskWanted() {
+  const pick = /** @type {any} */ (window).showSaveFilePicker;
+  return typeof pick === 'function' && !/** @type {any} */ (window).e2eNoPicker;
+}
+
+// fileDiskOpen asks for the place on disk. It returns true when a writer is
+// ready, false when the page must keep the bytes in memory, and null when the
+// guest closed the picker: then the offer stays untouched, as if accept was
+// never pressed.
+async function fileDiskOpen(rec) {
+  if (!fileDiskWanted()) return false;
+  let handle;
+  try {
+    handle = await /** @type {any} */ (window).showSaveFilePicker({ suggestedName: rec.name });
+  } catch (err) {
+    if (err && err.name === 'AbortError') return null;
+    return false;
+  }
+  try {
+    rec.writer = await handle.createWritable();
+    rec.disk = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// fileDiskWrite queues one chunk on the writable. The queue keeps the byte
+// order, and a slow disk applies its pressure to the queue instead of the page
+// buffering the whole file. A failed write ends the transfer and removes the
+// partial file.
+function fileDiskWrite(rec, bytes) {
+  const writer = rec.writer;
+  if (!writer) return;
+  rec.writes = (rec.writes || Promise.resolve()).then(() => writer.write(bytes)).catch(() => {
+    fileDiskAbort(rec);
+    const peer = state.peers.get(rec.peerId);
+    if (peer && peer.keys) sealedSend(peer, { k: 'file', a: 'cancel', x: rec.x });
+    fileFinishIn(rec, 'cancelled');
+  });
+}
+
+// fileDiskAbort drops a partial file after a cancel. It waits for the writes
+// that are already queued, so the abort can not land in the middle of one.
+function fileDiskAbort(rec) {
+  const writer = rec.writer;
+  rec.writer = null;
+  rec.chunks = [];
+  if (!writer) return;
+  const pending = rec.writes || Promise.resolve();
+  rec.writes = pending.then(() => writer.abort()).catch(() => {});
+}
+
+function fileAccept(rec, button) {
   const peer = state.peers.get(rec.peerId);
   if (!peer || !peer.keys) {
     fileFinishIn(rec, 'gone');
     return;
   }
+  // The picker runs inside the click that accepted, so a browser lets it
+  // open. A closed picker means no accept was sent, and the offer is still
+  // there for a second click.
+  return fileDiskOpen(rec).then((ok) => {
+    if (ok === null) {
+      if (button) button.disabled = false;
+      return;
+    }
+    fileAcceptGo(rec, peer, ok);
+  });
+}
+
+function fileAcceptGo(rec, peer, disk) {
+  if (disk === null || !state.peers.has(peer.id) || !peer.keys) return;
   rec.status = 'receiving';
   rec.got = 0;
   rec.expect = 0;
@@ -2507,7 +2579,8 @@ function fileOnChunk(peer, raw) {
     fileFinishIn(rec, 'cancelled');
     return;
   }
-  rec.chunks.push(bytes);
+  if (rec.writer) fileDiskWrite(rec, bytes);
+  else rec.chunks.push(bytes);
   rec.got += bytes.length;
   rec.expect = q + 1;
   state.fileChunksRecv++;
@@ -2734,7 +2807,10 @@ function fileInText(rec) {
     const rate = fileRateText(rec.rate);
     return 'receiving ' + pct + ' percent' + (rate ? ', ' + rate : '');
   }
-  if (rec.status === 'done') return 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
+  if (rec.status === 'done') {
+    return rec.disk ? 'saved to disk' + (rec.avg ? ', ' + rec.avg : '')
+      : 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
+  }
   if (rec.status === 'refused') return 'refused';
   if (rec.status === 'cancelled') return 'cancelled';
   if (rec.status === 'gone') return 'the sender left';
@@ -2748,6 +2824,31 @@ function filePaintIn(rec) {
   rec.el.status.textContent = fileInText(rec);
 }
 
+// fileFinishDisk closes the writable after the last queued chunk. The bytes
+// are on disk with the name the guest chose, so the row carries no save link
+// and the page keeps no byte of the file.
+function fileFinishDisk(rec) {
+  const writer = rec.writer;
+  rec.writer = null;
+  rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
+  if (rec.el) rec.el.status.textContent = 'saving to disk' + (rec.avg ? ', ' + rec.avg : '');
+  const pending = rec.writes || Promise.resolve();
+  pending.then(() => writer.close()).then(() => {
+    state.fileRecv++;
+    state.filesIn.delete(rec.key);
+    if (rec.el) {
+      rec.el.acts.replaceChildren();
+      rec.el.status.textContent = fileInText(rec);
+    }
+  }).catch(() => {
+    state.filesIn.delete(rec.key);
+    if (rec.el) {
+      rec.el.acts.replaceChildren();
+      rec.el.status.textContent = 'the disk write failed';
+    }
+  });
+}
+
 function fileFinishIn(rec, status) {
   if (rec.timer) {
     clearTimeout(rec.timer);
@@ -2756,6 +2857,10 @@ function fileFinishIn(rec, status) {
   if (status === 'done' && rec.got !== rec.size) status = 'cancelled';
   rec.status = status;
   if (rec.el) rec.el.bar.hidden = true;
+  if (status === 'done' && rec.writer) {
+    fileFinishDisk(rec);
+    return;
+  }
   if (status === 'done') {
     // The bytes live in this Blob only. The link hands them to the guest when
     // the guest clicks it, so nothing is written before that click.
@@ -2781,8 +2886,9 @@ function fileFinishIn(rec, status) {
     state.filesIn.delete(rec.key);
     return;
   }
-  // A refused, cancelled or orphaned transfer keeps no bytes at all.
-  rec.chunks = [];
+  // A refused, cancelled or orphaned transfer keeps no bytes at all, and a
+  // half written file on disk is dropped.
+  fileDiskAbort(rec);
   if (rec.url) {
     URL.revokeObjectURL(rec.url);
     state.fileLinks.delete(rec.url);
@@ -2851,9 +2957,9 @@ function fileClearAll() {
   }
   state.files.clear();
   for (const rec of state.filesIn.values()) {
+    fileDiskAbort(rec);
     if (rec.url) URL.revokeObjectURL(rec.url);
     rec.url = '';
-    rec.chunks = [];
   }
   state.filesIn.clear();
   for (const url of state.fileLinks) URL.revokeObjectURL(url);
@@ -3142,60 +3248,75 @@ async function peerStats(peer) {
   return out;
 }
 
-// ownMediaLine describes the local devices: the microphone and its input
-// level, denoise, the state of the microphone graph and the camera
-// resolution. A live track with a silent meter points at the graph; a dead
-// context points at the autoplay rule of a phone.
-function ownMediaLine() {
-  const parts = [];
+// ownMediaPairs is the own card: what the browser holds, then what it moves.
+/** @returns {(string | boolean | undefined)[][]} */
+// A live track with a silent meter points at the graph; a dead context points
+// at the autoplay rule of a phone, so the sound state only shows when it needs
+// a click.
+function ownMediaPairs() {
+  const out = [];
   const live = !!(state.mic && state.micTrack && state.micTrack.readyState === 'live');
   const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
-  let label = live ? 'mic on' : 'mic off';
+  let label = live ? 'on' : 'off';
   // Safari reports no sample rate on an audio track, so the rate is a bonus
   // and a missing rate never means off.
   if (mic && mic.sampleRate) label += ` ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
-  parts.push(label);
-  if (live) parts.push(micLevelLine());
-  parts.push(state.denoiseOn ? 'denoise on' : 'denoise off');
-  parts.push(`audio ${state.audioCtx ? state.audioCtx.state : 'none'}`);
-  parts.push(`out ${state.playCtx ? state.playCtx.state : 'none'}`);
+  out.push(['mic ', label]);
+  out.push(['denoise ', state.denoiseOn ? 'on' : 'off']);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
-  if (cam && cam.width && cam.height) parts.push(`camera ${cam.width}x${cam.height}`);
-  else parts.push('camera off');
-  return parts.join(' | ');
+  out.push(['camera ', cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : 'off']);
+  if (live) out.push(['', micLevelLine()]);
+  const ctx = state.playCtx;
+  const play = ctx ? ctx.state : 'none';
+  if (play !== 'running') out.push(['sound ', `${play}: tap the page once`]);
+  return out;
 }
 
-function pathLine(s) {
-  const bits = [];
-  if (s.rtt !== null) bits.push(`${s.rtt} ms`);
-  if (s.path) bits.push(s.path);
-  return bits.join(' | ') || 'no pair yet';
+// peerPairs is one peer card: the link, then what moves over it.
+// The rate is out/in, the same order in both columns, so two cards compare at
+// a glance.
+/** @returns {(string | boolean | undefined)[][]} */
+function peerPairs(peer, s) {
+  if (!s) return [['', 'connecting'], ['', inLevelLine(peer)]];
+  const out = [
+    ['rtt ', `${s.rtt === null ? '-' : s.rtt + ' ms'} · ${s.path || 'no path'}`],
+    ['video ', `${s.up.video}/${s.down.video} kbit/s`],
+    ['audio ', `${s.up.audio}/${s.down.audio} kbit/s`],
+  ];
+  out.push(['', inLevelLine(peer)]);
+  return out;
 }
 
-function rateLine(s) {
-  return `video ${s.up.video}/${s.down.video} | audio ${s.up.audio}/${s.down.audio}`;
+// statsRow is one card of the panel: a name and a short list of key/value
+// lines. A line is [key, value] or [key, value, mark], where a mark of true
+// turns it green and false turns it red.
+function statLine(key, value, mark) {
+  const line = document.createElement('div');
+  line.className = 'sline' + (mark === true ? ' good' : mark === false ? ' bad' : '');
+  const k = document.createElement('span');
+  k.className = 'sk';
+  k.textContent = key;
+  const v = document.createElement('span');
+  v.className = 'sv';
+  v.textContent = String(value);
+  line.append(k, v);
+  return line;
 }
 
-function statsRow(title, lines, mark) {
+function statsRow(title, pairs, mark) {
   const row = document.createElement('div');
   row.className = 'srow';
   const head = document.createElement('div');
   head.className = 'sname';
   head.textContent = title;
   row.appendChild(head);
-  for (const text of lines) {
-    const line = document.createElement('div');
-    line.className = 'sline' + (mark === true ? ' good' : mark === false ? ' bad' : '');
-    line.textContent = text;
-    row.appendChild(line);
-  }
+  for (const p of pairs) row.appendChild(statLine(p[0], p[1], p.length > 2 ? p[2] : mark));
   return row;
 }
 
-// updateStats draws one round. The totals of the own tile are the sums of the
-// per peer numbers across every connection. A sealed room adds its own rows
-// (suite, self test, room code, sealed frame counters, wire audit) above the
-// per peer rate rows, in the same panel and the same sheet on a phone.
+// updateStats draws one round. The totals of the own card are the sums of the
+// per peer numbers across every connection. A fault sits above the cards, so a
+// red line is the first thing on the panel and a healthy call needs no scroll.
 async function updateStats() {
   if (!statsOpen() || state.statsBusy) return;
   const body = $('stats-body');
@@ -3203,20 +3324,24 @@ async function updateStats() {
   state.statsBusy = true;
   try {
     const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
-    const rows = [];
+    const peers = [];
     for (const peer of state.peers.values()) {
       const s = await peerStats(peer);
-      if (!s) {
-        rows.push(statsRow(peer.name, ['connecting', inLevelLine(peer)]));
-        continue;
+      if (s) {
+        for (const dir of ['up', 'down']) {
+          for (const kind of ['audio', 'video']) total[dir][kind] += s[dir][kind];
+        }
       }
-      for (const dir of ['up', 'down']) {
-        for (const kind of ['audio', 'video']) total[dir][kind] += s[dir][kind];
-      }
-      rows.push(statsRow(peer.name, [pathLine(s), rateLine(s), inLevelLine(peer)]));
+      const pairs = peerPairs(peer, s);
+      for (const p of sealedPeerPairs(peer)) pairs.push(p);
+      peers.push(statsRow(peer.name || shortPeer(peer.id), pairs));
     }
-    const own = statsRow('you', [ownMediaLine(), rateLine(total)]);
-    body.replaceChildren(own, ...sealedStatsRows(), ...rows);
+    const ownPairs = ownMediaPairs();
+    ownPairs.push(['video ', `${total.up.video}/${total.down.video} kbit/s`]);
+    ownPairs.push(['audio ', `${total.up.audio}/${total.down.audio} kbit/s`]);
+    const own = statsRow('you', ownPairs);
+    const alarms = sealedAlarms();
+    body.replaceChildren(...alarms, own, ...peers, ...sealedCards());
   } finally {
     state.statsBusy = false;
   }
@@ -4583,100 +4708,113 @@ function sealedPairCount(id) {
   return { out, inn, refused };
 }
 
-// sealedStatsRows is the sealed half of the one stats panel. It shows what the
-// relay cannot see: the suite, the codes both ends share, the sealed frame
-// counters and the wire audit that looks for a name or a chat line in every
-// signaling frame. A red row is a real fault.
-function sealedStatsRows() {
-  const rows = [];
+// sealedPeerPairs is the sealed half of one peer card: the code both ends
+/** @returns {(string | boolean | undefined)[][]} */
+// share, the key state and the sealed frame counters. It sits under the media
+// numbers of the same person, so one card answers "is this peer good".
+function sealedPeerPairs(peer) {
+  const c = sealedPairCount(peer.id);
+  const pin = pinState(peer);
+  return [
+    ['code ', verifyText(peer.sas) || '-'],
+    ['keys ', `${peer.keys ? 'ok' : 'none'} · link ${peer.pc ? peer.pc.connectionState : 'none'} · confirmed ${peer.confirmed ? 'yes' : 'no'}`],
+    ['id ', `${peer.proven ? peer.fp : 'unproven'} · pin ${pin === 'known' ? pinLabelOf(peer) : pin}`],
+    ['frames ', `out ${c.out} in ${c.inn} refused ${c.refused}`, c.refused === 0 ? undefined : false],
+  ];
+}
+
+// sealedAlarms are the lines that mean something is wrong now. A healthy call
+// shows none of them, so the panel opens on the numbers and not on a warning
+// that has to be read twice to be dismissed.
+function sealedAlarms() {
+  const out = [];
+  if (state.sealFault) out.push(statsRow('sealing fault', [['', state.sealFault, false]]));
+  const failed = sealedFailedPairs();
+  if (failed.length) {
+    const tags = failed.map((peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || 'no code'}`);
+    out.push(statsRow('room code', [
+      ['', 'KEY MISMATCH ' + tags.join(', '), false],
+      ['', 'do not trust this call', false],
+    ]));
+  }
+  if (state.wireLeaks.length) {
+    out.push(statsRow('leak', state.wireLeaks.map((w) => ['', `${w.where}: ${w.canary}`, false])));
+  }
+  if (state.workerErrors.length) {
+    out.push(statsRow('worker', state.workerErrors.slice(0, 5).map((e) => ['', e, false])));
+  }
+  const wt = state.wasmTest;
+  if (wt && !wasmTestOk(wt)) out.push(statsRow('self test', wasmTestFaults(wt)));
+  return out;
+}
+
+function wasmTestOk(wt) {
+  return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused &&
+    wt.idSign && wt.idUnsigned && wt.idFp);
+}
+
+// wasmTestFaults lists only the checks that failed.
+// The whole list belongs in the test output, not on a screen a guest reads
+// during a call.
+/** @returns {(string | boolean)[][]} */
+function wasmTestFaults(wt) {
+  const bad = [
+    ['sas ', wt.sasMatch ? 'match' : 'no', !!wt.sasMatch],
+    ['confirm ', wt.confirm ? 'ok' : 'no', !!wt.confirm],
+    ['open ', wt.open ? 'ok' : 'no', !!wt.open],
+    ['wrong key ', wt.wrongKeyRefused ? 'refused' : 'OPENED', !!wt.wrongKeyRefused],
+    ['identity ', wt.idSign ? 'signs' : 'BROKEN', !!wt.idSign],
+    ['unsigned ', wt.idUnsigned ? 'refused' : 'ACCEPTED', !!wt.idUnsigned],
+    ['fingerprint ', wt.idFp ? 'ok' : 'BROKEN', !!wt.idFp],
+  ];
+  const out = [['', 'FAIL', false]];
+  for (const b of bad) if (!b[2]) out.push(b);
+  return out;
+}
+
+// sealedCards is the sealed half of the panel, below the person cards: what
+// the relay cannot see, in the few lines that answer it.
+function sealedCards() {
+  const out = [];
   const available = sealingAvailable();
-  rows.push(statsRow('pq-e2e', [
-    'suite pq-e2e v2 | X25519 + ML-KEM-768 + Ed25519 identity | HKDF-SHA256 | AES-256-GCM',
-    'session keys come from ephemeral halves only, inside this page, for this call',
-    available
-      ? 'media sealing available: every frame leaves through the worker'
-      : 'media sealing NOT available in this browser: no media is sent',
-  ], available));
-  if (state.sealFault) rows.push(statsRow('sealing fault', [state.sealFault], false));
+  const wt = state.wasmTest;
+  out.push(statsRow('sealed', [
+    ['suite ', 'pq-e2e v2'],
+    ['media ', available ? 'worker, every frame sealed' : 'NO SEALING: no media is sent', available],
+    ['self test ', wt ? (wasmTestOk(wt) ? 'pass' : 'FAIL') : 'not run', wt ? wasmTestOk(wt) : undefined],
+  ]));
 
   const me = state.idKey;
-  rows.push(statsRow('identity', [
-    me ? `${me.kind} | ${me.fp}` : 'none',
-    deviceNote(),
-    `(a pin proves who a peer is; the ephemeral key proves the call is closed)`,
-  ], me ? true : false));
-
-  const wt = state.wasmTest;
-  if (wt) {
-    const ok = !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused &&
-      wt.idSign && wt.idUnsigned && wt.idFp);
-    rows.push(statsRow('self test', [
-      `${ok ? 'pass' : 'FAIL'} | sas ${wt.sasMatch ? 'match' : 'no'} | confirm ${wt.confirm ? 'ok' : 'no'} | open ${wt.open ? 'ok' : 'no'} | wrong key ${wt.wrongKeyRefused ? 'refused' : 'OPENED'} | id ${wt.idSign ? 'signs' : 'BROKEN'} | unsigned ${wt.idUnsigned ? 'refused' : 'ACCEPTED'} | fp ${wt.idFp ? 'ok' : 'BROKEN'} | code ${wt.sas || '-'}`,
-    ], ok));
-  }
+  out.push(statsRow('identity', [
+    ['key ', me ? `${me.kind} ${me.fp}` : 'none'],
+    ['device ', deviceNote()],
+  ]));
 
   const code = sealedRoomCode();
   const codes = sealedRoomCodes();
-  const failed = sealedFailedPairs();
-  if (failed.length > 0) {
-    const tags = failed.map((peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || 'no code'}`);
-    rows.push(statsRow('room code', [
-      'KEY MISMATCH ' + tags.join(', '),
-      'the keys of that pair do not match, so do not trust this call',
-    ], false));
-  } else if (codes.size > 1) {
-    rows.push(statsRow('room code', [
-      `one code per pair | ${state.peers.size} guests | ` + [...codes].map((c) => verifyText(c) + ' ' + c).join(', '),
-      'a mesh has one code per pair: compare each code on its guest tile by voice',
-    ], true));
+  if (codes.size > 1) {
+    const pairs = [['code ', `one code per pair · ${state.peers.size} guests`, true]];
+    for (const c of codes) pairs.push(['', `${verifyText(c)} ${c}`]);
+    out.push(statsRow('room code', pairs));
   } else {
-    rows.push(statsRow('room code', [
-      `${verifyText(code) || '-'}  ${code || 'pending'}`,
-      verifyNames(code) || 'no peer code yet',
-    ], code ? true : undefined));
-  }
-
-  for (const peer of state.peers.values()) {
-    const c = sealedPairCount(peer.id);
-    const pin = pinState(peer);
-    rows.push(statsRow('peer ' + shortPeer(peer.id), [
-      `${peer.name || 'unnamed'} | ${verifyText(peer.sas) || 'code -'}`,
-      `keys ${peer.keys ? 'yes' : 'no'} | link ${peer.pc ? peer.pc.connectionState : 'none'} | confirmed ${peer.confirmed ? 'yes' : 'no'}`,
-      `identity ${peer.proven ? peer.fp : 'unproven'} | pin ${pin === 'known' ? pinLabelOf(peer) : pin}`,
-      `sealed out ${c.out} in ${c.inn} | refused ${c.refused}`,
-    ], peer.keys && peer.sas && peer.confirmed ? true : undefined));
+    out.push(statsRow('room code', [
+      ['code ', `${verifyText(code) || '-'} ${code || 'pending'}`, code ? true : undefined],
+      ['words ', verifyNames(code) || '-'],
+    ]));
   }
 
   let refused = 0;
   for (const st of Object.values(state.frames)) {
     if (st && st.dir === 'recv') refused += st.fail || 0;
   }
-  rows.push(statsRow('sealed frames', [
-    `out ${state.encryptFrames} | in ${state.decryptFrames} | refused ${refused} | worker errors ${state.workerErrors.length}`,
-  ], refused === 0 && state.workerErrors.length === 0));
-  rows.push(statsRow('wire audit', [
-    `frames ${state.wireFrames} | canaries ${state.canaries.length} | plaintext leaks ${state.wireLeaks.length}`,
-  ], state.wireLeaks.length === 0));
-  rows.push(statsRow('sealed chat', [
-    `out ${state.chatSent} | in ${state.chatRecv} | replays ${state.replayDrops} | confirm failures ${state.confirmFailures} | identity refusals ${state.identityFailures}`,
-  ], state.confirmFailures === 0 && state.identityFailures === 0 && state.replayDrops === 0));
-  rows.push(statsRow('sealed files', [
-    `offers ${state.fileOffers} | saved ${state.fileRecv} | chunks out ${state.fileChunksSent} | chunks in ${state.fileChunksRecv} | refused ${state.fileRefused} | cancelled ${state.fileCancelled}`,
+  const clean = state.workerErrors.length === 0;
+  out.push(statsRow('counters', [
+    ['frames ', `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`, refused === 0 && clean],
+    ['files ', `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`],
+    ['chat ', `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`, state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0],
+    ['wire ', `frames ${state.wireFrames} canaries ${state.canaries.length} leaks ${state.wireLeaks.length}`, state.wireLeaks.length === 0],
   ]));
-
-  const ctx = state.playCtx;
-  const play = ctx ? ctx.state : 'none';
-  rows.push(statsRow('sound out', [
-    `${play}${play === 'suspended' ? ' (tap the page once)' : ''} | videos muted`,
-  ], play === 'running' ? true : undefined));
-
-  if (state.wireLeaks.length) {
-    rows.push(statsRow('leak', state.wireLeaks.map((w) => `${w.where}: ${w.canary}`), false));
-  }
-  if (state.workerErrors.length) {
-    rows.push(statsRow('worker', state.workerErrors.slice(0, 5), false));
-  }
-  return rows;
+  return out;
 }
 
 // ---------------------------------------------------------------- lab proof

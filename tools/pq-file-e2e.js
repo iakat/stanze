@@ -62,6 +62,10 @@ async function joinPage(context, name, room) {
   // that no file name and no chunk of a file went over it.
   await page.addInitScript(() => {
     if (window.__wsSent) return;
+    // The save picker is a native dialog this suite cannot answer, so the
+    // file path here is the in-memory one and its save link. The disk path
+    // has its own probe with a stubbed handle.
+    window.e2eNoPicker = true;
     window.__wsSent = [];
     const send = WebSocket.prototype.send;
     WebSocket.prototype.send = function (raw) {
