@@ -2698,9 +2698,9 @@ function sealingAvailable() {
 
 // ------------------------------------------------------------- wasm loading
 
-// wasm_exec.js is only fetched when a sealed room is wanted, so a plain visit
-// never pays for the module. The script defines the Go class; the module then
-// starts the JSON bridge.
+// wasm_exec.js is fetched when the lobby opens, not at page load, so the join
+// form paints first. The script defines the Go class; the module then starts
+// the JSON bridge.
 function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     if (win().Go) {
