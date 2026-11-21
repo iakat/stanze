@@ -140,7 +140,7 @@ const SCENARIOS = [
       // A navigation to the exact same URL, fragment included, is not a reload
       // in this browser: it is a same-document no-op, so the old page keeps the
       // call and the lobby input is hidden. The nonce forces a new document.
-      await b.goto(BASE + '/?sealed=1&n=' + Date.now() + '#r=' + pages.room,
+      await b.goto(BASE + '/?n=' + Date.now() + '#r=' + pages.room,
         { waitUntil: 'load', timeout: 30000 });
       await until(b, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 30000, 'reload wasm');
       if (!(await b.evaluate(() => !!(window.e2eApp && window.e2eApp.state.self)))) {
@@ -208,7 +208,6 @@ function instrument() {
       if (m.room) o.room = String(m.room).slice(0, 10);
       if (m.to) o.to = m.to;
       if (m.from) o.from = m.from;
-      if (m.sealed) o.sealed = true;
       if (m.sdp) o.sdp = sdpSummary(m.sdp);
       if (m.candidate) o.cand = String((m.candidate || {}).candidate || '').slice(0, 20);
       if (m.b) o.b = String(m.b).length;
@@ -350,15 +349,11 @@ async function attach(page, errors) {
 async function prep(ctx, name, room, errors) {
   const page = await ctx.newPage();
   attach(page, errors);
-  await page.goto(BASE + '/?sealed=1#r=' + room, { waitUntil: 'load', timeout: 60000 });
+  await page.goto(BASE + '/#r=' + room, { waitUntil: 'load', timeout: 60000 });
   await until(page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 60000, name + ' wasm self test');
-  const boxed = await page.evaluate(() => document.getElementById('sealed').checked);
-  if (!boxed) await page.click('#sealed');
   await page.fill('#name', name);
   await page.fill('#room', room);
   const ready = await page.evaluate(() => ({
-    sealed: window.e2eApp.state.sealed,
-    boxed: document.getElementById('sealed').checked,
     room: document.getElementById('room').value,
     name: document.getElementById('name').value,
   }));
@@ -372,9 +367,9 @@ function probe(page) {
     const s = app.state;
     const race = window.__race || { pcs: [] };
     const out = {
-      self: s.self, room: s.room, sealed: s.sealed, leaving: s.leaving,
+      self: s.self, room: s.room, leaving: s.leaving,
       outbox: s.outbox ? s.outbox.length : null, hasWorker: !!s.worker,
-      identity: !!s.identity, sealFault: s.sealFault, modeClash: s.modeClash,
+      identity: !!s.identity, sealFault: s.sealFault,
       sealing: typeof RTCRtpScriptTransform === 'function',
       counters: app.counters(),
       linkText: (document.getElementById('link-text') || {}).textContent,

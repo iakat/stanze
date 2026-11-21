@@ -59,17 +59,13 @@ async function joinPage(context, name, room) {
   let app = null;
   // A join can occasionally miss its first websocket; retry once by reloading.
   for (let attempt = 0; attempt < 3; attempt++) {
-    // Sealed rooms use the same join form as plain ones: the flag travels in
-    // the query, the room in the fragment, and a sealed visit warms the module
-    // before the join so the only prompt left is the microphone.
-    await page.goto(BASE + '/?sealed=1' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
-    const boxed = await page.evaluate(() => document.getElementById('sealed').checked);
-    if (!boxed) await page.click('#sealed');
+    // Every visit is sealed: the room travels in the fragment and the module
+    // warms while the lobby is open, so the only prompt left is the microphone.
+    await page.goto(BASE + '/' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
     await until(page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 45000, 'wasm self test');
     app = await page.evaluate(() => ({
       test: window.e2eApp && window.e2eApp.state.wasmTest,
       room: document.getElementById('room').value,
-      sealed: document.getElementById('sealed').checked,
       title: document.title,
     }));
     await page.fill('#name', name);
@@ -88,9 +84,7 @@ async function joinPage(context, name, room) {
         hasApp: !!window.e2eApp,
         stageHidden: document.getElementById('stage').hidden,
         lobbyHidden: document.getElementById('lobby').hidden,
-        sealedBox: document.getElementById('sealed').checked,
         self: window.e2eApp ? window.e2eApp.state.self : null,
-        sealed: window.e2eApp ? window.e2eApp.state.sealed : null,
         linkText: (document.getElementById('link-text') || {}).textContent,
         say: (document.getElementById('status') || {}).textContent,
       })).catch((e) => ({ evaluate: String(e) }));
@@ -225,28 +219,25 @@ async function frameDump(page, label) {
   let a = null;
   let b = null;
   try {
-    // The default is checked before any link or stored choice: a visitor who
-    // opens the plain address gets post-quantum e2ee without asking.
+    // There is one kind of room, and the form says so without a toggle.
     const probe = await ctxA.newPage();
     await probe.goto(BASE + '/', { waitUntil: 'load', timeout: 60000 });
     const defaults = await probe.evaluate(() => ({
-      box: document.getElementById('sealed').checked,
-      label: document.querySelector('label.check').textContent.trim(),
+      box: !!document.getElementById('sealed'),
+      note: [...document.querySelectorAll('p.note')].map((p) => p.textContent).join(' '),
     }));
     await probe.close();
-    check('the post-quantum box is on by default', defaults.box === true, defaults.box);
-    check('the box says enable post-quantum e2ee', /enable post-quantum e2ee/.test(defaults.label), defaults.label);
+    check('the join form has no post-quantum toggle', defaults.box === false, defaults.box);
+    check('the lobby says every room is sealed', /sealed end to end/.test(defaults.note), defaults.note);
 
     a = await joinPage(ctxA, 'alice', '');
-    check('the sealed box is on for a sealed link', a.app.sealed === true, a.app.sealed);
     check('A loaded the post-quantum module', !!(a.app.test && a.app.test.sasMatch && a.app.test.confirm && a.app.test.open && a.app.test.wrongKeyRefused),
       JSON.stringify(a.app.test));
     const room = a.app.room;
     check('A has a 26 character random room id', /^[a-z2-7]{26}$/.test(room), room);
-    // Sealed is the default, so the address carries the room only; a plain
-    // room is the one that says sealed=0.
+    // The address carries the room only.
     const hashA = await a.page.evaluate(() => location.hash);
-    check('a sealed link carries no sealed flag', !/sealed=/.test(hashA), hashA);
+    check('a room link carries no mode flag', !/sealed=/.test(hashA), hashA);
 
     b = await joinPage(ctxB, 'bob', room);
 

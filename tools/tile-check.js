@@ -48,15 +48,14 @@ async function joinPage(context, name, room) {
   const page = await context.newPage();
   const errors = [];
   attach(page, errors);
-  await page.goto(BASE + '/?sealed=1' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
-  if (!(await page.evaluate(() => document.getElementById('sealed').checked))) await page.click('#sealed');
+  await page.goto(BASE + '/' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
   await until(page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 45000, 'wasm self test');
   await page.fill('#name', name);
   if (room) await page.fill('#room', room);
   await page.click('#enter-btn', { timeout: 20000 });
   await until(page, () => window.e2eApp && window.e2eApp.state.self && !document.getElementById('stage').hidden,
     null, 25000, name + ' joined');
-  const app = await page.evaluate(() => ({ room: window.e2eApp.state.room, sealed: window.e2eApp.state.sealed }));
+  const app = await page.evaluate(() => ({ room: window.e2eApp.state.room }));
   return { page, errors, app };
 }
 
@@ -94,7 +93,11 @@ function peerCount(page) {
 
 (async () => {
   const browser = await chromium.launch({
-    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+    args: [
+      '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required',
+      // The sealed media path needs the script transform API.
+      '--enable-features=RTCRtpScriptTransform',
+    ],
   });
   let a;
   let b;

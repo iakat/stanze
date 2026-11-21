@@ -54,14 +54,12 @@ function attach(page, errors) {
   page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url() + ' ' + (r.failure() || {}).errorText));
 }
 
-// Visible state of the page: tiles, remote and local video elements.
+// Visible state of the page: tiles, remote and local video elements. Every
+// remote video is muted because its audio goes through the peer gain node.
 function snapshot() {
   const tiles = [...document.querySelectorAll('.tile')];
-  const remotes = tiles.filter((t) => {
-    const v = t.querySelector('video');
-    return v && !v.muted;
-  });
-  const locals = [...document.querySelectorAll('.tile video[muted]')];
+  const remotes = tiles.filter((t) => t.dataset.local !== 'yes');
+  const locals = [...document.querySelectorAll('.tile[data-local="yes"] video')];
   return {
     tiles: tiles.length,
     remotes: remotes.map((t) => {
@@ -157,6 +155,8 @@ async function stats(page) {
       '--use-fake-device-for-media-stream',
       '--use-fake-ui-for-media-stream',
       '--autoplay-policy=no-user-gesture-required',
+      // The sealed media path needs the script transform API.
+      '--enable-features=RTCRtpScriptTransform',
     ],
   });
 
@@ -180,6 +180,8 @@ async function stats(page) {
   try {
     // ---- A creates the room (empty room field => new room)
     await pageA.goto(BASE + '/', { waitUntil: 'load', timeout: 60000 });
+    // The module warms while the lobby is open, so this waits before the join.
+    await until(pageA, () => state.wasmOk, null, 60000, 'A pq module');
     const lobby = await pageA.evaluate(() => {
       const btn = document.getElementById('enter-btn');
       const form = document.getElementById('join-form');
@@ -230,6 +232,7 @@ async function stats(page) {
 
     // ---- B joins the same room through the shared link
     await pageB.goto(BASE + '/#r=' + room, { waitUntil: 'load', timeout: 60000 });
+    await until(pageB, () => state.wasmOk, null, 60000, 'B pq module');
     const prefilled = await pageB.evaluate(() => document.getElementById('room').value);
     check('B lobby prefills the room from the link', prefilled === room, prefilled);
     await pageB.fill('#name', 'bob');
@@ -244,7 +247,7 @@ async function stats(page) {
       const t = [...document.querySelectorAll('.tile')];
       return t.length === 2 && t.some((x) => {
         const v = x.querySelector('video');
-        return x.dataset.state === 'connected' && !v.muted && v.videoWidth > 0;
+        return x.dataset.local !== 'yes' && x.dataset.state === 'connected' && v.videoWidth > 0;
       });
     };
     await until(pageA, bothTiles, null, 60000, 'A remote peer connected');
@@ -258,8 +261,8 @@ async function stats(page) {
     const remoteA = snapA1.remotes[0] || {};
     const remoteB = snapB1.remotes[0] || {};
 
-    const namesA = await pageA.evaluate(() => [...document.querySelectorAll('.tile:not(:has(video[muted])) .name')].map((n) => n.textContent.trim()));
-    const namesB = await pageB.evaluate(() => [...document.querySelectorAll('.tile:not(:has(video[muted])) .name')].map((n) => n.textContent.trim()));
+    const namesA = await pageA.evaluate(() => [...document.querySelectorAll('.tile[data-peer] .name')].map((n) => n.textContent.trim()));
+    const namesB = await pageB.evaluate(() => [...document.querySelectorAll('.tile[data-peer] .name')].map((n) => n.textContent.trim()));
     check('A sees B under the joined name', namesA[0] === 'bob', JSON.stringify(namesA));
     check('B sees A under the joined name', namesB[0] === 'alice', JSON.stringify(namesB));
 
@@ -354,7 +357,7 @@ async function stats(page) {
     check('stats show outbound and inbound bitrate for video and audio',
       /video [1-9]\d*\/[1-9]\d*/.test(tel.text) && /audio [1-9]\d*\/[1-9]\d*/.test(tel.text), tel.text);
     check('stats show the own rnnoise state and device settings',
-      /rnnoise (on|off)/.test(tel.text) && /mic \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
+      /rnnoise (on|off)/.test(tel.text) && /mic (on|off) \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
     const hiddenStop = await pageA.evaluate(() => {
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
       document.dispatchEvent(new Event('visibilitychange'));

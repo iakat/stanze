@@ -83,6 +83,8 @@ function newRoomID() {
       '--use-fake-ui-for-media-stream',
       '--autoplay-policy=no-user-gesture-required',
       '--no-sandbox',
+      // The sealed media path needs the script transform API.
+      '--enable-features=RTCRtpScriptTransform',
     ],
   });
   const ctxA = await browser.newContext({ permissions: ['camera', 'microphone'] });
@@ -95,6 +97,7 @@ function newRoomID() {
   try {
     // ---- fresh page, join with fake camera and microphone
     await pageA.goto(BASE + '/', { waitUntil: 'load', timeout: TIMEOUT });
+    await until(pageA, () => state.wasmOk, null, 'the post-quantum module');
     await pageA.fill('#name', 'smoke');
     await pageA.fill('#room', room);
     await pageA.click('#enter-btn');
@@ -162,6 +165,7 @@ function newRoomID() {
 
     // ---- a second peer in the same room, and one volume change
     await pageB.goto(BASE + '/#r=' + room, { waitUntil: 'load', timeout: TIMEOUT });
+    await until(pageB, () => state.wasmOk, null, 'the post-quantum module on B');
     await pageB.fill('#name', 'smoke2');
     await pageB.click('#enter-btn');
     await until(pageA, () => [...state.peers.values()].some((p) => p.state === 'connected'), null, 'a connected remote peer');

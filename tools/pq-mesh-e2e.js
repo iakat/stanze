@@ -60,14 +60,11 @@ async function joinPage(context, name, room) {
     try { localStorage.setItem('rooms.cam', '0'); } catch (e) { /* private mode */ }
   });
   for (let attempt = 0; attempt < 3; attempt++) {
-    await page.goto(BASE + '/?sealed=1' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
-    const boxed = await page.evaluate(() => document.getElementById('sealed').checked);
-    if (!boxed) await page.click('#sealed');
+    await page.goto(BASE + '/' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
     await until(page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 45000, 'wasm self test');
     const app = await page.evaluate(() => ({
       test: window.e2eApp && window.e2eApp.state.wasmTest,
       room: document.getElementById('room').value,
-      sealed: document.getElementById('sealed').checked,
     }));
     await page.fill('#name', name);
     if (room) await page.fill('#room', room);
@@ -95,7 +92,7 @@ function meshState(page) {
     const badge = document.getElementById('sealed-badge');
     const stats = document.getElementById('stats-body') ? document.getElementById('stats-body').textContent : '';
     return {
-      self: s.self, room: s.room, sealed: s.sealed, peers,
+      self: s.self, room: s.room, peers,
       badge: { text: badge.textContent, title: badge.title, hidden: badge.hidden },
       stats,
       confirmFailures: window.e2eApp.counters().confirmFailures,
