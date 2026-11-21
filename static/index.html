@@ -19,7 +19,7 @@
     <span class="tbbuttons"><span class="tbcap"></span><span class="tbcap"></span><span class="tbcap close">×</span></span>
   </div>
   <div class="window-body">
-    <p class="hint">Peer to peer audio and video. Nothing is stored and nothing is recorded.</p>
+    <p class="hint">Peer to peer audio and video, sealed in the browser. Nothing is stored and nothing is recorded.</p>
 
     <form id="join-form" autocomplete="off">
       <label>your name
@@ -42,11 +42,10 @@
           <option value="relay">relay only: hides your address</option>
         </select>
       </label>
-      <label class="check"><input id="sealed" type="checkbox"> enable post-quantum e2ee</label>
       <p id="sealed-note" class="note" hidden></p>
-      <p class="note">Post-quantum e2ee keeps your name, the chat and the media inside the browser, with
-        X25519 + ML-KEM-768 and AES-256-GCM. The server only forwards sealed blobs. Compare the
-        emoji code with the other people to rule out a swapped key.</p>
+      <p class="note">Every room is sealed end to end in the browser: your name, the chat and the
+        media stay there, with X25519 + ML-KEM-768 and AES-256-GCM. The server only forwards
+        sealed blobs. Compare the emoji code with the other people to rule out a swapped key.</p>
       <label class="check"><input id="noise" type="checkbox" checked> noise suppression (RNNoise)</label>
       <label>camera
         <select id="cam-select">
