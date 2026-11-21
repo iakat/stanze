@@ -19,8 +19,18 @@ func main() {
 		"initiate": js.FuncOf(initiate),
 		"respond":  js.FuncOf(respond),
 		"verify":   js.FuncOf(verify),
+		// One gate for a pair: the peer's identity signature and its key
+		// confirmation tag, both or neither.
+		"proved":   js.FuncOf(proved),
 		"seal":     js.FuncOf(seal),
 		"open":     js.FuncOf(open),
+		// The long-term identity: generated, signed with and verified here, so
+		// the browser needs no second crypto library. A page that can hold a
+		// non-extractable WebCrypto key signs there and only verifies here.
+		"idgen":    js.FuncOf(idgen),
+		"idsign":   js.FuncOf(idsign),
+		"idverify": js.FuncOf(idverify),
+		"idfp":     js.FuncOf(idfp),
 	}))
 	select {}
 }
@@ -78,8 +88,10 @@ func wrapKeys(k pq.Keys) keysOut {
 }
 
 type pubIn struct {
-	X string `json:"x"`
-	K string `json:"k"`
+	X   string `json:"x"`
+	K   string `json:"k"`
+	ID  string `json:"id"`
+	SID string `json:"sid"`
 }
 
 func (p pubIn) public() (pq.Public, error) {
@@ -91,26 +103,38 @@ func (p pubIn) public() (pq.Public, error) {
 	if err != nil {
 		return pq.Public{}, err
 	}
-	return pq.Public{X: x, KEM: k}, nil
+	id, err := b64d(p.ID)
+	if err != nil {
+		return pq.Public{}, err
+	}
+	sid, err := b64d(p.SID)
+	if err != nil {
+		return pq.Public{}, err
+	}
+	return pq.Public{X: x, KEM: k, ID: id, SID: sid}, nil
 }
 
 func initiate(_ js.Value, args []js.Value) any {
 	var in struct {
-		Self  string `json:"self"`
-		Peer  string `json:"peer"`
-		SelfX string `json:"selfX"`
-		SelfK string `json:"selfK"`
-		PeerX string `json:"peerX"`
-		PeerK string `json:"peerK"`
+		Self    string `json:"self"`
+		Peer    string `json:"peer"`
+		SelfX   string `json:"selfX"`
+		SelfK   string `json:"selfK"`
+		SelfID  string `json:"selfID"`
+		SelfSID string `json:"selfSID"`
+		PeerX   string `json:"peerX"`
+		PeerK   string `json:"peerK"`
+		PeerID  string `json:"peerID"`
+		PeerSID string `json:"peerSID"`
 	}
 	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
 		return fail(err)
 	}
-	selfPub, err := (pubIn{in.SelfX, in.SelfK}).public()
+	selfPub, err := (pubIn{in.SelfX, in.SelfK, in.SelfID, in.SelfSID}).public()
 	if err != nil {
 		return fail(err)
 	}
-	peerPub, err := (pubIn{in.PeerX, in.PeerK}).public()
+	peerPub, err := (pubIn{in.PeerX, in.PeerK, in.PeerID, in.PeerSID}).public()
 	if err != nil {
 		return fail(err)
 	}
@@ -129,16 +153,21 @@ func initiate(_ js.Value, args []js.Value) any {
 
 func respond(_ js.Value, args []js.Value) any {
 	var in struct {
-		Self   string `json:"self"`
-		Peer   string `json:"peer"`
-		SelfX  string `json:"selfX"`
-		SelfSK string `json:"selfSK"`
-		SelfK  string `json:"selfK"`
-		SelfDK string `json:"selfDK"`
-		PeerX  string `json:"peerX"`
-		PeerK  string `json:"peerK"`
-		EPK    string `json:"epk"`
-		CT     string `json:"ct"`
+		Self    string `json:"self"`
+		Peer    string `json:"peer"`
+		SelfX   string `json:"selfX"`
+		SelfSK  string `json:"selfSK"`
+		SelfK   string `json:"selfK"`
+		SelfDK  string `json:"selfDK"`
+		SelfID  string `json:"selfID"`
+		SelfSID string `json:"selfSID"`
+		PeerX   string `json:"peerX"`
+		PeerK   string `json:"peerK"`
+		PeerID  string `json:"peerID"`
+		PeerSID string `json:"peerSID"`
+		EPK     string `json:"epk"`
+		CT      string `json:"ct"`
+		Sig     string `json:"sig"`
 	}
 	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
 		return fail(err)
@@ -167,12 +196,20 @@ func respond(_ js.Value, args []js.Value) any {
 	if err != nil {
 		return fail(err)
 	}
-	peerPub, err := (pubIn{in.PeerX, in.PeerK}).public()
+	sig, err := b64d(in.Sig)
+	if err != nil {
+		return fail(err)
+	}
+	peerPub, err := (pubIn{in.PeerX, in.PeerK, in.PeerID, in.PeerSID}).public()
+	if err != nil {
+		return fail(err)
+	}
+	selfPub, err := (pubIn{in.SelfX, in.SelfK, in.SelfID, in.SelfSID}).public()
 	if err != nil {
 		return fail(err)
 	}
 	self := &pq.Identity{XPub: xpub, XSk: xsk, EK: ek, DK: dk}
-	acc, err := pq.Accept(in.Self, in.Peer, self, peerPub, self.Public(), epk, ct)
+	acc, err := pq.Accept(in.Self, in.Peer, self, peerPub, selfPub, epk, ct, sig)
 	if err != nil {
 		return fail(err)
 	}
@@ -181,6 +218,128 @@ func respond(_ js.Value, args []js.Value) any {
 		"transcript": b64e(acc.Transcript),
 		"keys":       wrapKeys(acc.Keys),
 	})
+}
+
+// proved is the mutual gate the client uses: a pair is only usable when the
+// peer signed this transcript and its confirmation tag matches.
+func proved(_ js.Value, args []js.Value) any {
+	var in struct {
+		Key        string `json:"key"`        // the receive media key of this pair
+		Transcript string `json:"transcript"`
+		Tag        string `json:"tag"`
+		ID         string `json:"id"`         // the peer's Ed25519 public key
+		Sig        string `json:"sig"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	key, err := b64d(in.Key)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	tr, err := b64d(in.Transcript)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	tag, err := b64d(in.Tag)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	id, err := b64d(in.ID)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	sig, err := b64d(in.Sig)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	if len(key) != 32 {
+		return reply(map[string]any{"ok": false, "error": "key size"})
+	}
+	// Only the receive half matters here: the tag is checked against the key
+	// this side would decrypt the peer's media with.
+	if err := pq.Proved(pq.Keys{RecvMedia: key}, tr, tag, id, sig); err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	return reply(map[string]any{"ok": true})
+}
+
+func idgen(js.Value, []js.Value) any {
+	key, err := pq.NewSigningKey()
+	if err != nil {
+		return fail(err)
+	}
+	return reply(map[string]string{
+		"seed": b64e(key.Seed()),
+		"pub":  b64e(key.PublicKey()),
+	})
+}
+
+// idsign signs one transcript with a seed the caller holds. Only a browser
+// without WebCrypto Ed25519 uses it, so the seed exists because the browser
+// gave no way to keep the key itself.
+func idsign(_ js.Value, args []js.Value) any {
+	var in struct {
+		Seed string `json:"seed"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return fail(err)
+	}
+	seed, err := b64d(in.Seed)
+	if err != nil {
+		return fail(err)
+	}
+	msg, err := b64d(in.Msg)
+	if err != nil {
+		return fail(err)
+	}
+	key, err := pq.SigningKeyFromSeed(seed)
+	if err != nil {
+		return fail(err)
+	}
+	return reply(map[string]string{"sig": b64e(key.Sign(msg))})
+}
+
+func idverify(_ js.Value, args []js.Value) any {
+	var in struct {
+		ID  string `json:"id"`
+		Msg string `json:"msg"`
+		Sig string `json:"sig"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	id, err := b64d(in.ID)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	msg, err := b64d(in.Msg)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	sig, err := b64d(in.Sig)
+	if err != nil {
+		return reply(map[string]any{"ok": false, "error": err.Error()})
+	}
+	return reply(map[string]any{"ok": pq.VerifySignature(id, msg, sig)})
+}
+
+func idfp(_ js.Value, args []js.Value) any {
+	var in struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return fail(err)
+	}
+	id, err := b64d(in.ID)
+	if err != nil {
+		return fail(err)
+	}
+	if len(id) != pq.IDSize {
+		return fail(pq.ErrShape)
+	}
+	return reply(map[string]string{"fp": pq.Fingerprint(id)})
 }
 
 func verify(_ js.Value, args []js.Value) any {
