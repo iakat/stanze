@@ -10,13 +10,9 @@ import (
 	"errors"
 	"strings"
 	"sync"
-	"time"
 )
 
-var (
-	errRoomUnavailable = errors.New("room unavailable")
-	errRoomLimit       = errors.New("room limit reached")
-)
+var errRoomUnavailable = errors.New("room unavailable")
 
 // roomIDBytes is also the amount of entropy per room id: 128 bits, which is
 // unguessable by brute force, so rooms need no directory.
@@ -115,10 +111,8 @@ type Room struct {
 	id    string
 	pass  *passHash
 	peers map[string]*Peer
-	// emptyAt is set when the room is made, cleared by the first join and
 	// never set again: the last leave drops the room, so only a room that
 	// was created ahead of the first join waits in the map while empty.
-	emptyAt time.Time
 	// admins are the peers that may mute, remove or promote others. The first
 	// peer in the room gets the role, and a room can have several admins.
 	admins map[string]bool
@@ -131,9 +125,7 @@ type Hub struct {
 	rooms        map[string]*Room
 	maxPeers     int
 	maxRooms     int
-	emptyRoomTTL time.Duration
 	rnd          func() (string, error)
-	now          func() time.Time
 	hashSem      chan struct{}
 }
 
@@ -149,51 +141,9 @@ func newHub(cfg *Config) *Hub {
 		rooms:        make(map[string]*Room),
 		maxPeers:     cfg.MaxPeers,
 		maxRooms:     cfg.MaxRooms,
-		emptyRoomTTL: cfg.EmptyRoomTTL,
 		rnd:          newRoomID,
-		now:          time.Now,
 		hashSem:      make(chan struct{}, 4),
 	}
-}
-
-// create makes a room with an optional passphrase and returns its id.
-func (h *Hub) create(passphrase string) (string, error) {
-	var pass *passHash
-	if passphrase != "" {
-		release := h.hashSlot()
-		var err error
-		pass, err = hashPassphrase(passphrase)
-		release()
-		if err != nil {
-			return "", err
-		}
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if len(h.rooms) >= h.maxRooms {
-		return "", errRoomLimit
-	}
-	for i := 0; i < 8; i++ {
-		id, err := h.rnd()
-		if err != nil {
-			return "", err
-		}
-		if _, taken := h.rooms[id]; taken {
-			continue
-		}
-		now := h.now()
-		h.rooms[id] = &Room{
-			id:      id,
-			pass:    pass,
-			peers:   make(map[string]*Peer),
-			admins:  make(map[string]bool),
-			emptyAt: now,
-		}
-		return id, nil
-	}
-	return "", errors.New("could not allocate room id")
 }
 
 // join attaches a peer to a room. A room that does not exist yet is created by
@@ -243,13 +193,11 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 		if len(h.rooms) >= h.maxRooms {
 			return nil, errRoomUnavailable
 		}
-		now := h.now()
 		room = &Room{
-			id:      roomID,
-			pass:    pass,
-			peers:   make(map[string]*Peer),
-			admins:  make(map[string]bool),
-			emptyAt: now,
+			id:     roomID,
+			pass:   pass,
+			peers:  make(map[string]*Peer),
+			admins: make(map[string]bool),
 		}
 		h.rooms[roomID] = room
 	}
@@ -266,7 +214,6 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 	}
 	room.peers[p.id] = p
 	room.order = append(room.order, p.id)
-	room.emptyAt = time.Time{}
 	p.room = room
 	if len(room.admins) == 0 {
 		room.admins[p.id] = true
@@ -403,37 +350,6 @@ func (h *Hub) broadcastTo(room *Room, payload []byte) {
 func (h *Hub) broadcast(p *Peer, payload []byte) {
 	for _, other := range h.peersOf(p.room, p.id) {
 		other.enqueue(payload)
-	}
-}
-
-// reap drops rooms that stayed empty for longer than the grace period. The
-// last leave already drops a room at once, so this catches a room that was
-// created ahead of the first join, and any room that went empty some other
-// way: a zero emptyAt is older than any ttl and is dropped on the next tick.
-func (h *Hub) reap() {
-	now := h.now()
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for id, room := range h.rooms {
-		if len(room.peers) > 0 {
-			continue
-		}
-		if now.Sub(room.emptyAt) > h.emptyRoomTTL {
-			delete(h.rooms, id)
-		}
-	}
-}
-
-func (h *Hub) runReaper(stop <-chan struct{}) {
-	t := time.NewTicker(15 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-			h.reap()
-		}
 	}
 }
 

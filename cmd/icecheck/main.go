@@ -3,12 +3,14 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,21 +29,13 @@ func main() {
 
 	id := *room
 	if id == "" {
-		resp, err := http.Post(httpBase+"/api/new", "application/json", nil)
-		if err != nil {
+		// The first join creates the room, so a local name is enough.
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err != nil {
 			fmt.Fprintln(os.Stderr, "new room:", err)
 			os.Exit(1)
 		}
-		var body struct {
-			Room string `json:"room"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&body)
-		resp.Body.Close()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "new room body:", err)
-			os.Exit(1)
-		}
-		id = body.Room
+		id = strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
 	}
 	fmt.Println("room:", id)
 

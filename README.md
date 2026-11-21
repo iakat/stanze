@@ -56,11 +56,9 @@ request, a proxy log or a `Referer` header.
 
 A room that nobody is in does not exist. The last peer to leave takes the room
 with it, so the same id joined later is a new room: the guest types the
-passphrase again and starts a fresh call with nothing carried over. `POST
-/api/new` is the only way to make a room ahead of the first join; such a room
-waits for its first peer for `-empty-room-ttl` (2 minutes) and is then forgotten
-too, passphrase included. The browser never calls that route: a link from the
-lobby is just an id, and the first join makes the room.
+passphrase again and starts a fresh call with nothing carried over. A link from
+the lobby is just an id, and the first join makes the room, so there is no
+create route and no room can ever wait with nobody in it.
 
 Pressing enter asks for the camera and the microphone and starts the call with
 both on. A refusal or a missing device still joins, with the devices that did not
@@ -115,9 +113,7 @@ Every flag has an environment variable equivalent. Flags win.
 | `-turn-min-port` / `-turn-max-port` | `TURN_MIN_PORT` / `TURN_MAX_PORT` | `49200` / `49300` | relay port range to open in the firewall |
 | `-max-peers` | `MAX_PEERS` | `8` | peers per room (2..32) |
 | `-max-rooms` | `MAX_ROOMS` | `200` | rooms alive at the same time |
-| `-create-per-min` | `CREATE_PER_MIN` | `10` | room creations per client IP per minute |
 | `-max-msg-bytes` | `MAX_MSG_BYTES` | `262144` | largest accepted WebSocket message (SDP + ICE) |
-| `-empty-room-ttl` | `EMPTY_ROOM_TTL` | `2m` | how long a room created before the first join waits for its first peer |
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
@@ -163,12 +159,12 @@ well.
   base32 (26 characters). Guessing one is not feasible.
 - Rooms exist only in memory. A room is dropped in the same step that removes
   its last peer, and the passphrase digest goes with it: a later join of the
-  same id starts a new room with nothing carried over. A room made with
-  `POST /api/new` and not yet joined waits `-empty-room-ttl` for its first peer.
-  Nothing is ever written to disk.
+  same id starts a new room with nothing carried over. A room that nobody joined
+  never exists, so nothing waits and nothing expires. Nothing is ever written to
+  disk.
 - There is no route that lists, counts or describes rooms. The only endpoints
-  are `GET /`, `GET /app.js`, `GET /style.css`, `GET /favicon.svg`,
-  `POST /api/new` and `GET /ws`. Anything else returns `404`.
+  are `GET /`, the client files, `GET /ws`, `GET /QUEUE.md` and `GET /DONE.md`.
+  Anything else returns `404`.
 - A join to a missing room, with a wrong passphrase, or into a full room is
   answered with the same `{"t":"error","code":"unavailable"}` and the
   connection is closed. The passphrase check runs PBKDF2 against a dummy salt
@@ -229,7 +225,7 @@ start at the same time without glare. Mute and camera toggles only flip
 `pion/webrtc` peers, so it proves the relay and the media path, not just JSON.
 
 ```sh
-./bin/rooms -listen 127.0.0.1:8095 -turn-public-ip 127.0.0.1 -turn-secret test -turn-port 3478 -create-per-min 500 &
+./bin/rooms -listen 127.0.0.1:8095 -turn-public-ip 127.0.0.1 -turn-secret test -turn-port 3478 &
 ./bin/selftest -addr http://127.0.0.1:8095
 ```
 
