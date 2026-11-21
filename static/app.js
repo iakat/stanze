@@ -164,46 +164,107 @@ function updateCount() {
 
 const MIC_AUDIO = { echoCancellation: true, noiseSuppression: false, autoGainControl: true };
 
-async function openMedia() {
-  const want = {
-    audio: MIC_AUDIO,
-    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-  };
-  try {
-    state.raw = await navigator.mediaDevices.getUserMedia(want);
-  } catch {
-    try {
-      state.raw = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO });
-      state.cam = false;
-    } catch {
-      say('no camera or microphone available, joining to watch only');
-      state.mic = false;
-      state.cam = false;
-      state.raw = null;
-    }
-  }
-  state.camTrack = state.raw ? state.raw.getVideoTracks()[0] || null : null;
-  state.micTrack = state.raw ? state.raw.getAudioTracks()[0] || null : null;
-  if (state.camTrack) state.camTrack.contentHint = 'motion';
-
-  await buildAudio();
-
+// prepareLocal builds the empty local side: the output stream, the own tile
+// and the buttons. It asks for no permission. The microphone and the camera
+// are requested on their first click, so a visitor only watches by default.
+function prepareLocal() {
   state.outStream = new MediaStream();
-  if (state.mixer) state.outStream.addTrack(state.mixer.stream.getAudioTracks()[0]);
-  if (state.camTrack) state.outStream.addTrack(state.camTrack);
-
   // The own tile exists even with no camera and no microphone, so the mirror
   // preview, the name and the mute flags always have a place.
   const self = makeTile(state.name, state.name, true);
-  const preview = new MediaStream();
-  if (state.camTrack) preview.addTrack(state.camTrack);
-  self.querySelector('video').srcObject = preview;
-  if (state.camTrack) self.classList.add('playing');
   self.dataset.state = 'connected';
   self.querySelector('.state').textContent = 'you';
   applyFlags(self, state.mic, state.cam);
   applyMirror();
   updateButtons();
+}
+
+// publishTrack offers one new track to every peer. addTrack triggers the
+// perfect negotiation on that connection, so no manual renegotiation is coded.
+function publishTrack(track) {
+  if (!track) return;
+  for (const peer of state.peers.values()) {
+    if (!peer.pc) continue;
+    if (peer.pc.getSenders().some((s) => s.track === track)) continue;
+    try {
+      peer.pc.addTrack(track, state.outStream);
+    } catch {
+      // The connection is closing; it is replaced by a reconnect.
+    }
+  }
+}
+
+async function enableMic() {
+  if (!state.micTrack) {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_AUDIO });
+    } catch {
+      say('the microphone is not available or was refused');
+      return;
+    }
+    state.micTrack = stream.getAudioTracks()[0] || null;
+    if (!state.micTrack) {
+      say('the microphone is not available');
+      return;
+    }
+    if (!state.audioCtx) await buildAudio();
+    const track = state.mixer && state.mixer.stream.getAudioTracks()[0];
+    if (track && state.outStream) state.outStream.addTrack(track);
+    publishTrack(track);
+  }
+  state.mic = true;
+  if (state.micGain) state.micGain.gain.value = 1;
+  if (state.micTrack) state.micTrack.enabled = true;
+  updateButtons();
+  sendState();
+}
+
+function disableMic() {
+  state.mic = false;
+  if (state.micGain) state.micGain.gain.value = 0;
+  updateButtons();
+  sendState();
+}
+
+async function enableCam() {
+  if (!state.camTrack) {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      });
+    } catch {
+      say('the camera is not available or was refused');
+      return;
+    }
+    state.camTrack = stream.getVideoTracks()[0] || null;
+    if (!state.camTrack) {
+      say('the camera is not available');
+      return;
+    }
+    state.camTrack.contentHint = 'motion';
+    const self = document.querySelector('.tile[data-local="yes"]');
+    if (self) {
+      self.querySelector('video').srcObject = new MediaStream([state.camTrack]);
+      self.classList.add('playing');
+      self.querySelector('video').play().catch(() => {});
+    }
+    if (state.outStream) state.outStream.addTrack(state.camTrack);
+    publishTrack(state.camTrack);
+    applyMirror();
+  }
+  state.cam = true;
+  if (state.camTrack) state.camTrack.enabled = true;
+  updateButtons();
+  sendState();
+}
+
+function disableCam() {
+  state.cam = false;
+  if (state.camTrack) state.camTrack.enabled = false;
+  updateButtons();
+  sendState();
 }
 
 // buildAudio wires mic -> (RNNoise) -> gain -> mixer. The mixer track is what
@@ -220,7 +281,7 @@ async function buildAudio() {
   state.mixer = state.audioCtx.createMediaStreamDestination();
   state.micGain = state.audioCtx.createGain();
   state.micGain.connect(state.mixer);
-  if (state.micTrack) {
+  if (state.micTrack && !state.micSource) {
     state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([state.micTrack]));
     await setNoise(state.noiseWanted);
   }
@@ -293,14 +354,6 @@ function updateButtons() {
   $('share-btn').setAttribute('aria-pressed', String(!!state.screen));
   $('mirror').checked = state.mirror;
   $('noise-live').checked = state.rnnoiseOn;
-}
-
-function toggleMic() {
-  state.mic = !state.mic;
-  // The mixer keeps running; the gain is the mute.
-  if (state.micGain) state.micGain.gain.value = state.mic ? 1 : 0;
-  updateButtons();
-  sendState();
 }
 
 function applyMirror() {
@@ -683,6 +736,9 @@ function handle(msg) {
       state.ice = msg.ice || [];
       say('');
       for (const peer of msg.peers || []) connectPeer(peer.id, peer.name, true, peer.mic, peer.cam);
+      // Tell the room the real microphone and camera state right away: a new
+      // visitor shares neither until a button is pressed.
+      sendState();
       break;
     }
     case 'peer-joined': {
@@ -736,6 +792,8 @@ async function enterRoom(room, pass) {
   state.noiseWanted = $('noise').checked;
   state.mirror = true;
   state.leaving = false;
+  state.mic = false;
+  state.cam = false;
   if (window.localStorage) {
     try { localStorage.setItem('rooms.name', state.name); } catch { /* private mode */ }
   }
@@ -746,9 +804,7 @@ async function enterRoom(room, pass) {
   $('room-label').title = room;
   setHash(room);
 
-  await openMedia();
-  if (!state.noiseWanted && state.rnnoiseOn) await setNoise(false);
-  updateButtons();
+  prepareLocal();
   connectWS();
 }
 
@@ -771,6 +827,12 @@ function leave(message) {
   if (state.raw) {
     for (const track of state.raw.getTracks()) track.stop();
     state.raw = null;
+  }
+  if (state.micTrack) {
+    try { state.micTrack.stop(); } catch { /* already stopped */ }
+  }
+  if (state.camTrack) {
+    try { state.camTrack.stop(); } catch { /* already stopped */ }
   }
   if (state.audioCtx) {
     state.audioCtx.close().catch(() => {});
@@ -889,13 +951,14 @@ function init() {
     else startShare();
   });
 
-  $('mic-btn').addEventListener('click', toggleMic);
+  $('mic-btn').addEventListener('click', () => {
+    if (state.mic) disableMic();
+    else enableMic();
+  });
 
   $('cam-btn').addEventListener('click', () => {
-    state.cam = !state.cam;
-    if (state.camTrack) state.camTrack.enabled = state.cam;
-    updateButtons();
-    sendState();
+    if (state.cam) disableCam();
+    else enableCam();
   });
 
   $('leave-btn').addEventListener('click', () => leave(''));

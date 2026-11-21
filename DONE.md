@@ -25,5 +25,7 @@ One line per work item, newest last.
 - The client carries the name stanze: the page title and both title bars.
 - Every tile carries a mute flag and a camera flag, sent over the signaling socket as a `state` message on each toggle and on join.
 - The own tile is always drawn, with an avatar, the name and the flags, even when the browser gives no camera.
+- The microphone and the camera are off until their button is pressed; the first press asks for the permission, and a visitor can watch without sharing.
+- The rnnoise output goes through a ring buffer, so no frame tail is dropped: 480 is not a multiple of the 128 sample render quantum.
 - The rnnoise worklet has a safety net: if loud input comes out near silent for 300 ms, it passes the dry signal for 5 s and then tries again.
 - QUEUE.md and DONE.md are served by the server from the binary, and a copy is published at https://ocbot-files.ch-test.katia.sh/stanze/.
