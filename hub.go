@@ -124,22 +124,7 @@ type Room struct {
 	admins map[string]bool
 	// order keeps the join order, so a new admin is the oldest peer.
 	order []string
-	// chat is the recent line buffer, sent to a peer that joins late.
-	chat []chatLine
 }
-
-// chatLine is one line of the room log. Events (join, leave, kick, mute) use
-// the same shape as a text message, so a client renders one list.
-type chatLine struct {
-	Kind string `json:"kind"`
-	From string `json:"from,omitempty"`
-	Name string `json:"name,omitempty"`
-	Text string `json:"text,omitempty"`
-	TS   int64  `json:"ts"`
-}
-
-// chatMax is the number of lines a room keeps.
-const chatMax = 100
 
 type Hub struct {
 	mu           sync.Mutex
@@ -305,8 +290,8 @@ func (h *Hub) leave(p *Peer) {
 	}
 	delete(room.admins, p.id)
 	if len(room.peers) == 0 {
-		// The last peer takes the room with it. The passphrase digest and the
-		// chat buffer die here, so a later join starts from nothing.
+		// The last peer takes the room with it. The passphrase digest dies
+		// here, so a later join starts from nothing.
 		if h.rooms[room.id] == room {
 			delete(h.rooms, room.id)
 		}
@@ -395,34 +380,6 @@ func (h *Hub) grantAdmin(room *Room, id string) bool {
 	}
 	room.admins[id] = true
 	return true
-}
-
-// addChat appends one line to the room log and returns the room history.
-func (h *Hub) addChat(room *Room, line chatLine) []chatLine {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if room == nil {
-		return nil
-	}
-	room.chat = append(room.chat, line)
-	if len(room.chat) > chatMax {
-		room.chat = append(room.chat[:0], room.chat[len(room.chat)-chatMax:]...)
-	}
-	out := make([]chatLine, len(room.chat))
-	copy(out, room.chat)
-	return out
-}
-
-// chatOf returns a copy of the room log.
-func (h *Hub) chatOf(room *Room) []chatLine {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if room == nil {
-		return nil
-	}
-	out := make([]chatLine, len(room.chat))
-	copy(out, room.chat)
-	return out
 }
 
 // peerOf looks one peer up inside a room.
