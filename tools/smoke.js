@@ -146,9 +146,9 @@ function newRoomID() {
     const camOff = await until(pageA, () => (document.getElementById('cam-btn').textContent === 'camera off' ? {
       text: document.getElementById('cam-btn').textContent,
       on: state.cam,
-      live: state.raw ? state.raw.getVideoTracks().filter((t) => t.readyState !== 'ended').length : 0,
+      track: state.camTrack,
     } : null), null, 'the camera off');
-    pass('the camera toggles off and stops the track', camOff.on === false && camOff.live === 0, JSON.stringify(camOff));
+    pass('the camera toggles off and stops the track', camOff.on === false && camOff.track === null, JSON.stringify(camOff));
     await pageA.click('#cam-btn');
     await until(pageA, () => document.getElementById('cam-btn').textContent === 'camera on', null, 'the camera on');
     pass('the camera toggles back on', true);

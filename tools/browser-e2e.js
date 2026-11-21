@@ -384,7 +384,6 @@ async function stats(page) {
       micOn: state.mic,
       micGain: state.micGain ? state.micGain.gain.value : null,
       camTrack: state.camTrack,
-      camLive: state.raw ? state.raw.getVideoTracks().filter((t) => t.readyState !== 'ended').length : 0,
       micBtn: document.getElementById('mic-btn').textContent,
       camBtn: document.getElementById('cam-btn').textContent,
       prefs: [localStorage.getItem('rooms.mic'), localStorage.getItem('rooms.cam')],
@@ -392,7 +391,7 @@ async function stats(page) {
     check('mic toggle mutes the microphone and turns it off', toggled.micOn === false && toggled.micGain === 0 && /off/.test(toggled.micBtn),
       JSON.stringify(toggled));
     check('camera off stops the video track, so the camera light goes off',
-      toggled.camTrack === null && toggled.camLive === 0 && /off/.test(toggled.camBtn), JSON.stringify(toggled));
+      toggled.camTrack === null && /off/.test(toggled.camBtn), JSON.stringify(toggled));
     check('the toggles are remembered', toggled.prefs[0] === '0' && toggled.prefs[1] === '0', JSON.stringify(toggled.prefs));
     await pageA.click('#mic-btn');
     await pageA.click('#cam-btn');

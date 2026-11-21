@@ -22,7 +22,6 @@ const state = {
   ice: [],
   peers: new Map(),
   admins: new Set(),  // filled by `joined`; empty until then
-  raw: null,          // camera + microphone from getUserMedia
   camTrack: null,
   micTrack: null,
   outStream: null,    // what is sent to peers
@@ -1053,7 +1052,6 @@ function disableCam() {
   const track = state.camTrack;
   state.camTrack = null;
   if (track) {
-    if (state.raw) state.raw.removeTrack(track);
     try { track.stop(); } catch { /* already stopped */ }
   }
   if (!state.screen) paintSelfCam(false);
@@ -2149,10 +2147,6 @@ function leave(message) {
   $('sealed-badge').removeAttribute('title');
   $('chat-note').hidden = true;
   $('link-text').textContent = 'connected';
-  if (state.raw) {
-    for (const track of state.raw.getTracks()) track.stop();
-    state.raw = null;
-  }
   if (state.micTrack) {
     try { state.micTrack.stop(); } catch { /* already stopped */ }
   }
