@@ -4,12 +4,9 @@
 // The server only relays SDP and ICE. Negotiation follows the "perfect
 // negotiation" pattern so both sides can renegotiate without glare.
 //
-// The room has two forms on the same page. A plain room sends names, chat and
-// media as they are. A sealed room (the `sealed` checkbox, remembered in the
-// browser) keeps names and chat inside opaque `enc` payloads and puts every
-// encoded media frame through an AES-GCM transform in a worker, so the relay
-// only ever forwards sealed blobs. The stage, the tiles, the chat log, the
-// stats panel and the controls are the same in both forms.
+// Every room is sealed end to end. Names and chat stay inside opaque `enc`
+// payloads and every encoded media frame goes through an AES-GCM transform in a
+// worker, so the relay only ever forwards sealed blobs.
 //
 // Microphone audio always goes through one output track that is built here:
 // mic -> RNNoise (optional) -> gain -> mixer destination. Sharing a screen
@@ -71,9 +68,8 @@ const state = {
   ownSpoke: null,
   outbox: [],         // signaling frames held while the socket is connecting
 
-  // Sealed room state. Every field is inert until a sealed join: the plain
-  // path never reads the worker, the identity or the frame counters.
-  sealed: false,       // this call is a sealed one
+  // Sealed room state, live for the whole call: the worker, the identity and
+  // the frame counters belong to one join and die with it.
   wasmOk: false,       // /pq.wasm loaded and the self test passed once
   wasmTest: null,      // the result of that self test, for the stats panel
   identity: null,      // our key bundle for one call
