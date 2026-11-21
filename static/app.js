@@ -83,7 +83,6 @@ const state = {
   confirmFailures: 0,
   workerErrors: [],    // a red row in the stats panel, never ignored
   sealFault: '',       // why this browser can not seal media, if it can not
-  modeClash: false,    // this call met a guest that uses the other mode
   wireFrames: 0,       // signaling frames inspected by the audit
   wireLeaks: [],       // a canary that appeared on the wire, must stay empty
   canaries: [],        // the name and the chat lines that must never leak
@@ -98,7 +97,7 @@ const state = {
  *   lobby: HTMLElement, 'join-form': HTMLFormElement, name: HTMLInputElement,
  *   room: HTMLInputElement, 'newid-btn': HTMLButtonElement, pass: HTMLInputElement,
  *   path: HTMLSelectElement, noise: HTMLInputElement, 'enter-btn': HTMLButtonElement,
- *   sealed: HTMLInputElement, 'sealed-note': HTMLElement,
+ *   'sealed-note': HTMLElement,
  *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
  *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, 'link-dot': HTMLElement,
  *   'link-text': HTMLElement, 'sealed-badge': HTMLElement, grid: HTMLElement,
@@ -214,31 +213,9 @@ function roomFromHash() {
   return ROOM_RE.test(id) ? id : '';
 }
 
-// sealedFlag reads the sealed flag from the fragment or from the query:
-// '1' on, '0' off, '' when the link says nothing. The fragment is what a
-// copied link carries; the query is what the old /e2e route redirects to, so a
-// link from before the merge still lands sealed. The flag is on by default, so
-// a plain link has to say '0' to keep a plain room plain.
-function sealedFlag() {
-  const value = new URLSearchParams(location.search).get('sealed')
-    || new URLSearchParams(location.hash.replace(/^#/, '')).get('sealed')
-    || '';
-  if (value === '1' || value === 'true' || value === 'on') return '1';
-  if (value === '0' || value === 'false' || value === 'off') return '0';
-  return '';
-}
-
-// setHash keeps the room, and the sealed flag with it, in the fragment: a
-// fragment never reaches the server. Sealed is the default, so only a plain
-// room says so in the link; the flag stays readable in both directions.
+// setHash keeps the room in the fragment, so it never reaches the server.
 function setHash(room) {
-  const params = new URLSearchParams();
-  if (room) {
-    params.set('r', room);
-    if (!state.sealed) params.set('sealed', '0');
-  }
-  const hash = params.toString();
-  history.replaceState(null, '', hash ? `#${hash}` : location.pathname);
+  history.replaceState(null, '', room ? `#r=${encodeURIComponent(room)}` : location.pathname);
 }
 
 function wsURL() {
@@ -255,9 +232,9 @@ const OUTBOX_MAX = 64;
 function send(msg) {
   const raw = JSON.stringify(msg);
   // The audit sees every frame the relay sees, in both directions. It is the
-  // client half of the proof that a sealed room never sends a name or a chat
-  // line in the clear.
-  if (state.sealed) auditWire('out', raw);
+  // client half of the proof that a room never sends a name or a chat line in
+  // the clear.
+  auditWire('out', raw);
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
     // Keep the newest frames: an offer outranks the ICE of a peer that the
     // close already dropped.
@@ -309,8 +286,8 @@ function makeTile(id, name, local = false) {
     ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
   tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
   tile.querySelector('.avatar').textContent = name || '?';
-  if (state.sealed && !local) {
-    // A sealed guest is heard through its own gain node, so the video element
+  if (!local) {
+    // A remote guest is heard through its own gain node, so the video element
     // only ever carries pictures and stays muted.
     tile.querySelector('video').muted = true;
   }
@@ -357,12 +334,6 @@ function wireVolume(peer) {
     store(`vol.${peer.name}`, peer.vol);
   });
   paintVolume(peer);
-}
-
-function setTileState(peer, text) {
-  if (!peer.tile) return;
-  peer.tile.dataset.state = text;
-  peer.tile.querySelector('.state').textContent = text;
 }
 
 // applyFlags shows the mute and camera state of one tile. A tile with neither
@@ -713,7 +684,7 @@ async function askKind(kind, pick) {
 // already there, so the peers see the new camera without a rejoin; only a call
 // that started with no camera at all adds a sender.
 async function switchDevice(kind, id) {
-  if (state.sealed && !sealingAvailable()) {
+  if (!sealingAvailable()) {
     say('this browser cannot seal media frames, so the device stays off');
     return;
   }
@@ -877,22 +848,12 @@ function refreshSelf() {
   updateButtons();
 }
 
-// addTrackToPeer is the one place that offers a track to one connection. In a
-// plain room that is a bare addTrack. In a sealed room the sender must carry
-// the frame transform before the first frame can leave, and a browser that
-// cannot install it gets no track at all: a missing frame is better than a
-// plaintext one.
+// addTrackToPeer is the one place that offers a track to one connection. The
+// sender must carry the frame transform before the first frame can leave, and a
+// browser that cannot install it gets no track at all: a missing frame is
+// better than a plaintext one.
 function addTrackToPeer(peer, track) {
   if (!peer.pc || !track) return;
-  if (!state.sealed) {
-    try {
-      const sender = peer.pc.addTrack(track, state.outStream);
-      // A fresh sender may report no encodings yet; the connection event caps
-      // it once the description is in place.
-      if (track === state.camTrack) capVideoSender(sender);
-    } catch { /* closing */ }
-    return;
-  }
   if (!sealingAvailable() || !state.worker) return;
   let sender;
   try {
@@ -1019,7 +980,7 @@ async function adoptCam(track) {
 }
 
 async function enableMic() {
-  if (state.sealed && !sealingAvailable()) {
+  if (!sealingAvailable()) {
     // No transform, no frame: the microphone stays off and says why.
     say('this browser cannot seal media frames, so the microphone stays off');
     return;
@@ -1057,7 +1018,7 @@ function disableMic() {
 }
 
 async function enableCam() {
-  if (state.sealed && !sealingAvailable()) {
+  if (!sealingAvailable()) {
     say('this browser cannot seal media frames, so the camera stays off');
     return;
   }
@@ -1450,9 +1411,9 @@ function applyMirror() {
 // can be stopped again.
 async function replaceOutVideo(track) {
   if (!state.outStream) return;
-  // A sealed room never sends a clear frame: without the worker there is no
-  // transform, so the screen track is not offered at all.
-  if (state.sealed && track && (!sealingAvailable() || !state.worker)) {
+  // A room never sends a clear frame: without the worker there is no transform,
+  // so the screen track is not offered at all.
+  if (track && (!sealingAvailable() || !state.worker)) {
     state.sealFault = 'this browser cannot seal media frames, so no screen is sent';
     say(state.sealFault);
     return;
@@ -1473,7 +1434,7 @@ async function replaceOutVideo(track) {
     }
     if (sender) {
       await sender.replaceTrack(track || null).catch(() => {});
-      if (state.sealed && track) {
+      if (track) {
         // replaceTrack keeps a transform that is already set; a sender without
         // one (published before the share) gets it now, and is cleared again if
         // the browser ignores the setter.
@@ -1505,7 +1466,7 @@ async function startShare() {
     say('screen sharing is not supported by this browser');
     return;
   }
-  if (state.sealed && !sealingAvailable()) {
+  if (!sealingAvailable()) {
     say('this browser cannot seal media frames, so screen sharing stays off');
     return;
   }
@@ -1592,7 +1553,7 @@ function rtcConfig() {
   };
 }
 
-function ensurePeer(id, name, mic, cam) {
+function ensurePeer(id, mic, cam) {
   let peer = state.peers.get(id);
   if (peer) {
     if (mic !== undefined || cam !== undefined) {
@@ -1600,15 +1561,11 @@ function ensurePeer(id, name, mic, cam) {
       peer.cam = cam === undefined ? peer.cam : cam;
       applyFlags(peer.tile, peer.mic, peer.cam);
     }
-    if (name && peer.name !== name) {
-      peer.name = name;
-      paintName(peer.tile, name, false);
-    }
     return peer;
   }
-  // A sealed room has no name to draw yet: the name arrives sealed, later. The
-  // short id keeps the tile readable until then.
-  const initial = state.sealed ? String(id).slice(0, 6) : (name || 'guest');
+  // The name arrives sealed, later, so the short id keeps the tile readable
+  // until then.
+  const initial = String(id).slice(0, 6);
   peer = {
     id,
     name: initial,
@@ -1634,7 +1591,6 @@ function ensurePeer(id, name, mic, cam) {
     pending: [],
     state: 'new',
     initiator: false,
-    // sealed handshake, inert in a plain room
     pub: null,
     keys: null,
     transcript: null,
@@ -1669,8 +1625,8 @@ function addLocalTracks(peer) {
     }
   }
   peer.tracksAdded = true;
-  // A sealed answer must seal the new receivers too, before the answer leaves.
-  if (state.sealed) installSealedReceivers(peer);
+  // The answer must seal the new receivers too, before it leaves.
+  installSealedReceivers(peer);
 }
 
 // Only the side that starts the offer needs explicit transceivers: without a
@@ -1682,8 +1638,8 @@ function ensureRecvTransceivers(peer) {
   }
 }
 
-function connectPeer(id, name, initiator, mic, cam) {
-  const peer = ensurePeer(id, name, mic, cam);
+function connectPeer(id, initiator, mic, cam) {
+  const peer = ensurePeer(id, mic, cam);
   if (peer.pc) {
     peer.initiator = peer.initiator || initiator;
     return peer;
@@ -1746,27 +1702,19 @@ function connectPeer(id, name, initiator, mic, cam) {
     ensureRecvTransceivers(peer);
     // The receivers named by our own senders and transceivers need the
     // transform before the answer of the other side arrives.
-    if (state.sealed) installSealedReceivers(peer);
+    installSealedReceivers(peer);
   }
   return peer;
 }
 
 function setPeerState(peer, text) {
   peer.state = text;
-  if (state.sealed) {
-    // In a sealed room the badge on the tile names the key state, so the link
-    // state lives in the data attribute only.
-    if (peer.tile) peer.tile.dataset.state = text;
-    if ((text === 'failed' || text === 'closed') && peer.tile) peer.tile.classList.remove('playing');
-    if (text === 'connected') $('link-text').textContent = `sealed, ${state.peers.size + 1} in the room`;
-    else if (text === 'failed') $('link-text').textContent = 'sealed, link failed';
-    updateCount();
-    return;
-  }
-  setTileState(peer, text);
-  if (text === 'failed' || text === 'closed') {
-    peer.tile.classList.remove('playing');
-  }
+  // The badge on the tile names the key state, so the link state lives in the
+  // data attribute only.
+  if (peer.tile) peer.tile.dataset.state = text;
+  if ((text === 'failed' || text === 'closed') && peer.tile) peer.tile.classList.remove('playing');
+  if (text === 'connected') $('link-text').textContent = `sealed, ${state.peers.size + 1} in the room`;
+  else if (text === 'failed') $('link-text').textContent = 'sealed, link failed';
   updateCount();
 }
 
@@ -1819,7 +1767,7 @@ async function applyDescription(peer, type, sdp) {
     peer.settingAnswer = false;
     // The remote senders exist now; their transform has to be in place before
     // the first frame is decoded.
-    if (state.sealed) installSealedReceivers(peer);
+    installSealedReceivers(peer);
 
     if (type === 'offer') {
       // Tracks are added after the remote offer, so the answer carries them
@@ -1864,7 +1812,7 @@ function dropPeer(id) {
   if (peer.pc) peer.pc.close();
   if (peer.tile) peer.tile.remove();
   state.peers.delete(id);
-  if (state.sealed) updateSealedBadge();
+  updateSealedBadge();
   updateCount();
 }
 
@@ -1917,15 +1865,15 @@ function connectWS() {
     state.reconnectDelay = 500;
     $('link-dot').className = 'dot on';
     stopLost();
-    // A sealed room never sends a name: the server announces every peer as its
+    // The join carries no name: the server announces every peer as its
     // placeholder, and the real name travels sealed once the keys exist.
-    send({ t: 'join', room: state.room, pass: state.pass, name: state.sealed ? '' : state.name, sealed: state.sealed });
+    send({ t: 'join', room: state.room, pass: state.pass });
     // Only after the join: the server refuses any other type before it.
     flushOutbox();
   };
 
   ws.onmessage = (event) => {
-    if (state.sealed) auditWire('in', event.data);
+    auditWire('in', event.data);
     let msg;
     try {
       msg = JSON.parse(event.data);
@@ -1958,8 +1906,7 @@ function connectWS() {
 }
 
 function handle(msg) {
-  // A host command, a kick and a terminal join error mean the same in both
-  // kinds of room, so they are answered before the mode split.
+  // A host command, a kick and a terminal join error are answered first.
   if (msg.t === 'mod') {
     // The host asked for a mute. It is a request to this client; the server
     // can not mute a track, so this client turns its own gain down.
@@ -1980,60 +1927,31 @@ function handle(msg) {
     }
     return;
   }
-  if (state.sealed) {
-    handleSealed(msg);
-    return;
-  }
   switch (msg.t) {
     case 'joined': {
       state.self = msg.self;
       state.ice = msg.ice || [];
-      state.modeClash = false;
       say('');
       setAdmins(msg.admins);
-      const peers = msg.peers || [];
-      if (plainModeClash(peers)) break;
-      for (const peer of peers) {
-        if (peer.sealed) continue;
-        connectPeer(peer.id, peer.name, true, peer.mic, peer.cam);
+      for (const info of msg.peers || []) {
+        if (!info) continue;
+        const peer = ensurePeer(info.id, info.mic, info.cam);
+        sealedSendPub(peer);
       }
       markAdmins();
-      renderChat(msg.chat);
-      // Tell the room the real microphone and camera state right away.
+      $('link-text').textContent = 'sealed, handshaking';
+      // Tell the room the microphone and camera state; only the flags travel.
       sendState();
+      updateCount();
       break;
     }
     case 'peer-joined': {
-      if (msg.peer.sealed) {
-        noteModeClash('a guest joined in a sealed room, so you can not see or hear each other');
-        break;
-      }
-      ensurePeer(msg.peer.id, msg.peer.name, msg.peer.mic, msg.peer.cam);
+      if (!msg.peer) break;
+      const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam);
       if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
+      sealedSendPub(peer);
       playSfx('pop');
-      break;
-    }
-    case 'admin': {
-      setAdmins(msg.admins);
-      markAdmins();
-      break;
-    }
-    case 'chat': {
-      addChatLine(msg.kind, msg.name, msg.text, msg.ts, msg.from);
-      break;
-    }
-    case 'state': {
-      const peer = state.peers.get(msg.from);
-      if (peer) {
-        const wasMic = peer.mic;
-        if (msg.mic !== undefined) peer.mic = msg.mic;
-        if (msg.cam !== undefined) peer.cam = msg.cam;
-        applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
-        if (wasMic !== peer.mic) {
-          addChatLine('note', '', `${peer.name} ${peer.mic ? 'turned the microphone on' : 'turned the microphone off'}`);
-        }
-      }
       break;
     }
     case 'peer-left': {
@@ -2043,15 +1961,38 @@ function handle(msg) {
       playSfx('bonk');
       break;
     }
-    case 'offer':
+    case 'admin': {
+      setAdmins(msg.admins);
+      markAdmins();
+      break;
+    }
+    case 'state': {
+      const peer = state.peers.get(msg.from);
+      if (peer) {
+        if (msg.mic !== undefined) peer.mic = msg.mic;
+        if (msg.cam !== undefined) peer.cam = msg.cam;
+        applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+      }
+      break;
+    }
+    case 'enc': {
+      if (msg.from && typeof msg.b === 'string') sealedHandleOpaque(msg.from, msg.b);
+      break;
+    }
+    case 'offer': {
+      // The peer exists already: the handshake opened its connection.
+      const peer = state.peers.get(msg.from);
+      if (peer && msg.sdp) sealedOnOffer(peer, msg.sdp);
+      break;
+    }
     case 'answer': {
-      const peer = connectPeer(msg.from, null, false);
-      onDescription(peer, msg.t, msg.sdp);
+      const peer = state.peers.get(msg.from);
+      if (peer && msg.sdp) onDescription(peer, 'answer', msg.sdp);
       break;
     }
     case 'ice': {
       const peer = state.peers.get(msg.from);
-      if (peer) onCandidate(peer, msg.candidate);
+      if (peer && msg.candidate) onCandidate(peer, msg.candidate);
       break;
     }
   }
@@ -2064,16 +2005,9 @@ async function enterRoom(room, pass) {
   preloadSfx();
   cancelReconnect();
   state.fatal = '';
-  state.modeClash = false;
   state.room = room;
   state.pass = pass;
-  // The checkbox is the one choice that decides the whole call. It is read
-  // once, here, and never changed silently afterwards.
-  state.sealed = !!$('sealed').checked;
-  store('sealed', state.sealed ? 1 : 0);
-  state.name = state.sealed
-    ? (cleanSealedName($('name').value) || 'guest')
-    : (($('name').value || '').trim().slice(0, 32) || 'guest');
+  state.name = cleanSealedName($('name').value) || 'guest';
   state.path = $('path').value;
   state.quality = $('quality').value;
   state.noiseWanted = $('noise').checked;
@@ -2087,37 +2021,9 @@ async function enterRoom(room, pass) {
   store('path', state.path);
   store('noise', state.noiseWanted ? 1 : 0);
 
-  if (state.sealed) {
-    await enterSealedRoom();
-    return;
-  }
-
-  $('lobby').hidden = true;
-  $('stage').hidden = false;
-  $('room-label').textContent = room;
-  $('room-label').title = room;
-  setHash(room);
-  startCallClock();
-  startSpeaking();
-
-  prepareLocal();
-  // The join click asks for the camera and the microphone. The signaling
-  // socket waits for the answer, so the first offer already carries the tracks.
-  try {
-    await requestLocal();
-  } catch {
-    // Devices are optional; joining the room is not.
-  }
-  ensurePlayback();
-  connectWS();
-}
-
-// enterSealedRoom opens the same stage as a sealed room. The post-quantum
-// module and the frame worker are ready before the stage appears, so a browser
-// that cannot seal stays in the lobby with a reason instead of quietly
-// becoming a plain room.
-async function enterSealedRoom() {
-  const room = state.room;
+  // The post-quantum module and the frame worker are ready before the stage
+  // appears, so a browser that cannot seal stays in the lobby with a reason
+  // instead of quietly opening an unsealed room.
   // The join click is the gesture the audio output needs.
   ensurePlayback();
   $('enter-btn').disabled = true;
@@ -2178,8 +2084,9 @@ async function enterSealedRoom() {
 
     prepareLocal();
     if (sealingAvailable()) {
-      // The same device request and the same microphone graph as a plain room;
-      // only the senders carry a transform.
+      // The join click asks for the camera and the microphone. The signaling
+      // socket waits for the answer, so the first offer already carries the
+      // tracks, and each sender gets its transform in addTrackToPeer.
       try {
         await requestLocal();
       } catch {
@@ -2237,7 +2144,6 @@ function leave(message) {
   state.wireLeaks = [];
   state.canaries = [];
   state.samples = [];
-  state.sealed = false;
   $('sealed-badge').hidden = true;
   $('sealed-badge').textContent = '';
   $('sealed-badge').removeAttribute('title');
@@ -2294,7 +2200,6 @@ function leave(message) {
   state.self = null;
   state.ice = [];
   state.fatal = '';
-  state.modeClash = false;
   state.reconnectDelay = 500;
   state.mic = false;
   state.cam = false;
@@ -2312,74 +2217,35 @@ function leave(message) {
 
 // ---------------------------------------------------------------- chat
 
-// The room log carries text lines and events in one shape. Events are drawn in
-// a duller colour, so the talk stays readable.
+// The room log carries the sealed chat lines of this call. They never leave the
+// browser in the clear, so there is no server history to replay.
 const CHAT_MAX = 200;
-const chatNames = new Map();
 
 function chatTime(ts) {
   const d = ts ? new Date(ts) : new Date();
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-function chatEventText(kind, name, text) {
-  switch (kind) {
-    case 'join': return `${name} joined`;
-    case 'leave': return `${name} left`;
-    case 'kick': return `${text} removed ${name}`;
-    case 'mute': return `${text} muted ${name}`;
-    case 'admin': return `${name} is now host`;
-    case 'note': return text;
-    default: return '';
-  }
-}
-
-function addChatLine(kind, name, text, ts, from) {
+function addChatLine(name, text, ts) {
   const log = $('chat-log');
   if (!log) return;
-  const fill = () => {
-    const li = document.createElement('li');
-    if (kind !== 'text') li.className = 'event';
-    const when = document.createElement('span');
-    when.className = 'when';
-    when.textContent = chatTime(ts);
-    li.appendChild(when);
-    if (kind === 'text') {
-      const who = document.createElement('span');
-      who.className = 'who';
-      who.textContent = `${name || 'guest'}:`;
-      li.appendChild(who);
-      li.appendChild(document.createTextNode(` ${text}`));
-    } else {
-      li.appendChild(document.createTextNode(chatEventText(kind, name, text)));
-    }
-    log.appendChild(li);
-    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
-    log.scrollTop = log.scrollHeight;
-  };
-  if (from) chatNames.set(from, name);
-  fill();
-}
-
-function renderChat(lines) {
-  const log = $('chat-log');
-  if (!log) return;
-  log.replaceChildren();
-  for (const line of lines || []) {
-    addChatLine(line.kind, line.name, line.text, line.ts, line.from);
-  }
+  const li = document.createElement('li');
+  const when = document.createElement('span');
+  when.className = 'when';
+  when.textContent = chatTime(ts);
+  li.appendChild(when);
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = `${name || 'guest'}:`;
+  li.appendChild(who);
+  li.appendChild(document.createTextNode(` ${text}`));
+  log.appendChild(li);
+  while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
 }
 
 function sendChat() {
-  if (state.sealed) {
-    sendSealedChat();
-    return;
-  }
-  const input = $('chat-text');
-  const text = (input.value || '').trim();
-  if (!text) return;
-  send({ t: 'chat', text });
-  input.value = '';
+  sendSealedChat();
 }
 
 // ---------------------------------------------------------------- sound effects
@@ -2732,21 +2598,20 @@ async function updateStats() {
       rows.push(statsRow(peer.name, [pathLine(s), rateLine(s), inLevelLine(peer)]));
     }
     const own = statsRow('you', [ownMediaLine(), rateLine(total)]);
-    const sealed = state.sealed ? sealedStatsRows() : [];
-    body.replaceChildren(own, ...sealed, ...rows);
+    body.replaceChildren(own, ...sealedStatsRows(), ...rows);
   } finally {
     state.statsBusy = false;
   }
 }
 
-// ---------------------------------------------------------------- sealed rooms
+// ---------------------------------------------------------------- sealing
 //
-// A sealed room keeps the stage and the plumbing of a plain one and changes
-// three things: the join never carries a name, the chat never uses the server
-// `chat` message, and every encoded media frame goes through an AES-GCM
-// transform in a worker. The keys come from the WebAssembly build of X25519 +
-// ML-KEM-768 (static/pq.wasm) through the JSON bridge in wasm_exec.js, so the
-// relay only ever sees opaque blobs.
+// Every room is sealed end to end and keeps the stage and the plumbing of any
+// call, with three differences from a relayed one: the join never carries a
+// name, the chat never uses the server `chat` message, and every encoded media
+// frame goes through an AES-GCM transform in a worker. The keys come from the
+// WebAssembly build of X25519 + ML-KEM-768 (static/pq.wasm) through the JSON
+// bridge in wasm_exec.js, so the relay only ever sees opaque blobs.
 
 // The short code is 13 base32 characters, which is fine to compare on a screen
 // but clumsy to read aloud. The same bits are shown as six OpenMoji drawings
@@ -2963,19 +2828,18 @@ function ensureWasm() {
   return wasmLoad;
 }
 
-// preloadSealed warms the module as soon as the checkbox is on (or a sealed
-// link is opened), so the join itself is only a microphone prompt.
+// preloadSealed warms the module as soon as the lobby opens, so the join itself
+// is only a microphone prompt. A failure stays in the note, and the join says
+// it again.
 function preloadSealed() {
   $('sealed-note').hidden = false;
   $('sealed-note').textContent = 'loading the post-quantum module';
   ensureWasm()
     .then(() => {
-      if (!$('lobby').hidden && $('sealed').checked) {
-        $('sealed-note').textContent = 'pq-e2e ready';
-      }
+      if (!$('lobby').hidden) $('sealed-note').textContent = 'pq-e2e ready';
     })
     .catch((err) => {
-      if (!$('lobby').hidden && $('sealed').checked) {
+      if (!$('lobby').hidden) {
         $('sealed-note').textContent = 'the post-quantum module did not load: '
           + (err && err.message ? err.message : err);
       }
@@ -2993,7 +2857,6 @@ function canary(value) {
 }
 
 function auditWire(where, raw) {
-  if (!state.sealed) return;
   const text = typeof raw === 'string' ? raw : String(raw);
   state.wireFrames++;
   for (const c of state.canaries) {
@@ -3066,7 +2929,7 @@ function paintFrameCounters() {
 // idempotent, so it can run after every description and every addTrack.
 function installSealedReceivers(peer) {
   const pc = peer.pc;
-  if (!pc || !state.sealed || !state.worker) return;
+  if (!pc || !state.worker) return;
   for (const receiver of pc.getReceivers()) {
     if (peer.recvSet.has(receiver)) continue;
     let transform = null;
@@ -3283,7 +3146,7 @@ function sealedOnConfirm(peer, msg) {
       // A timed out key install must not start a connection that can only
       // drop frames; the retry inside the install is the recovery path.
       if (!state.peers.has(peer.id)) return; // the peer left during the install
-      if (ok !== false && !peer.pc && !state.leaving) connectPeer(peer.id, null, true);
+      if (ok !== false && !peer.pc && !state.leaving) connectPeer(peer.id, true);
     });
   }
 }
@@ -3334,7 +3197,7 @@ function sealedOnApp(peer, b) {
     sealedSetName(peer, obj.n);
   } else if (obj.k === 'chat') {
     state.chatRecv++;
-    addChatLine('text', peer.name || shortPeer(peer.id), String(obj.x || ''), Date.now());
+    addChatLine(peer.name || shortPeer(peer.id), String(obj.x || ''), Date.now());
   }
 }
 
@@ -3360,7 +3223,7 @@ function sendSealedChat() {
   if (!text || !state.self) return;
   input.value = '';
   canary(text);
-  addChatLine('text', state.name, text, Date.now());
+  addChatLine(state.name, text, Date.now());
   state.chatSent++;
   for (const peer of state.peers.values()) {
     if (!peer.keys) continue;
@@ -3381,7 +3244,7 @@ function sealedSetName(peer, raw) {
 // sealedSetE2E paints the key state and the short code on one tile.
 function sealedSetE2E(peer, status) {
   peer.ready = status;
-  if (state.sealed) updateSealedBadge();
+  updateSealedBadge();
   if (!peer.tile) return;
   peer.tile.dataset.e2e = status;
   const badge = peer.tile.querySelector('.state');
@@ -3464,12 +3327,6 @@ function sealedPairNames(pairs) {
 function updateSealedBadge() {
   const badge = $('sealed-badge');
   if (!badge) return;
-  if (!state.sealed) {
-    badge.hidden = true;
-    badge.textContent = '';
-    badge.removeAttribute('title');
-    return;
-  }
   badge.hidden = false;
   const failed = sealedFailedPairs();
   if (failed.length > 0) {
@@ -3500,137 +3357,8 @@ async function sealedOnOffer(peer, sdp) {
     }
     if (!state.peers.has(peer.id)) return; // the peer left while the keys installed
   }
-  const target = connectPeer(peer.id, null, false);
+  const target = connectPeer(peer.id, false);
   await onDescription(target, 'offer', sdp);
-}
-
-// noteModeClash shows one line about a mode clash, and only one per call, so a
-// room with several guests of the other mode does not repeat it.
-function noteModeClash(text) {
-  if (state.modeClash) return;
-  state.modeClash = true;
-  say(text);
-}
-
-// plainModeClash reads the mode the guests had before this join. Sealed peers
-// seal every frame and every name, so a plain client can not reach them. A room
-// where all guests seal can never work for this client: it goes back to the
-// form with the box already on. In a mixed room the plain guests still hear
-// each other, so the call stays and one line says what is out of reach.
-function plainModeClash(peers) {
-  if (state.sealed || peers.length === 0) return false;
-  const sealed = peers.filter((peer) => !!peer.sealed);
-  if (sealed.length === 0) return false;
-  if (sealed.length === peers.length) {
-    $('sealed').checked = true;
-    leave('this room is sealed end to end; tick the post-quantum box and join again');
-    return true;
-  }
-  noteModeClash('a guest is in a sealed room, so you can not see or hear that guest');
-  return false;
-}
-
-// sealedModeClash is the other side of the same check: a sealed client that
-// walks into a room with no sealed guest has nothing to seal to, so it goes
-// back to the form with the box off. A mixed room keeps only the sealed peers.
-function sealedModeClash(peers) {
-  if (!state.sealed || peers.length === 0) return false;
-  const sealed = peers.filter((peer) => !!peer.sealed);
-  if (sealed.length === peers.length) return false;
-  if (sealed.length === 0) {
-    $('sealed').checked = false;
-    leave('this room is not sealed; untick the post-quantum box and join again');
-    return true;
-  }
-  noteModeClash('a guest is in a plain room, so this call can not be sealed with that guest');
-  return false;
-}
-
-function handleSealed(msg) {
-  switch (msg.t) {
-    case 'joined': {
-      state.self = msg.self;
-      state.ice = msg.ice || [];
-      state.modeClash = false;
-      say('');
-      setAdmins(msg.admins);
-      const infos = msg.peers || [];
-      if (sealedModeClash(infos)) break;
-      for (const info of infos) {
-        if (!info.sealed) continue;
-        const peer = ensurePeer(info.id, '', info.mic, info.cam);
-        sealedSendPub(peer);
-      }
-      markAdmins();
-      $('link-text').textContent = 'sealed, handshaking';
-      // Tell the room the microphone and camera state; only the flags travel.
-      sendState();
-      updateCount();
-      break;
-    }
-    case 'peer-joined': {
-      if (!msg.peer) break;
-      if (!msg.peer.sealed) {
-        noteModeClash('a guest joined in a plain room, so this call can not be sealed with that guest');
-        break;
-      }
-      const peer = ensurePeer(msg.peer.id, '', msg.peer.mic, msg.peer.cam);
-      if (msg.peer.admin) state.admins.add(msg.peer.id);
-      markAdmins();
-      sealedSendPub(peer);
-      playSfx('pop');
-      break;
-    }
-    case 'peer-left': {
-      dropPeer(msg.from);
-      state.admins.delete(msg.from);
-      markAdmins();
-      playSfx('bonk');
-      break;
-    }
-    case 'admin': {
-      setAdmins(msg.admins);
-      markAdmins();
-      break;
-    }
-    case 'enc': {
-      if (msg.from && typeof msg.b === 'string') sealedHandleOpaque(msg.from, msg.b);
-      break;
-    }
-    case 'offer': {
-      // A plain guest never gets a peer here, so its description has nothing
-      // to answer: the mode line already said why.
-      const peer = state.peers.get(msg.from);
-      if (!peer) break;
-      if (msg.sdp) sealedOnOffer(peer, msg.sdp);
-      break;
-    }
-    case 'answer': {
-      const peer = state.peers.get(msg.from);
-      if (peer && msg.sdp) onDescription(peer, 'answer', msg.sdp);
-      break;
-    }
-    case 'ice': {
-      const peer = state.peers.get(msg.from);
-      if (peer && msg.candidate) onCandidate(peer, msg.candidate);
-      break;
-    }
-    case 'state': {
-      const peer = state.peers.get(msg.from);
-      if (peer) {
-        if (msg.mic !== undefined) peer.mic = msg.mic;
-        if (msg.cam !== undefined) peer.cam = msg.cam;
-        applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
-      }
-      break;
-    }
-    case 'chat': {
-      // A sealed room has no plaintext chat path; the server line is ignored.
-      break;
-    }
-    default:
-      break;
-  }
 }
 
 // ------------------------------------------------------------- sealed stats
@@ -3967,23 +3695,9 @@ function init() {
   $('noise').checked = state.noiseWanted;
   $('noise-live').checked = state.noiseWanted;
 
-  // The sealed choice comes back like the name and the devices, and it is on
-  // for a new visitor: post-quantum end-to-end encryption is the default. A
-  // link wins over the stored choice, in both directions.
-  const flag = sealedFlag();
-  state.sealed = flag ? flag === '1' : load('sealed') !== '0';
-  $('sealed').checked = state.sealed;
-
-  $('sealed').addEventListener('change', () => {
-    state.sealed = $('sealed').checked;
-    store('sealed', state.sealed ? 1 : 0);
-    if (state.sealed) preloadSealed();
-    else {
-      $('sealed-note').hidden = true;
-      $('sealed-note').textContent = '';
-    }
-  });
-  if (state.sealed) preloadSealed();
+  // The module is warming before the first click, so a failure is visible in
+  // the lobby and the join is only a microphone prompt.
+  preloadSealed();
 
   $('newid-btn').addEventListener('click', (event) => {
     event.preventDefault();
@@ -4083,11 +3797,7 @@ function init() {
   $('leave-btn').addEventListener('click', () => leave(''));
 
   $('copy-btn').addEventListener('click', async () => {
-    // Sealed is the default, so its link stays clean. A plain room says so,
-    // because the guest would otherwise land in a sealed room it can not use.
-    const link = state.sealed
-      ? `${location.origin}/#r=${encodeURIComponent(state.room)}`
-      : `${location.origin}/#r=${encodeURIComponent(state.room)}&sealed=0`;
+    const link = `${location.origin}/#r=${encodeURIComponent(state.room)}`;
     try {
       await navigator.clipboard.writeText(link);
       $('copy-btn').textContent = 'copied';
