@@ -152,13 +152,20 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			s.hub.relay(p, m.To, mustJSON(serverMsg{T: "ice", From: p.id, Candidate: m.Candidate}))
 		case "state":
-			// A mute, camera or deafen toggle is a small indicator for the
-			// other tiles and the member list. It carries no media, and the
-			// server keeps the last value only for the lifetime of the
-			// connection.
+			// A mute, camera, deafen or raised hand toggle is a small
+			// indicator for the other tiles and the member list. It carries
+			// no media, and the server keeps the last value only for the
+			// lifetime of the connection. The whole room gets the answer,
+			// the sender too, because a raised hand needs its queue number.
+			room := s.hub.roomOf(p)
 			mic, cam, deaf := p.setFlags(m.Mic, m.Cam, m.Deaf)
-			s.hub.broadcast(p, mustJSON(serverMsg{
+			if m.Hand != nil {
+				p.setHand(*m.Hand, func() int { return s.hub.nextHand(room) })
+			}
+			hand, seq := p.handState()
+			s.hub.broadcastTo(room, mustJSON(serverMsg{
 				T: "state", From: p.id, Mic: &mic, Cam: &cam, Deaf: &deaf,
+				Hand: &hand, HandSeq: seq,
 			}))
 		case "enc":
 			// Opaque end-to-end payload: forwarded verbatim, never stored.
@@ -211,6 +218,22 @@ func (s *server) handleMod(p *Peer, m clientMsg) {
 		if target := s.hub.peerOf(room, m.To); target != nil {
 			target.enqueueJSON(serverMsg{T: "mod", From: p.id, Action: "mute"})
 		}
+	case "lowerhand":
+		// The host takes a hand down, so a queue that nobody follows can be
+		// cleared from the front. The room gets the new state of that guest.
+		target := s.hub.peerOf(room, m.To)
+		if target == nil {
+			return
+		}
+		if on, _ := target.handState(); !on {
+			return
+		}
+		hand, seq := target.setHand(false, nil)
+		mic, cam, deaf := target.flags()
+		s.hub.broadcastTo(room, mustJSON(serverMsg{
+			T: "state", From: target.id, Mic: &mic, Cam: &cam, Deaf: &deaf,
+			Hand: &hand, HandSeq: seq,
+		}))
 	case "kick":
 		target := s.hub.peerOf(room, m.To)
 		if target == nil {
@@ -273,9 +296,10 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
 		mic, cam, deaf := other.flags()
+		hand, seq := other.handState()
 		peers = append(peers, peerInfo{
 			ID: other.id, Mic: mic, Cam: cam, Deaf: deaf, Admin: isAdmin[other.id],
-			Waiting: s.hub.isWaiting(other),
+			Waiting: s.hub.isWaiting(other), Hand: hand, HandSeq: seq,
 		})
 	}
 
@@ -298,9 +322,13 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	})
 
 	ownMic, ownCam, ownDeaf := p.flags()
+	ownHand, ownSeq := p.handState()
 	joinedMsg := mustJSON(serverMsg{
-		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Admin: isAdmin[p.id], Waiting: selfWaiting},
+		T: "peer-joined",
+		Peer: &peerInfo{
+			ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Admin: isAdmin[p.id],
+			Waiting: selfWaiting, Hand: ownHand, HandSeq: ownSeq,
+		},
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)

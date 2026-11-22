@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122ah">
+<link rel="stylesheet" href="/style.css?v=20261122ai">
 </head>
 <body>
 
@@ -179,6 +179,7 @@
         <button id="cam-btn" type="button" class="ctrl" aria-pressed="true"><img class="ico" src="/openmoji/1F4F7.svg" alt="" width="22" height="22"><span>camera on</span></button>
         <button id="deaf-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F507.svg" alt="" width="22" height="22"><span>deafen</span></button>
         <button id="share-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F5A5.svg" alt="" width="22" height="22"><span>share screen</span></button>
+        <button id="hand-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F590.svg" alt="" width="22" height="22"><span>raise hand</span></button>
         <button id="stats-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F4C9.svg" alt="" width="22" height="22"><span>stats</span></button>
         <label class="pick perf-pick">performance
           <input id="perf-live" type="range" min="0" max="3" step="1" value="0" aria-label="performance: picture quality against bandwidth and compute">
@@ -218,6 +219,11 @@
       </aside>
 
       <div class="side">
+      <aside id="hand-queue" class="hand-queue" aria-label="raised hands in order" hidden>
+        <div class="hq-head">hands up</div>
+        <ol id="hand-queue-list" class="hq-list"></ol>
+      </aside>
+
       <aside id="stage-rail" class="stage-rail" aria-label="every member of the room"></aside>
 
       <aside class="chat" id="chat-panel">
@@ -237,6 +243,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122ag"></script>
+<script src="/app.js?v=20261122ah"></script>
 </body>
 </html>

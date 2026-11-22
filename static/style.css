@@ -1421,7 +1421,7 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 }
 /* One width per toolbar button, wide enough for its longest label: a label that
    changes under the pointer then never moves the buttons beside it. */
-#mic-btn, #cam-btn, #deaf-btn, #stats-btn, #leave-btn { width: 128px; }
+#mic-btn, #cam-btn, #deaf-btn, #hand-btn, #stats-btn, #leave-btn { width: 128px; }
 #share-btn { width: 144px; }
 /* A toolbar button carries a big drawing left of the label, so the buttons
    are told apart by a picture and not only by a word. */
@@ -1523,16 +1523,16 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
      broke after the fifth button whatever the widths were, so the row is a
      grid of six equal cells and leave takes the last cell of the first row. */
   .controls {
-    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+    display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
     align-items: center; gap: 4px; width: 100%;
   }
   /* The five menus do not fit 360 px at the menu size: one step down, and the
      last one is no longer cut at the edge. */
   .menubar-item { font-size: var(--fs-tiny); padding: 1px 6px; }
-  .ctrl, #mic-btn, #cam-btn, #deaf-btn, #stats-btn, #leave-btn, #share-btn {
+  .ctrl, #mic-btn, #cam-btn, #deaf-btn, #hand-btn, #stats-btn, #leave-btn, #share-btn {
     width: auto; min-width: 0; min-height: 44px; padding: 0 2px; grid-row: 1;
   }
-  #leave-btn { grid-column: 6; }
+  #leave-btn { grid-column: 7; }
   .controls .perf-pick { grid-row: 2; grid-column: 1 / -1; min-height: 32px; justify-content: flex-end; }
   .controls .perf-pick input[type="range"] { height: 32px; }
   .ctrl span {
@@ -1586,14 +1586,14 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
    the pictures get the height back. */
 @media (max-height: 460px) and (hover: none) {
   .statusline .controls {
-    grid-template-columns: repeat(6, minmax(0, 1fr)) minmax(84px, 1.2fr);
+    grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(84px, 1.2fr);
   }
   .controls .ctrl, .controls #leave-btn { grid-row: 1; }
-  #leave-btn { grid-column: 6; }
+  #leave-btn { grid-column: 7; }
   /* The static word takes the room that the slider needs; the name of the
      level stays, and the range keeps its own label for a reader. */
   .controls .perf-pick {
-    grid-row: 1; grid-column: 7; min-height: 40px;
+    grid-row: 1; grid-column: 8; min-height: 40px;
     justify-content: flex-end; font-size: 0;
   }
   .controls .perf-pick input[type="range"] { width: 100%; height: 40px; }
@@ -1752,3 +1752,81 @@ body.self-waiting .admit { display: none; }
 /* A chosen entry of a submenu: a button row, so no form control is involved. */
 .menu-choice { width: 100%; justify-content: flex-start; }
 .menu-choice[aria-pressed="true"] .menu-tick::after { content: "\2713"; }
+
+/* ------------------------------------------------------- raised hands */
+
+/* The queue is one small panel above the list of names: the raised hands in
+   the order the server numbered them, so every guest reads the same order. */
+.hand-queue {
+  flex: 0 0 auto;
+  max-height: 30vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 2px solid;
+  border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
+  padding: 1px;
+}
+.hq-head {
+  flex: none;
+  padding: 2px 6px;
+  color: #fff;
+  background: linear-gradient(90deg, #084a80, #1084d0);
+  font-size: var(--fs-smaller);
+  font-weight: bold;
+}
+.hq-list {
+  margin: 0;
+  padding: 2px 4px 2px 24px;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: var(--fs-smaller);
+}
+.hq-row { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+.hq-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hq-lower { flex: none; min-height: 22px; padding: 0 6px; font-size: var(--fs-tiny); }
+
+/* A raised hand in the list of names: one small word, the way the deafened
+   mark sits there. */
+.row-hand {
+  flex: none;
+  padding: 0 4px;
+  font-size: var(--fs-tiny);
+  color: #141414;
+  background: #ffe36e;
+  border: 1px solid #7a5c00;
+}
+
+/* ------------------------------------------------------------ phone chrome */
+
+/* A phone shows the picture and nothing else. The title bar, the menu, the
+   toolbar and the side column lie over the video as a sheet: a tap brings
+   them back, a few seconds of quiet slides them away, and the frame takes the
+   whole screen in between. The class comes from the page, because a desktop
+   window never carries it, and no rule here fires while it is absent. */
+.phone:not(.ui-open) .stage > .titlebar,
+.phone:not(.ui-open) .menubar,
+.phone:not(.ui-open) .statusline,
+.phone:not(.ui-open) .side { display: none; }
+.phone:not(.ui-open) .stage .stage-body { padding: 0; gap: 0; }
+.phone:not(.ui-open) .grid { border: 0; padding: 0; }
+
+.phone.ui-open .stage > .titlebar,
+.phone.ui-open .menubar,
+.phone.ui-open .statusline,
+.phone.ui-open .side {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+.phone.ui-open .stage > .titlebar { top: 0; }
+.phone.ui-open .menubar { top: 26px; }
+.phone.ui-open .statusline { bottom: 0; box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.45); }
+.phone.ui-open .side { bottom: 86px; max-height: 48vh; gap: 4px; }
+/* The sheet is a strip of controls over the picture, so the round trip of the
+   video does not resize while it comes and goes. */
+.phone.ui-open .stage-body { padding: 0; }
+.phone.ui-open .grid { border: 0; padding: 0; }

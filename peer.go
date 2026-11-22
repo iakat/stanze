@@ -17,14 +17,20 @@ type Peer struct {
 	// written under the hub lock, like the room itself.
 	waiting bool
 
-	// mic, cam and deaf are the flags the client reported last. They are
-	// only indicators for the other tiles and the member list; the media
+	// mic, cam, deaf and hand are the flags the client reported last. They
+	// are only indicators for the other tiles and the member list; the media
 	// itself decides the truth. The read loop of this peer writes them and
 	// the join of another peer reads them, so fmu guards both.
 	fmu  sync.Mutex
 	mic  bool
 	cam  bool
 	deaf bool
+	hand bool
+	// handSeq is the queue number of a raised hand: the oldest raised hand of
+	// the room is 1. It is 0 while the hand is down, and it never goes back
+	// to an old number, so a hand that is lowered and raised again goes to
+	// the back of the queue.
+	handSeq int
 
 	// wmu serialises writes to the websocket. gorilla allows one concurrent
 	// writer, and both the write loop and the read loop (terminal errors)
@@ -84,6 +90,30 @@ func (p *Peer) flags() (bool, bool, bool) {
 	return p.mic, p.cam, p.deaf
 }
 
+// setHand writes the raised hand and returns it with its queue number. next is
+// called, with the hand lock held, only when a hand goes up, so a room hands
+// out one rising number to every raise and the queue order is the same in
+// every client. No path takes the hub lock before the hand lock, so the two
+// can not deadlock.
+func (p *Peer) setHand(on bool, next func() int) (bool, int) {
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	switch {
+	case on && !p.hand:
+		p.hand, p.handSeq = true, next()
+	case !on:
+		p.hand, p.handSeq = false, 0
+	}
+	return p.hand, p.handSeq
+}
+
+// handState returns the raised hand and its queue number.
+func (p *Peer) handState() (bool, int) {
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	return p.hand, p.handSeq
+}
+
 // write sends one text frame. It is the only place that calls WriteMessage.
 func (p *Peer) write(conn *websocket.Conn, msg []byte) error {
 	p.wmu.Lock()
@@ -126,6 +156,9 @@ type peerInfo struct {
 	Admin bool   `json:"admin,omitempty"`
 	// Waiting is true for a guest that the room has not let in yet.
 	Waiting bool `json:"waiting,omitempty"`
+	// Hand is a raised hand, and HandSeq is its place in the queue.
+	Hand    bool `json:"hand,omitempty"`
+	HandSeq int  `json:"handSeq,omitempty"`
 }
 
 type iceServer struct {
@@ -144,12 +177,14 @@ type clientMsg struct {
 	SDP       string          `json:"sdp,omitempty"`
 	Candidate json.RawMessage `json:"candidate,omitempty"`
 
-	// mic, cam and deaf are pointers so "not sent" and "false" differ.
+	// mic, cam, deaf and hand are pointers so "not sent" and "false" differ.
 	Mic  *bool `json:"mic,omitempty"`
 	Cam  *bool `json:"cam,omitempty"`
 	Deaf *bool `json:"deaf,omitempty"`
+	Hand *bool `json:"hand,omitempty"`
 
-	// action is the admin command: kick, mute, admin or waitingroom.
+	// action is the admin command: kick, mute, admin, lowerhand or
+	// waitingroom.
 	Action string `json:"action,omitempty"`
 
 	// on is the value of the waitingroom command. A pointer, so "not sent"
@@ -175,6 +210,8 @@ type serverMsg struct {
 	Mic       *bool           `json:"mic,omitempty"`
 	Cam       *bool           `json:"cam,omitempty"`
 	Deaf      *bool           `json:"deaf,omitempty"`
+	Hand      *bool           `json:"hand,omitempty"`
+	HandSeq   int             `json:"handSeq,omitempty"`
 	Admins    []string        `json:"admins,omitempty"`
 	Action    string          `json:"action,omitempty"`
 	Code      string          `json:"code,omitempty"`

@@ -54,6 +54,8 @@ const state = {
   sounds: true,       // the four cues and the lost connection chime
   waitingRoom: false, // the room switch an admin sets
   waiting: false,     // this guest is held outside until a member lets it in
+  hand: false,        // this guest has a raised hand
+  handSeq: 0,         // the queue number the server gave that hand
   insideFps: new Set(), // fingerprints of proven guests seen inside this call, for a quick return
   mirror: true,
   selfPip: false,     // the own picture is a small preview, not a tile in the grid
@@ -501,6 +503,14 @@ function paintRowDeaf(row, deaf) {
   if (mark) mark.hidden = !deaf;
 }
 
+// paintRowHand shows the raised hand of one member on its row. The queue panel
+// carries the order; the row only says that this hand is up.
+function paintRowHand(row, hand) {
+  if (!row) return;
+  const mark = row.querySelector('.row-hand');
+  if (mark) mark.hidden = !hand;
+}
+
 // tileId is the spotlight key of one tile: the peer id, or 'self'. The screen
 // tile of a guest carries ':screen', so each picture is its own key.
 function tileId(tile) {
@@ -569,7 +579,7 @@ function makeRow(id, name, local = false) {
   row.dataset.mic = 'on';
   row.tabIndex = 0;
   row.setAttribute('role', 'group');
-  row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span>${local ? '<span class="row-you">you</span>' : `
+  row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span><span class="row-hand" hidden>hand</span>${local ? '<span class="row-you">you</span>' : `
     <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
     <span class="vol-num">100%</span>
     <button class="admit" type="button" title="let this guest into the room">let in</button>
@@ -946,12 +956,18 @@ function applyFlags(tile, mic, cam, admin) {
   tile.dataset.waiting = waiting ? 'yes' : '';
   if (row) row.dataset.waiting = waiting ? 'yes' : '';
   const box = tile.querySelector('.flags');
+  // A raised hand is on the tile with its place in the queue, and on the row
+  // of the same member, so a small picture still shows it.
+  const handOn = who ? !!who.hand : !!(tile.dataset.local && state.hand);
+  const handSeq = who ? who.handSeq : state.handSeq;
+  paintRowHand(row, handOn);
   if (!box) return;
   const out = [];
   if (waiting) out.push('waiting');
   if (admin) out.push('host');
   if (mic === false) out.push('muted');
   if (cam === false) out.push('no cam');
+  if (handOn) out.push(handSeq ? `hand #${handSeq}` : 'hand');
   box.innerHTML = '';
   for (const text of out) {
     const chip = document.createElement('span');
@@ -1098,6 +1114,7 @@ function paintWaiting() {
   const self = document.querySelector('.tile[data-local="yes"]');
   if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   updateCount();
+  paintHandQueue();
 }
 
 // admitPeer runs when the server says that a guest is inside now. Our own media
@@ -1149,6 +1166,7 @@ function markAdmins() {
   }
   const self = document.querySelector('.tile[data-local="yes"]');
   applyFlags(self, state.mic, state.cam, mine);
+  paintHandQueue();
 }
 
 function updateCount() {
@@ -2442,12 +2460,64 @@ async function setPeerNoise(peer, on) {
   wirePlayNoise(peer);
 }
 
-// sendState tells the room that the microphone or the camera changed. The
-// other clients show it as a small flag on the tile.
+// sendState tells the room that the microphone, the camera or the hand
+// changed. The other clients show it as a small flag on the tile.
 function sendState() {
   refreshSelf();
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    send({ t: 'state', mic: state.mic, cam: state.cam, deaf: state.deaf });
+    send({ t: 'state', mic: state.mic, cam: state.cam, deaf: state.deaf, hand: state.hand });
+  }
+}
+
+// setHand raises or lowers the own hand and tells the room. The server numbers
+// every raise, so the queue order is the same in every client, and a hand that
+// is lowered and raised again goes to the back.
+function setHand(on) {
+  if (state.waiting || state.hand === on) return;
+  state.hand = on;
+  if (!on) state.handSeq = 0;
+  const self = document.querySelector('.tile[data-local="yes"]');
+  if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
+  updateButtons();
+  sendState();
+  paintHandQueue();
+}
+
+// paintHandQueue draws the raised hands in the order the server numbered them:
+// the first row holds the hand that the room answers next. An admin gets a
+// button on every row that takes that hand down.
+function paintHandQueue() {
+  const panel = document.getElementById('hand-queue');
+  const list = document.getElementById('hand-queue-list');
+  if (!panel || !list) return;
+  const rows = [];
+  for (const peer of state.peers.values()) {
+    if (peer.hand) rows.push({ id: peer.id, name: peer.name, seq: peer.handSeq, self: false });
+  }
+  if (state.hand) {
+    rows.push({ id: state.self, name: state.name || 'you', seq: state.handSeq, self: true });
+  }
+  // A hand whose number has not arrived yet goes last, never first.
+  rows.sort((a, b) => (a.seq || 1e9) - (b.seq || 1e9));
+  panel.hidden = rows.length === 0;
+  list.replaceChildren();
+  for (const row of rows) {
+    const li = document.createElement('li');
+    li.className = 'hq-row';
+    const name = document.createElement('span');
+    name.className = 'hq-name';
+    name.textContent = row.self ? `${row.name} (you)` : row.name;
+    li.appendChild(name);
+    if (isAdmin(state.self) && !row.self) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'hq-lower';
+      b.textContent = 'lower';
+      b.setAttribute('aria-label', `take the hand of ${row.name} down`);
+      b.addEventListener('click', () => send({ t: 'mod', to: row.id, action: 'lowerhand' }));
+      li.appendChild(b);
+    }
+    list.appendChild(li);
   }
 }
 
@@ -2467,6 +2537,7 @@ function updateButtons() {
   setCtrl('cam-btn', state.cam ? 'camera on' : 'camera off', state.cam);
   setCtrl('deaf-btn', state.deaf ? 'undeafen' : 'deafen', state.deaf);
   setCtrl('share-btn', state.screen ? 'stop share' : 'share screen', !!state.screen);
+  setCtrl('hand-btn', state.hand ? 'lower hand' : 'raise hand', state.hand);
   $('mirror').checked = state.mirror;
   $('pip').checked = state.selfPip;
   $('voice-tiles').checked = !state.voiceTiles;
@@ -2855,13 +2926,17 @@ function rtcConfig() {
   };
 }
 
-function ensurePeer(id, mic, cam, deaf) {
+function ensurePeer(id, mic, cam, deaf, hand, seq) {
   let peer = state.peers.get(id);
   if (peer) {
     if (mic !== undefined || cam !== undefined || deaf !== undefined) {
       peer.mic = mic === undefined ? peer.mic : mic;
       peer.cam = cam === undefined ? peer.cam : cam;
       peer.deaf = deaf === undefined ? peer.deaf : deaf;
+      if (hand !== undefined) {
+        peer.hand = !!hand;
+        peer.handSeq = seq || 0;
+      }
       applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
       paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
     }
@@ -2877,6 +2952,8 @@ function ensurePeer(id, mic, cam, deaf) {
     cam: cam === undefined ? true : cam,
     deaf: deaf === undefined ? false : deaf,
     waiting: false,   // held outside the room, see the waiting room
+    hand: !!hand,     // a raised hand, with its place in the queue
+    handSeq: seq || 0,
     vol: 100,
     pc: null,
     tile: null,
@@ -2930,12 +3007,15 @@ function ensurePeer(id, mic, cam, deaf) {
   peer.tile = makeTile(peer.name, peer.name);
   peer.video = peer.tile.querySelector('video');
   peer.tile.dataset.peer = id;
+  // The map holds the peer before the first paint: the flags of the tile read
+  // the waiting room and the raised hand from it.
+  state.peers.set(id, peer);
   applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
   paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
   wireVolume(peer);
-  state.peers.set(id, peer);
   layoutStage();
   updateCount();
+  paintHandQueue();
   return peer;
 }
 
@@ -3148,6 +3228,7 @@ function dropPeer(id) {
   layoutStage();
   updatePinCount();
   updateCount();
+  paintHandQueue();
 }
 
 // ---------------------------------------------------------------- signaling
@@ -3267,7 +3348,7 @@ function handle(msg) {
       asrProbe();
       for (const info of msg.peers || []) {
         if (!info) continue;
-        const peer = ensurePeer(info.id, info.mic, info.cam, info.deaf);
+        const peer = ensurePeer(info.id, info.mic, info.cam, info.deaf, info.hand, info.handSeq);
         peer.waiting = !!info.waiting;
         sealedSendPub(peer);
       }
@@ -3280,11 +3361,12 @@ function handle(msg) {
     }
     case 'peer-joined': {
       if (!msg.peer) break;
-      const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam, msg.peer.deaf);
+      const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam, msg.peer.deaf, msg.peer.hand, msg.peer.handSeq);
       peer.waiting = !!msg.peer.waiting;
       if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
       paintWaiting();
+      paintHandQueue();
       sealedSendPub(peer);
       playSfx('pop');
       break;
@@ -3312,14 +3394,44 @@ function handle(msg) {
       break;
     }
     case 'state': {
+      if (msg.from === state.self) {
+        // The echo of our own state carries the queue number of a hand that
+        // has just gone up, and it keeps the button in step if two tabs of
+        // one guest disagree.
+        if (msg.hand !== undefined) {
+          state.hand = !!msg.hand;
+          state.handSeq = msg.handSeq || 0;
+        }
+        if (msg.mic !== undefined) state.mic = msg.mic;
+        if (msg.cam !== undefined) state.cam = msg.cam;
+        if (msg.deaf !== undefined) state.deaf = msg.deaf;
+        const self = document.querySelector('.tile[data-local="yes"]');
+        if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
+        updateButtons();
+        paintHandQueue();
+        break;
+      }
       const peer = state.peers.get(msg.from);
       if (peer) {
         if (msg.mic !== undefined) peer.mic = msg.mic;
         if (msg.cam !== undefined) peer.cam = msg.cam;
         if (msg.deaf !== undefined) peer.deaf = msg.deaf;
+        if (msg.hand !== undefined) {
+          const was = peer.hand;
+          peer.hand = !!msg.hand;
+          peer.handSeq = msg.handSeq || 0;
+          if (peer.hand !== was) {
+            playSfx(peer.hand ? 'pop' : 'bonk');
+            // A hand that goes up on a phone brings the chrome back, or
+            // nobody would see the queue on a screen that shows only the
+            // picture.
+            if (peer.hand) revealUI(4000);
+          }
+        }
         applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
         if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
         paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
+        paintHandQueue();
       }
       break;
     }
@@ -3487,8 +3599,11 @@ function leave(message) {
   asrStop();
   state.waiting = false;
   state.waitingRoom = false;
+  state.hand = false;
+  state.handSeq = 0;
   state.insideFps.clear();
   paintWaiting();
+  paintHandQueue();
   updatePinCount();
   $('chat-note').hidden = true;
   if (state.micTrack) {
@@ -7575,6 +7690,56 @@ async function paintRelay(peer) {
 
 // ---------------------------------------------------------------- boot
 
+// ---------------------------------------------------------------- phone chrome
+
+// A phone shows the pictures and nothing else. The bars, the menu and the side
+// column are a sheet over the video: a tap brings them back and a few seconds
+// of quiet slide them away. The sheet starts open on a fresh page, so the
+// controls are seen once. A desktop never carries the class.
+const PHONE_QUERY = '(max-width: 620px), (max-height: 520px) and (hover: none)';
+const phoneQuery = window.matchMedia ? window.matchMedia(PHONE_QUERY) : null;
+let uiTimer = 0;
+
+function phoneMode() {
+  return document.body.classList.contains('phone');
+}
+
+// revealUI opens the sheet for hold milliseconds. A hold of 0 keeps it open
+// until the next tap or until another call closes it.
+function revealUI(hold = 5000) {
+  if (!phoneMode()) return;
+  document.body.classList.add('ui-open');
+  clearTimeout(uiTimer);
+  if (hold) uiTimer = setTimeout(() => document.body.classList.remove('ui-open'), hold);
+}
+
+function hideUI() {
+  clearTimeout(uiTimer);
+  document.body.classList.remove('ui-open');
+}
+
+function paintPhone() {
+  const on = !!(phoneQuery && phoneQuery.matches);
+  document.body.classList.toggle('phone', on);
+  if (!on) hideUI();
+  else revealUI(4000);
+}
+
+function wirePhone() {
+  if (phoneQuery) {
+    if (phoneQuery.addEventListener) phoneQuery.addEventListener('change', paintPhone);
+    else if (phoneQuery.addListener) phoneQuery.addListener(paintPhone);
+  }
+  paintPhone();
+  // A finger on the sheet keeps it open: the timer restarts on every touch of
+  // the bars, the menu and the side column.
+  document.addEventListener('pointerdown', (event) => {
+    if (!phoneMode() || !document.body.classList.contains('ui-open')) return;
+    const target = /** @type {Element} */ (event.target);
+    if (target.closest('.menubar, .statusline, .side, .stage > .titlebar')) revealUI(6000);
+  });
+}
+
 function init() {
   // Older builds kept a volume under the guest name. That is a list of the
   // people who used this machine, so it goes before anything else reads it.
@@ -7785,6 +7950,7 @@ function init() {
   wireMenuBar();
   wireCornerDrag();
   wireSubmenus();
+  wirePhone();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
 
@@ -7800,6 +7966,20 @@ function init() {
     // The click that ends a drag of the small tile is not a zoom.
     if (Date.now() - cornerDropAt < 300) return;
     const target = /** @type {Element} */ (event.target);
+    // On a phone the picture owns the screen: a tap brings the sheet of
+    // controls back, and a tap on the empty frame closes it again. While the
+    // sheet is open, a tap on a picture keeps its old meaning.
+    if (phoneMode()) {
+      const open = document.body.classList.contains('ui-open');
+      if (!open) {
+        revealUI(6000);
+        return;
+      }
+      if (!target.closest('.tile')) {
+        hideUI();
+        return;
+      }
+    }
     // A click on the small preview puts the own picture back in the grid.
     if (target.closest('#self-pip')) {
       state.selfPip = false;
@@ -7871,6 +8051,8 @@ function init() {
   });
 
   $('deaf-btn').addEventListener('click', () => setDeaf(!state.deaf));
+
+  $('hand-btn').addEventListener('click', () => setHand(!state.hand));
 
   $('leave-btn').addEventListener('click', () => leave(''));
 

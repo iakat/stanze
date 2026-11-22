@@ -123,6 +123,14 @@ function stageBox() {
   };
 }
 
+/* reveal taps the picture when the sheet of controls is closed, the way a
+ * finger does, and waits until it is open. */
+async function reveal(page) {
+  if (await page.evaluate(() => document.body.classList.contains('ui-open'))) return;
+  await page.tap('#grid').catch(async () => { await page.click('#grid'); });
+  await until(page, () => document.body.classList.contains('ui-open'), null, 4000, 'the sheet opens').catch(() => {});
+}
+
 async function openPage(browser, viewport, room) {
   const ctx = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
@@ -134,7 +142,18 @@ async function openPage(browser, viewport, room) {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
-  page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+  page.on('console', (m) => {
+    // A failed fetch is counted once, below, with its URL: the browser also
+    // writes a bare "Failed to load resource" line for the same request.
+    if (m.type() !== 'error' || /Failed to load resource/.test(m.text())) return;
+    errors.push('console: ' + m.text());
+  });
+  page.on('response', (r) => {
+    const u = r.url();
+    // A local server has no vosk model directory, and the transcribe menu asks
+    // for it to know whether the feature is there. That is not a page error.
+    if (r.status() >= 400 && !/\/vosk\//.test(u)) errors.push('http ' + r.status() + ' ' + u);
+  });
   await page.goto(BASE + '/' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
   await until(page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 45000, 'wasm self test').catch(() => {});
   return { ctx, page, errors };
@@ -179,6 +198,27 @@ async function openPage(browser, viewport, room) {
         }, null, 30000, 'own tile');
         await sleep(1200);
 
+        // A phone shows the picture alone. The bars and the side column are a
+        // sheet that a tap brings back, so the first check runs on the bare
+        // screen and the audit runs with the sheet open.
+        const phone = await a.page.evaluate(() => document.body.classList.contains('phone'));
+        if (phone) {
+          await until(a.page, () => !document.body.classList.contains('ui-open'), null, 8000, 'the sheet closes by itself').catch(() => {});
+          const bare = await a.page.evaluate(() => {
+            const g = document.getElementById('grid').getBoundingClientRect();
+            return {
+              sheet: !document.body.classList.contains('ui-open'),
+              w: Math.round(g.width), h: Math.round(g.height),
+              vw: window.innerWidth, vh: window.innerHeight,
+            };
+          });
+          check(tag + 'the picture owns the screen', bare.sheet && bare.h >= bare.vh - 8 && bare.w >= bare.vw - 8, JSON.stringify(bare));
+          await reveal(a.page);
+          const opened = await a.page.evaluate(() => document.body.classList.contains('ui-open'));
+          check(tag + 'a tap brings the controls back', opened);
+        }
+        await sleep(400);
+
         const stage = await a.page.evaluate(audit);
         const box = await a.page.evaluate(stageBox);
         await a.page.screenshot({ path: OUT + '/' + tag + 'stage.png' });
@@ -193,7 +233,9 @@ async function openPage(browser, viewport, room) {
           box.controlsRow && box.controlsRow.h <= 100, JSON.stringify(box.controlsRow));
         report[vp.name] = { lobby, stage, box, errors: a.errors };
 
-        // The stats sheet and one menu, because both are overlays.
+        // The stats sheet and one menu, because both are overlays. Both live
+        // on the sheet, so it is brought back first.
+        await reveal(a.page);
         await a.page.click('#stats-btn');
         await until(a.page, () => !document.getElementById('stats-panel').hidden, null, 8000, 'stats open').catch(() => {});
         await sleep(400);
@@ -207,6 +249,7 @@ async function openPage(browser, viewport, room) {
         check(tag + 'stats nothing out of the screen', stats.spill.length === 0, stats.spill.join(' | '));
         await a.page.click('#stats-close').catch(() => {});
 
+        await reveal(a.page);
         await a.page.click('#menu-settings-btn').catch(() => {});
         await sleep(300);
         const menu = await a.page.evaluate(() => {
