@@ -3296,7 +3296,7 @@ function clearStatsPanel() {
   if (body) body.replaceChildren();
 }
 
-// bitrate turns two samples of one byte counter into kbps. The first sample
+// bitrate turns two samples of one byte counter into kilobits per second. The first sample
 // of a counter yields 0, which is honest: nothing was measured yet.
 function bitrate(last, report, field) {
   const bytes = report[field] || 0;
@@ -3421,25 +3421,26 @@ async function peerStats(peer) {
   return out;
 }
 
-// rateText renders a bitrate in the unit that keeps the number short. A rate
-// of zero returns an empty string, so a line with nothing to say is not drawn.
+// rateText renders a bitrate as the number and the first letter of its unit,
+// because the column beside it already says what the number is. A rate of
+// zero returns an empty string, so a cell with nothing to say stays empty.
 function rateText(kbit) {
   if (!(kbit > 0)) return '';
-  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + ' Mbps';
-  return Math.round(kbit) + ' kbps';
+  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + 'm';
+  return Math.round(kbit) + 'k';
 }
 
-// msText renders one round trip time in milliseconds.
+// msText renders one round trip time in milliseconds, as "12m".
 function msText(ms) {
-  return Math.round(ms) + ' ms';
+  return Math.round(ms) + 'm';
 }
 
 // jitterText renders one jitter in milliseconds. The numbers are small and a
-// few milliseconds decide whether a voice sounds clear, so under 10 ms keeps
-// one decimal.
+// few milliseconds decide whether a voice sounds clear, so under 10 keeps one
+// decimal.
 function jitterText(ms) {
   if (typeof ms !== 'number') return '';
-  return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + ' ms';
+  return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + 'm';
 }
 
 // lossText renders a packet loss share. Under a twentieth of a percent is not
@@ -3767,11 +3768,11 @@ function drawStatsGraphs() {
   const secs = `${hist.length} s`;
 
   // Downlink: the area says "steady" or "collapsing" at a glance. The floor of
-  // 100 kbps keeps a quiet call on the floor of the box, not off it.
+  // 100 kbit/s keeps a quiet call on the floor of the box, not off it.
   const down = series('down');
   statsPlot($('stats-graph-down'), down, peak(down, 100), true, navy);
   const downMax = Math.max(0, ...values(down));
-  statsNote('stats-note-down', `down ${rateText(now(down)) || '0 kbps'}, up to ${rateText(downMax) || '0 kbps'} in ${secs}`);
+  statsNote('stats-note-down', `down ${rateText(now(down)) || '0k'}, up to ${rateText(downMax) || '0k'} in ${secs}`);
 
   // Round trip: a line, broken where a sample has no value, so a gap is a gap.
   const rtt = series('rtt');

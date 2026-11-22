@@ -367,7 +367,7 @@ async function stats(page) {
       tel.text.includes('bob') && /\d+ ms/.test(tel.text)
       && tel.icons.some((t) => /^(direct|relay)/.test(t)), JSON.stringify(tel.icons));
     check('stats show the outbound and inbound bitrate with a drawing for each kind',
-      /[1-9][\d.]* (kbps|Mbps)/.test(tel.text)
+      /[1-9][\d.]*[km]\b/.test(tel.text)
       && tel.icons.some((t) => /^out/.test(t)) && tel.icons.some((t) => /^in,/.test(t))
       && tel.icons.includes('video') && tel.icons.includes('audio'), JSON.stringify(tel.icons));
     check('stats show the own picture size and the microphone state',
