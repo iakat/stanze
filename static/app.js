@@ -210,7 +210,7 @@ const LOOKS = {
   vivid: 'saturate(1.4) contrast(1.08)',
 };
 /** @type {string[]} */
-const MASKS = ['none', 'glasses', 'moustache', 'cat'];
+const MASKS = ['none', 'glasses', 'moustache', 'cat', 'miku'];
 // The long side of the canvas. A camera step above this is scaled down before
 // the look runs, so a filter never costs more pixels than it has to.
 const LOOK_MAX = 1280;
@@ -2748,8 +2748,7 @@ function drawMask(ctx, W, H, which, a) {
     ctx.bezierCurveTo(cx + fw * 0.24, my - fh * 0.05, cx + fw * 0.1, my - fh * 0.09, cx, my - fh * 0.03);
     ctx.closePath();
     ctx.fill();
-  } else if (which === 'cat') {
-    const top = cy - fh * 0.52;
+  } else if (which === 'cat') {    const top = cy - fh * 0.52;
     ctx.strokeStyle = '#20242c';
     ctx.lineWidth = Math.max(1.5, fw * 0.012);
     for (const side of [-1, 1]) {
@@ -2769,6 +2768,26 @@ function drawMask(ctx, W, H, which, a) {
       ctx.lineTo(ex + fw * 0.07, top + fh * 0.16);
       ctx.closePath();
       ctx.fill();
+    }
+  } else if (which === 'miku') {
+    // Teal hair over the top of the head, a long twin tail on each side and a
+    // red tie at the base of each tail.
+    const hair = '#39c5bb';
+    ctx.fillStyle = hair;
+    roundPath(ctx, cx - fw * 0.52, cy - fh * 0.66, fw * 1.04, fh * 0.34, fh * 0.15);
+    ctx.fill();
+    for (const side of [-1, 1]) {
+      const baseX = cx + side * fw * 0.34;
+      const baseY = cy - fh * 0.3;
+      ctx.fillStyle = hair;
+      ctx.beginPath();
+      ctx.moveTo(baseX - side * fw * 0.06, baseY);
+      ctx.bezierCurveTo(cx + side * fw * 0.74, cy - fh * 0.16, cx + side * fw * 0.82, cy + fh * 0.5, cx + side * fw * 0.62, cy + fh * 1.02);
+      ctx.bezierCurveTo(cx + side * fw * 0.5, cy + fh * 0.52, baseX - side * fw * 0.02, cy + fh * 0.12, baseX + side * fw * 0.12, baseY + fh * 0.04);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#e8455c';
+      ctx.fillRect(baseX - fw * 0.07, baseY - fh * 0.02, fw * 0.14, fh * 0.09);
     }
   }
   ctx.restore();
