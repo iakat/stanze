@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122r">
+<link rel="stylesheet" href="/style.css?v=20261122s">
 </head>
 <body>
 
@@ -84,6 +84,22 @@
     </span>
   </div>
 
+  <div class="menubar" id="menubar">
+    <div class="menubar-slot">
+      <button id="menu-settings-btn" class="menubar-item" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-settings">settings</button>
+      <div id="menu-settings" class="menubar-menu" role="menu" aria-labelledby="menu-settings-btn" hidden>
+        <label class="menu-item"><input id="mirror" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">mirror me</span></label>
+        <label class="menu-item"><input id="pip" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">own view small</span></label>
+        <label class="menu-item"><input id="voice-tiles" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">show voice-only tiles</span></label>
+        <div class="menu-sep" role="separator"></div>
+        <label class="menu-item"><input id="noise-live" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">noise cancel</span></label>
+        <label class="menu-item"><input id="sounds" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">sounds</span></label>
+        <div class="menu-sep" role="separator"></div>
+        <label class="menu-item admin-only" id="waiting-room-pick"><input id="waiting-room" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">waiting room</span></label>
+      </div>
+    </div>
+  </div>
+
   <div class="stage-body">
     <div class="statusline">
       <div class="controls">
@@ -111,13 +127,7 @@
           <input id="perf-live" type="range" min="0" max="3" step="1" value="0" aria-label="performance: picture quality against bandwidth and compute">
           <span id="perf-live-text" class="perf-name"></span>
         </label>
-        <label class="pick check"><input id="sounds" type="checkbox" checked> sounds</label>
-        <label class="pick check admin-only" id="waiting-room-pick"><input id="waiting-room" type="checkbox"> waiting room</label>
         <span class="pick" id="asr-pick" hidden><select id="asr-lang" aria-label="transcription language" hidden></select><button id="asr-btn" type="button" aria-pressed="false">transcribe</button></span>
-        <label class="pick check"><input id="mirror" type="checkbox" checked> mirror me</label>
-        <label class="pick check"><input id="pip" type="checkbox"> own view small</label>
-        <label class="pick check"><input id="voice-tiles" type="checkbox"> show voice-only tiles</label>
-        <label class="pick check"><input id="noise-live" type="checkbox" checked> noise cancel</label>
         <button id="leave-btn" type="button" class="ctrl danger"><img class="ico" src="/openmoji/1F6AA.svg" alt="" width="22" height="22"><span>leave</span></button>
       </div>
     </div>
@@ -170,6 +180,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122r"></script>
+<script src="/app.js?v=20261122s"></script>
 </body>
 </html>

@@ -140,6 +140,7 @@ const state = {
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   quality: HTMLSelectElement, mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'voice-tiles': HTMLInputElement,
+ *   menubar: HTMLElement, 'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
  *   'cam-live': HTMLSelectElement, 'mic-live': HTMLSelectElement,
@@ -238,6 +239,73 @@ function setAdmins(list) {
 function joinWords(list) {
   if (list.length <= 1) return list[0] || '';
   return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+}
+
+// ---------------------------------------------------------------- menu bar
+
+// settingsMenu opens or closes the one drop-down of the menu bar. The panel
+// keeps its own DOM, so a switch keeps its listener and its tick when the
+// panel closes. Opening puts the focus on the first row, the way a Windows
+// menu does, and Esc gives it back to the entry.
+function settingsMenu(open) {
+  const list = $('menu-settings');
+  const btn = $('menu-settings-btn');
+  if (!list || !btn) return;
+  const was = !list.hidden;
+  list.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open && !was) {
+    const first = /** @type {HTMLElement | null} */ (list.querySelector('input[type="checkbox"]'));
+    if (first) first.focus();
+  }
+}
+
+// settingsMenuClose closes the panel when it is open, and says whether it was,
+// so the global Esc handler can leave the rest of the page alone.
+function settingsMenuClose() {
+  const list = $('menu-settings');
+  if (!list || list.hidden) return false;
+  settingsMenu(false);
+  return true;
+}
+
+// wireMenuBar gives the bar its behaviour: a click on the entry opens the
+// panel, a click in it keeps it open so several switches can be set at once,
+// a click anywhere else or Esc closes it, and the arrow keys walk the rows.
+function wireMenuBar() {
+  const btn = $('menu-settings-btn');
+  const list = $('menu-settings');
+  if (!btn || !list) return;
+  btn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    settingsMenu(list.hidden);
+  });
+  list.addEventListener('click', (event) => event.stopPropagation());
+  document.addEventListener('click', (event) => {
+    const target = /** @type {Element} */ (event.target);
+    if (target.closest('#menubar')) return;
+    settingsMenu(false);
+  });
+  list.addEventListener('keydown', (event) => {
+    const rows = Array.from(list.querySelectorAll('input[type="checkbox"]'));
+    const at = rows.indexOf(/** @type {HTMLInputElement} */ (document.activeElement));
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      settingsMenu(false);
+      btn.focus();
+      return;
+    }
+    if (event.key === 'Tab') {
+      settingsMenu(false);
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    const next = /** @type {HTMLElement | undefined} */ (rows[(at + step + rows.length) % rows.length]);
+    if (next) next.focus();
+  });
 }
 
 function suggestRoom() {
@@ -2757,6 +2825,7 @@ function leave(message) {
   $('stage-rail').replaceChildren();
   $('stage-rail').hidden = false;
   stopCallClock();
+  settingsMenu(false);
   $('stage').hidden = true;
   $('lobby').hidden = false;
   $('room-label').textContent = '';
@@ -7006,6 +7075,7 @@ function init() {
     });
   }
 
+  wireMenuBar();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
 
@@ -7062,6 +7132,7 @@ function init() {
   document.addEventListener('click', closeMenus);
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    if (settingsMenuClose()) return;
     closeMenus();
     if (state.spotlight) setSpotlight('');
   });
