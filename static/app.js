@@ -376,8 +376,7 @@ function makeRow(id, name, local = false) {
     <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
     <span class="vol-num">100%</span>
     <button class="admit" type="button" title="let this guest into the room">let in</button>
-    <button class="dots" type="button" aria-label="member actions">&#8943;</button>
-    <div class="menu" hidden></div>`}`;
+    <button class="dots" type="button" aria-label="member actions">&#8943;</button>`}`;
   paintRowName(row, name, local);
   if (!local) {
     wireDots(row);
@@ -621,13 +620,30 @@ function applyFlags(tile, mic, cam, admin) {
 
 // ---------------------------------------------------------------- host control
 
+// hostMenu returns the menu element of one member, a tile or a rail row. A
+// tile holds its own menu, because nothing scrolls around it. The rail does
+// scroll and is short, so a row hands the work to one popup on the page: the
+// entries would be cut off inside the list. One popup serves every row.
+let rowMenuEl = null;
+function hostMenu(host) {
+  if (!host) return null;
+  if (!host.classList.contains('plist-row')) return host.querySelector('.menu');
+  if (!rowMenuEl) {
+    rowMenuEl = document.createElement('div');
+    rowMenuEl.className = 'menu row-menu';
+    rowMenuEl.hidden = true;
+    document.body.appendChild(rowMenuEl);
+  }
+  return rowMenuEl;
+}
+
 // wireDots opens the small menu of one remote member. Every guest sees it; the
 // host commands appear only for the admin, and the server checks the role
 // again on every command. It takes the tile or the row of that member, because
 // both carry the peer id.
 function wireDots(host) {
   const dots = host.querySelector('.dots');
-  const menu = host.querySelector('.menu');
+  const menu = hostMenu(host);
   if (!dots || !menu) return;
   dots.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -640,6 +656,7 @@ function wireDots(host) {
       return;
     }
     menu.replaceChildren();
+    menu.dataset.peer = host.dataset.peer || '';
     const peer = state.peers.get(host.dataset.peer);
     const add = (label, run) => {
       const b = document.createElement('button');
@@ -671,6 +688,19 @@ function wireDots(host) {
       card.className = 'sas';
       card.append(...sealedCodePanel(peer));
       menu.appendChild(card);
+    }
+    if (menu.classList.contains('row-menu')) {
+      // The popup sits under the three dots of its row, and above them when
+      // there is no room below, so every entry stays on the screen.
+      const r = dots.getBoundingClientRect();
+      const width = Math.min(300, window.innerWidth - 16);
+      menu.style.left = Math.round(Math.max(4, Math.min(r.left, window.innerWidth - width - 4))) + 'px';
+      const below = r.bottom + 2;
+      const height = menu.offsetHeight;
+      const top = below + height > window.innerHeight - 4
+        ? Math.max(4, window.innerHeight - 4 - height)
+        : below;
+      menu.style.top = Math.round(top) + 'px';
     }
     menu.hidden = false;
   });
@@ -6259,8 +6289,9 @@ function sealedSetE2E(peer, status) {
 // when its menu is open. A closed menu reads the code when it opens; an open
 // one needs a redraw, because the code of a pair can arrive after it opened.
 function refreshCodeCard(host, peer) {
-  const menu = host ? host.querySelector('.menu') : null;
+  const menu = hostMenu(host);
   if (!menu || menu.hidden) return;
+  if (menu.classList.contains('row-menu') && menu.dataset.peer !== (host.dataset.peer || '')) return;
   let card = menu.querySelector('.sas');
   if (!peer.sas) {
     if (card) card.remove();

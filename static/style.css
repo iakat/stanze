@@ -864,7 +864,8 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 .tile[data-peer] .dots {
   display: block;
 }
-.tile .menu {
+.tile .menu,
+.row-menu {
   position: absolute;
   top: 28px;
   right: 4px;
@@ -878,7 +879,19 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   border-color: var(--panel-hi) #000 #000 var(--panel-hi);
   padding: 2px;
 }
-.tile .menu button {
+/* The member menu of a rail row is one popup on the page, placed under the
+   three dots of that row: the list scrolls and is short, so a menu inside a
+   row would be cut off. */
+.row-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 60;
+  max-height: min(70vh, calc(100vh - 8px));
+  overflow-y: auto;
+}
+.tile .menu button,
+.row-menu button {
   min-width: 150px;
   text-align: left;
   font-size: var(--fs-smaller);
@@ -887,7 +900,8 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   background: transparent;
   padding: 3px 7px;
 }
-.tile .menu button:hover { background: var(--navy); color: #fff; }
+.tile .menu button:hover,
+.row-menu button:hover { background: var(--navy); color: #fff; }
 
 /* One member of the room is one row of the list. The row is one line: the
    microphone lamp, the name, the volume slider, the link lamp and, for the
@@ -968,40 +982,15 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   padding: 0 2px;
 }
 .plist-row[data-peer] .dots { display: block; }
-/* The menu opens inside the row. The row wraps while it is open and the list
-   scrolls, so nothing outside the list moves. */
-.plist-row:has(.menu:not([hidden])) { flex-wrap: wrap; }
-.plist-row .menu {
-  position: static;
-  flex: 1 0 100%;
-  order: 9;
-  margin: 2px 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel);
-  border: 2px solid;
-  border-color: var(--panel-hi) #000 #000 var(--panel-hi);
-  padding: 2px;
-}
-.plist-row .menu button {
-  min-width: 140px;
-  text-align: left;
-  font-size: var(--fs-smaller);
-  border-width: 0;
-  box-shadow: none;
-  background: transparent;
-  padding: 3px 7px;
-}
-.plist-row .menu button:hover { background: var(--navy); color: #fff; }
 /* A member that talks lights up like its tile does, so a guest without a
    picture still shows that it talks. */
 .plist-row.speaking { border-color: #007000; }
 .plist-row.speaking::before { background: #00b000; }
-/* The sealed code card sits inside the member menu of a row too, and the menu
-   carries the column, so the row only wraps around the open menu. */
-.plist-row .menu .sas { width: 100%; }
-.plist-row .sas-emoji { width: 22px; height: 22px; }
-.plist-row .sas .id-fp { white-space: normal; word-break: break-all; }
+/* The sealed code card sits inside the member menu of a rail row too, and the
+   popup is narrow, so the code wraps there. */
+.row-menu .sas { width: 100%; }
+.row-menu .sas-emoji { width: 22px; height: 22px; }
+.row-menu .sas .id-fp { white-space: normal; word-break: break-all; }
 
 /* The spotlight ring holds on the grey panel and on a black picture: a navy
    border for the panel, a white inner line for the frame behind it. */
