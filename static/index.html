@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122u">
+<link rel="stylesheet" href="/style.css?v=20261122v">
 </head>
 <body>
 
@@ -22,54 +22,62 @@
     <p class="hint">Peer to peer audio and video, sealed in the browser. Nothing is stored and nothing is recorded.</p>
 
     <form id="join-form" autocomplete="off">
-      <label>your name
-        <input id="name" maxlength="32" placeholder="name" spellcheck="false">
-      </label>
-      <label>room
-        <span class="with-button">
-          <input id="room" maxlength="64" placeholder="new room" spellcheck="false" autocapitalize="off">
-          <button id="newid-btn" type="button" title="suggest another random room id">new id</button>
-        </span>
-      </label>
-      <p class="note">Any name works. The suggested id is random and hard to guess; a name you type is easy to guess.</p>
-      <label>passphrase
-        <input id="pass" type="password" maxlength="128" placeholder="only if the room has one">
-      </label>
-      <label>media path
-        <select id="path">
-          <option value="auto">automatic: direct, relay if needed</option>
-          <option value="p2p">direct only: no relay</option>
-          <option value="relay">relay only: hides your address</option>
-        </select>
-      </label>
-      <p id="sealed-note" class="note" hidden></p>
-      <p class="note">Every room is sealed end to end in the browser: your name, the chat and the
-        media stay there, with X25519 + ML-KEM-768 and AES-256-GCM. The server only forwards
-        sealed blobs. Compare the emoji code with the other people to rule out a swapped key.</p>
-      <label class="check"><input id="noise" type="checkbox" checked> noise cancel</label>
-      <label>camera
-        <select id="cam-select">
-          <option value="">system camera</option>
-        </select>
-      </label>
-      <label>microphone
-        <select id="mic-select">
-          <option value="">system microphone</option>
-        </select>
-      </label>
-      <label>performance
-        <input id="perf" type="range" min="0" max="3" step="1" value="0" aria-describedby="perf-text">
-      </label>
-      <p id="perf-text" class="note"></p>
-      <p class="note">Choose the camera and the microphone before the join. The names appear after
-        the browser has asked once, and the choice is remembered.</p>
-      <div class="row">
-        <button id="enter-btn" type="submit">enter</button>
-      </div>
-    </form>
+      <div class="join-cols">
+        <fieldset class="group">
+          <legend>room</legend>
+          <label class="field"><span>name</span>
+            <input id="name" maxlength="32" placeholder="any name" spellcheck="false">
+          </label>
+          <label class="field"><span>room</span>
+            <span class="with-button">
+              <input id="room" maxlength="64" placeholder="new room" spellcheck="false" autocapitalize="off">
+              <button id="newid-btn" type="button" title="suggest another random room id">new</button>
+            </span>
+          </label>
+          <label class="field"><span>passphrase</span>
+            <input id="pass" type="password" maxlength="128" placeholder="if the room has one">
+          </label>
+          <label class="check"><input id="noise" type="checkbox" checked> noise cancel</label>
+        </fieldset>
 
-    <p id="lobby-error" class="error" hidden></p>
-    <p class="foot"><a href="/QUEUE.md">queue</a> | <a href="/DONE.md">done</a> | emoji drawings: OpenMoji, CC BY-SA 4.0</p>
+        <fieldset class="group">
+          <legend>devices</legend>
+          <label class="field"><span>camera</span>
+            <select id="cam-select">
+              <option value="">system camera</option>
+            </select>
+          </label>
+          <label class="field"><span>microphone</span>
+            <select id="mic-select">
+              <option value="">system microphone</option>
+            </select>
+          </label>
+          <label class="field"><span>path</span>
+            <select id="path">
+              <option value="auto">automatic</option>
+              <option value="p2p">direct</option>
+              <option value="relay">relay</option>
+            </select>
+          </label>
+          <label class="field"><span>quality</span>
+            <input id="perf" type="range" min="0" max="3" step="1" value="0" aria-describedby="perf-text">
+          </label>
+          <p id="perf-text" class="note"></p>
+        </fieldset>
+      </div>
+
+      <p id="sealed-note" class="note" hidden></p>
+      <p class="note">Every room is sealed end to end in the browser, with X25519 + ML-KEM-768 and AES-256-GCM;
+        the server only forwards sealed blobs, so compare the emoji code with the other people. The path sets the
+        link: automatic takes the relay when it helps, direct never does, relay hides your address. Any name works;
+        a suggested id is hard to guess, a name you type is not.</p>
+
+      <div class="join-foot">
+        <button id="enter-btn" type="submit">enter</button>
+        <span class="foot"><a href="/QUEUE.md">queue</a> | <a href="/DONE.md">done</a> | emoji: OpenMoji, CC BY-SA 4.0</span>
+      </div>
+      <p id="lobby-error" class="error" hidden></p>
+    </form>
   </div>
 </main>
 
@@ -180,6 +188,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122u"></script>
+<script src="/app.js?v=20261122v"></script>
 </body>
 </html>
