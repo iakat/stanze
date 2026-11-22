@@ -394,7 +394,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   align-content: center;
 }
 .stage-rail {
-  flex: 0 0 clamp(20%, 26%, 30%);
+  flex: 0 0 clamp(16%, 20%, 26%);
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -415,12 +415,17 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   grid-template-rows: minmax(0, 1fr);
   align-content: stretch;
 }
-.stage-main .tile { align-self: center; }
+/* A tile in the large area takes the whole cell of the grid, and the picture is
+   fitted inside it, so the space of the frame is the space of the picture. A
+   fixed 16:9 box with a centred tile threw the height away on a tall window. */
+.stage-main .tile,
 .stage-main[data-alone="yes"] .tile {
   aspect-ratio: auto;
   min-height: 0;
   align-self: stretch;
 }
+.stage-main .tile video { object-fit: contain; }
+.stage-main[data-alone="yes"] .tile video { object-fit: cover; }
 
 /* Three rings can hold on one tile at once: the talking light, the spotlight
  * and the key state. Each one is a variable and the tile paints all three, in
@@ -737,7 +742,7 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .stage-rail .tile {
   flex: none;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 3px;
   aspect-ratio: auto;
@@ -765,6 +770,10 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   flex: 1 0 100%;
   display: none;
 }
+.stage-rail .tile:hover,
+.stage-rail .tile:focus-within,
+.stage-rail .tile:focus-visible,
+.stage-rail .tile.ctl { flex-wrap: wrap; }
 .stage-rail .tile:hover .vol,
 .stage-rail .tile:focus-within .vol,
 .stage-rail .tile:focus-visible .vol,
@@ -800,7 +809,9 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.stage-rail .tile .flags { flex: none; gap: 2px; }
+/* A rail row has no width for the word of the sealing state: the ring of the
+   tile already draws it, so the words stay on the tile in the large area. */
+.stage-rail .tile .flags { display: none; }
 .stage-rail .tile .flags span,
 .stage-rail .tile .state { padding: 0 2px; }
 /* A row has no width for the words of the link state, so the link is a second
