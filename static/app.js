@@ -2587,10 +2587,47 @@ function lookTrack() {
   return state.lookOut && state.lookOut.readyState === 'live' ? state.lookOut : null;
 }
 
+// The drawn track is painted by a clock, not by the display alone. A tab that
+// is not in front is handed no animation frames at all, so an animation frame
+// loop stops dead and the peers keep the last picture for ever. A worker timer
+// runs outside the page's timer budget, so it keeps asking for frames while the
+// tab is behind another one.
+const DRAW_CLOCK_SRC = 'let id = null;\n' +
+  'onmessage = (event) => {\n' +
+  '  if (event.data === "stop") { if (id !== null) clearInterval(id); id = null; return; }\n' +
+  '  if (id !== null) return;\n' +
+  '  id = setInterval(() => postMessage(1), 33);\n' +
+  '};';
+
+// drawClock gives the pipeline its worker, built once per pipeline.
+function drawClock(p) {
+  if (p.clock) return p.clock;
+  const url = URL.createObjectURL(new Blob([DRAW_CLOCK_SRC], { type: 'text/javascript' }));
+  const worker = new Worker(url);
+  p.clockUrl = url;
+  worker.onmessage = () => {
+    // The script has run at least once, so its URL can go.
+    if (p.clockUrl) {
+      URL.revokeObjectURL(p.clockUrl);
+      p.clockUrl = '';
+    }
+    if (state.lookPipe !== p || !document.hidden) return;
+    lookDraw(p);
+  };
+  p.clock = worker;
+  return worker;
+}
+
+// drawClockOn starts or stops the worker ticks. The animation frame loop stays
+// as it is: the display resumes it by itself when the tab comes back.
+function drawClockOn(p, on) {
+  drawClock(p).postMessage(on ? 'go' : 'stop');
+}
+
 // lookStart builds the pipeline once: the camera feeds a video element, every
-// animation frame is drawn on a canvas with the colour step and the mask, and
-// the canvas track becomes what peers receive. Nothing is uploaded. A shared
-// screen has its own sender, so a look never touches it.
+// frame is drawn on a canvas with the colour step and the mask, and the canvas
+// track becomes what peers receive. Nothing is uploaded. A shared screen has its
+// own sender, so a look never touches it.
 async function lookStart() {
   if (!lookOn() || !state.camTrack) return;
   if (state.lookPipe) return;
@@ -2599,6 +2636,10 @@ async function lookStart() {
   video.muted = true;
   video.playsInline = true;
   video.srcObject = new MediaStream([src]);
+  // A video element that the page never shows can be treated as unrendered and
+  // left undecoded, so it lives off screen instead of outside the document.
+  video.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+  document.body.appendChild(video);
   try { await video.play(); } catch { /* the first frame comes later */ }
   const settings = src.getSettings ? src.getSettings() : {};
   const scale = Math.min(1, LOOK_MAX / Math.max(settings.width || 1280, settings.height || 720));
@@ -2617,20 +2658,31 @@ async function lookStart() {
   sample.width = 64;
   sample.height = 48;
   const sctx = sample.getContext('2d', { alpha: false, willReadFrequently: true });
-  state.lookPipe = { src, video, canvas, ctx, sample, sctx, stream, track, raf: 0, anchor: null, frame: 0 };
+  const pipe = { src, video, canvas, ctx, sample, sctx, stream, track, raf: 0, clock: null, clockUrl: '', follow: null, anchor: null, frame: 0 };
+  state.lookPipe = pipe;
   // The canvas track is captured at 30 fps, so a 60 or 120 Hz display needs no
   // more than every second or fourth frame drawn; the rest only burn the filter.
   let last = 0;
   const tick = (now) => {
-    const p = state.lookPipe;
-    if (!p) return;
+    if (state.lookPipe !== pipe) return;
     if (!(now - last < 30)) {
       last = now;
-      lookDraw(p);
+      lookDraw(pipe);
     }
-    p.raf = requestAnimationFrame(tick);
+    pipe.raf = requestAnimationFrame(tick);
   };
-  state.lookPipe.raf = requestAnimationFrame(tick);
+  pipe.raf = requestAnimationFrame(tick);
+  // The tab can be behind another one from the start, and it moves both ways.
+  pipe.follow = () => {
+    if (state.lookPipe !== pipe) return;
+    drawClockOn(pipe, document.hidden);
+    // A hidden tab can leave the source element paused, and the worker clock
+    // draws from it, so it is asked to play on the way in and on the way out.
+    const playing = video.play();
+    if (playing && playing.catch) playing.catch(() => {});
+  };
+  document.addEventListener('visibilitychange', pipe.follow);
+  pipe.follow();
   state.lookOut = track;
   await lookPublish(track);
 }
@@ -2789,8 +2841,19 @@ function lookStop(restore = true) {
   state.lookOut = null;
   if (p) {
     cancelAnimationFrame(p.raf);
+    if (p.follow) document.removeEventListener('visibilitychange', p.follow);
+    if (p.clock) {
+      p.clock.postMessage('stop');
+      p.clock.terminate();
+      p.clock = null;
+    }
+    if (p.clockUrl) {
+      URL.revokeObjectURL(p.clockUrl);
+      p.clockUrl = '';
+    }
     try { p.video.pause(); } catch { /* already paused */ }
     p.video.srcObject = null;
+    if (p.video.parentNode) p.video.parentNode.removeChild(p.video);
     for (const t of p.stream.getTracks()) {
       try { t.stop(); } catch { /* already stopped */ }
     }
