@@ -5937,6 +5937,11 @@ const omni = {
   recs: new Map(), // peer id -> { proc, src, sink }
 };
 
+// asrStats is what the engine last said about itself: the start, and the tail of
+// the phrases it decoded with the time each one took. A browser test reads it
+// through window.e2eApp; the page itself never does.
+const asrStats = { engine: '', ready: false, initMs: null, segments: [] };
+
 const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB`;
 
 function asrNote(text) {
@@ -6492,15 +6497,25 @@ function omniOnWorker(msg) {
       if (!omni.busy) return;
       omni.busy = false;
       omni.on = true;
+      asrStats.engine = 'omni';
+      asrStats.ready = true;
+      asrStats.initMs = Number(msg.ms) || null;
       paintAsr();
       asrNote('You transcribe this meeting. The text goes to the chat under your name, and your own voice is not transcribed.');
       asrSay({ s: 'on' });
       omniSync();
       omni.timer = setInterval(omniSync, 2000);
       return;
-    case 'line':
+    case 'line': {
+      const ms = Number(msg.ms);
+      const sec = Number(msg.sec);
+      if (Number.isFinite(ms) && ms > 0 && sec > 0) {
+        asrStats.segments.push({ ms, audioSec: sec });
+        if (asrStats.segments.length > 8) asrStats.segments.shift();
+      }
       omniLine(String(msg.id || ''), String(msg.text || ''));
       return;
+    }
     case 'error':
       omniFail(String(msg.text || 'the engine stopped'));
       return;
@@ -6535,6 +6550,8 @@ function omniStop() {
   const was = omni.on;
   omni.on = false;
   omni.busy = false;
+  asrStats.engine = '';
+  asrStats.ready = false;
   clearInterval(omni.timer);
   omni.timer = 0;
   for (const id of [...omni.recs.keys()]) omniUntap(id);
@@ -6798,6 +6815,7 @@ function omniWorker(cfg) {
   }
 
   async function start() {
+    const t0 = performance.now();
     post({ ev: 'status', text: 'starting the engine' });
     await waitRuntime();
     post({ ev: 'status', text: 'loading the model' });
@@ -6828,7 +6846,7 @@ function omniWorker(cfg) {
     // @ts-ignore
     rec = new OfflineRecognizer(config, G.Module);
     if (!rec || !rec.handle) throw new Error('the recognizer did not start');
-    post({ ev: 'ready' });
+    post({ ev: 'ready', ms: Math.round(performance.now() - t0) });
     pump();
   }
 
@@ -6908,6 +6926,7 @@ function omniWorker(cfg) {
     if (decoding || !rec || queue.length === 0) return;
     const job = queue.shift();
     decoding = true;
+    const t0 = performance.now();
     let text = '';
     try {
       const stream = rec.createStream();
@@ -6922,7 +6941,7 @@ function omniWorker(cfg) {
       return;
     }
     decoding = false;
-    if (text) post({ ev: 'line', id: job.id, text });
+    if (text) post({ ev: 'line', id: job.id, text, ms: Math.round(performance.now() - t0), sec: job.samples.length / RATE });
     // One phrase per turn of the event loop, so queued audio is read first.
     setTimeout(pump, 0);
   }
@@ -8337,6 +8356,14 @@ async function runLab() {
 win().e2eApp = {
   get state() {
     return state;
+  },
+  get asrStats() {
+    return {
+      engine: asrStats.engine,
+      ready: asrStats.ready,
+      initMs: asrStats.initMs,
+      segments: asrStats.segments.slice(),
+    };
   },
   peers: () => [...state.peers.values()].map((p) => ({
     id: p.id,
