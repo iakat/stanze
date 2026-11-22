@@ -197,11 +197,6 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	for _, name := range routeNames() {
 		mux.Handle("/"+name, serve(name))
 	}
-	// The second front of the same client: one page at /jit, and one at any
-	// room in the path, like a meeting link of its own. The room still travels
-	// in the fragment, so the server never reads a name.
-	mux.HandleFunc("/jit", serve("jit.html"))
-	mux.HandleFunc("/jit/", serve("jit.html"))
 	// The drawings of the short code are one folder of small files. The map
 	// holds only the listed names, so any other path still gets a 404.
 	mux.HandleFunc("/openmoji/", func(w http.ResponseWriter, r *http.Request) {
@@ -351,9 +346,6 @@ func loadOpenmoji(dir string, out map[string][]byte) error {
 func assetNames() []string {
 	return []string{
 		"index.html", "app.js", "style.css", "favicon.svg",
-		// The second front: the same client under a jitsi-shaped skin, served
-		// at /jit and at /jit/<room>.
-		"jit.html", "jit.css", "jit.js", "jit-boot.js",
 		// The house typeface: Arial metrics, shipped with the page so every
 		// browser puts the same letters on the same pixels.
 		"lsans.woff2", "lsans-bold.woff2",

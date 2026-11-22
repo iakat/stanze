@@ -213,13 +213,8 @@ well.
   never exists, so nothing waits and nothing expires. Nothing is ever written to
   disk.
 - There is no route that lists, counts or describes rooms. The only endpoints
-  are `GET /`, `GET /jit` and `GET /jit/<room>`, the client files, `GET /ws`,
-  `GET /QUEUE.md` and `GET /DONE.md`. Anything else returns `404`.
-- `/jit` is the same client under a second skin that looks and sounds like
-  Jitsi Meet. The room still travels in the fragment, and the server reads no
-  name out of the path; `/jit/<room>` only rewrites the address to `#r=<room>`
-  in the browser before the client boots. Nothing about the room, the media or
-  the signaling changes.
+  are `GET /`, the client files, `GET /ws`, `GET /QUEUE.md` and `GET /DONE.md`.
+  Anything else returns `404`.
 - A join to a missing room, with a wrong passphrase, or into a full room is
   answered with the same `{"t":"error","code":"unavailable"}` and the
   connection is closed. The passphrase check runs PBKDF2 against a dummy salt
