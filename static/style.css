@@ -1575,13 +1575,37 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   }
 }
 
-/* A phone held sideways, or any short window: the side column goes back to the
-   right of the pictures, or they lose all their height to the chat. */
-@media (max-height: 520px) and (min-width: 620px) {
-  .room-row { flex-direction: row; }
-  .side { flex: 0 0 250px; }
-  .stage-rail { height: 64px; }
-  .chat { flex: 1 1 auto; min-height: 0; }
+/* A short window: the bar, the menus and the toolbar take half of a phone
+   held sideways, and the pictures were left with 14 px of height. The side
+   column now goes back to the right of the pictures at every short height,
+   the list of names is short enough for one row, and the performance slider
+   shares the toolbar line: its word goes, its name and its handle stay, and
+   the pictures get the height back. */
+@media (max-height: 460px) and (hover: none) {
+  .statusline .controls {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) minmax(84px, 1.2fr);
+  }
+  .controls .ctrl, .controls #leave-btn { grid-row: 1; }
+  #leave-btn { grid-column: 6; }
+  /* The static word takes the room that the slider needs; the name of the
+     level stays, and the range keeps its own label for a reader. */
+  .controls .perf-pick {
+    grid-row: 1; grid-column: 7; min-height: 40px;
+    justify-content: flex-end; font-size: 0;
+  }
+  .controls .perf-pick input[type="range"] { width: 100%; height: 40px; }
+  .controls .perf-pick .perf-name { font-size: var(--fs-tiny); }
+  .room-row { flex-direction: row; gap: 4px; }
+  .grid { min-height: 0; }
+  .side { flex: 0 0 clamp(150px, 34%, 230px); }
+  .stage-rail { height: auto; max-height: 3.2em; }
+  .chat { height: auto; flex: 1 1 auto; min-height: 0; }
+  /* The note of the sealed chat wraps to two lines in a narrow column and
+     takes the room that the log and the form need. The title bar of the stage
+     already carries the sealed badge, so the note goes and the head stays one
+     line. */
+  .chat-head { white-space: nowrap; }
+  .chat-head #chat-note { display: none; }
 }
 
 /* ------------------------------------------------------------- identity pins */
