@@ -120,6 +120,19 @@ func (p *Peer) handState() (bool, int) {
 	return p.hand, p.handSeq
 }
 
+// lowerHand takes a raised hand down and reports whether there was one to
+// lower, with the flags the room has to be told. The check and the change share
+// one lock, so a raise that lands at the same moment is never swallowed.
+func (p *Peer) lowerHand() (bool, bool, bool, bool, bool, int, bool) {
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	changed := p.hand
+	if changed {
+		p.hand, p.handSeq = false, 0
+	}
+	return p.mic, p.cam, p.deaf, p.screen, p.hand, p.handSeq, changed
+}
+
 // write sends one text frame. It is the only place that calls WriteMessage.
 func (p *Peer) write(conn *websocket.Conn, msg []byte) error {
 	p.wmu.Lock()

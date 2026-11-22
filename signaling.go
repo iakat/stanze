@@ -121,6 +121,13 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// A kick closes the socket from another goroutine; a frame already
+		// read must not act on a peer that has left the room.
+		select {
+		case <-done:
+			return
+		default:
+		}
 		if !p.limit.allow() {
 			s.log.Debug("peer exceeded message rate")
 			return
@@ -225,11 +232,10 @@ func (s *server) handleMod(p *Peer, m clientMsg) {
 		if target == nil {
 			return
 		}
-		if on, _ := target.handState(); !on {
+		mic, cam, deaf, screen, hand, seq, changed := target.lowerHand()
+		if !changed {
 			return
 		}
-		hand, seq := target.setHand(false, nil)
-		mic, cam, deaf, screen := target.flags()
 		s.hub.broadcastTo(room, mustJSON(serverMsg{
 			T: "state", From: target.id, Mic: &mic, Cam: &cam, Deaf: &deaf, Screen: &screen,
 			Hand: &hand, HandSeq: seq,
