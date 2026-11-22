@@ -147,6 +147,7 @@ const state = {
  *   mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'voice-tiles': HTMLInputElement,
  *   menubar: HTMLElement, 'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
+ *   'menu-effects-btn': HTMLButtonElement, 'menu-effects': HTMLElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
  *   'menu-devices-btn': HTMLButtonElement, 'menu-devices': HTMLElement,
@@ -157,7 +158,7 @@ const state = {
  *   'perf-text': HTMLElement, 'perf-live-text': HTMLElement,
  *   'menu-asr-btn': HTMLButtonElement, 'asr-on': HTMLInputElement,
  *   'asr-lang': HTMLSelectElement, 'asr-note': HTMLElement,
- *   'look-filter': HTMLSelectElement, 'look-mask': HTMLSelectElement, 'look-note': HTMLElement,
+ *   'look-filter': HTMLSelectElement, 'look-mask': HTMLSelectElement,
  * }} Elements
  */
 
@@ -276,6 +277,7 @@ function joinWords(list) {
 // bar behaves.
 const MENUS = [
   ['menu-settings-btn', 'menu-settings'],
+  ['menu-effects-btn', 'menu-effects'],
   ['menu-asr-btn', 'menu-asr'],
   ['menu-devices-btn', 'menu-devices'],
 ];
