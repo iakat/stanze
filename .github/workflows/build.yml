@@ -16,7 +16,6 @@ permissions:
 
 env:
   CGO_ENABLED: "0"
-  GOFLAGS: -mod=mod
 
 jobs:
   binaries:
@@ -145,6 +144,7 @@ jobs:
       # x86-64-v4 is a separate tag, never the default: the binary faults on
       # anything below AVX-512, which is most machines that are not new servers.
       - uses: docker/metadata-action@v5
+        if: github.event_name != 'pull_request'
         id: meta-v4
         with:
           images: ${{ env.IMAGE }}
@@ -156,6 +156,7 @@ jobs:
             type=sha,format=short
 
       - name: build v4
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .

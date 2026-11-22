@@ -17,7 +17,7 @@ if [ -z "${GO:-}" ]; then
 	fi
 fi
 
-export GOFLAGS="${GOFLAGS:--mod=mod}"
+export GOFLAGS="${GOFLAGS:--mod=readonly}"
 export CGO_ENABLED=0
 [ -n "${GOPATH:-}" ] || export GOPATH="$(cd "$here/.." && pwd)/tools/gopath"
 [ -n "${GOMODCACHE:-}" ] || export GOMODCACHE="$GOPATH/pkg/mod"
@@ -29,6 +29,6 @@ export CGO_ENABLED=0
 "$GO" run ./cmd/pack
 
 mkdir -p bin
-"$GO" build -trimpath -ldflags "-s -w" -o bin/rooms .
-"$GO" build -trimpath -ldflags "-s -w" -o bin/selftest ./cmd/selftest
+"$GO" build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/rooms .
+"$GO" build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/selftest ./cmd/selftest
 ls -l bin

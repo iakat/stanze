@@ -12,10 +12,10 @@ ROOMSBASE ?= http://127.0.0.1:8095
 all: build selftest
 
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w" -o $(BIN)/rooms .
+	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/rooms .
 
 selftest:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w" -o $(BIN)/selftest ./cmd/selftest
+	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/selftest ./cmd/selftest
 
 # Dev server with the relay enabled on loopback.
 run: build
@@ -43,4 +43,4 @@ sealed:
 check: typecheck smoke
 
 clean:
-	rm -rf $(BIN)
+	rm -rf $(BIN) packed/static.tgz

@@ -13,7 +13,6 @@ ARG GOAMD64=v1
 # GOTOOLCHAIN=local keeps the pin above: no toolchain download mid build.
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS mods
 ENV CGO_ENABLED=0 \
-    GOFLAGS=-mod=mod \
     GOTOOLCHAIN=local \
     GOPATH=/go \
     GOMODCACHE=/go/pkg/mod \
@@ -28,7 +27,6 @@ RUN go mod download
 # so the same commit gives the same archive.
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS client
 ENV CGO_ENABLED=0 \
-    GOFLAGS=-mod=mod \
     GOTOOLCHAIN=local \
     GOPATH=/go \
     GOMODCACHE=/go/pkg/mod \
@@ -46,7 +44,6 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG GOAMD64
 ENV CGO_ENABLED=0 \
-    GOFLAGS=-mod=mod \
     GOTOOLCHAIN=local \
     GOPATH=/go \
     GOMODCACHE=/go/pkg/mod \
@@ -73,9 +70,9 @@ FROM --platform=$BUILDPLATFORM alpine:3.20 AS vosk
 ARG VOSK_MODEL_URL
 ARG VOSK_MODEL_SHA256
 ARG VOSK_MODEL_LANG
-RUN apk add --no-cache curl
 COPY tools/fetch-vosk.sh /fetch-vosk.sh
 RUN if [ -n "$VOSK_MODEL_URL" ]; then \
+	apk add --no-cache curl && \
 	MODEL_URL="$VOSK_MODEL_URL" MODEL_SHA256="$VOSK_MODEL_SHA256" LANG="$VOSK_MODEL_LANG" sh /fetch-vosk.sh /vosk; \
 	else \
 	mkdir -p /vosk; \
