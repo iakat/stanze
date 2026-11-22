@@ -94,3 +94,4 @@ One line per work item, newest last.
 - A sound switch for the four cues and the lost connection chime, on by default, one stored choice (2026-11-22).
 - Transcription speaks more than one language: the directory holds `model-<lang>.tar.gz` files, `/vosk/models` lists them with their labels and sizes, and the page shows a picker beside the transcribe button (by label, the browser language picked when it is offered, the kept choice after that). One engine, one model at a time; a change of language restarts it on the other model and the cache keeps one entry (2026-11-22).
 - The member menu of a rail row is one popup on the page, placed under the three dots of that row: the list scrolls and is short, so a menu inside the row was cut off.
+- A guest that the waiting room lets in gets the outgoing tracks on every connection that is already built, so the room hears it at once.

@@ -759,6 +759,14 @@ function paintWaiting() {
 function admitPeer(id) {
   if (id === state.self) {
     state.waiting = false;
+    // The waiting room held every outgoing track back. Now the guest is
+    // inside, so the tracks go to every connection that is already built.
+    // Without this the room hears nothing of a guest it has just let in.
+    if (state.outStream) {
+      for (const peer of state.peers.values()) {
+        for (const track of state.outStream.getTracks()) attachTrack(peer, track);
+      }
+    }
     paintWaiting();
     playSfx('pop');
     return;
