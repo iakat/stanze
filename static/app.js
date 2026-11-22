@@ -120,7 +120,7 @@ const state = {
  *   'stats-graph-down': HTMLCanvasElement, 'stats-graph-rtt': HTMLCanvasElement,
  *   'stats-graph-loss': HTMLCanvasElement, 'stats-note-down': HTMLElement,
  *   'stats-note-rtt': HTMLElement, 'stats-note-loss': HTMLElement,
- *   'stats-body': HTMLElement, 'chat-log': HTMLElement, 'chat-form': HTMLFormElement,
+ *   'stats-sum': HTMLElement, 'stats-body': HTMLElement, 'chat-log': HTMLElement, 'chat-form': HTMLFormElement,
  *   'chat-text': HTMLInputElement, 'chat-note': HTMLElement, 'mic-btn': HTMLButtonElement,
  *   'chat-panel': HTMLElement, 'file-btn': HTMLButtonElement, 'file-input': HTMLInputElement,
  *   'cam-btn': HTMLButtonElement, 'share-btn': HTMLButtonElement,
@@ -3294,6 +3294,8 @@ function setStatsOpen(open) {
 function clearStatsPanel() {
   const body = $('stats-body');
   if (body) body.replaceChildren();
+  const sum = $('stats-sum');
+  if (sum) sum.replaceChildren();
 }
 
 // bitrate turns two samples of one byte counter into kilobits per second. The first sample
@@ -3430,9 +3432,10 @@ function rateText(kbit) {
   return Math.round(kbit) + 'k';
 }
 
-// msText renders one round trip time in milliseconds, as "12m".
+// msText renders one round trip time in milliseconds, as "12 ms". The unit is
+// spelled out because the bitrate column already uses a bare "m" for megabits.
 function msText(ms) {
-  return Math.round(ms) + 'm';
+  return Math.round(ms) + ' ms';
 }
 
 // jitterText renders one jitter in milliseconds. The numbers are small and a
@@ -3440,7 +3443,7 @@ function msText(ms) {
 // decimal.
 function jitterText(ms) {
   if (typeof ms !== 'number') return '';
-  return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + 'm';
+  return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + ' ms';
 }
 
 // lossText renders a packet loss share. Under a twentieth of a percent is not
@@ -3471,17 +3474,20 @@ const RELAY_ICON = ['1F4E1', 'relay, the media goes through the server'];
 const UP_ICON = ['2B06', 'out, what this browser sends'];
 const DOWN_ICON = ['2B07', 'in, what this browser receives'];
 
-// pathIcon is the drawing of one route: a link when the two browsers talk to
-// each other, a satellite when the media has to pass the server.
-function pathIcon(path) {
-  return path === 'direct' ? DIRECT_ICON : RELAY_ICON;
+// routeCell is the value of the route row: the drawing and the word. A link
+// when the two browsers talk to each other, a satellite when the media has to
+// pass the server.
+function routeCell(path) {
+  if (!path) return ['', '', 'not known yet'];
+  const direct = path === 'direct' || path === 'p2p';
+  return [...(direct ? DIRECT_ICON : RELAY_ICON), path === 'p2p' ? 'direct' : path];
 }
 
 // rateCell is one bitrate with the arrow of its direction. Both directions sit
 // on the same row, so the two rates of the video row and of the audio row line
 // up under each other.
 function rateCell(dir, kbit) {
-  return [...(dir === 'up' ? UP_ICON : DOWN_ICON), rateText(kbit)];
+  return [...(dir === 'up' ? UP_ICON : DOWN_ICON), rateText(kbit) || '-'];
 }
 
 // tripCells are the three numbers of one path: how long a packet takes, how
@@ -3526,12 +3532,34 @@ function callPairs(live, total) {
   const rtt = worst('rtt');
   const jitter = worst('jitter');
   const loss = worst('loss');
-  if (path || rtt !== null || jitter !== null || loss !== null) {
-    out.push([pathIcon(path), tripCells(rtt, jitter, loss)]);
+  if (path) out.push(['route ', [routeCell(path)]]);
+  if (rtt !== null || jitter !== null || loss !== null) {
+    out.push(['link ', tripCells(rtt, jitter, loss), undefined, 'metrics']);
   }
-  out.push([VIDEO_ICON, [rateCell('up', total.up.video), rateCell('down', total.down.video)]]);
-  out.push([AUDIO_ICON, [rateCell('up', total.up.audio), rateCell('down', total.down.audio)]]);
+  out.push([VIDEO_ICON, [['', '', ''], rateCell('up', total.up.video), rateCell('down', total.down.video)]]);
+  out.push([AUDIO_ICON, [['', '', ''], rateCell('up', total.up.audio), rateCell('down', total.down.audio)]]);
   return out;
+}
+
+// levelDb is one input peak as decibels, or the word silent under -60 dB, which
+// is below anything a person hears.
+function levelDb(peak) {
+  const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+  return db > -60 ? `${Math.round(db)} dB` : 'silent';
+}
+
+// levelFraction is the share of the -60 dB to 0 dB scale that one peak fills,
+// from 0 to 1, for the bar of a meter row.
+function levelFraction(peak) {
+  const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+  return Math.max(0, Math.min(1, (db + 60) / 60));
+}
+
+// peerLevel is what arrives from one guest, read before the gain. It is empty
+// until the audio path of that guest exists.
+function peerLevel(peer) {
+  if (!peer.audioSrc || !peer.meter) return '';
+  return levelDb(peer.meterPeak || 0);
 }
 
 // ownPairs is the own card: the key this browser holds, then what its own
@@ -3553,16 +3581,17 @@ function ownPairs(total) {
     rateCell('up', total ? total.up.video : 0),
     rateCell('down', total ? total.down.video : 0),
   ]]);
-  // The microphone row says the four things a speaker asks: is it on, how loud
-  // is it, how much of the scale does that fill and is anything going out.
-  const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
   const sample = mic && mic.sampleRate ? `${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch` : '';
   out.push([AUDIO_ICON, [
     ['', '', live ? (sample || 'on') : 'off'],
-    ['', '', level ? level.db : ''],
-    ['', '', level ? level.pct : ''],
-    ['', '', level ? level.state : ''],
+    rateCell('up', total ? total.up.audio : 0),
+    rateCell('down', total ? total.down.audio : 0),
   ]]);
+  // The microphone has a meter of its own: a bar that fills with the level,
+  // so a speaker sees at once that the voice is going out.
+  const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
+  out.push(['mic ', [['', '', level ? (level.state === 'silent' ? 'silent' : level.db) : 'off']],
+    undefined, false, level ? levelFraction(state.meterPeak) : 0]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
   if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);
@@ -3589,14 +3618,15 @@ function peerPairs(peer, s) {
   if (!s) {
     out.push(['', 'connecting', undefined, true]);
   } else {
-    out.push([s.path ? pathIcon(pathText(s.path)) : ['', 'the route is not known yet'], tripCells(s.rtt, s.jitter, s.loss)]);
+    out.push(['route ', [routeCell(s.path)]]);
+    out.push(['link ', tripCells(s.rtt, s.jitter, s.loss), undefined, 'metrics']);
     out.push([VIDEO_ICON, [
       [...PICTURE_ICON, s.shot || ''],
       rateCell('up', s.up.video),
       rateCell('down', s.down.video),
     ]]);
     out.push([AUDIO_ICON, [
-      ['', '', inLevelLine(peer)],
+      ['', '', peerLevel(peer)],
       rateCell('up', s.up.audio),
       rateCell('down', s.down.audio),
     ]]);
@@ -3626,52 +3656,145 @@ function statIcon(hex, title) {
   return img;
 }
 
-// statCells fills one line with one cell per part. A part is text, or
+// statCells fills one row with one cell per part. A part is text, or
 // [drawing, word, text] with the word in the title, or the same with a fourth
-// false to mark that cell red. A cell that carries a digit is a number, and a
-// number is monospace so one digit is one width against the line above it.
-function statCells(value) {
+// false to mark that cell red. An empty part keeps its column, so the numbers
+// of the row below still line up with it.
+function statCells(value, metrics) {
   const span = document.createElement('span');
   span.className = 'sv';
   const parts = Array.isArray(value) ? value : [value];
   for (const raw of parts) {
     const p = Array.isArray(raw) ? raw : [raw];
     const cell = document.createElement('span');
-    if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
-    const text = document.createElement('span');
+    cell.className = 'cell' + (p[3] === true ? ' good' : p[3] === false ? ' bad' : '');
     const word = p.length > 1 ? p[2] : p[0];
+    const text = document.createElement('span');
     text.textContent = word === null || word === undefined ? '' : String(word);
-    cell.className = 'cell' + (/\d/.test(text.textContent) ? ' num' : '') +
-      (p[3] === true ? ' good' : p[3] === false ? ' bad' : '');
-    cell.appendChild(text);
+    if (metrics && p.length > 1 && p[1]) {
+      // A metric reads as a small label over a number: the word is the first
+      // part of the title of its drawing, so the two never disagree.
+      const label = document.createElement('span');
+      label.className = 'cl';
+      label.title = String(p[1]);
+      label.textContent = String(p[1]).split(',')[0];
+      text.className = 'cv';
+      cell.append(label, text);
+    } else {
+      if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
+      cell.appendChild(text);
+    }
     span.appendChild(cell);
   }
   return span;
 }
 
-function statLine(key, value, mark, sub) {
+function statLine(key, value, mark, sub, meter) {
   const line = document.createElement('div');
-  line.className = 'sline' + (sub === 'mono' ? ' mono' : sub ? ' sub' : '') +
+  const parts = Array.isArray(value) ? value : [value];
+  line.className = 'sline' + (sub === 'mono' ? ' mono' : sub === 'metrics' ? ' metrics' : sub ? ' sub' : '') +
+    (typeof meter === 'number' ? ' meterline' : '') +
     (mark === true ? ' good' : mark === false ? ' bad' : '');
+  line.dataset.n = String(parts.length);
   const k = document.createElement('span');
   k.className = 'sk';
-  // A key of two is [drawing, word]: the picture stands in for the word and
-  // the word is the hover. A key with no drawing keeps its word as text.
-  if (Array.isArray(key) && key[0]) k.appendChild(statIcon(key[0], key[1]));
-  else k.textContent = Array.isArray(key) ? (key[1] || '') : key;
-  line.append(k, statCells(value));
+  // A key of two is [drawing, word]: the drawing and the first words of its
+  // title, so the row reads without a hover. A key with no drawing keeps its
+  // word as text.
+  if (Array.isArray(key) && key[0]) {
+    k.appendChild(statIcon(key[0], key[1]));
+    k.appendChild(document.createTextNode(String(key[1]).split(',')[0]));
+  } else k.textContent = Array.isArray(key) ? (key[1] || '') : key;
+  line.appendChild(k);
+  if (typeof meter === 'number') {
+    const bar = document.createElement('span');
+    bar.className = 'meter';
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', `level ${Math.round(meter * 100)} percent`);
+    const fill = document.createElement('i');
+    fill.style.width = `${Math.round(meter * 100)}%`;
+    bar.appendChild(fill);
+    line.appendChild(bar);
+  }
+  line.appendChild(statCells(value, sub === 'metrics'));
   return line;
 }
 
-function statsRow(title, pairs, mark) {
+function statsRow(title, pairs, mark, badge) {
   const row = document.createElement('div');
   row.className = 'srow';
   const head = document.createElement('div');
   head.className = 'sname';
-  head.textContent = title;
+  const name = document.createElement('span');
+  name.className = 'stitle';
+  name.textContent = title;
+  head.appendChild(name);
+  // The badge is the verdict of one guest: a lamp and a word, so the card says
+  // how that link is before a number has to be read.
+  if (badge && badge.level) {
+    const chip = document.createElement('span');
+    chip.className = 'sbadge';
+    chip.dataset.level = badge.level;
+    chip.textContent = badge.text || badge.level;
+    head.appendChild(chip);
+  }
   row.appendChild(head);
-  for (const p of pairs) row.appendChild(statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false));
+  for (const p of pairs) {
+    row.appendChild(statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false, p[4]));
+  }
   return row;
+}
+
+// linkLevel is the verdict on one link: poor from 5 percent loss or 400 ms,
+// fair from 2 percent, 200 ms or 40 ms of jitter, good otherwise. A link with
+// nothing measured yet has no verdict, because a guess would be a lie.
+function linkLevel(s) {
+  if (!s) return '';
+  const { rtt, loss, jitter } = s;
+  if (rtt === null && loss === null) return '';
+  if ((loss !== null && loss >= 5) || (rtt !== null && rtt >= 400)) return 'poor';
+  if ((loss !== null && loss >= 2) || (rtt !== null && rtt >= 200) || (jitter !== null && jitter >= 40)) return 'fair';
+  return 'good';
+}
+
+function worstLevel(levels) {
+  for (const word of ['poor', 'fair', 'good']) if (levels.includes(word)) return word;
+  return '';
+}
+
+// statsSummary is the first card: one lamp and one sentence for the whole
+// call, so a healthy call needs no reading and a weak one says what to do.
+function statsSummary(live, guestCount) {
+  const level = worstLevel(live.map(linkLevel));
+  const box = document.createElement('div');
+  box.className = 'ssum';
+  box.dataset.level = level;
+  const lamp = document.createElement('span');
+  lamp.className = 'slamp';
+  const text = document.createElement('div');
+  const head = document.createElement('div');
+  head.className = 'ssum-head';
+  const sub = document.createElement('div');
+  sub.className = 'ssum-sub';
+  if (guestCount === 0) {
+    head.textContent = 'waiting for guests';
+    sub.textContent = 'the numbers start when someone joins';
+  } else if (!level) {
+    head.textContent = 'measuring';
+    sub.textContent = 'the first numbers arrive in a second';
+  } else {
+    head.textContent = `connection ${level}`;
+    const nums = live.map((s) => s.rtt).filter((n) => typeof n === 'number');
+    const loss = live.map((s) => s.loss).filter((n) => typeof n === 'number');
+    const bits = [callPath(live)];
+    if (nums.length) bits.push(msText(Math.max(...nums)));
+    if (loss.length) bits.push(`loss ${lossText(Math.max(...loss))}`);
+    sub.textContent = bits.filter(Boolean).join(' | ');
+    if (level === 'poor') sub.textContent += '. Try a lower quality in the toolbar.';
+  }
+  text.append(head, sub);
+  box.append(lamp, text);
+  return box;
 }
 
 // recordStatsHistory appends one sample of the whole call: what came down,
@@ -3705,11 +3828,33 @@ function statsPlot(canvas, values, peak, fill, color) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cssW, cssH);
+  // A black screen with a dark green grid, like the performance monitor of the
+  // era: the shape reads at a glance and the colours need no legend.
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cssW, cssH);
   const n = values.length;
-  const stepX = (cssW - 2) / Math.max(1, n - 1);
-  const px = (i) => 1 + i * stepX;
-  const py = (v) => cssH - 1 - (v / peak) * (cssH - 2);
+  // One step is one second of a fixed minute and the newest sample sits at the
+  // right edge, so a call that has run for ten seconds fills a sixth of the
+  // box and the picture scrolls left from there, instead of stretching.
+  const stepX = (cssW - 2) / (STATS_HISTORY - 1);
+  const px = (i) => cssW - 1 - (n - 1 - i) * stepX;
+  const py = (v) => cssH - 1 - (Math.min(v, peak) / peak) * (cssH - 2);
+
+  ctx.strokeStyle = '#0c3c0c';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let g = 1; g < 3; g++) {
+    const y = Math.round((cssH * g) / 3) + 0.5;
+    ctx.moveTo(0, y);
+    ctx.lineTo(cssW, y);
+  }
+  for (let g = 1; g < 6; g++) {
+    const x = Math.round((cssW * g) / 6) + 0.5;
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, cssH);
+  }
+  ctx.stroke();
+  if (n < 1) return;
 
   if (fill) {
     ctx.beginPath();
@@ -3718,12 +3863,10 @@ function statsPlot(canvas, values, peak, fill, color) {
     ctx.lineTo(px(n - 1), cssH - 1);
     ctx.closePath();
     ctx.fillStyle = color;
-    ctx.globalAlpha = 0.28;
+    ctx.globalAlpha = 0.35;
     ctx.fill();
     ctx.globalAlpha = 1;
-    return;
   }
-
   ctx.beginPath();
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
@@ -3745,6 +3888,13 @@ function statsNote(id, text) {
   if (note) note.textContent = text;
 }
 
+// rateWords is a bitrate with its unit spelled out, for the line under a graph.
+function rateWords(kbit) {
+  if (!(kbit > 0)) return '0 kbit/s';
+  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + ' Mbit/s';
+  return Math.round(kbit) + ' kbit/s';
+}
+
 // drawStatsGraphs draws the last minute as three drawings: the downlink as a
 // filled area, the round trip and the loss as lines. Each keeps its own peak,
 // so one guest with a bad path shows on its own drawing and not as a small
@@ -3755,10 +3905,6 @@ function drawStatsGraphs() {
   const hist = state.statHist;
   box.hidden = hist.length < 2;
   if (hist.length < 2) return;
-  const css = getComputedStyle(document.documentElement);
-  const navy = css.getPropertyValue('--navy').trim() || '#000080';
-  const green = css.getPropertyValue('--green').trim() || '#002b00';
-  const red = css.getPropertyValue('--red').trim() || '#800000';
   const series = (key) => hist.map((p) => (typeof p[key] === 'number' ? p[key] : null));
   const values = (arr) => arr.filter((v) => v !== null);
   const peak = (arr, floor) => Math.max(floor, ...values(arr));
@@ -3766,36 +3912,35 @@ function drawStatsGraphs() {
     const kept = values(arr);
     return kept.length ? kept[kept.length - 1] : null;
   };
-  const secs = `${hist.length} s`;
+  const secs = `last ${hist.length} s`;
 
   // Downlink: the area says "steady" or "collapsing" at a glance. The floor of
   // 100 kbit/s keeps a quiet call on the floor of the box, not off it.
   const down = series('down');
-  statsPlot($('stats-graph-down'), down, peak(down, 100), true, navy);
+  statsPlot($('stats-graph-down'), down, peak(down, 100), true, '#00e000');
   const downMax = Math.max(0, ...values(down));
-  statsNote('stats-note-down', `down ${rateText(now(down)) || '0k'}, up to ${rateText(downMax) || '0k'} in ${secs}`);
+  statsNote('stats-note-down', `down ${rateWords(now(down))} now, peak ${rateWords(downMax)}, ${secs}`);
 
   // Round trip: a line, broken where a sample has no value, so a gap is a gap.
   const rtt = series('rtt');
-  statsPlot($('stats-graph-rtt'), rtt, peak(rtt, 100), false, green);
+  statsPlot($('stats-graph-rtt'), rtt, peak(rtt, 100), false, '#f0e000');
   statsNote('stats-note-rtt', values(rtt).length
-    ? `round trip ${msText(now(rtt))}, up to ${msText(Math.max(...values(rtt)))} in ${secs}`
-    : `round trip not measured in ${secs}`);
+    ? `round trip ${msText(now(rtt))} now, peak ${msText(Math.max(...values(rtt)))}, ${secs}`
+    : `round trip not measured, ${secs}`);
 
   // Loss: a line on a scale that starts at one percent, so a clean call is a
   // flat floor and any loss at all leaves the floor.
   const loss = series('loss');
-  statsPlot($('stats-graph-loss'), loss, peak(loss, 1), false, red);
+  statsPlot($('stats-graph-loss'), loss, peak(loss, 1), false, '#ff5050');
   const lossMax = Math.max(0, ...values(loss));
   statsNote('stats-note-loss', lossMax > 0
-    ? `loss ${lossText(now(loss))} now, up to ${lossText(lossMax)} in ${secs}`
-    : `loss none in ${secs}`);
+    ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}`
+    : `loss none, ${secs}`);
 }
 
-// updateStats draws one round. A fault sits above the cards, so a red line is
-// the first thing on the panel and a healthy call needs no scroll. Then the
-// call at a glance, then the own side, then only the guest rows that add a
-// number of their own.
+// updateStats draws one round: the faults and the verdict of the call, the
+// graphs of the last minute, then one card per guest, the own side and the
+// crypto counters.
 async function updateStats() {
   if (!statsOpen() || state.statsBusy) return;
   const body = $('stats-body');
@@ -3824,11 +3969,20 @@ async function updateStats() {
       if (call.length) rows.push(statsRow('call', call));
     }
     for (const { peer, s } of guests) {
+      const level = linkLevel(s);
       const pairs = peerPairs(peer, s);
-      if (pairs.length) rows.push(statsRow(peer.name || shortPeer(peer.id), pairs));
+      if (pairs.length) {
+        rows.push(statsRow(peer.name || shortPeer(peer.id), pairs, undefined, level ? { level, text: level } : null));
+      }
     }
     rows.push(statsRow('you', ownPairs(total)));
-    body.replaceChildren(...sealedAlarms(), ...rows, ...sealedCards());
+    // The faults and the verdict sit in their own block above the graphs, so a
+    // red line is the first thing on the panel and a healthy call needs no scroll.
+    $('stats-sum').replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
+    const legend = document.createElement('p');
+    legend.className = 'slegend';
+    legend.textContent = 'k is kbit/s and m is Mbit/s. The up arrow is what you send, the down arrow what you receive.';
+    body.replaceChildren(...rows, ...sealedCards(), legend);
     drawStatsGraphs();
   } finally {
     state.statsBusy = false;
