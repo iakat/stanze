@@ -2878,6 +2878,12 @@ async function startShare() {
     const el = tile.querySelector('video');
     el.srcObject = display;
     el.play().catch(() => {});
+    // A screen tile stands in the stage only while it has a picture, and a
+    // capture on a slow display gives its first frame after this function
+    // returns. The own tile waits for it like a guest's tile does, or the
+    // sharer sees nothing of the screen that everyone else sees.
+    el.addEventListener('resize', () => layoutStage());
+    el.addEventListener('loadedmetadata', () => layoutStage());
     state.screenTile = tile;
   }
   const audio = display.getAudioTracks()[0];
