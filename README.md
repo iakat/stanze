@@ -168,6 +168,7 @@ Every flag has an environment variable equivalent. Flags win.
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
 | `-vosk-dir` | `VOSK_DIR` | empty | directory with `vosk.js` and `model-<lang>.tar.gz` for the optional in-browser transcription; empty means the feature is not offered (see `tools/fetch-vosk.sh`) |
+| `-omni-dir` | `OMNI_DIR` | empty | directory with the sherpa-onnx wasm bundle and the Omnilingual ASR model for the optional multilingual transcription; empty means the engine is not offered (no model ships with this repository) |
 | `-debug` | `DEBUG` | off | verbose logs (room ids are still only logged as a 8 hex character hash) |
 
 Room creation and join attempts are limited per client IP. Behind a reverse
@@ -258,6 +259,24 @@ well.
   transcribes. A guest's own voice is not transcribed. A failed download leaves
   the call alone. The CSP allows `blob:` for workers and fetches, which the
   engine needs; nothing loads before the guest asks.
+- **Multilingual transcription.** A second engine is offered when
+  `-omni-dir` holds the five files it needs: `model.int8.onnx`, `tokens.txt`,
+  `sherpa-onnx-asr.js`, `sherpa-onnx-wasm-main-vad-asr.js` and
+  `sherpa-onnx-wasm-main-vad-asr.wasm`. That is one Omnilingual ASR CTC 300M
+  model for every language, so it has no picker and no per language file; the
+  server lists the five with their sizes and sha256 under `/omni/models` and
+  serves them under `/omni/`. The model is 348 MB, the tab downloads it once,
+  keeps it in the browser cache in 32 MB parts, checks it against the listed
+  sha256 before the wasm reads a byte, and says the size before the download
+  starts. The wasm is a pthread build: the page is cross-origin isolated (COOP
+  `same-origin`, COEP `require-corp`, and CORP `same-origin` on our own
+  answers), which costs nothing here because every resource is same origin or a
+  blob of it, and the recognizer runs in a worker of its own, since one decode
+  costs most of a second of CPU. The published glue carries the machinery of a
+  demo model preload (this build only defines it and never calls it); the server
+  removes the call when a file has one, as it serves the file, so the copy on
+  disk stays pristine. With both engines on offer the menu has an engine row,
+  and only one engine runs at a time.
 - **Performance slider**, **volume curve**, **sound switch**, clickable
   `http(s)` links in the chat and a movable lobby window are client only and
   stored in the browser.

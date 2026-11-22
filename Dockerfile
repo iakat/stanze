@@ -80,6 +80,11 @@ RUN if [ -n "$VOSK_MODEL_URL" ]; then \
 	else \
 	mkdir -p /vosk; \
 	fi
+# The multilingual engine is never built into the image: its one model is
+# 348 MB and the rest of its bundle is a download of its own, so the stage only
+# makes an empty /omni and an operator mounts the directory there (or runs with
+# -omni-dir pointing at it). Empty means the engine is not offered.
+RUN mkdir -p /omni
 
 FROM scratch
 # Only the binary: the client, the queue and the done list are embedded.
@@ -88,6 +93,10 @@ COPY --from=server /out/rooms /rooms
 # server offers the feature only when the library and a model are there.
 COPY --from=vosk /vosk /vosk
 ENV VOSK_DIR=/vosk
+# The multilingual directory holds nothing in this image on purpose; mount a
+# bundle over /omni (or pass -omni-dir) to offer that engine as well.
+COPY --from=vosk /omni /omni
+ENV OMNI_DIR=/omni
 # scratch has no /etc/passwd, so nobody is named by number. It matches the
 # runAsUser of the deployment and holds no privileges the binary could use.
 USER 65534:65534
