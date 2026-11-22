@@ -739,10 +739,10 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   aspect-ratio: auto;
-  min-height: 26px;
-  padding: 1px 4px;
+  min-height: 20px;
+  padding: 0 4px;
   background: var(--panel);
   border: 1px solid;
   border-color: #fff var(--edge) var(--edge) #fff;
@@ -755,7 +755,20 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .stage-rail .tile .zoom,
 .stage-rail .tile .pin { display: none; }
 .stage-rail .tile .name::before { display: none; }
-.stage-rail .tile .vol { opacity: 1; visibility: visible; }
+/* A rail row is one line while nobody touches it: the volume slider sits on a
+   second line and would make every row twice as tall, so it opens only while
+   the pointer is over that row, while a control in it has the focus, or after a
+   tap on a touch screen. A full room then stays a short list. */
+.stage-rail .tile .vol {
+  opacity: 1;
+  visibility: visible;
+  flex: 1 0 100%;
+  display: none;
+}
+.stage-rail .tile:hover .vol,
+.stage-rail .tile:focus-within .vol,
+.stage-rail .tile:focus-visible .vol,
+.stage-rail .tile.ctl .vol { display: flex; }
 .stage-rail .tile .vol-ico { display: none; }
 .stage-rail .tile:focus-visible { outline-color: var(--ink); outline-offset: -3px; }
 .stage-rail .tile .tag {
@@ -809,7 +822,6 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .stage-rail .tile .vol {
   order: 4;
   position: static;
-  flex: 1 0 100%;
   gap: 4px;
   padding: 0 2px;
 }
