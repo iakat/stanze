@@ -3438,19 +3438,32 @@ function lossMark(pct) {
   return pct >= 2 ? false : undefined;
 }
 
-// mediaPairs is one direction: the two kinds added, then each kind that moved
-// a byte as an indented row. The parts are shown only when both are live, so a
-// call with sound and no picture stays short.
+// mediaPairs is one direction on one line: the two kinds added, then each kind
+// that moved a byte in brackets, since the line has the room for it and three
+// short lines read slower than one. The parts are shown only when both are
+// live, so a call with sound and no picture stays short.
 /** @returns {(string | boolean | undefined)[][]} */
 function mediaPairs(label, video, audio) {
   const total = video + audio;
   if (!(total > 0)) return [];
-  const out = [[label, rateText(total)]];
-  if (video > 0 && audio > 0) {
-    out.push(['video ', rateText(video), undefined, true]);
-    out.push(['audio ', rateText(audio), undefined, true]);
+  const parts = [];
+  if (video > 0) parts.push('video ' + rateText(video));
+  if (audio > 0) parts.push('audio ' + rateText(audio));
+  const text = parts.length > 1 ? `${rateText(total)} (${parts.join(', ')})` : rateText(total);
+  return [[label, text]];
+}
+
+// tripText is the round trip and the jitter on one line: they describe the
+// same path, and a caller reads them together or not at all.
+function tripText(rtts, jitters) {
+  const parts = [];
+  if (rtts.length) {
+    const lo = Math.round(Math.min(...rtts));
+    const hi = Math.round(Math.max(...rtts));
+    parts.push(lo === hi ? msText(lo) : `${lo} to ${hi} ms`);
   }
-  return out;
+  if (jitters.length) parts.push('jitter ' + jitterText(Math.max(...jitters)));
+  return parts.join(', ');
 }
 
 // pathText is the word a guest reads for one route: the report says p2p for a
@@ -3478,13 +3491,8 @@ function callPairs(live, total) {
   const path = callPath(live);
   if (path) out.push(['path ', path]);
   const rtts = live.map((s) => s.rtt).filter((n) => typeof n === 'number');
-  if (rtts.length) {
-    const lo = Math.min(...rtts);
-    const hi = Math.max(...rtts);
-    out.push(['round trip ', lo === hi ? msText(lo) : `${lo} to ${hi} ms`]);
-  }
   const jitters = live.map((s) => s.jitter).filter((n) => typeof n === 'number');
-  if (jitters.length) out.push(['jitter ', jitterText(Math.max(...jitters))]);
+  if (rtts.length || jitters.length) out.push(['trip ', tripText(rtts, jitters)]);
   const losses = live.map((s) => s.loss).filter((n) => typeof n === 'number');
   if (losses.length) {
     const worst = Math.max(...losses);
@@ -3508,11 +3516,14 @@ function ownPairs() {
   // Safari reports no sample rate on an audio track, so the rate is a bonus
   // and a missing rate never means off.
   if (mic && mic.sampleRate) label += `, ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
+  // The level belongs to the microphone it measures, on the same line.
+  if (live && state.micAnalyser) label += ', ' + levelText(state.meterPeak);
   out.push(['mic ', label]);
-  out.push(['denoise ', state.denoiseOn ? 'on' : 'off']);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
-  out.push(['camera ', cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : 'off']);
-  if (live) out.push(['level ', levelText(state.meterPeak), undefined, true]);
+  const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : 'off';
+  // The denoise switch changes the same picture and the same microphone, so it
+  // rides beside the camera instead of on a line of its own.
+  out.push(['camera ', `${shot}, denoise ${state.denoiseOn ? 'on' : 'off'}`]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
   if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);
@@ -3529,8 +3540,10 @@ function peerPairs(peer, s) {
     out.push(['', 'connecting', undefined, true]);
   } else {
     if (s.path) out.push(['path ', pathText(s.path)]);
-    if (typeof s.rtt === 'number') out.push(['round trip ', msText(s.rtt)]);
-    if (typeof s.jitter === 'number') out.push(['jitter ', jitterText(s.jitter)]);
+    const trip = tripText(
+      typeof s.rtt === 'number' ? [s.rtt] : [],
+      typeof s.jitter === 'number' ? [s.jitter] : []);
+    if (trip) out.push(['trip ', trip]);
     if (typeof s.loss === 'number') out.push(['loss ', lossText(s.loss), lossMark(s.loss)]);
     out.push(...mediaPairs('up ', s.up.video, s.up.audio));
     out.push(...mediaPairs('down ', s.down.video, s.down.audio));
