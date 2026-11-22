@@ -726,7 +726,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   min-height: 0;
   padding: 0;
 }
-body.is-admin .tile[data-peer] .zoom { right: 32px; }
+.tile[data-peer] .zoom { right: 32px; }
 .tile .zoom::before,
 .tile .zoom::after {
   content: "";
@@ -741,7 +741,7 @@ body.is-admin .tile[data-peer] .zoom { right: 32px; }
 .tile .zoom[aria-pressed="true"]::after { display: block; left: 8px; top: 4px; width: 8px; height: 7px; }
 .tile .zoom:active { padding: 0; }
 
-/* host controls: a three dot button on a remote tile, only for the admin */
+/* member controls: a three dot button on a remote tile, for every guest */
 .dots {
   position: absolute;
   top: 4px;
@@ -753,8 +753,7 @@ body.is-admin .tile[data-peer] .zoom { right: 32px; }
   font-size: var(--fs);
   display: none;
 }
-body.is-admin .tile[data-peer]:hover .dots,
-body.is-admin .tile[data-peer]:focus-within .dots {
+.tile[data-peer] .dots {
   display: block;
 }
 .tile .menu {
@@ -850,7 +849,7 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .plist-row[data-state="connected"]::after { background: #007000; }
 .plist-row[data-state="failed"]::after,
 .plist-row[data-state="disconnected"]::after { background: var(--red); }
-/* A row shows the host menu to the admin only, and always: it is the one
+/* A row shows the member menu to every guest, and always: it is the one
    control of that member left when the camera is off. */
 .plist-row .dots {
   position: static;
@@ -860,7 +859,7 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   min-height: 18px;
   padding: 0 2px;
 }
-body.is-admin .plist-row[data-peer] .dots { display: block; }
+.plist-row[data-peer] .dots { display: block; }
 /* The menu opens inside the row. The row wraps while it is open and the list
    scrolls, so nothing outside the list moves. */
 .plist-row:has(.menu:not([hidden])) { flex-wrap: wrap; }
@@ -1245,5 +1244,5 @@ body.is-admin .plist-row[data-peer] .dots { display: block; }
   .tile .zoom::before { left: 11px; top: 10px; }
   .tile .zoom[aria-pressed="true"]::before { left: 10px; top: 13px; }
   .tile .zoom[aria-pressed="true"]::after { left: 14px; top: 9px; }
-  body.is-admin .tile[data-peer] .zoom { right: 40px; }
+  .tile[data-peer] .zoom { right: 40px; }
 }

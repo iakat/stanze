@@ -33,6 +33,7 @@ const state = {
   meterPeak: 0,       // decaying peak, so one tick per second can see a word
   denoise: null,
   denoiseOn: false,
+  noiseWasm: null,    // one fetch of the noise model, shared by every node
   playCtx: null,      // the remote audio graph, so a peer can go over 100%
   screen: null,       // display stream while sharing
   screenSource: null,
@@ -320,7 +321,7 @@ function makeTile(id, name, local = false) {
     </div>`}
     <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
     <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${local ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
-    ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
+    ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
   paintName(tile, name, local);
   // A remote guest is heard through its own gain node, so the video element
   // only ever carries pictures and stays muted.
@@ -354,7 +355,7 @@ function makeRow(id, name, local = false) {
     <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
     <span class="vol-num">100%</span>
     <button class="row-sas" type="button" aria-label="sealed code" title="sealed code" hidden>code</button>
-    <button class="dots" type="button" aria-label="host actions">&#8943;</button>
+    <button class="dots" type="button" aria-label="member actions">&#8943;</button>
     <div class="sas" hidden></div>
     <div class="menu" hidden></div>`}`;
   paintRowName(row, name, local);
@@ -576,9 +577,10 @@ function applyFlags(tile, mic, cam, admin) {
 
 // ---------------------------------------------------------------- host control
 
-// wireDots opens the small host menu of one remote member. Only the admin sees
-// it; the CSS shows it. It takes the tile or the row of that member, because
-// both carry the peer id. The server checks the role again on every command.
+// wireDots opens the small menu of one remote member. Every guest sees it; the
+// host commands appear only for the admin, and the server checks the role
+// again on every command. It takes the tile or the row of that member, because
+// both carry the peer id.
 function wireDots(host) {
   const dots = host.querySelector('.dots');
   const menu = host.querySelector('.menu');
@@ -594,16 +596,24 @@ function wireDots(host) {
       return;
     }
     menu.replaceChildren();
-    for (const [action, label] of [['admin', 'give admin'], ['mute', 'mute'], ['kick', 'remove from room']]) {
+    const peer = state.peers.get(host.dataset.peer);
+    const add = (label, run) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = label;
       b.addEventListener('click', () => {
         menu.hidden = true;
-        send({ t: 'mod', to: host.dataset.peer, action });
+        run();
       });
       menu.appendChild(b);
+    };
+    if (isAdmin(state.self)) {
+      add('give admin', () => send({ t: 'mod', to: host.dataset.peer, action: 'admin' }));
+      add('mute', () => send({ t: 'mod', to: host.dataset.peer, action: 'mute' }));
+      add('remove from room', () => send({ t: 'mod', to: host.dataset.peer, action: 'kick' }));
     }
+    const noiseOn = !!(peer && peer.inNoise);
+    add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => { void setPeerNoise(peer, !noiseOn); });
     menu.hidden = false;
   });
 }
@@ -616,8 +626,8 @@ function closeMenus() {
   }
 }
 
-// markAdmins redraws the host chip on every tile and hides the menus from
-// peers that are not the admin.
+// markAdmins redraws the host chip on every tile. The member menu is open to
+// every guest, so only the chip and the host commands depend on the role.
 function markAdmins() {
   const mine = isAdmin(state.self);
   document.body.classList.toggle('is-admin', mine);
@@ -1482,6 +1492,36 @@ function inLevelLine(peer) {
   return levelText(peer.meterPeak || 0);
 }
 
+// noiseWasm fetches the model once; every processor builds its module from the
+// same copy.
+function noiseWasm() {
+  if (!state.noiseWasm) {
+    state.noiseWasm = fetch('/gtcrn.wasm').then((res) => {
+      if (!res.ok) throw new Error('gtcrn.wasm ' + res.status);
+      return res.arrayBuffer();
+    });
+  }
+  return state.noiseWasm;
+}
+
+// makeDenoiseNode builds one GTCRN processor on one context. The microphone and
+// every incoming stream that wants it own a node, because the filter state
+// belongs to one stream.
+async function makeDenoiseNode(ctx) {
+  const [binary] = await Promise.all([
+    noiseWasm(),
+    ctx.audioWorklet.addModule('/gtcrn-node.js'),
+  ]);
+  return new AudioWorkletNode(ctx, 'gtcrn', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    channelCount: 1,
+    channelCountMode: 'explicit',
+    processorOptions: { wasm: new Uint8Array(binary) },
+  });
+}
+
 // setNoise switches the microphone between the raw path and the GTCRN path.
 // The output of the mixer does not change, so no peer is disturbed.
 async function setNoise(on) {
@@ -1494,21 +1534,7 @@ async function setNoise(on) {
       // The worklet module gets the wasm bytes from the page: a worklet can
       // only build a module from bytes it already holds, so the binary comes
       // over the wire as a file and travels in processorOptions.
-      const [binary] = await Promise.all([
-        fetch('/gtcrn.wasm').then((res) => {
-          if (!res.ok) throw new Error('gtcrn.wasm ' + res.status);
-          return res.arrayBuffer();
-        }),
-        state.audioCtx.audioWorklet.addModule('/gtcrn-node.js'),
-      ]);
-      state.denoise = new AudioWorkletNode(state.audioCtx, 'gtcrn', {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
-        channelCount: 1,
-        channelCountMode: 'explicit',
-        processorOptions: { wasm: new Uint8Array(binary) },
-      });
+      state.denoise = await makeDenoiseNode(state.audioCtx);
       state.denoise.connect(state.micGain);
     } catch (err) {
       console.warn('noise suppression unavailable', err);
@@ -1605,6 +1631,9 @@ function routeAudio(peer, track) {
   peer.meter = ctx.createAnalyser();
   peer.meter.fftSize = 1024;
   peer.audioSrc.connect(peer.meter);
+  // A guest whose noise cancel was asked for before this track existed gets it
+  // now, without a second toggle.
+  if (peer.inNoise) void setPeerNoise(peer, true);
   resumePlayback();
   // A context that is still suspended after a resume attempt plays nothing.
   // Say it, because the video looks correct and only the sound is missing.
@@ -1615,6 +1644,9 @@ function routeAudio(peer, track) {
 // its nodes can be collected.
 function dropAudio(peer) {
   if (!peer) return;
+  if (peer.inDenoise) {
+    try { peer.inDenoise.disconnect(); } catch { /* already gone */ }
+  }
   if (peer.audioSrc) {
     try { peer.audioSrc.disconnect(); } catch { /* already gone */ }
     peer.audioSrc = null;
@@ -1637,6 +1669,49 @@ function dropAudio(peer) {
     peer.audioEl.srcObject = null;
     peer.audioEl = null;
   }
+}
+
+// wirePlayNoise connects the source of one guest to its gain, through that
+// guest's own noise cancel when it is on. The talking light reads the source
+// directly, so it keeps working on either path.
+function wirePlayNoise(peer) {
+  if (!peer.audioSrc || !peer.gain) return;
+  try { peer.audioSrc.disconnect(); } catch { /* not connected */ }
+  if (peer.inDenoise) {
+    try { peer.inDenoise.disconnect(); } catch { /* not connected */ }
+  }
+  if (peer.inNoise && peer.inDenoise) {
+    peer.audioSrc.connect(peer.inDenoise);
+    peer.inDenoise.connect(peer.gain);
+  } else {
+    peer.audioSrc.connect(peer.gain);
+  }
+  if (peer.meter) peer.audioSrc.connect(peer.meter);
+}
+
+// setPeerNoise turns the local noise cancel of one incoming stream on or off.
+// The processor is built on the first use of that guest; a browser without Web
+// Audio says so once and keeps the raw audio.
+async function setPeerNoise(peer, on) {
+  if (!peer) return;
+  if (on) {
+    const ctx = state.playCtx || ensurePlayback();
+    if (!ctx) {
+      say('this browser can not cancel noise without Web Audio');
+      return;
+    }
+    if (!peer.inDenoise) {
+      try {
+        peer.inDenoise = await makeDenoiseNode(ctx);
+      } catch (err) {
+        console.warn('noise cancel unavailable', err);
+        say('the local noise cancel is not available in this browser');
+        return;
+      }
+    }
+  }
+  peer.inNoise = on;
+  wirePlayNoise(peer);
 }
 
 // sendState tells the room that the microphone or the camera changed. The
@@ -1816,6 +1891,8 @@ function ensurePeer(id, mic, cam, deaf) {
     audioEl: null,
     meter: null,     // tap on the incoming audio, for the talking light
     meterPeak: 0,    // decaying peak of that tap, so one stats tick sees a word
+    inDenoise: null, // local noise cancel of this incoming stream
+    inNoise: false,  // that noise cancel is asked for
     spoke: null,     // last time this peer was heard, for the hold
 
     statLast: new Map(),
