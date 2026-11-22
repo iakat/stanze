@@ -149,7 +149,8 @@ const state = {
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'voice-tiles': HTMLInputElement,
- *   menubar: HTMLElement, 'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
+ *   menubar: HTMLElement, 'chrome-btn': HTMLButtonElement,
+ *   'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
  *   'menu-effects-btn': HTMLButtonElement, 'menu-effects': HTMLElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
@@ -287,14 +288,18 @@ const MENUS = [
 
 // fitMenu keeps a drop-down inside the window. A menu hangs from its slot to
 // the left, which is right for the left of the bar and wrong for the right: on
-// a narrow screen the last slot would push its panel past the edge. When the
-// panel does not fit, it flips to the far edge of its slot, the way a menu of
-// the era moved itself off the edge of the desktop.
+// a narrow screen the last slot would push its panel past the edge. The panel
+// is slid back by the pixels it hangs out, and never past the left edge, so a
+// wrapped bar of two lines still keeps every panel on the glass.
 function fitMenu(list) {
   if (!(list instanceof HTMLElement)) return;
-  list.classList.remove('menu-flip');
   const room = document.documentElement.clientWidth;
-  if (list.getBoundingClientRect().right > room - 2) list.classList.add('menu-flip');
+  list.style.left = '';
+  const box = list.getBoundingClientRect();
+  let shift = 0;
+  if (box.right > room - 2) shift = room - 2 - box.right;
+  if (box.left + shift < 2) shift = 2 - box.left;
+  if (shift) list.style.left = Math.round(shift) + 'px';
 }
 
 // menuSet opens one panel, closes the others, and moves the focus to its first
@@ -3422,10 +3427,10 @@ function handle(msg) {
           peer.handSeq = msg.handSeq || 0;
           if (peer.hand !== was) {
             playSfx(peer.hand ? 'pop' : 'bonk');
-            // A hand that goes up on a phone brings the chrome back, or
+            // A hand that goes up on a phone brings the frame back, or
             // nobody would see the queue on a screen that shows only the
             // picture.
-            if (peer.hand) revealUI(4000);
+            if (peer.hand) setChrome(true);
           }
         }
         applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
@@ -3516,6 +3521,9 @@ async function enterRoom(room, pass) {
 
     $('lobby').hidden = true;
     $('stage').hidden = false;
+    // The call opens on the picture alone, and the frame waits for a tap.
+    $('stage').classList.remove('chrome');
+    applyImmersive();
     $('room-label').textContent = room;
     $('room-label').title = room;
     $('chat-note').hidden = false;
@@ -3652,6 +3660,7 @@ function leave(message) {
   menuSet(false);
   $('stage').hidden = true;
   $('lobby').hidden = false;
+  applyImmersive();
   $('room-label').textContent = '';
   $('peer-count').textContent = '';
   state.room = '';
@@ -7688,57 +7697,39 @@ async function paintRelay(peer) {
   }
 }
 
+// ---------------------------------------------------------------- phone frame
+
+// A phone shows the call as a picture. The class folds the frame of the app
+// away in the stylesheet, and a tap on the picture brings it back over it. The
+// query is the one the stylesheet uses, so a desktop never gets the class and
+// keeps its frame in place.
+const phoneQuery = window.matchMedia ? window.matchMedia('(max-width: 620px), (max-height: 520px) and (hover: none)') : null;
+
+// applyImmersive turns the folded call view on or off for the window that is
+// here now, and every window that comes after a rotation. It only ever folds a
+// stage that is on screen, so the lobby stays a whole card.
+function applyImmersive() {
+  const stage = $('stage');
+  const on = !!phoneQuery && phoneQuery.matches && !stage.hidden;
+  stage.classList.toggle('immersive', on);
+  if (!on) stage.classList.remove('chrome');
+  $('chrome-btn').setAttribute('aria-expanded', String(stage.classList.contains('chrome')));
+}
+
+// setChrome shows or folds the frame of the app. The menus and the stats sheet
+// go with it when it folds, because their buttons leave with the frame and a
+// sheet whose button is gone cannot be shut.
+function setChrome(show) {
+  const stage = $('stage');
+  if (!stage.classList.contains('immersive')) return;
+  stage.classList.toggle('chrome', show);
+  $('chrome-btn').setAttribute('aria-expanded', String(show));
+  if (show) return;
+  menuClose();
+  if (statsOpen()) setStatsOpen(false);
+}
+
 // ---------------------------------------------------------------- boot
-
-// ---------------------------------------------------------------- phone chrome
-
-// A phone shows the pictures and nothing else. The bars, the menu and the side
-// column are a sheet over the video: a tap brings them back and a few seconds
-// of quiet slide them away. The sheet starts open on a fresh page, so the
-// controls are seen once. A desktop never carries the class.
-const PHONE_QUERY = '(max-width: 620px), (max-height: 520px) and (hover: none)';
-const phoneQuery = window.matchMedia ? window.matchMedia(PHONE_QUERY) : null;
-let uiTimer = 0;
-
-function phoneMode() {
-  return document.body.classList.contains('phone');
-}
-
-// revealUI opens the sheet for hold milliseconds. A hold of 0 keeps it open
-// until the next tap or until another call closes it.
-function revealUI(hold = 5000) {
-  if (!phoneMode()) return;
-  document.body.classList.add('ui-open');
-  clearTimeout(uiTimer);
-  if (hold) uiTimer = setTimeout(() => document.body.classList.remove('ui-open'), hold);
-}
-
-function hideUI() {
-  clearTimeout(uiTimer);
-  document.body.classList.remove('ui-open');
-}
-
-function paintPhone() {
-  const on = !!(phoneQuery && phoneQuery.matches);
-  document.body.classList.toggle('phone', on);
-  if (!on) hideUI();
-  else revealUI(4000);
-}
-
-function wirePhone() {
-  if (phoneQuery) {
-    if (phoneQuery.addEventListener) phoneQuery.addEventListener('change', paintPhone);
-    else if (phoneQuery.addListener) phoneQuery.addListener(paintPhone);
-  }
-  paintPhone();
-  // A finger on the sheet keeps it open: the timer restarts on every touch of
-  // the bars, the menu and the side column.
-  document.addEventListener('pointerdown', (event) => {
-    if (!phoneMode() || !document.body.classList.contains('ui-open')) return;
-    const target = /** @type {Element} */ (event.target);
-    if (target.closest('.menubar, .statusline, .side, .stage > .titlebar')) revealUI(6000);
-  });
-}
 
 function init() {
   // Older builds kept a volume under the guest name. That is a list of the
@@ -7950,7 +7941,6 @@ function init() {
   wireMenuBar();
   wireCornerDrag();
   wireSubmenus();
-  wirePhone();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
 
@@ -7966,20 +7956,6 @@ function init() {
     // The click that ends a drag of the small tile is not a zoom.
     if (Date.now() - cornerDropAt < 300) return;
     const target = /** @type {Element} */ (event.target);
-    // On a phone the picture owns the screen: a tap brings the sheet of
-    // controls back, and a tap on the empty frame closes it again. While the
-    // sheet is open, a tap on a picture keeps its old meaning.
-    if (phoneMode()) {
-      const open = document.body.classList.contains('ui-open');
-      if (!open) {
-        revealUI(6000);
-        return;
-      }
-      if (!target.closest('.tile')) {
-        hideUI();
-        return;
-      }
-    }
     // A click on the small preview puts the own picture back in the grid.
     if (target.closest('#self-pip')) {
       state.selfPip = false;
@@ -8006,6 +7982,19 @@ function init() {
     }
     setSpotlight(id);
   });
+  // A tap on the picture folds the frame of the app away on a phone, and the
+  // next tap brings it back. A tap on the frame itself never folds it, or no
+  // button of the frame could be used while the frame is open. A desktop has
+  // no immersive class, so nothing here reaches it.
+  $('stage').addEventListener('click', (event) => {
+    if (Date.now() - cornerDropAt < 300) return;
+    if (!$('stage').classList.contains('immersive')) return;
+    const target = /** @type {Element} */ (event.target);
+    if (target.closest('.titlebar, .menubar, .statusline, .side, .stats, .chrome-handle')) return;
+    setChrome(!$('stage').classList.contains('chrome'));
+  });
+  $('chrome-btn').addEventListener('click', () => setChrome(true));
+  if (phoneQuery) phoneQuery.addEventListener('change', applyImmersive);
   // The list of members sits outside the frame of the grid, so it carries its
   // own listener: a click on a row enlarges that member, the way a click on a
   // tile does.

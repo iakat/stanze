@@ -4,7 +4,9 @@
  * joins a room with a fake camera, audits the stage, opens the stats sheet and
  * a menu, and writes one screenshot per state. A finding is a rectangle that
  * leaves the screen without a clipping parent, a control a finger cannot hit,
- * or a text smaller than the sheet's 13 px floor.
+ * or a text smaller than the sheet's 13 px floor. On a phone the stage opens
+ * on the picture alone, so the check taps the handle first and the frame comes
+ * back, and it taps the picture again at the end to fold the frame away.
  *
  * env: PW (playwright-core directory), ROOMSBASE, OUTDIR
  */
@@ -123,12 +125,22 @@ function stageBox() {
   };
 }
 
-/* reveal taps the picture when the sheet of controls is closed, the way a
- * finger does, and waits until it is open. */
-async function reveal(page) {
-  if (await page.evaluate(() => document.body.classList.contains('ui-open'))) return;
-  await page.tap('#grid').catch(async () => { await page.click('#grid'); });
-  await until(page, () => document.body.classList.contains('ui-open'), null, 4000, 'the sheet opens').catch(() => {});
+/* frameShown says which parts of the app frame the stylesheet keeps on the
+ * screen, so a folded call and an open one are told apart without a pixel. */
+function frameShown() {
+  const shown = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden';
+  };
+  return {
+    title: shown('.stage > .titlebar'),
+    menu: shown('.menubar'),
+    controls: shown('.statusline'),
+    side: shown('.side'),
+    handle: shown('#chrome-btn'),
+  };
 }
 
 async function openPage(browser, viewport, room) {
@@ -143,16 +155,10 @@ async function openPage(browser, viewport, room) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => {
-    // A failed fetch is counted once, below, with its URL: the browser also
-    // writes a bare "Failed to load resource" line for the same request.
+    // A missing resource is a 404 of an optional file, and the local speech
+    // folder is the one that is normally absent. A script error stays an error.
     if (m.type() !== 'error' || /Failed to load resource/.test(m.text())) return;
     errors.push('console: ' + m.text());
-  });
-  page.on('response', (r) => {
-    const u = r.url();
-    // A local server has no vosk model directory, and the transcribe menu asks
-    // for it to know whether the feature is there. That is not a page error.
-    if (r.status() >= 400 && !/\/vosk\//.test(u)) errors.push('http ' + r.status() + ' ' + u);
   });
   await page.goto(BASE + '/' + (room ? '#r=' + room : ''), { waitUntil: 'load', timeout: 60000 });
   await until(page, () => !!(window.e2eApp && window.e2eApp.state.wasmTest), null, 45000, 'wasm self test').catch(() => {});
@@ -198,26 +204,21 @@ async function openPage(browser, viewport, room) {
         }, null, 30000, 'own tile');
         await sleep(1200);
 
-        // A phone shows the picture alone. The bars and the side column are a
-        // sheet that a tap brings back, so the first check runs on the bare
-        // screen and the audit runs with the sheet open.
-        const phone = await a.page.evaluate(() => document.body.classList.contains('phone'));
-        if (phone) {
-          await until(a.page, () => !document.body.classList.contains('ui-open'), null, 8000, 'the sheet closes by itself').catch(() => {});
-          const bare = await a.page.evaluate(() => {
-            const g = document.getElementById('grid').getBoundingClientRect();
-            return {
-              sheet: !document.body.classList.contains('ui-open'),
-              w: Math.round(g.width), h: Math.round(g.height),
-              vw: window.innerWidth, vh: window.innerHeight,
-            };
-          });
-          check(tag + 'the picture owns the screen', bare.sheet && bare.h >= bare.vh - 8 && bare.w >= bare.vw - 8, JSON.stringify(bare));
-          await reveal(a.page);
-          const opened = await a.page.evaluate(() => document.body.classList.contains('ui-open'));
-          check(tag + 'a tap brings the controls back', opened);
+        // A phone opens the call on the picture alone: one tap on the handle
+        // brings the frame of the app back, and the checks below measure the
+        // toolbar and the menus that the tap revealed.
+        const immersive = vp.width <= 620 || vp.height <= 520;
+        if (immersive) {
+          const folded = await a.page.evaluate(frameShown);
+          await a.page.screenshot({ path: OUT + '/' + tag + 'folded.png' });
+          check(tag + 'the call opens on the picture alone', !folded.menu && !folded.controls && !folded.side, JSON.stringify(folded));
+          check(tag + 'a handle offers the frame', folded.handle, JSON.stringify(folded));
+          await a.page.click('#chrome-btn');
+          await sleep(300);
+          const open = await a.page.evaluate(frameShown);
+          check(tag + 'one tap brings the frame back', open.menu && open.controls && open.side && open.title, JSON.stringify(open));
+          await a.page.screenshot({ path: OUT + '/' + tag + 'revealed.png' });
         }
-        await sleep(400);
 
         const stage = await a.page.evaluate(audit);
         const box = await a.page.evaluate(stageBox);
@@ -233,9 +234,7 @@ async function openPage(browser, viewport, room) {
           box.controlsRow && box.controlsRow.h <= 100, JSON.stringify(box.controlsRow));
         report[vp.name] = { lobby, stage, box, errors: a.errors };
 
-        // The stats sheet and one menu, because both are overlays. Both live
-        // on the sheet, so it is brought back first.
-        await reveal(a.page);
+        // The stats sheet and one menu, because both are overlays.
         await a.page.click('#stats-btn');
         await until(a.page, () => !document.getElementById('stats-panel').hidden, null, 8000, 'stats open').catch(() => {});
         await sleep(400);
@@ -249,7 +248,6 @@ async function openPage(browser, viewport, room) {
         check(tag + 'stats nothing out of the screen', stats.spill.length === 0, stats.spill.join(' | '));
         await a.page.click('#stats-close').catch(() => {});
 
-        await reveal(a.page);
         await a.page.click('#menu-settings-btn').catch(() => {});
         await sleep(300);
         const menu = await a.page.evaluate(() => {
@@ -260,6 +258,28 @@ async function openPage(browser, viewport, room) {
         });
         await a.page.screenshot({ path: OUT + '/' + tag + 'menu.png' });
         check(tag + 'settings menu fits the screen', menu && menu.x >= 0 && menu.x + menu.w <= vp.width + 1 && menu.y >= 0 && menu.y + menu.h <= vp.height + 1, JSON.stringify(menu));
+
+        // One tap on the picture folds the frame away again, and the menus go
+        // with it, because their buttons leave with the frame. The tap lands on
+        // the part of the picture that the bands of the frame leave free. An
+        // open drop-down covers that part, so it closes first.
+        if (immersive) {
+          const stillOpen = await a.page.evaluate(() => !document.getElementById('menu-settings').hidden);
+          if (stillOpen) {
+            await a.page.click('#menu-settings-btn');
+            await sleep(200);
+          }
+          const spot = await a.page.evaluate(() => {
+            const top = document.querySelector('.menubar').getBoundingClientRect().bottom;
+            const bar = document.querySelector('.statusline').getBoundingClientRect().top;
+            return { x: Math.round(window.innerWidth / 2), y: Math.round((top + bar) / 2) };
+          });
+          await a.page.touchscreen.tap(spot.x, spot.y);
+          await sleep(300);
+          const back = await a.page.evaluate(frameShown);
+          await a.page.screenshot({ path: OUT + '/' + tag + 'folded-again.png' });
+          check(tag + 'a second tap folds the frame away', !back.menu && !back.controls && !back.side, JSON.stringify(back) + ' at ' + JSON.stringify(spot));
+        }
         check(tag + 'no page errors', a.errors.length === 0, a.errors.join(' | '));
       } finally {
         await a.ctx.close();

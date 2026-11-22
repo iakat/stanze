@@ -39,17 +39,24 @@ async function until(page, fn, arg, timeout, label) {
   throw new Error('timeout waiting for ' + (label || 'condition') + ' (last=' + JSON.stringify(last) + ')');
 }
 
-/* names reads the raised hands of one page, in the order of the panel. */
+/* names reads the raised hands of one page, in the order of the panel. The
+ * own row says "(you)" after the name, and the order is what these checks
+ * read, so the note goes. */
 function names() {
-  return [...document.querySelectorAll('#hand-queue-list .hq-name')].map((n) => n.textContent);
+  return [...document.querySelectorAll('#hand-queue-list .hq-name')]
+    .map((n) => n.textContent.replace(/ \(you\)$/, ''));
 }
 
-/* reveal opens the sheet of a phone, the way a finger does. */
+/* reveal brings the frame of a phone back, the way a finger does: a phone
+ * opens on the picture alone and the handle shows the bars and the menus. */
 async function reveal(page) {
-  if (await page.evaluate(() => !document.body.classList.contains('phone'))) return;
-  if (await page.evaluate(() => document.body.classList.contains('ui-open'))) return;
-  await page.tap('#grid').catch(async () => { await page.click('#grid'); });
-  await until(page, () => document.body.classList.contains('ui-open'), null, 4000, 'the sheet opens').catch(() => {});
+  const folded = await page.evaluate(() => {
+    const stage = document.getElementById('stage');
+    return stage.classList.contains('immersive') && !stage.classList.contains('chrome');
+  });
+  if (!folded) return;
+  await page.click('#chrome-btn');
+  await until(page, () => document.getElementById('stage').classList.contains('chrome'), null, 4000, 'the frame opens').catch(() => {});
 }
 
 async function join(browser, viewport, room, who) {
@@ -111,12 +118,12 @@ async function join(browser, viewport, room, who) {
       check('B sees the name in the queue', one[0] === 'ana', JSON.stringify(one));
       const label = await a.page.evaluate(() => document.querySelector('#hand-btn span').textContent);
       check('the button reads lower hand', label === 'lower hand', label);
-      await until(a.page, () => /hand #1/.test(document.querySelector('#stage-main .tile .flags').textContent), null, 8000, 'the tile flag')
+      await until(a.page, () => /hand #1/.test(document.querySelector('.tile[data-local="yes"] .flags').textContent), null, 8000, 'the tile flag')
         .catch(() => {});
-      const flag = await a.page.evaluate(() => document.querySelector('#stage-main .tile .flags').textContent);
+      const flag = await a.page.evaluate(() => document.querySelector('.tile[data-local="yes"] .flags').textContent);
       check('the own tile carries the queue number', /hand #1/.test(flag), flag);
 
-      // B raises on a phone, so the sheet has to come back first.
+      // B raises on a phone, so the frame has to come back first.
       await reveal(b.page);
       await b.page.click('#hand-btn');
       await until(a.page, () => document.querySelectorAll('#hand-queue-list .hq-row').length === 2, null, 8000, 'the queue of two')
@@ -136,7 +143,7 @@ async function join(browser, viewport, room, who) {
           vw: window.innerWidth, vh: window.innerHeight,
         };
       });
-      check('the queue fits the phone sheet', !box.hidden && box.x >= 0 && box.x + box.w <= box.vw + 1 &&
+      check('the queue fits the phone frame', !box.hidden && box.x >= 0 && box.x + box.w <= box.vw + 1 &&
         box.y >= 0 && box.y + box.h <= box.vh + 1, JSON.stringify(box));
       await b.page.screenshot({ path: OUT + '/hand-phone.png' });
 
