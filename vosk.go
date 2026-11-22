@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // The optional speech to text engine runs in the browser and is never part of
@@ -76,22 +75,15 @@ func voskModels(dir string) []voskModel {
 }
 
 // voskServes reports whether one path under /vosk/ may be served. Only the
-// library and the files the list names are served, so nothing else on the disk
-// is reachable, and a name with a separator or a dot dot never matches.
-func voskServes(dir, path string) bool {
+// library and a model name of the one accepted shape are served, so nothing
+// else on the disk is reachable, and a name with a separator or a dot dot never
+// matches. A name that passes but is not on disk is rejected by the open below.
+func voskServes(path string) bool {
 	base := strings.TrimPrefix(path, "/vosk/")
 	if base == "" || base != filepath.Base(base) || strings.Contains(base, "..") {
 		return false
 	}
-	if base == voskLib {
-		return true
-	}
-	for _, m := range voskModels(dir) {
-		if m.File == base {
-			return true
-		}
-	}
-	return false
+	return base == voskLib || voskModelName.MatchString(base)
 }
 
 // The library is 5.8 MB of script with the wasm inside, and it is the same
@@ -162,7 +154,7 @@ func voskHandler(dir string) http.HandlerFunc {
 			}
 			return
 		}
-		if !voskServes(dir, r.URL.Path) {
+		if !voskServes(r.URL.Path) {
 			http.NotFound(w, r)
 			return
 		}
@@ -200,15 +192,6 @@ func voskHandler(dir string) http.HandlerFunc {
 				}
 			}
 		}
-		http.ServeContent(w, r, "", statModTime(f), f)
+		http.ServeContent(w, r, "", st.ModTime(), f)
 	}
-}
-
-// statModTime is the time ServeContent revalidates against; a failed stat gives
-// the zero time, which turns If-Modified-Since off for that file.
-func statModTime(f *os.File) time.Time {
-	if info, err := f.Stat(); err == nil {
-		return info.ModTime()
-	}
-	return time.Time{}
 }
