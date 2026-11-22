@@ -15,8 +15,16 @@ type Peer struct {
 
 	// mic and cam are the flags the client reported last. They are only
 	// indicators for the other tiles; the media itself decides the truth.
+	// The read loop of this peer writes them and the join of another peer
+	// reads them, so fmu guards both.
+	fmu sync.Mutex
 	mic bool
 	cam bool
+
+	// wmu serialises writes to the websocket. gorilla allows one concurrent
+	// writer, and both the write loop and the read loop (terminal errors)
+	// write on the same connection.
+	wmu sync.Mutex
 
 	send      chan []byte
 	closeOnce sync.Once
@@ -45,6 +53,45 @@ func (p *Peer) enqueue(msg []byte) {
 	default:
 		p.close()
 	}
+}
+
+// setFlags stores the flags that a state message carries and returns both
+// values as they are now. A nil pointer leaves that flag as it was.
+func (p *Peer) setFlags(mic, cam *bool) (bool, bool) {
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	if mic != nil {
+		p.mic = *mic
+	}
+	if cam != nil {
+		p.cam = *cam
+	}
+	return p.mic, p.cam
+}
+
+// flags returns the last reported microphone and camera flags.
+func (p *Peer) flags() (bool, bool) {
+	p.fmu.Lock()
+	defer p.fmu.Unlock()
+	return p.mic, p.cam
+}
+
+// write sends one text frame. It is the only place that calls WriteMessage.
+func (p *Peer) write(conn *websocket.Conn, msg []byte) error {
+	p.wmu.Lock()
+	defer p.wmu.Unlock()
+	conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+	return conn.WriteMessage(websocket.TextMessage, msg)
+}
+
+// writeNow sends one message on the connection directly. It is used for
+// terminal errors, where the queued writer might lose the message on close.
+func (p *Peer) writeNow(conn *websocket.Conn, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	_ = p.write(conn, b)
 }
 
 func (p *Peer) enqueueJSON(v any) {
@@ -211,8 +258,7 @@ func (p *Peer) writeLoop(conn *websocket.Conn, done <-chan struct{}) {
 		case <-done:
 			return
 		case msg := <-p.send:
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			if err := p.write(conn, msg); err != nil {
 				p.close()
 				return
 			}

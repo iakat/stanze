@@ -132,12 +132,12 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		var m clientMsg
 		if err := json.Unmarshal(data, &m); err != nil {
-			writeNow(conn, serverMsg{T: "error", Code: "bad-message"})
+			p.writeNow(conn, serverMsg{T: "error", Code: "bad-message"})
 			continue
 		}
 		if p.room == nil {
 			if m.T != "join" {
-				writeNow(conn, serverMsg{T: "error", Code: "unavailable"})
+				p.writeNow(conn, serverMsg{T: "error", Code: "unavailable"})
 				return
 			}
 			if !s.handleJoin(p, conn, m) {
@@ -160,13 +160,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// A mute or camera toggle is a small indicator for the other
 			// tiles. It carries no media, and the server keeps the last value
 			// only for the lifetime of the connection.
-			if m.Mic != nil {
-				p.mic = *m.Mic
-			}
-			if m.Cam != nil {
-				p.cam = *m.Cam
-			}
-			mic, cam := p.mic, p.cam
+			mic, cam := p.setFlags(m.Mic, m.Cam)
 			s.hub.broadcast(p, mustJSON(serverMsg{
 				T: "state", From: p.id, Mic: &mic, Cam: &cam,
 			}))
@@ -244,17 +238,6 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-// writeNow sends one message on the connection directly. It is used for
-// terminal errors, where the queued writer might lose the message on close.
-func writeNow(conn *websocket.Conn, v any) {
-	conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-	b, err := json.Marshal(v)
-	if err != nil {
-		return
-	}
-	conn.WriteMessage(websocket.TextMessage, b)
-}
-
 // handleJoin resolves the room and announces the new peer. It returns false if
 // the connection must be dropped.
 func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
@@ -262,7 +245,7 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	if err != nil {
 		// One answer for every failure: unknown room, wrong passphrase, full
 		// room. Nothing is distinguishable.
-		writeNow(conn, serverMsg{T: "error", Code: "unavailable"})
+		p.writeNow(conn, serverMsg{T: "error", Code: "unavailable"})
 		return false
 	}
 
@@ -274,8 +257,9 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
+		mic, cam := other.flags()
 		peers = append(peers, peerInfo{
-			ID: other.id, Mic: other.mic, Cam: other.cam, Admin: isAdmin[other.id],
+			ID: other.id, Mic: mic, Cam: cam, Admin: isAdmin[other.id],
 		})
 	}
 
@@ -293,9 +277,10 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		Admins: admins,
 	})
 
+	ownMic, ownCam := p.flags()
 	joinedMsg := mustJSON(serverMsg{
 		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Mic: p.mic, Cam: p.cam, Admin: isAdmin[p.id]},
+		Peer: &peerInfo{ID: p.id, Mic: ownMic, Cam: ownCam, Admin: isAdmin[p.id]},
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)

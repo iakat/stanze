@@ -52,6 +52,7 @@ const state = {
   fatal: '',
   statsTimer: null,
   statsBusy: false,
+  notice: '',         // the text on the status line now, so a later step can tell whose it is
   statHist: [],       // one sample a second, for the graph in the stats panel
   callStart: 0,       // ms at the join, for the header timer
   callTimer: null,
@@ -171,6 +172,7 @@ function newRoomID() {
 
 function say(text) {
   const box = state.room ? $('stage-error') : $('lobby-error');
+  state.notice = text;
   box.textContent = text;
   box.hidden = !text;
 }
@@ -261,6 +263,12 @@ function send(msg) {
 function paintName(tile, name, local) {
   tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
   tile.querySelector('.avatar').textContent = name || '?';
+  tile.setAttribute('aria-label', local ? `${name}, you` : name);
+}
+
+// tileId is the spotlight key of one tile: the peer id, or 'self'.
+function tileId(tile) {
+  return tile.dataset.peer || (tile.dataset.local ? 'self' : '');
 }
 
 function makeTile(id, name, local = false) {
@@ -268,20 +276,34 @@ function makeTile(id, name, local = false) {
   tile.className = 'tile';
   tile.dataset.state = 'new';
   if (local) tile.dataset.local = 'yes';
+  // The tile is a focus stop: Enter or Space on it enlarges that guest, the
+  // same as a click. The controls on it show on hover, on focus and, on a
+  // touch screen, after a tap.
+  tile.tabIndex = 0;
+  tile.setAttribute('role', 'group');
   tile.innerHTML = `
     <video autoplay playsinline${local ? ' muted' : ''}></video>
     <div class="avatar"></div>
+    <span class="ring" aria-hidden="true"></span>
     ${local ? '' : `<div class="vol">
+      <img class="vol-ico" src="/openmoji/1F50A.svg" alt="" width="16" height="16">
       <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
       <span class="vol-num">100%</span>
     </div>`}
-    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${local ? '' : '<span class="pin" hidden></span>'}</div>
+    <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
+    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${local ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
     ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="host actions">&#8943;</button><div class="menu" hidden></div>'}`;
   paintName(tile, name, local);
   // A remote guest is heard through its own gain node, so the video element
   // only ever carries pictures and stays muted.
   if (!local) tile.querySelector('video').muted = true;
   if (!local) wireDots(tile);
+  tile.addEventListener('keydown', (event) => {
+    if (event.target !== tile || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    const id = tileId(tile);
+    if (id) setSpotlight(id);
+  });
   $('stage-main').appendChild(tile);
   return tile;
 }
@@ -335,7 +357,14 @@ function layoutStage() {
     const big = spot ? tile === spot : tileHasPicture(tile);
     const host = big ? main : rail;
     if (tile.parentElement !== host) host.appendChild(tile);
-    tile.classList.toggle('spot', big && !!spot);
+    const on = big && !!spot;
+    tile.classList.toggle('spot', on);
+    const zoom = tile.querySelector('.zoom');
+    if (zoom) {
+      zoom.setAttribute('aria-pressed', String(on));
+      zoom.setAttribute('aria-label', on ? 'back to the grid' : 'enlarge this picture');
+      zoom.title = on ? 'back to the grid' : 'enlarge';
+    }
   }
   const alone = main.childElementCount === 1 ? 'yes' : 'no';
   if (main.dataset.alone !== alone) main.dataset.alone = alone;
@@ -347,6 +376,7 @@ function layoutStage() {
 // when that guest already holds it.
 function setSpotlight(id) {
   state.spotlight = id && state.spotlight !== id ? id : '';
+  for (const open of document.querySelectorAll('.tile.ctl')) open.classList.remove('ctl');
   layoutStage();
 }
 
@@ -471,7 +501,14 @@ function wireDots(tile) {
     }
     menu.hidden = false;
   });
-  document.addEventListener('click', () => { menu.hidden = true; });
+}
+
+// closeMenus hides every host menu. One listener on the page does it, because
+// a listener per tile was never removed when its tile left.
+function closeMenus() {
+  for (const menu of document.querySelectorAll('.tile .menu:not([hidden])')) {
+    /** @type {HTMLElement} */ (menu).hidden = true;
+  }
 }
 
 // markAdmins redraws the host chip on every tile and hides the menus from
@@ -1090,10 +1127,13 @@ async function enableMic() {
   sendState();
 }
 
-function disableMic() {
+// disableMic mutes the microphone. A mute that the guest chose is remembered
+// for the next visit; a mute that the host forced is not, or the guest would
+// join muted for ever after one request.
+function disableMic(persist = true) {
   playSfx('hammer');
   state.mic = false;
-  store('mic', 0);
+  if (persist) store('mic', 0);
   if (state.micGain) state.micGain.gain.value = 0;
   updateButtons();
   sendState();
@@ -1581,7 +1621,7 @@ function ensurePeer(id, mic, cam) {
     if (mic !== undefined || cam !== undefined) {
       peer.mic = mic === undefined ? peer.mic : mic;
       peer.cam = cam === undefined ? peer.cam : cam;
-      applyFlags(peer.tile, peer.mic, peer.cam);
+      applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
     }
     return peer;
   }
@@ -1642,7 +1682,7 @@ function ensurePeer(id, mic, cam) {
   peer.tile = makeTile(peer.name, peer.name);
   peer.video = peer.tile.querySelector('video');
   peer.tile.dataset.peer = id;
-  applyFlags(peer.tile, peer.mic, peer.cam);
+  applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
   wireVolume(peer);
   state.peers.set(id, peer);
   layoutStage();
@@ -1934,7 +1974,7 @@ function handle(msg) {
     // The host asked for a mute. It is a request to this client; the server
     // can not mute a track, so this client turns its own gain down.
     if (msg.action === 'mute') {
-      disableMic();
+      disableMic(false);
       say('the host muted your microphone');
     }
     return;
@@ -1954,7 +1994,9 @@ function handle(msg) {
     case 'joined': {
       state.self = msg.self;
       state.ice = msg.ice || [];
-      say('');
+      // Only the reconnect notice ends here. A device or sealing notice that
+      // the join itself wrote must stay up until the guest has read it.
+      if (state.notice === 'connection lost, reconnecting') say('');
       setAdmins(msg.admins);
       for (const info of msg.peers || []) {
         if (!info) continue;
@@ -3969,6 +4011,9 @@ async function updateStats() {
       if (call.length) rows.push(statsRow('call', call));
     }
     for (const { peer, s } of guests) {
+      // The route can change in a call, so the tile mark follows what the
+      // report says now and not only what it said when the link came up.
+      if (s && s.path && peer.tile) peer.tile.dataset.relay = s.path.startsWith('relay') ? 'yes' : 'no';
       const level = linkLevel(s);
       const pairs = peerPairs(peer, s);
       if (pairs.length) {
@@ -5629,18 +5674,34 @@ win().e2eApp = {
 
 // ---------------------------------------------------------------- relay badge
 
+// selectedPair is the candidate pair that carries the media. The standard way
+// to find it is the transport report; the `selected` flag on the pair is a
+// Firefox extra, so a lookup that relied on it never marked a Chrome guest.
+function selectedPair(stats) {
+  let pair = null;
+  stats.forEach((r) => {
+    if (!pair && r.type === 'transport' && r.selectedCandidatePairId) {
+      pair = stats.get(r.selectedCandidatePairId) || null;
+    }
+  });
+  if (pair) return pair;
+  stats.forEach((r) => {
+    if (!pair && r.type === 'candidate-pair' && (r.selected || (r.nominated && r.state === 'succeeded'))) pair = r;
+  });
+  return pair;
+}
+
 // paintRelay marks a tile when the link to that peer runs through the TURN
 // relay. The selected pair is read once, when the link comes up; a reconnect
 // runs this again.
 async function paintRelay(peer) {
   try {
-    let pair = null;
     const stats = await peer.pc.getStats();
-    stats.forEach((r) => {
-      if (r.type === 'candidate-pair' && r.selected) pair = r;
-    });
-    const local = pair && stats.get(pair.localCandidateId);
-    peer.tile.dataset.relay = local && local.candidateType === 'relay' ? 'yes' : 'no';
+    const pair = selectedPair(stats);
+    const local = pair ? stats.get(pair.localCandidateId) : null;
+    const remote = pair ? stats.get(pair.remoteCandidateId) : null;
+    const relayed = !!((local && local.candidateType === 'relay') || (remote && remote.candidateType === 'relay'));
+    if (peer.tile) peer.tile.dataset.relay = relayed ? 'yes' : 'no';
   } catch {
     /* stats are best effort */
   }
@@ -5795,6 +5856,10 @@ function init() {
   // and every other guest becomes a rail row. The same click again, a click on
   // the empty stage, or Esc gives the normal layout back. A click on a control
   // in the tile stays with that control.
+  // A touch screen has no hover, so the first tap on a picture opens its
+  // controls (volume, code card, enlarge) and a second tap, or the enlarge
+  // button, enlarges it. The controls close on their own after a few seconds.
+  const touch = window.matchMedia ? window.matchMedia('(hover: none)') : { matches: false };
   $('grid').addEventListener('click', (event) => {
     const target = /** @type {Element} */ (event.target);
     const tile = target.closest('.tile');
@@ -5804,11 +5869,22 @@ function init() {
     }
     if (target.closest('.vol, .dots, .menu, .sas, .pin')) return;
     const el = /** @type {HTMLElement} */ (tile);
-    const id = el.dataset.peer || (el.dataset.local ? 'self' : '');
-    if (id) setSpotlight(id);
+    const id = tileId(el);
+    if (!id) return;
+    if (touch.matches && !target.closest('.zoom') && el.parentElement === $('stage-main') && !el.classList.contains('ctl')) {
+      for (const open of document.querySelectorAll('.tile.ctl')) open.classList.remove('ctl');
+      el.classList.add('ctl');
+      clearTimeout(/** @type {any} */ (el).ctlTimer);
+      /** @type {any} */ (el).ctlTimer = setTimeout(() => el.classList.remove('ctl'), 5000);
+      return;
+    }
+    setSpotlight(id);
   });
+  document.addEventListener('click', closeMenus);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && state.spotlight) setSpotlight('');
+    if (event.key !== 'Escape') return;
+    closeMenus();
+    if (state.spotlight) setSpotlight('');
   });
 
   // A hidden tab has no one to read the numbers, so the polling sleeps until
