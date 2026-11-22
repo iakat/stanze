@@ -2,15 +2,8 @@
 
 One line per work item. The top item is the most important.
 
-## In work, not live yet
-
-- The stats panel gets a redesign: it reads as a clear sheet and not as a pile of rows, and the numbers stay the same.
-- The stats panel gets old school graphs: the downlink area, the round trip line and the loss, drawn in the look of the rest of the sheet, and a text line under each drawing.
-
-
 ## Open
 
-- The per peer volume keeps a guest name on disk and has no identity beyond it: `rooms.vol.<name>` lists who a guest called on a shared machine, and two guests with one name share one setting. Key the setting with the peer key fingerprint or the peer id, keep no name on disk, and keep the setting in memory for the call if that is too much.
 - A real desktop window on the login page: the lobby window must move around the screen like a real desktop window. Drag by the title bar, keep the whole window inside the viewport, allow the drag on a touch screen, and remember the place for the guest. The call stage stays maximised and takes no drag.
 - Show the per peer volume slider and the `e2e ready` badge only while the pointer is over that tile, so a full room is a picture and not a panel. On a touch screen there is no hover, so the control must open on a tap.
 - Give the per peer volume slider a natural scale: today the gain is linear in amplitude, so the top half of the travel changes little and the bottom half jumps to silence. Map the slider position to loudness, for example a power curve, keep 100 percent at unity, and keep the stored setting in the same unit.
