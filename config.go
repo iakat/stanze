@@ -33,6 +33,7 @@ type Config struct {
 	StaticDir     string
 	DocsDir       string
 	VoskDir       string
+	OmniDir       string
 	AllowedOrigin string
 }
 
@@ -115,6 +116,7 @@ func loadConfig(args []string) (*Config, error) {
 	fs.StringVar(&cfg.StaticDir, "static-dir", envStr("STATIC_DIR", ""), "serve the web client from this directory instead of the embedded copy")
 	fs.StringVar(&cfg.DocsDir, "docs-dir", envStr("DOCS_DIR", ""), "serve QUEUE.md and DONE.md from this directory (empty disables the routes)")
 	fs.StringVar(&cfg.VoskDir, "vosk-dir", envStr("VOSK_DIR", ""), "directory with vosk.js and model.tar.gz for the optional in-browser transcription (empty: the feature is not offered)")
+	fs.StringVar(&cfg.OmniDir, "omni-dir", envStr("OMNI_DIR", ""), "directory with the sherpa-onnx wasm bundle and the Omnilingual ASR model for the optional multilingual transcription (empty: the feature is not offered)")
 	fs.StringVar(&cfg.AllowedOrigin, "allowed-origin", envStr("ALLOWED_ORIGIN", ""), "extra allowed websocket Origin (default: same host only)")
 
 	if err := fs.Parse(args); err != nil {
