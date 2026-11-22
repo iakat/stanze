@@ -266,16 +266,17 @@ well.
   model for every language, so it has no picker and no per language file; the
   server lists the five with their sizes and sha256 under `/omni/models` and
   serves them under `/omni/`. The model is 348 MB, the tab downloads it once,
-  keeps it in OPFS (the Cache API refuses a single entry that size) and checks
-  the hash before use, and the menu says so before the download starts. The
-  wasm is a pthread build: the page is cross-origin isolated (COOP
+  keeps it in the browser cache in 32 MB parts, checks it against the listed
+  sha256 before the wasm reads a byte, and says the size before the download
+  starts. The wasm is a pthread build: the page is cross-origin isolated (COOP
   `same-origin`, COEP `require-corp`, and CORP `same-origin` on our own
   answers), which costs nothing here because every resource is same origin or a
   blob of it, and the recognizer runs in a worker of its own, since one decode
-  costs most of a second of CPU. The published glue carries a preload of the
-  sherpa-onnx demo model; the server cuts that call out as it serves the file,
-  so the copy on disk stays pristine. With both engines on offer the menu has an
-  engine row, and only one engine runs at a time.
+  costs most of a second of CPU. The published glue carries the machinery of a
+  demo model preload (this build only defines it and never calls it); the server
+  removes the call when a file has one, as it serves the file, so the copy on
+  disk stays pristine. With both engines on offer the menu has an engine row,
+  and only one engine runs at a time.
 - **Performance slider**, **volume curve**, **sound switch**, clickable
   `http(s)` links in the chat and a movable lobby window are client only and
   stored in the browser.
