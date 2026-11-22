@@ -206,6 +206,9 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	// file write and needs no new binary.
 	mux.HandleFunc("/QUEUE.md", docHandler(cfg.DocsDir, "QUEUE.md"))
 	mux.HandleFunc("/DONE.md", docHandler(cfg.DocsDir, "DONE.md"))
+	// Optional transcription files, served from disk only when an operator
+	// provides them; otherwise 404.
+	mux.HandleFunc("/vosk/", voskHandler(cfg.VoskDir))
 
 	return securityHeaders(mux, srv.log), nil
 }
@@ -414,8 +417,8 @@ func contentType(name string) string {
 // securityHeaders keeps the client dependency-free and locked down. Room ids
 // live only in the URL fragment, so no path or query ever carries them.
 func securityHeaders(next http.Handler, log *slog.Logger) http.Handler {
-	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; " +
-		"media-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'self'; " +
+	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; " +
+		"media-src 'self' blob:; connect-src 'self' blob: ws: wss:; font-src 'self'; " +
 		"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

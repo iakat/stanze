@@ -118,6 +118,10 @@ type Room struct {
 	admins map[string]bool
 	// order keeps the join order, so a new admin is the oldest peer.
 	order []string
+	// waitingRoom is the switch an admin turns on. While it is on, a guest
+	// who joins a room that has someone inside waits until a member lets
+	// them in. It dies with the room, like everything else.
+	waitingRoom bool
 }
 
 type Hub struct {
@@ -212,24 +216,47 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 		}
 		p.id = id
 	}
+	// The first guest of a room is never held, so the room can not wait for
+	// a member who is not there. A later guest waits while the switch is on.
+	p.waiting = room.waitingRoom && room.admittedLocked() > 0
 	room.peers[p.id] = p
 	room.order = append(room.order, p.id)
 	p.room = room
-	if len(room.admins) == 0 {
+	if len(room.admins) == 0 && !p.waiting {
 		room.admins[p.id] = true
 	}
 	return room, nil
 }
 
+// admittedLocked counts the guests that are inside the room, not waiting.
+// The caller holds the hub lock.
+func (r *Room) admittedLocked() int {
+	n := 0
+	for _, p := range r.peers {
+		if !p.waiting {
+			n++
+		}
+	}
+	return n
+}
+
 // leave removes the peer from its room and returns that room, or nil when the
 // peer held the last place in it, so the caller can address the rest of it.
 func (h *Hub) leave(p *Peer) *Room {
+	room, _ := h.leaveWith(p)
+	return room
+}
+
+// leaveWith is leave, and it also returns the id of the waiting guest that
+// the leave let in, or "" when it let nobody in.
+func (h *Hub) leaveWith(p *Peer) (*Room, string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	room := p.room
 	if room == nil {
-		return nil
+		return nil, ""
 	}
+	letIn := ""
 	delete(room.peers, p.id)
 	for i, id := range room.order {
 		if id == p.id {
@@ -245,18 +272,74 @@ func (h *Hub) leave(p *Peer) *Room {
 			delete(h.rooms, room.id)
 		}
 		p.room = nil
-		return nil
+		return nil, ""
+	}
+	// Nobody inside is left and guests still wait: the one that has waited
+	// longest is let in, or the room would hold them out for good. The
+	// others wait for that guest, as they would for any member.
+	if room.admittedLocked() == 0 {
+		for _, id := range room.order {
+			if w := room.peers[id]; w != nil && w.waiting {
+				w.waiting = false
+				letIn = w.id
+				break
+			}
+		}
 	}
 	if len(room.admins) == 0 {
+		// The role goes to the oldest guest that is inside the room, never
+		// to one that waits.
 		for _, id := range room.order {
-			if _, ok := room.peers[id]; ok {
+			if q, ok := room.peers[id]; ok && !q.waiting {
 				room.admins[id] = true
 				break
 			}
 		}
 	}
 	p.room = nil
-	return room
+	return room, letIn
+}
+
+// isWaiting reports whether one peer is held outside the room.
+func (h *Hub) isWaiting(p *Peer) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return p != nil && p.waiting
+}
+
+// waitingRoomOn reads the room switch.
+func (h *Hub) waitingRoomOn(room *Room) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return room != nil && room.waitingRoom
+}
+
+// setWaitingRoom turns the switch of a room. Guests that already wait stay
+// where they are when it goes off: only a member lets a guest in.
+func (h *Hub) setWaitingRoom(room *Room, on bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room != nil {
+		room.waitingRoom = on
+	}
+}
+
+// admit lets one waiting guest into the room. Only a guest that is inside may
+// do it, and the target must be waiting in the same room. It reports whether
+// anything changed.
+func (h *Hub) admit(by *Peer, id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	room := by.room
+	if room == nil || by.waiting || id == by.id {
+		return false
+	}
+	target, ok := room.peers[id]
+	if !ok || !target.waiting {
+		return false
+	}
+	target.waiting = false
+	return true
 }
 
 // roomOf reads the room of a peer under the hub lock.
@@ -328,7 +411,7 @@ func (h *Hub) grantAdmin(room *Room, id string) bool {
 	if room == nil {
 		return false
 	}
-	if _, ok := room.peers[id]; !ok {
+	if t, ok := room.peers[id]; !ok || t.waiting {
 		return false
 	}
 	room.admins[id] = true

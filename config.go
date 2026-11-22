@@ -32,6 +32,7 @@ type Config struct {
 	BehindProxy   bool
 	StaticDir     string
 	DocsDir       string
+	VoskDir       string
 	AllowedOrigin string
 }
 
@@ -113,6 +114,7 @@ func loadConfig(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.BehindProxy, "behind-proxy", envStr("BEHIND_PROXY", "") != "", "trust X-Forwarded-For for rate limiting (only behind a proxy you control)")
 	fs.StringVar(&cfg.StaticDir, "static-dir", envStr("STATIC_DIR", ""), "serve the web client from this directory instead of the embedded copy")
 	fs.StringVar(&cfg.DocsDir, "docs-dir", envStr("DOCS_DIR", ""), "serve QUEUE.md and DONE.md from this directory (empty disables the routes)")
+	fs.StringVar(&cfg.VoskDir, "vosk-dir", envStr("VOSK_DIR", ""), "directory with vosk.js and model.tar.gz for the optional in-browser transcription (empty: the feature is not offered)")
 	fs.StringVar(&cfg.AllowedOrigin, "allowed-origin", envStr("ALLOWED_ORIGIN", ""), "extra allowed websocket Origin (default: same host only)")
 
 	if err := fs.Parse(args); err != nil {

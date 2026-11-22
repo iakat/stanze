@@ -72,7 +72,8 @@ func httpDo(method, path string, body string) (int, []byte, error) {
 }
 
 type peerInfo struct {
-	ID string `json:"id"`
+	ID      string `json:"id"`
+	Waiting bool   `json:"waiting"`
 }
 
 type iceCfg struct {
@@ -91,6 +92,9 @@ type sigMsg struct {
 	Candidate json.RawMessage `json:"candidate"`
 	Code      string          `json:"code"`
 	Ice       []iceCfg        `json:"ice"`
+
+	Waiting     bool  `json:"waiting"`
+	WaitingRoom *bool `json:"waitingRoom"`
 }
 
 type sigClient struct {
@@ -585,6 +589,57 @@ func testRoomIsolation() {
 	report("no room information pushed to peers", errOr(nil, err == nil, "unexpected message "+m.T))
 }
 
+// testWaitingRoom proves the waiting room on the wire: only the admin turns it
+// on, a later guest waits, a waiting guest can not let anyone in, a member can,
+// and everyone is told.
+func testWaitingRoom() {
+	room, _ := randomRoomID()
+	a, err := join(room, "")
+	if err != nil {
+		report("waiting room: A joins", err)
+		return
+	}
+	defer a.c.close()
+	b, err := join(room, "")
+	if err != nil {
+		report("waiting room: B joins", err)
+		return
+	}
+	defer b.c.close()
+	a.c.drain(300 * time.Millisecond)
+	b.c.drain(100 * time.Millisecond)
+
+	on := true
+	// B is no admin: the switch must not move.
+	b.c.send(map[string]any{"t": "mod", "action": "waitingroom", "on": on})
+	m, err := a.c.wait("waiting-room", 500*time.Millisecond)
+	report("waiting room: a guest who is no admin can not switch it on", errOr(nil, err == nil, "the switch moved for "+m.T))
+
+	a.c.send(map[string]any{"t": "mod", "action": "waitingroom", "on": on})
+	m, err = b.c.wait("waiting-room", 2*time.Second)
+	report("waiting room: the admin switches it on and the room is told", errOr(err, m.WaitingRoom == nil || !*m.WaitingRoom, "switch not true"))
+
+	c, err := join(room, "")
+	if err != nil {
+		report("waiting room: C joins", err)
+		return
+	}
+	defer c.c.close()
+	pm, err := a.c.wait("peer-joined", 2*time.Second)
+	report("waiting room: a later guest waits", errOr(err, pm.Peer == nil || !pm.Peer.Waiting, "peer-joined has no waiting flag"))
+
+	// C waits, so C can not let anyone in, not even itself.
+	c.c.send(map[string]any{"t": "admit", "to": c.self})
+	_, err = a.c.wait("admitted", 500*time.Millisecond)
+	report("waiting room: a waiting guest can not admit itself", errOr(nil, err == nil, "admitted"))
+
+	b.c.send(map[string]any{"t": "admit", "to": c.self})
+	am, err := a.c.wait("admitted", 2*time.Second)
+	report("waiting room: a member lets the guest in", errOr(err, am.Peer == nil || am.Peer.ID != c.self, "wrong guest admitted"))
+	_, err = c.c.wait("admitted", 2*time.Second)
+	report("waiting room: the guest is told too", err)
+}
+
 // testRoomLifetime proves a room is gone as soon as its last peer leaves: the
 // same id joins at once as a new room, so the old passphrase opens nothing.
 func testRoomLifetime() {
@@ -1012,6 +1067,7 @@ func main() {
 	testRelay()
 	testHardening()
 	testRoomIsolation()
+	testWaitingRoom()
 	testNoNameInJoin()
 	testLimits()
 	testRoomLifetime()

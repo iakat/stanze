@@ -13,6 +13,10 @@ type Peer struct {
 	id   string
 	room *Room
 
+	// waiting is set while the room holds this guest outside. It is read and
+	// written under the hub lock, like the room itself.
+	waiting bool
+
 	// mic, cam and deaf are the flags the client reported last. They are
 	// only indicators for the other tiles and the member list; the media
 	// itself decides the truth. The read loop of this peer writes them and
@@ -120,6 +124,8 @@ type peerInfo struct {
 	Cam   bool   `json:"cam"`
 	Deaf  bool   `json:"deaf,omitempty"`
 	Admin bool   `json:"admin,omitempty"`
+	// Waiting is true for a guest that the room has not let in yet.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
 type iceServer struct {
@@ -143,8 +149,12 @@ type clientMsg struct {
 	Cam  *bool `json:"cam,omitempty"`
 	Deaf *bool `json:"deaf,omitempty"`
 
-	// action is the admin command: kick, mute or admin.
+	// action is the admin command: kick, mute, admin or waitingroom.
 	Action string `json:"action,omitempty"`
+
+	// on is the value of the waitingroom command. A pointer, so "not sent"
+	// and "off" differ.
+	On *bool `json:"on,omitempty"`
 
 	// b is an opaque, already encrypted payload for another peer or for the
 	// whole room. The server never decodes it.
@@ -153,7 +163,7 @@ type clientMsg struct {
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
 // peer-left, offer, answer, ice-candidate, state, admin, mod, kicked, enc,
-// error, pong.
+// waiting-room, admitted, error, pong.
 type serverMsg struct {
 	T         string          `json:"t"`
 	Self      string          `json:"self,omitempty"`
@@ -169,6 +179,12 @@ type serverMsg struct {
 	Action    string          `json:"action,omitempty"`
 	Code      string          `json:"code,omitempty"`
 	Ice       []iceServer     `json:"ice,omitempty"`
+
+	// WaitingRoom is the room switch, sent with `joined` and with a
+	// `waiting-room` change. Waiting is true in `joined` for a guest that
+	// has to wait. A pointer for the switch, so "off" is still sent.
+	WaitingRoom *bool `json:"waitingRoom,omitempty"`
+	Waiting     bool  `json:"waiting,omitempty"`
 
 	// b is relayed verbatim from another peer.
 	B string `json:"b,omitempty"`

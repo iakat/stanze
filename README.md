@@ -167,6 +167,7 @@ Every flag has an environment variable equivalent. Flags win.
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
+| `-vosk-dir` | `VOSK_DIR` | empty | directory with `vosk.js` and `model.tar.gz` for the optional in-browser transcription; empty means the feature is not offered (see `tools/fetch-vosk.sh`) |
 | `-debug` | `DEBUG` | off | verbose logs (room ids are still only logged as a 8 hex character hash) |
 
 Room creation and join attempts are limited per client IP. Behind a reverse
@@ -224,6 +225,35 @@ well.
 - Logs: info level has listen addresses and counts only. Room ids appear at
   debug level as a truncated SHA-256 fingerprint, never in clear.
 
+## Waiting room, transcription and other client switches
+
+- **Waiting room.** An admin switches it on for the room. A guest who joins
+  while it is on, and while somebody is inside, waits until any guest inside
+  presses *let in*. The first guest of a room is never held, and when the last
+  member leaves the guest who waited longest is let in, so the room never
+  holds guests out for a host who is gone. The server keeps the flag and the
+  rules (only an admin sets the switch, only a guest inside admits, a waiting
+  guest never holds the admin role). Everything inside the sealed channel is
+  kept by the clients: members send no media and no chat to a waiting guest
+  and ignore chat and files from one. The waiting guest sends its own camera
+  and microphone to the room, as the notice on its screen says. A member whose
+  link dropped comes back as a new guest and waits, unless the admin's tab saw
+  the same proven identity key inside earlier in this call, in which case it
+  lets that guest in by itself (a name never counts, a removed guest is
+  forgotten, and the list ends with the call).
+- **Transcription.** Off by default. The server offers it only with
+  `-vosk-dir`; `tools/fetch-vosk.sh` fills that directory with the pinned
+  vosk-browser library and one model. A guest who presses *transcribe* sees the
+  size, downloads the model once (kept in the browser cache) and runs one
+  recognizer per incoming voice in the tab. The text goes out as sealed chat
+  labelled *transcript by NAME*, and every other guest is told that NAME
+  transcribes. A guest's own voice is not transcribed. A failed download leaves
+  the call alone. The CSP allows `blob:` for workers and fetches, which the
+  engine needs; nothing loads before the guest asks.
+- **Performance slider**, **volume curve**, **sound switch**, clickable
+  `http(s)` links in the chat and a movable lobby window are client only and
+  stored in the browser.
+
 ## Signaling protocol
 
 One JSON object per WebSocket text frame. Client to server:
@@ -235,7 +265,8 @@ One JSON object per WebSocket text frame. Client to server:
 | `ice` | `to`, `candidate` |
 | `enc` | `to` (empty or `*` for the room), `b` (base64 sealed blob) |
 | `state` | `mic`, `cam` |
-| `mod` | `to`, `action` (`kick`, `mute`, `admin`) |
+| `mod` | `to`, `action` (`kick`, `mute`, `admin`), or `action` `waitingroom` with `on` (admin only, no `to`) |
+| `admit` | `to` (a guest inside lets a waiting guest in) |
 | `leave` | – |
 | `ping` | – |
 
@@ -243,8 +274,10 @@ Server to client:
 
 | message | fields |
 | --- | --- |
-| `joined` | `self`, `peers[{id,mic,cam,admin}]`, `admins`, `ice[{urls,username,credential}]` |
-| `peer-joined` | `peer{id,mic,cam,admin}` |
+| `joined` | `self`, `peers[{id,mic,cam,admin,waiting}]`, `admins`, `waitingRoom`, `waiting`, `ice[{urls,username,credential}]` |
+| `peer-joined` | `peer{id,mic,cam,admin,waiting}` |
+| `waiting-room` | `waitingRoom` (the switch changed) |
+| `admitted` | `from`, `peer{id}` (a waiting guest is inside now) |
 | `peer-left` | `from` |
 | `offer` / `answer` | `from`, `sdp` |
 | `ice` | `from`, `candidate` |

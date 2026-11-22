@@ -86,8 +86,10 @@ body {
   user-select: none;
 }
 .tbicon { font-size: var(--fs-small); }
+.tbleft { display: flex; align-items: center; gap: 5px; flex: 1 1 0; min-width: 0; }
 .tbtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tbbuttons { margin-left: auto; display: flex; align-items: center; gap: 3px; }
+.stage > .titlebar .tbbuttons { flex: 1 1 0; justify-content: flex-end; margin-left: 0; min-width: 0; }
 .tbcap {
   width: 18px; height: 16px;
   background: var(--panel);
@@ -248,6 +250,18 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
   max-width: 520px;
   margin: 7vh auto;
 }
+/* The lobby is a desktop window: it is fixed once it has been moved and it
+   never leaves the viewport. A window taller than the viewport scrolls inside
+   itself, so the whole window stays visible. The stage takes no drag. */
+body:not(.jit) .lobby.moved {
+  position: fixed;
+  margin: 0;
+  width: min(520px, calc(100vw - 4px));
+}
+body:not(.jit) .lobby { max-height: calc(100vh - 4px); display: flex; flex-direction: column; box-sizing: border-box; }
+body:not(.jit) .lobby > .window-body { overflow: auto; min-height: 0; }
+body:not(.jit) .lobby > .titlebar { cursor: move; touch-action: none; user-select: none; }
+body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 .hint { margin: 0 0 12px; font-size: var(--fs-small); }
 .note {
   margin: -2px 0 12px;
@@ -299,14 +313,6 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
   border: 2px solid;
   border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
 }
-.dot {
-  width: 10px; height: 10px;
-  background: var(--panel-lo);
-  border: 1px solid var(--edge);
-  flex: none;
-}
-.dot.on { background: #007000; }
-.dot.off { background: var(--red); }
 .muted { color: var(--soft); }
 .peercount { font-weight: normal; font-size: var(--fs-smaller); margin-right: 6px; }
 /* The call length sits in the header and stays readable at any width. */
@@ -596,6 +602,8 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
   --ring-e2e: inset 0 0 0 0 transparent;
   cursor: pointer;
   position: relative;
+  display: flex;
+  flex-direction: column;
   background: #101010;
   border: 2px solid;
   border-color: var(--edge) var(--panel-hi) var(--panel-hi) var(--edge);
@@ -606,7 +614,8 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
 }
 .tile video {
   width: 100%;
-  height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
   object-fit: cover;
   background: #000;
   display: block;
@@ -616,7 +625,7 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
 /* The centre name stands on a black tile, so it is light: 9.2:1 on #101010. */
 .tile .avatar {
   position: absolute;
-  inset: 0;
+  inset: 0 0 21px 0;
   display: grid;
   place-items: center;
   padding: 12px 16px;
@@ -650,25 +659,26 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
 .tile.speaking .name {
   background: #d8ffd8;
 }
+/* The tag is a status bar in the Windows 2000 manner: one grey strip across
+ * the full bottom edge of the frame, a sunken field per item. It keeps its own
+ * row, so the picture above it is never covered. */
 .tile .tag {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: 4px;
-  display: flex;
-  justify-content: space-between;
-  gap: 4px;
+  order: 2;
+  flex: none;
+  display: flex; align-items: center; justify-content: space-between; gap: 3px;
+  height: 21px; padding: 0 2px;
   font-size: var(--fs-smaller);
+  background: var(--panel); border-top: 1px solid var(--edge);
+  box-shadow: inset 0 1px 0 #fff;
   pointer-events: none;
 }
-.tile .flags { display: flex; gap: 3px; }
+.tile .flags { display: flex; gap: 3px; min-width: 0; }
 .tile .flags span,
 .tile .name, .tile .state, .tile .route {
   background: var(--panel);
-  border: 1px solid;
-  border-color: #fff var(--edge) var(--edge) #fff;
-  color: var(--ink);
-  padding: 0 4px;
+  border: 1px solid; border-color: var(--edge) #fff #fff var(--edge);
+  color: var(--ink); padding: 0 4px; line-height: 17px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .tile .name {
   max-width: 65%;
@@ -1214,7 +1224,13 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
   align-items: center;
   justify-content: center;
   gap: 6px;
+  white-space: nowrap;
+  flex: none;
 }
+/* One width per toolbar button, wide enough for its longest label: a label that
+   changes under the pointer then never moves the buttons beside it. */
+#mic-btn, #cam-btn, #deaf-btn, #stats-btn, #leave-btn { width: 128px; }
+#share-btn { width: 144px; }
 /* A toolbar button carries a big drawing left of the label, so the buttons
    are told apart by a picture and not only by a word. */
 .ctrl .ico { flex: none; width: 22px; height: 22px; }
@@ -1253,11 +1269,13 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
 
 @media (max-width: 560px) {
   .stage-main { grid-template-columns: 1fr; }
-  .ctrl { min-width: 0; flex: 1; }
+  .ctrl { min-width: 0; width: auto; flex: 1; }
   /* The picks sit on the toolbar line, so they keep their own width; a full
      width field would push the toolbar down the screen. */
   .pick { width: auto; }
   .statusline .controls { gap: 4px; }
+  .stage > .titlebar .timer { display: none; }
+  .stage > .titlebar .tbbuttons { overflow: hidden; }
 }
 
 /* ------------------------------------------------------------- identity pins */
@@ -1266,27 +1284,19 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
    written out rather than taken from the sheet above, so this block keeps its
    contrast if the rest of the palette is redrawn: each is at least 8:1 on the
    grey panel. Nothing here is rounded, because nothing else is. */
-/* The one chip at the far end of the status line: how many guests this browser
-   can name by identity. Green when every guest is verified, red when one is
-   not, and both stay above 8:1 on the grey panel. */
-.badge.pincount {
-  color: #141414;
-  background: #dfdfdf;
-  border: 1px solid #808080;
-  padding: 0 6px;
-  font-size: var(--fs-tiny);
+/* The room chip sits in the centre of the title bar, and the bar carries the
+   state: green when every guest is verified, red when one is not. The chip is
+   white on either bar, and both bars keep white text above 8:1. */
+.pincount {
   flex: none;
+  padding: 0 7px;
+  font-size: var(--fs-tiny); letter-spacing: 0.08em; text-transform: uppercase;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
 }
-.badge.pincount[data-verified="all"] {
-  color: #eaffef;
-  background: #17501f;
-  border-color: #2f8b45;
-}
-.badge.pincount[data-verified="part"] {
-  color: #ffecec;
-  background: #7a1414;
-  border-color: #c04040;
-}
+.stage[data-verified="all"] > .titlebar { background: linear-gradient(90deg, #0b3d16, #1b5a25); }
+.stage[data-verified="part"] > .titlebar { background: linear-gradient(90deg, #4a0d0d, #7d1717); }
 
 .pin {
   color: #141414;
@@ -1342,3 +1352,33 @@ label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 
   .tile .zoom[aria-pressed="true"]::after { left: 14px; top: 9px; }
   .tile[data-peer] .zoom { right: 40px; }
 }
+
+/* Performance slider, sound switch, waiting room switch, transcription. */
+.perf-pick input[type="range"] { width: 90px; vertical-align: middle; }
+.perf-name { font-size: var(--fs-smaller); color: var(--soft); }
+body:not(.is-admin) .admin-only { display: none; }
+#perf { width: 100%; box-sizing: border-box; }
+
+/* A link in the chat: the address itself, underlined, never a preview. */
+.chat-log a.chat-link { color: var(--navy); text-decoration: underline; word-break: break-all; }
+.chat-log a.chat-link:visited { color: #500050; }
+
+/* The notice of a guest that waits outside the room. */
+.waiting-banner {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border: 2px solid #000;
+  background: #ffffc0;
+  color: #000;
+  font-weight: bold;
+  line-height: 1.35;
+}
+.asr-note { margin: 0 0 6px; padding: 4px 8px; border: 1px solid var(--panel-lo); font-size: var(--fs-smaller); }
+
+/* The let in button is for a member and only on a guest that waits. */
+.admit { display: none; font-size: var(--fs-smaller); min-height: 22px; padding: 0 6px; }
+.tile .admit { position: absolute; top: 4px; left: 4px; z-index: 3; }
+[data-waiting="yes"] .admit { display: inline-block; }
+body.self-waiting .admit { display: none; }
+.plist-row .admit { position: static; flex: none; min-height: 18px; padding: 0 4px; }
+>>>>>>>

@@ -48,6 +48,11 @@ const state = {
   devMics: [],        // last enumerateDevices() audio inputs
   path: 'auto',
   quality: '1280x720@30',
+  perf: 0,            // performance step, 0 = full quality (the default)
+  sounds: true,       // the four cues and the lost connection chime
+  waitingRoom: false, // the room switch an admin sets
+  waiting: false,     // this guest is held outside until a member lets it in
+  insideFps: new Set(), // fingerprints of proven guests seen inside this call, for a quick return
   mirror: true,
   selfPip: false,     // the own picture is a small preview, not a tile in the grid
   noiseWanted: true,
@@ -118,8 +123,7 @@ const state = {
  *   path: HTMLSelectElement, noise: HTMLInputElement, 'enter-btn': HTMLButtonElement,
  *   'sealed-note': HTMLElement,
  *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
- *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, 'link-dot': HTMLElement,
- *   'link-text': HTMLElement, grid: HTMLElement,
+ *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, grid: HTMLElement,
  *   'stage-main': HTMLElement, 'stage-rail': HTMLElement, 'self-pip': HTMLElement,
  *   'pin-count': HTMLElement,
  *   'stats-panel': HTMLElement, 'stats-graph-box': HTMLElement,
@@ -138,6 +142,9 @@ const state = {
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
  *   'cam-live': HTMLSelectElement, 'mic-live': HTMLSelectElement,
  *   'cam-pick': HTMLElement, 'mic-pick': HTMLElement,
+ *   perf: HTMLInputElement, sounds: HTMLInputElement, 'waiting-room': HTMLInputElement,
+ *   'waiting-banner': HTMLElement, 'perf-live': HTMLInputElement,
+ *   'perf-text': HTMLElement, 'perf-live-text': HTMLElement,
  * }} Elements
  */
 
@@ -149,6 +156,17 @@ const state = {
 const $ = (id) => /** @type {Elements[K]} */ (document.getElementById(id));
 const ROOM_RE = /^[a-z0-9._-]{1,64}$/;
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
+// The performance slider trades the picture against bandwidth and compute in
+// four steps. It works on top of the quality step above: step 0 is that step
+// unchanged, the full quality path, and every later step sends fewer pixels
+// from the camera itself, fewer frames and a lower bitrate ceiling. Sound is
+// never touched, so a weak link or a weak machine thins the picture first.
+const PERF = [
+  { name: 'full quality', scale: 1, fps: 0, bits: 1 },
+  { name: 'balanced', scale: 0.75, fps: 24, bits: 0.6 },
+  { name: 'light', scale: 0.5, fps: 20, bits: 0.35 },
+  { name: 'minimum', scale: 0.35, fps: 15, bits: 0.18 },
+];
 const QUALITY = {
   '640x360@30': { w: 640, h: 360, fps: 30, max: 400000 },
   '1280x720@30': { w: 1280, h: 720, fps: 30, max: 1500000 },
@@ -321,12 +339,13 @@ function makeTile(id, name, local = false) {
     </div>`}
     <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
     <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${local ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
-    ${local ? '' : '<button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
+    ${local ? '' : '<button class="admit" type="button" title="let this guest into the room">let in</button><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
   paintName(tile, name, local);
   // A remote guest is heard through its own gain node, so the video element
   // only ever carries pictures and stays muted.
   if (!local) tile.querySelector('video').muted = true;
   if (!local) wireDots(tile);
+  if (!local) wireAdmit(tile);
   tile.addEventListener('keydown', (event) => {
     if (event.target !== tile || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
@@ -354,10 +373,14 @@ function makeRow(id, name, local = false) {
   row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span>${local ? '<span class="row-you">you</span>' : `
     <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
     <span class="vol-num">100%</span>
+    <button class="admit" type="button" title="let this guest into the room">let in</button>
     <button class="dots" type="button" aria-label="member actions">&#8943;</button>
     <div class="menu" hidden></div>`}`;
   paintRowName(row, name, local);
-  if (!local) wireDots(row);
+  if (!local) {
+    wireDots(row);
+    wireAdmit(row);
+  }
   row.addEventListener('keydown', (event) => {
     if (event.target !== row || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
@@ -482,6 +505,22 @@ function purgeNamedVolume() {
   } catch { /* private mode */ }
 }
 
+// The slider is a position, not an amplitude. Loudness is heard on a log scale,
+// so a straight line from 0 to 2 in amplitude puts all the change at the
+// bottom and almost none at the top. The gain is a power of the position:
+// position 100 is unity, and every 50 points of travel is about 10 dB, which
+// the ear takes for half or double the loudness. 0 is silence, 200 is +10 dB.
+// What is stored is the position, the same percent as before.
+const VOL_MAX = 200;
+const VOL_EXP = 5 / 3;   // 2^(5/3) is 3.17, +10 dB
+
+// volGain turns a slider position (0 to 200) into the gain of the node.
+function volGain(pos) {
+  const n = Number(pos);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.pow(Math.min(n, VOL_MAX) / 100, VOL_EXP);
+}
+
 // storedVolume reads the kept percent of one peer: from the disk under its
 // fingerprint once that key is proven, and from memory before that.
 function storedVolume(peer) {
@@ -519,9 +558,10 @@ function paintVolume(peer) {
     num.textContent = `${peer.vol}%`;
     range.value = String(peer.vol);
   }
-  if (peer.gain) peer.gain.gain.value = state.deaf ? 0 : peer.vol / 100;
-  // The element path is only a fallback and can not go over 100 percent.
-  if (peer.audioEl) peer.audioEl.volume = state.deaf ? 0 : Math.min(peer.vol / 100, 1);
+  const g = state.deaf ? 0 : volGain(peer.vol);
+  if (peer.gain) peer.gain.gain.value = g;
+  // The element path is only a fallback and can not go over unity.
+  if (peer.audioEl) peer.audioEl.volume = Math.min(g, 1);
 }
 
 // wireVolume connects the tile slider and the row slider of one peer to the
@@ -553,9 +593,16 @@ function applyFlags(tile, mic, cam, admin) {
     row.dataset.mic = mic === false ? 'off' : 'on';
     row.classList.toggle('camoff', cam === false);
   }
+  // A guest that waits is marked on its tile and its row, and a member sees the
+  // let in button there; the CSS shows it.
+  const who = tile.dataset.peer ? state.peers.get(tile.dataset.peer) : null;
+  const waiting = who ? !!who.waiting : !!(tile.dataset.local && state.waiting);
+  tile.dataset.waiting = waiting ? 'yes' : '';
+  if (row) row.dataset.waiting = waiting ? 'yes' : '';
   const box = tile.querySelector('.flags');
   if (!box) return;
   const out = [];
+  if (waiting) out.push('waiting');
   if (admin) out.push('host');
   if (mic === false) out.push('muted');
   if (cam === false) out.push('no cam');
@@ -605,7 +652,13 @@ function wireDots(host) {
     if (isAdmin(state.self)) {
       add('give admin', () => send({ t: 'mod', to: host.dataset.peer, action: 'admin' }));
       add('mute', () => send({ t: 'mod', to: host.dataset.peer, action: 'mute' }));
-      add('remove from room', () => send({ t: 'mod', to: host.dataset.peer, action: 'kick' }));
+      add('remove from room', () => {
+        // A guest who was let in keeps that key; a removed guest must wait
+        // again on the next return, so the key goes when the guest is kicked.
+        const gone = state.peers.get(host.dataset.peer);
+        if (gone && gone.fp) state.insideFps.delete(gone.fp);
+        send({ t: 'mod', to: host.dataset.peer, action: 'kick' });
+      });
     }
     const noiseOn = !!(peer && peer.inNoise);
     add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => { void setPeerNoise(peer, !noiseOn); });
@@ -619,6 +672,74 @@ function wireDots(host) {
     }
     menu.hidden = false;
   });
+}
+
+// wireAdmit connects the let in button of one remote member. Any guest that is
+// inside may press it; the server checks that again and tells the whole room.
+function wireAdmit(host) {
+  const button = host.querySelector('.admit');
+  if (!button) return;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (state.waiting || !host.dataset.peer) return;
+    send({ t: 'admit', to: host.dataset.peer });
+  });
+}
+
+// waitingText says to a waiting guest what the room can see and hear. It is
+// built from the real state of the two devices, so it is never wrong about
+// them, and it is shown again whenever one of them changes.
+function waitingText() {
+  const both = state.mic && state.cam;
+  const lead = 'You are in the waiting room. ';
+  const mid = both
+    ? 'Your camera and your microphone are on, and every member of the meeting can see and hear you right now, before you are let in. '
+    : `Your camera is ${state.cam ? 'on' : 'off'} and your microphone is ${state.mic ? 'on' : 'off'}. Every member of the meeting can see and hear whatever is on, before you are let in. `;
+  return `${lead}${mid}Use the buttons below to turn them off if you do not want that. You can not see or hear the meeting, or chat, until a member lets you in.`;
+}
+
+// paintWaiting draws everything that depends on the waiting room: the notice
+// of a waiting guest, the admin switch, the chat lock and the count in the
+// header. It is cheap and safe to call at any time.
+function paintWaiting() {
+  document.body.classList.toggle('self-waiting', state.waiting);
+  const banner = document.getElementById('waiting-banner');
+  if (banner) {
+    banner.hidden = !state.waiting;
+    if (state.waiting) banner.textContent = waitingText();
+  }
+  const sw = /** @type {HTMLInputElement | null} */ (document.getElementById('waiting-room'));
+  if (sw) sw.checked = state.waitingRoom;
+  // A waiting guest has no chat and offers no files: the room is not theirs yet.
+  $('chat-text').disabled = state.waiting;
+  $('file-btn').disabled = state.waiting;
+  $('chat-text').placeholder = state.waiting ? 'chat opens when you are let in' : 'say something';
+  for (const peer of state.peers.values()) {
+    if (peer.tile) applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+  }
+  const self = document.querySelector('.tile[data-local="yes"]');
+  if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
+  updateCount();
+}
+
+// admitPeer runs when the server says that a guest is inside now. Our own media
+// goes to that guest from this moment on; before it, nothing of it did.
+function admitPeer(id) {
+  if (id === state.self) {
+    state.waiting = false;
+    paintWaiting();
+    playSfx('pop');
+    return;
+  }
+  const peer = state.peers.get(id);
+  if (!peer) return;
+  peer.waiting = false;
+  if (peer.fp) state.insideFps.add(peer.fp);
+  asrAnnounce(peer);
+  if (peer.pc && state.outStream) {
+    for (const track of state.outStream.getTracks()) attachTrack(peer, track);
+  }
+  paintWaiting();
 }
 
 // closeMenus hides every host menu. One listener on the page does it, because
@@ -644,7 +765,9 @@ function markAdmins() {
 function updateCount() {
   const total = state.peers.size + 1;
   const live = [...state.peers.values()].filter((p) => p.state === 'connected').length + 1;
-  $('peer-count').textContent = total === 1 ? '1 peer' : `${live}/${total} peers`;
+  const held = [...state.peers.values()].filter((p) => p.waiting).length;
+  $('peer-count').textContent = (total === 1 ? '1 peer' : `${live}/${total} peers`) +
+    (held && !state.waiting ? `, ${held} waiting` : '');
   updatePinCount();
 }
 
@@ -690,15 +813,67 @@ function qualityNow() {
   return QUALITY[state.quality] || QUALITY['1280x720@30'];
 }
 
-// camVideo builds the camera request for the chosen step. The join, every later
-// camera switch and the screen share go through it.
-function camVideo() {
-  const q = qualityNow();
+// perfNow is the chosen performance step, full quality for an unknown value.
+function perfNow() {
+  return PERF[state.perf] || PERF[0];
+}
+
+// evenPx scales a side and keeps it even, which every encoder accepts.
+function evenPx(n, scale) {
+  return scale === 1 ? n : Math.max(2, Math.round((n * scale) / 2) * 2);
+}
+
+// perfFps is the frame rate the camera sends at the chosen steps.
+function perfFps(q, p) {
+  return p.fps ? Math.min(q.fps, p.fps) : q.fps;
+}
+
+// videoFor builds one video request from a quality step and a performance step.
+function videoFor(q, p) {
+  const w = evenPx(q.w, p.scale);
+  const h = evenPx(q.h, p.scale);
+  const fps = perfFps(q, p);
   return {
-    width: { ideal: q.w, max: q.w },
-    height: { ideal: q.h, max: q.h },
-    frameRate: { ideal: q.fps, max: q.fps },
+    width: { ideal: w, max: w },
+    height: { ideal: h, max: h },
+    frameRate: { ideal: fps, max: fps },
   };
+}
+
+// camVideo builds the camera request for the chosen steps. The join and every
+// later camera switch go through it, so the performance step sets the size the
+// camera itself delivers, and not only what the encoder does with it.
+function camVideo() {
+  return videoFor(qualityNow(), perfNow());
+}
+
+// shareVideo is the screen share request. A shared screen is read as text, so
+// it keeps the quality step and never takes the performance step.
+function shareVideo() {
+  return videoFor(qualityNow(), PERF[0]);
+}
+
+// perfText says what the chosen step sends, in words and in numbers.
+function perfText() {
+  const q = qualityNow();
+  const p = perfNow();
+  const v = videoFor(q, p);
+  return `${p.name}: camera ${v.width.ideal}x${v.height.ideal} at ${v.frameRate.ideal} frames, up to ${Math.round((q.max * p.bits) / 1000)} kbit/s. Sound is not changed.`;
+}
+
+// paintPerf shows the step on both sliders, the one in the form and the one in
+// the toolbar, so the two can never disagree.
+function paintPerf() {
+  for (const id of ['perf', 'perf-live']) {
+    const el = /** @type {HTMLInputElement | null} */ (document.getElementById(id));
+    if (el) el.value = String(state.perf);
+  }
+  for (const id of ['perf-text', 'perf-live-text']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    // The toolbar has room for the name only; the form carries the numbers.
+    el.textContent = id === 'perf-text' ? perfText() : perfNow().name;
+  }
 }
 
 // ask opens one getUserMedia request and never throws, so the join can always
@@ -724,10 +899,20 @@ async function capVideoSender(sender) {
     return true;
   }
   if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return true;
-  const max = qualityNow().max;
+  const q = qualityNow();
+  const p = perfNow();
+  // Step 0 sets the same ceiling as before and no frame cap, so the default
+  // path is the one that always ran.
+  const max = Math.round(q.max * p.bits);
+  const fps = p.fps ? perfFps(q, p) : 0;
   const next = {
     ...params,
-    encodings: params.encodings.map((enc) => ({ ...enc, maxBitrate: max })),
+    encodings: params.encodings.map((enc) => {
+      const out = { ...enc, maxBitrate: max };
+      if (fps) out.maxFramerate = fps;
+      else delete out.maxFramerate;
+      return out;
+    }),
   };
   try {
     await sender.setParameters(next);
@@ -747,7 +932,7 @@ function capCameraSenders(pc) {
   }
 }
 
-// applyQuality pushes the chosen step into the live camera: the raw track gets
+// applyQuality pushes the chosen steps into the live camera: the raw track gets
 // the new size and frame rate, and every peer's encoder gets the matching
 // ceiling. The screen share is not touched; it carries its own quality.
 async function applyQuality() {
@@ -1069,6 +1254,8 @@ function refreshSelf() {
   applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   paintRowDeaf(document.querySelector('.plist-row[data-local="yes"]'), state.deaf);
   updateButtons();
+  // The notice of a waiting guest names the real state of both devices.
+  if (state.waiting) paintWaiting();
 }
 
 // setDeaf closes both directions at once: the microphone and the camera go
@@ -1140,6 +1327,8 @@ function preparePeer(peer) {
     }
     const track = state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
     if (!track) continue;
+    // A guest that waits outside gets none of our media until it is let in.
+    if (peer.waiting) continue;
     tr.sender.replaceTrack(track).catch(() => {});
     if (kind === 'video') capVideoSender(tr.sender);
   }
@@ -1149,7 +1338,7 @@ function preparePeer(peer) {
 // its transform already exist, so a track can come and go without a second
 // install path and without a renegotiation.
 function attachTrack(peer, track) {
-  if (peer.sealed === false) return;
+  if (peer.sealed === false || peer.waiting) return;
   const tr = peer.tx && peer.tx[track.kind];
   if (!tr) return;
   tr.sender.replaceTrack(track).catch(() => {});
@@ -1608,7 +1797,7 @@ function routeAudio(peer, track) {
     const el = peer.audioEl || new Audio();
     el.autoplay = true;
     el.srcObject = new MediaStream([track]);
-    el.volume = state.deaf ? 0 : Math.min(peer.vol / 100, 1);
+    el.volume = state.deaf ? 0 : Math.min(volGain(peer.vol), 1);
     el.play().catch(() => {});
     peer.audioEl = el;
     return;
@@ -1625,7 +1814,7 @@ function routeAudio(peer, track) {
   pump.play().catch(() => {});
   peer.pump = pump;
   peer.gain = ctx.createGain();
-  peer.gain.gain.value = state.deaf ? 0 : peer.vol / 100;
+  peer.gain.gain.value = state.deaf ? 0 : volGain(peer.vol);
   peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
   peer.audioSrc.connect(peer.gain);
   peer.gain.connect(ctx.destination);
@@ -1781,7 +1970,7 @@ async function replaceOutVideo(track) {
   if (track) state.outStream.addTrack(track);
   for (const peer of state.peers.values()) {
     const tr = peer.tx && peer.tx.video;
-    if (tr) await tr.sender.replaceTrack(track || null).catch(() => {});
+    if (tr && !peer.waiting) await tr.sender.replaceTrack(track || null).catch(() => {});
   }
 }
 
@@ -1796,7 +1985,7 @@ async function startShare() {
   }
   let display;
   try {
-    display = await navigator.mediaDevices.getDisplayMedia({ video: camVideo(), audio: true });
+    display = await navigator.mediaDevices.getDisplayMedia({ video: shareVideo(), audio: true });
   } catch (err) {
     if (err && err.name === 'NotAllowedError') return;
     say('screen sharing failed');
@@ -1885,6 +2074,7 @@ function ensurePeer(id, mic, cam, deaf) {
     mic: mic === undefined ? true : mic,
     cam: cam === undefined ? true : cam,
     deaf: deaf === undefined ? false : deaf,
+    waiting: false,   // held outside the room, see the waiting room
     vol: 100,
     pc: null,
     tile: null,
@@ -2042,8 +2232,6 @@ function setPeerState(peer, text) {
   if (row) row.dataset.state = text;
   if ((text === 'failed' || text === 'closed') && peer.tile) peer.tile.classList.remove('playing');
   layoutStage();
-  if (text === 'connected') $('link-text').textContent = '';
-  else if (text === 'failed') $('link-text').textContent = 'link failed';
   updateCount();
 }
 
@@ -2187,7 +2375,6 @@ function connectWS() {
 
   ws.onopen = () => {
     state.reconnectDelay = 500;
-    $('link-dot').className = 'dot on';
     stopLost();
     // The join carries no name: the server announces every peer as its
     // placeholder, and the real name travels sealed once the keys exist.
@@ -2207,7 +2394,6 @@ function connectWS() {
 
   ws.onclose = () => {
     if (state.ws === ws) state.ws = null;
-    $('link-dot').className = 'dot off';
     if (state.leaving) return;
     // The old peer id dies with the old socket, so the remote connections go
     // away too; the join after the reconnect rebuilds them.
@@ -2256,13 +2442,17 @@ function handle(msg) {
       // the join itself wrote must stay up until the guest has read it.
       if (state.notice === 'connection lost, reconnecting') say('');
       setAdmins(msg.admins);
+      state.waiting = !!msg.waiting;
+      state.waitingRoom = !!msg.waitingRoom;
+      asrProbe();
       for (const info of msg.peers || []) {
         if (!info) continue;
         const peer = ensurePeer(info.id, info.mic, info.cam, info.deaf);
+        peer.waiting = !!info.waiting;
         sealedSendPub(peer);
       }
       markAdmins();
-      $('link-text').textContent = 'handshaking';
+      paintWaiting();
       // Tell the room the microphone and camera state; only the flags travel.
       sendState();
       updateCount();
@@ -2271,16 +2461,28 @@ function handle(msg) {
     case 'peer-joined': {
       if (!msg.peer) break;
       const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam, msg.peer.deaf);
+      peer.waiting = !!msg.peer.waiting;
       if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
+      paintWaiting();
       sealedSendPub(peer);
       playSfx('pop');
+      break;
+    }
+    case 'waiting-room': {
+      state.waitingRoom = !!msg.waitingRoom;
+      paintWaiting();
+      break;
+    }
+    case 'admitted': {
+      if (msg.peer && msg.peer.id) admitPeer(msg.peer.id);
       break;
     }
     case 'peer-left': {
       dropPeer(msg.from);
       state.admins.delete(msg.from);
       markAdmins();
+      paintWaiting();
       playSfx('bonk');
       break;
     }
@@ -2386,7 +2588,6 @@ async function enterRoom(room, pass) {
     $('room-label').title = room;
     $('chat-note').hidden = false;
     updatePinCount();
-    $('link-text').textContent = 'connecting';
     setHash(room);
     startCallClock();
     startSpeaking();
@@ -2459,9 +2660,13 @@ function leave(message) {
   state.wireLeaks = [];
   state.canaries = [];
   state.samples = [];
+  asrStop();
+  state.waiting = false;
+  state.waitingRoom = false;
+  state.insideFps.clear();
+  paintWaiting();
   updatePinCount();
   $('chat-note').hidden = true;
-  $('link-text').textContent = '';
   if (state.micTrack) {
     try { state.micTrack.stop(); } catch { /* already stopped */ }
   }
@@ -2509,7 +2714,6 @@ function leave(message) {
   $('lobby').hidden = false;
   $('room-label').textContent = '';
   $('peer-count').textContent = '';
-  $('link-dot').className = 'dot';
   state.room = '';
   state.pass = '';
   state.self = null;
@@ -2540,6 +2744,73 @@ function chatTime(ts) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+// A posted address becomes a link, http and https only. It is a link and not a
+// preview: nothing is fetched and no picture is loaded until a guest clicks it,
+// because a link that phones home tells the other side who reads the room.
+// The text shown is the address itself, the title says where a click goes
+// (with punycode spelled out for a lookalike name), and the click opens a new
+// tab that gets no referrer and no handle back to this page.
+const LINK_RE = /https?:\/\/[^\s<>"']+/gi;
+
+// splitLink cuts the trailing marks that belong to the sentence and not to the
+// address: a full stop, a comma, a closing bracket without an opening one.
+function splitLink(raw) {
+  let url = raw;
+  let tail = '';
+  for (;;) {
+    const last = url[url.length - 1];
+    if (!last) break;
+    let cut = '.,;:!?\'"'.includes(last);
+    if (!cut && (last === ')' || last === ']' || last === '}')) {
+      const open = { ')': '(', ']': '[', '}': '{' }[last];
+      cut = url.split(last).length > url.split(open).length;
+    }
+    if (!cut) break;
+    tail = last + tail;
+    url = url.slice(0, -1);
+  }
+  return { url, tail };
+}
+
+// safeLink returns the parsed address when it may become a link, else null. A
+// name with a user part (https://good.example@evil.example) is refused: the
+// text would show one host and a click would go to another.
+function safeLink(text) {
+  let u;
+  try {
+    u = new URL(text);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  if (!u.hostname || u.username || u.password) return null;
+  return u;
+}
+
+// linkify returns the text as nodes: plain text, and an anchor for each address.
+function linkify(text) {
+  const out = document.createDocumentFragment();
+  let at = 0;
+  for (const m of text.matchAll(LINK_RE)) {
+    const { url, tail } = splitLink(m[0]);
+    const u = safeLink(url);
+    if (!u) continue;
+    if (m.index > at) out.appendChild(document.createTextNode(text.slice(at, m.index)));
+    const a = document.createElement('a');
+    a.textContent = url;
+    a.href = u.href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer nofollow';
+    a.referrerPolicy = 'no-referrer';
+    a.title = `opens ${u.href}`;
+    a.className = 'chat-link';
+    out.appendChild(a);
+    at = m.index + url.length;
+  }
+  if (at < text.length) out.appendChild(document.createTextNode(text.slice(at)));
+  return out;
+}
+
 function addChatLine(name, text, ts) {
   const log = $('chat-log');
   if (!log) return;
@@ -2552,7 +2823,8 @@ function addChatLine(name, text, ts) {
   who.className = 'who';
   who.textContent = `${name || 'guest'}:`;
   li.appendChild(who);
-  li.appendChild(document.createTextNode(` ${text}`));
+  li.appendChild(document.createTextNode(' '));
+  li.appendChild(linkify(String(text)));
   log.appendChild(li);
   while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
@@ -2706,7 +2978,7 @@ function fileSetBar(el, show, frac) {
 // fileOffer announces one file to every sealed peer of the room. Each peer
 // gets its own state, so one refusal never stops another transfer.
 function fileOffer(file) {
-  if (!file || !state.self || state.leaving) return;
+  if (!file || !state.self || state.leaving || state.waiting) return;
   const size = Number(file.size);
   if (!Number.isSafeInteger(size) || size < 0) {
     say('that file cannot be read');
@@ -2717,7 +2989,7 @@ function fileOffer(file) {
   const x = fileID();
   const out = { x, file, name, size, type, peers: new Map(), cancelled: false, el: null };
   for (const peer of state.peers.values()) {
-    if (!peer.keys) continue;
+    if (!peer.keys || peer.waiting) continue;
     out.peers.set(peer.id, { peer, status: 'offered', sent: 0, dead: false, wake: null });
     sealedSend(peer, { k: 'file', a: 'offer', x, n: name, z: size, m: type });
   }
@@ -3477,6 +3749,7 @@ function preloadSfx() {
 // playSfx plays one cue in full. A cue never waits in a line: it replaces the
 // one that is playing, so the newest event is the one that is heard.
 function playSfx(name) {
+  if (!state.sounds) return;
   if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
   const ctx = state.sfxCtx;
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
@@ -3511,7 +3784,10 @@ function playSfx(name) {
 // call while it already plays does nothing, so a chain of reconnect attempts
 // can never stack copies of it.
 function startLost() {
+  // The wish stays, so a guest who switches the sound back on in the middle of
+  // an outage hears the chime from then on.
   state.lostWanted = true;
+  if (!state.sounds) return;
   if (state.lostSource) return;
   const ctx = state.sfxCtx;
   const buffer = sfxCache.get('lost');
@@ -3538,6 +3814,27 @@ function startLost() {
   } catch {
     state.lostSource = null;
     state.lostGain = null;
+  }
+}
+
+// setSounds is the switch for the four cues and the lost connection chime. Off
+// cuts whatever plays now. The jitsi skin reads the same switch from the body.
+function setSounds(on) {
+  state.sounds = on;
+  document.body.dataset.sounds = on ? 'on' : 'off';
+  const box = /** @type {HTMLInputElement | null} */ (document.getElementById('sounds'));
+  if (box) box.checked = on;
+  if (!on) {
+    if (state.sfxSource) {
+      try { state.sfxSource.stop(); } catch { /* already finished */ }
+      state.sfxSource = null;
+    }
+    // Cut the pad but keep the wish for it.
+    const wanted = state.lostWanted;
+    stopLost();
+    state.lostWanted = wanted;
+  } else if (state.lostWanted) {
+    startLost();
   }
 }
 
@@ -4590,6 +4887,388 @@ function ensureReady() {
   return ensureWasm().then(ensureIdentity);
 }
 
+// ------------------------------------------------------------- transcription
+
+// Optional, off by default, one engine: vosk, running in this tab. Nothing is
+// loaded until the guest asks. The page then downloads the one model the server
+// offers (the size is shown first), keeps it in the browser's cache, and runs
+// one recognizer for each incoming voice. The text goes out as sealed chat,
+// labelled with the name of the guest who transcribes, and every other guest is
+// told that someone transcribes before the first line. A refused or failed
+// download leaves the call exactly as it was.
+const ASR_URL = '/vosk/model.tar.gz';
+const ASR_LIB = '/vosk/vosk.js';
+const ASR_CACHE = 'stanze-vosk';
+const ASR_LINE_MAX = 400;
+
+const asr = {
+  probed: false,
+  size: 0,         // bytes of the model, from the server
+  stamp: '',       // size and date of the model, the key of the cache entry
+  busy: false,     // a download or a start is under way
+  on: false,
+  abort: null,
+  model: null,
+  ctx: null,
+  timer: 0,
+  recs: new Map(), // peer id -> { rec, proc, src, sink }
+  lib: null,
+};
+
+const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB`;
+
+function asrNote(text) {
+  const el = document.getElementById('asr-note');
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = !text;
+}
+
+// asrPaintOthers tells a guest who else in the room transcribes.
+function asrPaintOthers() {
+  if (asr.busy || asr.on) return;
+  const names = [...state.peers.values()].filter((p) => p.asr).map((p) => p.name || shortPeer(p.id));
+  asrNote(names.length ? `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} transcribing this meeting. The text appears in the chat.` : '');
+}
+
+// asrProbe asks the server, once, whether it offers the model. Without it the
+// button stays hidden and nothing else changes.
+async function asrProbe() {
+  if (asr.probed) return;
+  asr.probed = true;
+  try {
+    const res = await fetch(ASR_URL, { method: 'HEAD', cache: 'no-store' });
+    if (!res.ok) return;
+    asr.size = parseInt(res.headers.get('content-length') || '0', 10) || 0;
+    asr.stamp = `${asr.size}-${res.headers.get('last-modified') || ''}`;
+    const pick = document.getElementById('asr-pick');
+    if (pick) pick.hidden = false;
+  } catch { /* offline or blocked: not offered */ }
+}
+
+// asrCacheKey is a request that is only ever used as a key.
+function asrCacheKey() {
+  return new Request(`${location.origin}${ASR_URL}?m=${encodeURIComponent(asr.stamp)}`);
+}
+
+async function asrCached() {
+  try {
+    if (!window.caches) return null;
+    const cache = await caches.open(ASR_CACHE);
+    const hit = await cache.match(asrCacheKey());
+    return hit ? await hit.blob() : null;
+  } catch { return null; }
+}
+
+// asrFetchModel downloads the model with a progress line. It reads the body to
+// the end, keeps it in the cache and returns the blob.
+async function asrFetchModel(signal) {
+  const res = await fetch(ASR_URL, { signal, cache: 'no-store' });
+  if (!res.ok || !res.body) throw new Error(`the server answered ${res.status}`);
+  const total = asr.size || parseInt(res.headers.get('content-length') || '0', 10) || 0;
+  const reader = res.body.getReader();
+  const parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    asrNote(total
+      ? `downloading the transcription model: ${mb(got)} of ${mb(total)} (${Math.floor((got * 100) / total)}%)`
+      : `downloading the transcription model: ${mb(got)}`);
+  }
+  const blob = new Blob(parts, { type: 'application/gzip' });
+  try {
+    if (window.caches) {
+      // Older entries go, so the cache holds one model only.
+      await caches.delete(ASR_CACHE);
+      const cache = await caches.open(ASR_CACHE);
+      await cache.put(asrCacheKey(), new Response(blob, { headers: { 'content-type': 'application/gzip' } }));
+    }
+  } catch { /* no cache: the model is used now and fetched again next time */ }
+  return blob;
+}
+
+function asrLoadLib() {
+  if (asr.lib) return asr.lib;
+  asr.lib = new Promise((resolve, reject) => {
+    const have = /** @type {any} */ (window).Vosk;
+    if (have) return resolve(have);
+    const el = document.createElement('script');
+    el.src = ASR_LIB;
+    el.onload = () => {
+      const lib = /** @type {any} */ (window).Vosk;
+      return lib ? resolve(lib) : reject(new Error('the engine did not load'));
+    };
+    el.onerror = () => reject(new Error('the engine could not be loaded'));
+    document.head.appendChild(el);
+  }).catch((err) => {
+    asr.lib = null;
+    throw err;
+  });
+  return asr.lib;
+}
+
+// asrSay sends one sealed transcription message to everyone inside.
+function asrSay(obj) {
+  for (const peer of state.peers.values()) {
+    if (!peer.keys || peer.waiting) continue;
+    sealedSend(peer, { k: 'asr', ...obj });
+  }
+}
+
+// asrAnnounce tells a guest who joined later that we transcribe.
+function asrAnnounce(peer) {
+  if (!asr.on || !peer.keys || peer.waiting) return;
+  sealedSend(peer, { k: 'asr', s: 'on' });
+}
+
+// asrTap hooks one incoming voice to a recognizer of its own. It reads the
+// source before the volume of that guest, so a guest turned down is still heard
+// by the engine.
+function asrTap(peer) {
+  const ctx = state.playCtx;
+  if (!asr.on || !asr.model || !ctx || !peer.audioSrc) return;
+  const have = asr.recs.get(peer.id);
+  if (have && have.src === peer.audioSrc) return;
+  if (have) asrUntap(peer.id);
+  const rec = new asr.model.KaldiRecognizer(ctx.sampleRate);
+  const speaker = () => peer.name || shortPeer(peer.id);
+  rec.on('result', (message) => {
+    const text = String((message.result && message.result.text) || '').trim();
+    if (!text || !asr.on) return;
+    const line = text.slice(0, ASR_LINE_MAX);
+    const who = speaker();
+    addChatLine(`transcript by ${state.name || 'you'}`, `${who}: ${line}`, Date.now());
+    asrSay({ w: who.slice(0, 64), x: line, ts: Date.now() });
+  });
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  proc.onaudioprocess = (event) => {
+    // A copy, because the engine takes the buffer to its worker.
+    try { rec.acceptWaveformFloat(new Float32Array(event.inputBuffer.getChannelData(0)), ctx.sampleRate); } catch { /* recognizer gone */ }
+  };
+  // The processor only runs when it is wired to an output; the gain of zero
+  // keeps it silent.
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+  peer.audioSrc.connect(proc);
+  proc.connect(sink);
+  sink.connect(ctx.destination);
+  asr.recs.set(peer.id, { rec, proc, src: peer.audioSrc, sink });
+}
+
+function asrUntap(id) {
+  const h = asr.recs.get(id);
+  if (!h) return;
+  asr.recs.delete(id);
+  try { h.src.disconnect(h.proc); } catch { /* source already gone */ }
+  try { h.proc.disconnect(); h.sink.disconnect(); } catch { /* already gone */ }
+  h.proc.onaudioprocess = null;
+  try { h.rec.retrieveFinalResult(); } catch { /* recognizer gone */ }
+  setTimeout(() => { try { h.rec.remove(); } catch { /* recognizer gone */ } }, 1500);
+}
+
+// asrSync follows the room: a recognizer for each guest inside who has a voice,
+// none for a guest who waits, and none for a guest who left.
+function asrSync() {
+  if (!asr.on) return;
+  for (const id of [...asr.recs.keys()]) {
+    const peer = state.peers.get(id);
+    if (!peer || peer.waiting) asrUntap(id);
+  }
+  for (const peer of state.peers.values()) {
+    if (!peer.waiting) asrTap(peer);
+  }
+}
+
+function asrStop() {
+  if (asr.abort) asr.abort.abort();
+  asr.abort = null;
+  const was = asr.on;
+  asr.on = false;
+  clearInterval(asr.timer);
+  asr.timer = 0;
+  for (const id of [...asr.recs.keys()]) asrUntap(id);
+  if (asr.model) {
+    const model = asr.model;
+    // After the recognizers are gone, the worker and its memory go too.
+    setTimeout(() => { try { model.terminate(); } catch { /* already gone */ } }, 2000);
+    asr.model = null;
+  }
+  asr.busy = false;
+  if (was) asrSay({ s: 'off' });
+  const btn = document.getElementById('asr-btn');
+  if (btn) {
+    btn.textContent = 'transcribe';
+    btn.setAttribute('aria-pressed', 'false');
+  }
+  asrNote('');
+  asrPaintOthers();
+}
+
+async function asrStart() {
+  const btn = document.getElementById('asr-btn');
+  asr.busy = true;
+  asr.abort = new AbortController();
+  const signal = asr.abort.signal;
+  if (btn) btn.textContent = 'cancel';
+  try {
+    let blob = await asrCached();
+    if (!blob) {
+      const size = asr.size ? mb(asr.size) : 'a large file';
+      // The guest asked for transcription; this is the size, before any byte.
+      if (!window.confirm(`Transcription runs in this tab and needs a one-time download of ${size}. The model is kept in the browser cache. Download it now?`)) {
+        asrStop();
+        return;
+      }
+      blob = await asrFetchModel(signal);
+    }
+    if (signal.aborted) return;
+    asrNote('starting the transcription engine');
+    const Vosk = await asrLoadLib();
+    const url = URL.createObjectURL(blob);
+    try {
+      asr.model = await Vosk.createModel(url);
+    } finally {
+      // The worker has fetched the blob once the model is ready.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    if (signal.aborted) {
+      asr.model.terminate();
+      asr.model = null;
+      return;
+    }
+    asr.on = true;
+    asr.busy = false;
+    asr.abort = null;
+    if (btn) {
+      btn.textContent = 'stop transcribing';
+      btn.setAttribute('aria-pressed', 'true');
+    }
+    asrNote('You are transcribing this meeting. Every other guest has been told, and the text goes to the chat under your name. Your own voice is not transcribed.');
+    asrSay({ s: 'on' });
+    asrSync();
+    asr.timer = setInterval(asrSync, 2000);
+  } catch (err) {
+    if (signal.aborted) return;
+    asrStop();
+    asrNote(`Transcription could not start: ${err && err.message ? err.message : 'the download failed'}. The call is not affected.`);
+  }
+}
+
+function initAsr() {
+  const btn = document.getElementById('asr-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (asr.on || asr.busy) {
+      asrStop();
+      return;
+    }
+    asrStart();
+  });
+}
+
+// asrOnMessage handles a sealed transcription message from a guest.
+function asrOnMessage(peer, obj) {
+  const name = peer.name || shortPeer(peer.id);
+  if (obj.s === 'on' || obj.s === 'off') {
+    peer.asr = obj.s === 'on';
+    if (peer.asr) addChatLine('stanze', `${name} started transcribing this meeting`, Date.now());
+    asrPaintOthers();
+    return;
+  }
+  const text = String(obj.x || '').slice(0, ASR_LINE_MAX);
+  const who = String(obj.w || '').slice(0, 64);
+  if (!text) return;
+  // The label is the guest who sent it, as this tab knows that guest, and never
+  // a name taken from the message.
+  state.chatRecv++;
+  addChatLine(`transcript by ${name}`, `${who}: ${text}`, Date.now());
+}
+
+// ------------------------------------------------------------- lobby window
+
+// The lobby is a desktop window: the guest drags it by the title bar with a
+// mouse, a pen or a finger, it never leaves the viewport, and the place is
+// kept for the guest. The arrow keys move it too, for a guest without a
+// pointer. The call stage is maximised and has no drag.
+const LOBBY_STEP = 16;
+
+// lobbyPlace puts the window at x, y inside the viewport and returns the place.
+function lobbyPlace(win, x, y) {
+  const w = win.offsetWidth;
+  const h = win.offsetHeight;
+  const maxX = Math.max(0, document.documentElement.clientWidth - w);
+  const maxY = Math.max(0, window.innerHeight - h);
+  const cx = Math.min(Math.max(0, Math.round(x)), maxX);
+  const cy = Math.min(Math.max(0, Math.round(y)), maxY);
+  win.classList.add('moved');
+  win.style.left = `${cx}px`;
+  win.style.top = `${cy}px`;
+  return { x: cx, y: cy };
+}
+
+function initLobbyWindow() {
+  const win = document.getElementById('lobby');
+  const bar = /** @type {HTMLElement | null} */ (win && win.querySelector('.titlebar'));
+  // The jitsi skin has no title bar and so no drag.
+  if (!win || !bar || getComputedStyle(bar).display === 'none') return;
+
+  const keep = (pos) => store('lobbypos', JSON.stringify(pos));
+  const at = () => {
+    const r = win.getBoundingClientRect();
+    return { x: r.left, y: r.top };
+  };
+
+  // The kept place, if a valid one is stored. Anything else is ignored.
+  try {
+    const kept = JSON.parse(load('lobbypos') || 'null');
+    if (kept && Number.isFinite(kept.x) && Number.isFinite(kept.y)) lobbyPlace(win, kept.x, kept.y);
+  } catch { /* no kept place */ }
+
+  let grab = null;
+  bar.addEventListener('pointerdown', (/** @type {PointerEvent} */ event) => {
+    if (event.button !== 0 && event.pointerType === 'mouse') return;
+    const here = at();
+    grab = { id: event.pointerId, dx: event.clientX - here.x, dy: event.clientY - here.y };
+    // The window is fixed from the first grab, at the place it has now.
+    lobbyPlace(win, here.x, here.y);
+    win.classList.add('dragging');
+    bar.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  bar.addEventListener('pointermove', (/** @type {PointerEvent} */ event) => {
+    if (!grab || event.pointerId !== grab.id) return;
+    lobbyPlace(win, event.clientX - grab.dx, event.clientY - grab.dy);
+  });
+  const drop = (/** @type {PointerEvent} */ event) => {
+    if (!grab || event.pointerId !== grab.id) return;
+    grab = null;
+    win.classList.remove('dragging');
+    keep(at());
+  };
+  bar.addEventListener('pointerup', drop);
+  bar.addEventListener('pointercancel', drop);
+
+  bar.tabIndex = 0;
+  bar.setAttribute('aria-label', 'stanze window, move it with the arrow keys');
+  bar.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+    if (!d) return;
+    event.preventDefault();
+    const here = at();
+    keep(lobbyPlace(win, here.x + d[0] * LOBBY_STEP, here.y + d[1] * LOBBY_STEP));
+  });
+
+  // A smaller viewport pulls the window back in.
+  window.addEventListener('resize', () => {
+    if (!win.classList.contains('moved') || win.hidden) return;
+    const here = at();
+    lobbyPlace(win, here.x, here.y);
+  });
+}
+
 // ------------------------------------------------------------- identity and pins
 //
 // The long-term identity is Ed25519 and signing only: it signs the handshake
@@ -4866,19 +5545,23 @@ function verifiedPeers() {
   return n;
 }
 
-// updatePinCount is the room summary at the far end of the status line: how
-// many guests this browser can name by identity, out of the guests present.
-// The chip is green when every guest is verified and red when one is not; a
-// pair whose keys do not match keeps it red and the title names that pair.
+// updatePinCount is the room summary in the middle of the title bar: how many
+// guests this browser can name by identity, out of the guests present. The bar
+// is green when every guest is verified and red when one is not; a pair whose
+// keys do not match keeps it red and the title names that pair.
 function updatePinCount() {
   const el = $('pin-count');
   if (!el) return;
   const total = state.peers.size;
   const known = verifiedPeers();
   const failed = sealedFailedPairs();
+  const full = total > 0 && known === total && failed.length === 0;
   el.hidden = total === 0;
   el.textContent = total ? `verified ${known}/${total}` : '';
-  el.dataset.verified = total > 0 && known === total && failed.length === 0 ? 'all' : 'part';
+  el.dataset.verified = full ? 'all' : 'part';
+  const stage = $('stage');
+  if (total === 0) delete stage.dataset.verified;
+  else stage.dataset.verified = el.dataset.verified;
   if (total === 0) {
     el.removeAttribute('title');
   } else if (failed.length > 0) {
@@ -5121,6 +5804,24 @@ function sealedProved(peer) {
   // later move of this guest under the same key finds it again.
   peer.vol = storedVolume(peer);
   paintVolume(peer);
+  waitingReturn(peer);
+  asrAnnounce(peer);
+}
+
+// waitingReturn keeps the waiting room from locking out a member whose link
+// dropped. A guest that was inside this call under a proven key is remembered
+// here. When the same key comes back and waits, the admin's client lets it in
+// by itself. Only a key proof counts, never a name, so nobody can pose as a
+// member to skip the room. A guest the admin removed is forgotten, and so is
+// not let back in. The list lives in this tab and ends with the call.
+function waitingReturn(peer) {
+  if (!peer.fp) return;
+  if (!peer.waiting) {
+    state.insideFps.add(peer.fp);
+    return;
+  }
+  if (state.waiting || !isAdmin(state.self)) return;
+  if (state.insideFps.has(peer.fp)) send({ t: 'admit', to: peer.id });
 }
 
 // wipeKeys zeroes one pair's secrets. They are the only copies outside the
@@ -5420,9 +6121,15 @@ function sealedOnApp(peer, b, seq) {
   peer.seqIn = seq;
   if (obj.k === 'name') {
     sealedSetName(peer, obj.n);
+  } else if ((obj.k === 'chat' || obj.k === 'file') && peer.waiting) {
+    // The server can not read a sealed line, so the room keeps this rule here:
+    // a guest that waits outside says nothing in the room and offers no file.
+    return;
   } else if (obj.k === 'chat') {
     state.chatRecv++;
     addChatLine(peer.name || shortPeer(peer.id), String(obj.x || ''), Date.now());
+  } else if (obj.k === 'asr') {
+    if (!peer.waiting) asrOnMessage(peer, obj);
   } else if (obj.k === 'file') {
     fileOnMessage(peer, obj);
   }
@@ -5450,13 +6157,14 @@ function sealedSend(peer, obj) {
 function sendSealedChat() {
   const input = $('chat-text');
   const text = (input.value || '').trim();
-  if (!text || !state.self) return;
+  if (!text || !state.self || state.waiting) return;
   input.value = '';
   canary(text);
   addChatLine(state.name, text, Date.now());
   state.chatSent++;
   for (const peer of state.peers.values()) {
-    if (!peer.keys) continue;
+    // A guest that waits outside is not in the room, so it gets no chat.
+    if (!peer.keys || peer.waiting) continue;
     sealedSend(peer, { k: 'chat', n: state.name, x: text, ts: Date.now() });
   }
 }
@@ -6015,6 +6723,10 @@ function init() {
     state.quality = storedQuality;
     $('quality').value = storedQuality;
   }
+  // The performance step comes back too. No stored value is full quality.
+  const storedPerf = parseInt(load('perf'), 10);
+  state.perf = storedPerf >= 0 && storedPerf < PERF.length ? storedPerf : 0;
+  paintPerf();
   state.noiseWanted = load('noise') !== '0';
   $('noise').checked = state.noiseWanted;
   $('noise-live').checked = state.noiseWanted;
@@ -6109,8 +6821,26 @@ function init() {
   $('quality').addEventListener('change', async () => {
     state.quality = $('quality').value;
     store('quality', state.quality);
+    paintPerf();
     await applyQuality();
   });
+
+  initLobbyWindow();
+  initAsr();
+
+  // One stored value per guest, written by both sliders. A step that the
+  // camera refuses leaves the old size in effect and says so.
+  for (const id of ['perf', 'perf-live']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.addEventListener('input', async () => {
+      const n = parseInt(/** @type {HTMLInputElement} */ (el).value, 10);
+      state.perf = n >= 0 && n < PERF.length ? n : 0;
+      store('perf', state.perf);
+      paintPerf();
+      await applyQuality();
+    });
+  }
 
   $('path').addEventListener('change', () => {
     state.path = $('path').value;
@@ -6127,6 +6857,28 @@ function init() {
   }
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
+  }
+
+  // The sound switch: on by default, one stored choice for the guest.
+  setSounds(load('sounds') !== '0');
+  const soundBox = document.getElementById('sounds');
+  if (soundBox) {
+    soundBox.addEventListener('change', () => {
+      const on = /** @type {HTMLInputElement} */ (soundBox).checked;
+      store('sounds', on ? 1 : 0);
+      setSounds(on);
+    });
+  }
+
+  // The waiting room switch is for the admin; the server ignores anyone else.
+  // The box follows the room, so it is put back if the server did not take it.
+  const waitBox = document.getElementById('waiting-room');
+  if (waitBox) {
+    waitBox.addEventListener('change', () => {
+      const on = /** @type {HTMLInputElement} */ (waitBox).checked;
+      send({ t: 'mod', action: 'waitingroom', on });
+      paintWaiting();
+    });
   }
 
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
@@ -6155,7 +6907,7 @@ function init() {
       setSpotlight('');
       return;
     }
-    if (target.closest('.vol, .dots, .menu, .sas, .pin')) return;
+    if (target.closest('.vol, .dots, .menu, .sas, .pin, .admit')) return;
     const el = /** @type {HTMLElement} */ (tile);
     const id = tileId(el);
     if (!id) return;
@@ -6175,7 +6927,7 @@ function init() {
   if (railEl) {
     railEl.addEventListener('click', (event) => {
       const target = /** @type {Element} */ (event.target);
-      if (target.closest('.vol-range, .vol-num, .dots, .menu, .sas')) return;
+      if (target.closest('.vol-range, .vol-num, .dots, .menu, .sas, .admit')) return;
       const row = target.closest('.plist-row');
       if (!row) return;
       const id = tileId(/** @type {HTMLElement} */ (row));

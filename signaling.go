@@ -24,15 +24,15 @@ type server struct {
 	log      *slog.Logger
 	upgrader websocket.Upgrader
 
-	joins   *windowLimiter
+	joins *windowLimiter
 }
 
 func newServer(cfg *Config, hub *Hub, log *slog.Logger) *server {
 	s := &server{
-		cfg:     cfg,
-		hub:     hub,
-		log:     log,
-		joins:   newWindowLimiter(time.Minute, 60),
+		cfg:   cfg,
+		hub:   hub,
+		log:   log,
+		joins: newWindowLimiter(time.Minute, 60),
 	}
 	s.upgrader = websocket.Upgrader{
 		ReadBufferSize:   4096,
@@ -42,6 +42,9 @@ func newServer(cfg *Config, hub *Hub, log *slog.Logger) *server {
 	}
 	return s
 }
+
+// handleWSHandler is the websocket route as an http.Handler.
+func (s *server) handleWSHandler() http.Handler { return http.HandlerFunc(s.handleWS) }
 
 func (s *server) checkOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
@@ -94,8 +97,13 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		// The peer is out of the room, so both messages reach the rest of it
 		// and an empty room, already gone, gets no admin list.
-		if room := s.hub.leave(p); room != nil {
+		if room, letIn := s.hub.leaveWith(p); room != nil {
 			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "peer-left", From: p.id}))
+			if letIn != "" {
+				// The last member left and the guest that waited longest
+				// takes the room; everyone is told, the guest too.
+				s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admitted", From: letIn, Peer: &peerInfo{ID: letIn}}))
+			}
 			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admin", Admins: s.hub.adminsOf(room)}))
 			s.log.Debug("peer left")
 		}
@@ -157,6 +165,12 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			s.handleEnc(p, m)
 		case "mod":
 			s.handleMod(p, m)
+		case "admit":
+			// Any guest inside may let a waiting guest in; the hub checks
+			// both sides, and the answer goes to the whole room.
+			if s.hub.admit(p, m.To) {
+				s.hub.broadcastTo(s.hub.roomOf(p), mustJSON(serverMsg{T: "admitted", From: p.id, Peer: &peerInfo{ID: m.To}}))
+			}
 		case "leave":
 			return
 		case "ping":
@@ -169,10 +183,23 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 // is not an admin is ignored, and the target must be in the same room.
 func (s *server) handleMod(p *Peer, m clientMsg) {
 	room := s.hub.roomOf(p)
-	if room == nil || m.To == "" || m.To == p.id {
+	if room == nil {
 		return
 	}
-	if !s.hub.isAdmin(room, p.id) {
+	if !s.hub.isAdmin(room, p.id) || s.hub.isWaiting(p) {
+		return
+	}
+	if m.Action == "waitingroom" {
+		// A room switch, not a command on a guest, so it has no target.
+		if m.On == nil {
+			return
+		}
+		on := *m.On
+		s.hub.setWaitingRoom(room, on)
+		s.hub.broadcastTo(room, mustJSON(serverMsg{T: "waiting-room", WaitingRoom: &on}))
+		return
+	}
+	if m.To == "" || m.To == p.id {
 		return
 	}
 	switch m.Action {
@@ -248,6 +275,7 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		mic, cam, deaf := other.flags()
 		peers = append(peers, peerInfo{
 			ID: other.id, Mic: mic, Cam: cam, Deaf: deaf, Admin: isAdmin[other.id],
+			Waiting: s.hub.isWaiting(other),
 		})
 	}
 
@@ -257,18 +285,22 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		s.log.Error("could not mint relay credentials", "err", err)
 	}
 
+	waitingRoom := s.hub.waitingRoomOn(room)
+	selfWaiting := s.hub.isWaiting(p)
 	p.enqueueJSON(serverMsg{
-		T:      "joined",
-		Self:   p.id,
-		Peers:  peers,
-		Ice:    ice,
-		Admins: admins,
+		T:           "joined",
+		Self:        p.id,
+		Peers:       peers,
+		Ice:         ice,
+		Admins:      admins,
+		WaitingRoom: &waitingRoom,
+		Waiting:     selfWaiting,
 	})
 
 	ownMic, ownCam, ownDeaf := p.flags()
 	joinedMsg := mustJSON(serverMsg{
 		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Admin: isAdmin[p.id]},
+		Peer: &peerInfo{ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Admin: isAdmin[p.id], Waiting: selfWaiting},
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)
