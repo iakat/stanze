@@ -372,6 +372,10 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   min-width: 0;
   min-height: 0;
   display: flex;
+  /* The pictures take the width and the height on top; a guest without a
+     picture never takes a column of that width away from them, because a row
+     under the pictures costs the pictures nothing but a little height. */
+  flex-direction: column;
   gap: 5px;
   /* The stage is a frame: a tile that cannot fit is cut at the edge, it never
      paints over the toolbar under it. */
@@ -394,11 +398,13 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   align-content: center;
 }
 .stage-rail {
-  flex: 0 0 clamp(16%, 20%, 26%);
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
+  max-height: 30%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 4px;
   overflow-y: auto;
   align-content: start;
@@ -407,7 +413,13 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .stage-rail[hidden] { display: none; }
 /* Nobody has a picture: the rail is the whole stage, so the rows get the
    width and the black area is not left empty. */
-.stage-main[hidden] + .stage-rail { flex: 1 1 auto; }
+.stage-main[hidden] + .stage-rail {
+  flex: 1 1 auto;
+  max-height: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+}
+.stage-main[hidden] + .stage-rail .tile { flex: 1 1 auto; max-width: none; }
 /* One guest alone in the large area fills it, and the picture covers the
    whole frame instead of keeping a fixed ratio with black bars. */
 .stage-main[data-alone="yes"] {
@@ -740,7 +752,8 @@ body.is-admin .tile[data-peer]:focus-within .dots {
    the mute and camera chips, the link state, and the volume slider. The node is
    moved, never copied, so the stream stays on the one video element. */
 .stage-rail .tile {
-  flex: none;
+  flex: 1 1 180px;
+  max-width: 320px;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
@@ -856,15 +869,9 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 /* Under 900 px the rail becomes a strip under the large area. The pictures
    keep the width, and the strip keeps a small height of its own. */
 @media (max-width: 900px) {
-  .grid { flex-direction: column; }
-  .stage-rail {
-    flex: 0 0 auto;
-    max-height: 30%;
-    flex-direction: row;
-    flex-wrap: wrap;
-    overflow-y: auto;
-  }
-  .stage-rail .tile { flex: 1 1 180px; }
+  /* The strip is already under the pictures at every width; on a phone it is
+     the same strip, only the rail keeps its 30 percent of the height. */
+  .stage-rail .tile { max-width: none; }
 }
 
 /* The verdict: one lamp and one sentence for the whole call, in a sunken field
