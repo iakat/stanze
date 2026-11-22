@@ -99,9 +99,15 @@
           <button id="stats-close" type="button" aria-label="close the stats">x</button>
         </div>
         <div id="stats-graph-box" class="sgraph-box" hidden>
-          <canvas id="stats-graph" class="sgraph" height="40" role="img"
-            aria-label="downlink rate as a filled area and round trip time as a line, last minute"></canvas>
-          <p id="stats-graph-note" class="sgnote"></p>
+          <canvas id="stats-graph-down" class="sgraph" height="34" role="img"
+            aria-label="downlink rate as a filled area over the last minute"></canvas>
+          <p id="stats-note-down" class="sgnote"></p>
+          <canvas id="stats-graph-rtt" class="sgraph" height="34" role="img"
+            aria-label="round trip time as a line over the last minute"></canvas>
+          <p id="stats-note-rtt" class="sgnote"></p>
+          <canvas id="stats-graph-loss" class="sgraph" height="34" role="img"
+            aria-label="packet loss as a filled area over the last minute"></canvas>
+          <p id="stats-note-loss" class="sgnote"></p>
         </div>
         <div id="stats-body" class="stats-body"></div>
       </aside>

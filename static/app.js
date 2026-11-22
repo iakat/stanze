@@ -117,7 +117,9 @@ const state = {
  *   'stage-main': HTMLElement, 'stage-rail': HTMLElement,
  *   'pin-count': HTMLElement,
  *   'stats-panel': HTMLElement, 'stats-graph-box': HTMLElement,
- *   'stats-graph': HTMLCanvasElement, 'stats-graph-note': HTMLElement,
+ *   'stats-graph-down': HTMLCanvasElement, 'stats-graph-rtt': HTMLCanvasElement,
+ *   'stats-graph-loss': HTMLCanvasElement, 'stats-note-down': HTMLElement,
+ *   'stats-note-rtt': HTMLElement, 'stats-note-loss': HTMLElement,
  *   'stats-body': HTMLElement, 'chat-log': HTMLElement, 'chat-form': HTMLFormElement,
  *   'chat-text': HTMLInputElement, 'chat-note': HTMLElement, 'mic-btn': HTMLButtonElement,
  *   'chat-panel': HTMLElement, 'file-btn': HTMLButtonElement, 'file-input': HTMLInputElement,
@@ -3589,20 +3591,15 @@ function recordStatsHistory(total, live) {
   if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
 }
 
-// drawStatsGraph draws the last minute: the downlink as a filled area and the
-// round trip as a line, each scaled to its own peak. The note under it carries
-// the numbers, so a guest who cannot read the shapes loses nothing, and the
-// area and the line are named there as well as drawn.
-function drawStatsGraph() {
-  const canvas = $('stats-graph');
-  const box = $('stats-graph-box');
-  const note = $('stats-graph-note');
-  if (!canvas || !box || !note) return;
-  const hist = state.statHist;
-  box.hidden = hist.length < 2;
-  if (hist.length < 2) return;
+// statsPlot draws one series on one small canvas. A filled series is an area
+// that stands on the floor, a line series is a stroke that breaks where a
+// sample has no value. The peak comes from the caller, so a small number still
+// fills the box, and the floor under it keeps a quiet call from reading as a
+// dead one.
+function statsPlot(canvas, values, peak, fill, color) {
+  if (!canvas) return;
   const cssW = canvas.clientWidth || 288;
-  const cssH = canvas.clientHeight || 40;
+  const cssH = canvas.clientHeight || 34;
   const dpr = window.devicePixelRatio || 1;
   const w = Math.round(cssW * dpr);
   const h = Math.round(cssH * dpr);
@@ -3614,47 +3611,90 @@ function drawStatsGraph() {
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
+  const n = values.length;
+  const stepX = (cssW - 2) / Math.max(1, n - 1);
+  const px = (i) => 1 + i * stepX;
+  const py = (v) => cssH - 1 - (v / peak) * (cssH - 2);
+
+  if (fill) {
+    ctx.beginPath();
+    ctx.moveTo(px(0), cssH - 1);
+    for (let i = 0; i < n; i++) ctx.lineTo(px(i), py(values[i] === null ? 0 : values[i]));
+    ctx.lineTo(px(n - 1), cssH - 1);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.28;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  let drawing = false;
+  for (let i = 0; i < n; i++) {
+    const v = values[i];
+    if (v === null) { drawing = false; continue; }
+    if (drawing) ctx.lineTo(px(i), py(v));
+    else { ctx.moveTo(px(i), py(v)); drawing = true; }
+  }
+  ctx.stroke();
+}
+
+// statsNote writes the text line under one drawing. The drawing is a glance,
+// the line under it carries the numbers, so a guest who cannot read the shapes
+// loses nothing.
+function statsNote(id, text) {
+  const note = $(id);
+  if (note) note.textContent = text;
+}
+
+// drawStatsGraphs draws the last minute as three drawings: the downlink as a
+// filled area, the round trip and the loss as lines. Each keeps its own peak,
+// so one guest with a bad path shows on its own drawing and not as a small
+// bump under a big one.
+function drawStatsGraphs() {
+  const box = $('stats-graph-box');
+  if (!box) return;
+  const hist = state.statHist;
+  box.hidden = hist.length < 2;
+  if (hist.length < 2) return;
   const css = getComputedStyle(document.documentElement);
   const navy = css.getPropertyValue('--navy').trim() || '#000080';
   const green = css.getPropertyValue('--green').trim() || '#002b00';
-  const downPeak = Math.max(100, ...hist.map((p) => p.down));
-  const rttPeak = Math.max(100, ...hist.map((p) => (typeof p.rtt === 'number' ? p.rtt : 0)));
-  const stepX = (cssW - 2) / Math.max(1, hist.length - 1);
-  const px = (i) => 1 + i * stepX;
-  const py = (v, peak) => cssH - 1 - (v / peak) * (cssH - 2);
+  const red = css.getPropertyValue('--red').trim() || '#800000';
+  const series = (key) => hist.map((p) => (typeof p[key] === 'number' ? p[key] : null));
+  const values = (arr) => arr.filter((v) => v !== null);
+  const peak = (arr, floor) => Math.max(floor, ...values(arr));
+  const now = (arr) => {
+    const kept = values(arr);
+    return kept.length ? kept[kept.length - 1] : null;
+  };
+  const secs = `${hist.length} s`;
 
-  // A filled area for the downlink: the shape says "steady" or "collapsing" at
-  // a glance.
-  ctx.beginPath();
-  ctx.moveTo(px(0), cssH - 1);
-  for (let i = 0; i < hist.length; i++) ctx.lineTo(px(i), py(hist[i].down, downPeak));
-  ctx.lineTo(px(hist.length - 1), cssH - 1);
-  ctx.closePath();
-  ctx.fillStyle = navy;
-  ctx.globalAlpha = 0.22;
-  ctx.fill();
-  ctx.globalAlpha = 1;
+  // Downlink: the area says "steady" or "collapsing" at a glance. The floor of
+  // 100 kbit/s keeps a quiet call on the floor of the box, not off it.
+  const down = series('down');
+  statsPlot($('stats-graph-down'), down, peak(down, 100), true, navy);
+  const downMax = Math.max(0, ...values(down));
+  statsNote('stats-note-down', `down ${rateText(now(down)) || '0 kbit/s'}, up to ${rateText(downMax) || '0 kbit/s'} in ${secs}`);
 
-  // A thin line for the round trip, broken where a sample has no value.
-  ctx.beginPath();
-  ctx.strokeStyle = green;
-  ctx.lineWidth = 1.5;
-  let drawing = false;
-  for (let i = 0; i < hist.length; i++) {
-    const v = hist[i].rtt;
-    if (typeof v !== 'number') { drawing = false; continue; }
-    if (!drawing) { ctx.moveTo(px(i), py(v, rttPeak)); drawing = true; }
-    else ctx.lineTo(px(i), py(v, rttPeak));
-  }
-  ctx.stroke();
+  // Round trip: a line, broken where a sample has no value, so a gap is a gap.
+  const rtt = series('rtt');
+  statsPlot($('stats-graph-rtt'), rtt, peak(rtt, 100), false, green);
+  statsNote('stats-note-rtt', values(rtt).length
+    ? `round trip ${msText(now(rtt))}, up to ${msText(Math.max(...values(rtt)))} in ${secs}`
+    : `round trip not measured in ${secs}`);
 
-  const downMax = Math.max(0, ...hist.map((p) => p.down));
-  const lossMax = Math.max(0, ...hist.map((p) => (typeof p.loss === 'number' ? p.loss : 0)));
-  const rttValues = hist.map((p) => p.rtt).filter((n) => typeof n === 'number');
-  const parts = [`${hist.length} s: down up to ${rateText(downMax) || '0 kbit/s'} (area)`];
-  if (rttValues.length) parts.push(`round trip up to ${msText(Math.max(...rttValues))} (line)`);
-  if (lossMax > 0) parts.push(`loss up to ${lossText(lossMax)}`);
-  note.textContent = parts.join(', ');
+  // Loss: a line on a scale that starts at one percent, so a clean call is a
+  // flat floor and any loss at all leaves the floor.
+  const loss = series('loss');
+  statsPlot($('stats-graph-loss'), loss, peak(loss, 1), false, red);
+  const lossMax = Math.max(0, ...values(loss));
+  statsNote('stats-note-loss', lossMax > 0
+    ? `loss ${lossText(now(loss))} now, up to ${lossText(lossMax)} in ${secs}`
+    : `loss none in ${secs}`);
 }
 
 // updateStats draws one round. A fault sits above the cards, so a red line is
@@ -3694,7 +3734,7 @@ async function updateStats() {
     }
     rows.push(statsRow('you', ownPairs()));
     body.replaceChildren(...sealedAlarms(), ...rows, ...sealedCards());
-    drawStatsGraph();
+    drawStatsGraphs();
   } finally {
     state.statsBusy = false;
   }
