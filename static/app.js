@@ -162,7 +162,7 @@ const state = {
  *   'waiting-banner': HTMLElement, 'perf-live': HTMLInputElement,
  *   'perf-text': HTMLElement, 'perf-live-text': HTMLElement,
  *   'menu-asr-btn': HTMLButtonElement, 'asr-on': HTMLInputElement,
- *   'asr-engine': HTMLSelectElement, 'asr-lang': HTMLSelectElement,
+ *   'asr-lang': HTMLSelectElement,
  *   'asr-note': HTMLElement,
  *   'look-filter': HTMLSelectElement, 'look-mask': HTMLSelectElement,
  * }} Elements
@@ -6041,8 +6041,7 @@ function asrEngine() {
   return '';
 }
 
-// asrSetEngine keeps the choice and paints the rows that belong to it. The
-// engine select is shown only while both engines are on offer.
+// asrSetEngine keeps the choice and paints the picker and the menu entry.
 function asrSetEngine(name, keep) {
   const engine = (name === 'omni' && omni.model) ? 'omni'
     : (name === 'vosk' && asr.models.length) ? 'vosk' : asrEngine();
@@ -6051,39 +6050,68 @@ function asrSetEngine(name, keep) {
     store('asr.engine', engine);
   }
   if (engine === 'vosk' && asr.models.length) asrPick(asr.lang || asrDefaultLang());
-  asrPaintEngineRow();
+  asrPaintLangRow();
   asrPaintEntry();
   asrPaintOthers();
 }
 
-// asrPaintEngineRow fills the engine select and hides the language row of the
-// other engine: the multilingual model has no language to pick.
-function asrPaintEngineRow() {
-  const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-engine'));
-  if (select) {
-    const both = asr.models.length > 0 && !!omni.model;
-    select.replaceChildren(...[
-      ['vosk', 'vosk, one model per language'],
-      ['omni', 'multilingual, one model for every language'],
-    ].map(([value, text]) => {
-      const o = document.createElement('option');
-      o.value = value;
-      o.textContent = text;
-      o.selected = value === asrEngine();
-      return o;
-    }));
-    select.value = asrEngine();
-    // The row and the select go together: a picker drawn inside a row the page
-    // declares hidden is not a picker a guest can use.
-    select.hidden = !both;
-    const row = select.closest('.menu-item');
-    if (row) /** @type {HTMLElement} */ (row).hidden = !both;
+// asrChoices is everything the one picker offers: each vosk language, then the
+// multilingual model, which covers every language alone. Every entry carries
+// the size of what it downloads, so the price of a pick is on the pick.
+function asrChoices() {
+  const list = asr.models.map((m) => ({
+    value: `vosk:${m.lang}`,
+    text: m.size ? `${m.lang} (${mb(m.size)})` : m.lang,
+  }));
+  if (omni.model) {
+    list.push({
+      value: 'omni',
+      text: omni.size ? `omni, every language (${mb(omni.size)})` : 'omni, every language',
+    });
   }
-  const lang = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-lang'));
-  if (lang) {
-    const row = lang.closest('.menu-item');
-    if (row) /** @type {HTMLElement} */ (row).hidden = asrEngine() !== 'vosk';
+  return list;
+}
+
+// asrChoice is the picker value of the engine and language in force.
+function asrChoice() {
+  if (asrEngine() === 'omni') return 'omni';
+  const model = asrModel();
+  return model ? `vosk:${model.lang}` : '';
+}
+
+// asrChoose takes one value of the picker: a language of the vosk engine or
+// the multilingual model.
+function asrChoose(value) {
+  if (value === 'omni') {
+    asrSetEngine('omni');
+    return;
   }
+  if (value.startsWith('vosk:')) {
+    asrSetEngine('vosk');
+    asrPick(value.slice('vosk:'.length));
+  }
+}
+
+// asrPaintLangRow fills the one picker from asrChoices and hides the row while
+// there is no second thing to pick: one model that is the only offer needs no
+// menu. The row and the select go together, so the picker is never drawn inside
+// a row the page declares hidden.
+function asrPaintLangRow() {
+  const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-lang'));
+  if (!select) return;
+  const choices = asrChoices();
+  const value = asrChoice();
+  select.replaceChildren(...choices.map((choice) => {
+    const o = document.createElement('option');
+    o.value = choice.value;
+    o.textContent = choice.text;
+    o.selected = choice.value === value;
+    return o;
+  }));
+  select.value = value;
+  select.hidden = choices.length < 2;
+  const row = select.closest('.menu-item');
+  if (row) /** @type {HTMLElement} */ (row).hidden = choices.length < 2;
 }
 
 // asrPaintEntry puts the engine and its size on the menu entry, before the
@@ -6116,23 +6144,13 @@ function asrModel() {
   return asr.models.find((m) => m.lang === asr.lang) || asr.models[0] || null;
 }
 
-// asrPick sets the label, fills the picker and paints the size of that model.
+// asrPick sets the label and paints the picker and the size of that model.
 function asrPick(lang) {
   const model = asr.models.find((m) => m.lang === lang) || asr.models[0];
   if (!model) return;
   asr.lang = model.lang;
   store('asr.lang', model.lang);
-  const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-lang'));
-  if (select) {
-    select.replaceChildren(...asr.models.map((m) => {
-      const o = document.createElement('option');
-      o.value = m.lang;
-      o.textContent = m.lang;
-      o.selected = m.lang === asr.lang;
-      return o;
-    }));
-    select.hidden = asr.models.length < 2;
-  }
+  asrPaintLangRow();
   const btn = document.getElementById('menu-asr-btn');
   if (btn) asrPaintEntry();
 }
@@ -6371,26 +6389,20 @@ function initAsr() {
       asrStart();
     }
   });
-  const engine = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-engine'));
-  if (engine) {
-    engine.addEventListener('change', () => {
-      // One engine runs at a time, and the other may be a 348 MB download, so
-      // a change only stops what runs: the next start is the guest's own tick.
-      asrStop();
-      omniStop();
-      asrSetEngine(engine.value);
-      paintAsr();
-    });
-  }
   const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-lang'));
   if (select) {
     select.addEventListener('change', () => {
-      // The engine holds one model at a time, so a change restarts it on the
-      // other model: stop first, then start on the new label.
-      const was = asr.on;
+      // One engine runs at a time and a pick may be a 348 MB download, so a
+      // change stops what runs and restarts only the engine that was running:
+      // the new pick is started by the guest's own tick otherwise.
+      const was = asr.on || omni.on;
       asrStop();
-      asrPick(select.value);
-      if (was) asrStart();
+      omniStop();
+      asrChoose(select.value);
+      paintAsr();
+      if (!was) return;
+      if (asrEngine() === 'omni') omniStart();
+      else asrStart();
     });
   }
 }

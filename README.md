@@ -251,7 +251,7 @@ well.
   binary as before. A model file is always named `model-<lang>.tar.gz` and the
   part after `model-` is the label in the picker; `LANG=it` on
   `tools/fetch-vosk.sh` writes the Italian one, and a second run adds a second
-  language, so the page shows a language picker next to *transcribe*. English
+  language, so the picker next to *transcribe* lists it. English
   is the label en, with no file name of its own. A guest who presses
   *transcribe* sees the size, downloads that one model (kept in the browser
   cache) and runs one recognizer per incoming voice in the tab. The text goes out as sealed chat
@@ -275,8 +275,10 @@ well.
   costs most of a second of CPU. The published glue carries the machinery of a
   demo model preload (this build only defines it and never calls it); the server
   removes the call when a file has one, as it serves the file, so the copy on
-  disk stays pristine. With both engines on offer the menu has an engine row,
-  and only one engine runs at a time.
+  disk stays pristine. One picker offers every transcription choice: one entry
+  per vosk language and, when the server lists it, the multilingual model, each
+  entry carrying the size of the download it needs. A single entry hides the
+  picker, and only one engine runs at a time.
 - **Performance slider**, **volume curve**, **sound switch**, clickable
   `http(s)` links in the chat and a movable lobby window are client only and
   stored in the browser.

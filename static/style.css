@@ -437,7 +437,7 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 /* The transcription panel carries a picker in one of its rows and a line of
  * state under the rows, so it is a little wider than the settings panel and
  * the picker takes the room the words leave. */
-#menu-asr { min-width: 272px; }
+#menu-asr { min-width: 288px; }
 .menu-item select {
   flex: 1;
   min-width: 0;
@@ -446,6 +446,16 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   min-height: 0;
   font-size: var(--fs-smaller);
   line-height: 1.2;
+}
+/* A picker row puts its select under the words and across the panel: an engine
+ * entry carries its name and its size, and half a row would cut the size off. */
+.menu-item:has(select) {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.menu-item:has(select) select {
+  flex: 1 1 100%;
+  max-width: 100%;
 }
 .menu-note {
   margin: 4px 6px 2px 21px;
