@@ -158,13 +158,13 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// lifetime of the connection. The whole room gets the answer,
 			// the sender too, because a raised hand needs its queue number.
 			room := s.hub.roomOf(p)
-			mic, cam, deaf := p.setFlags(m.Mic, m.Cam, m.Deaf)
+			mic, cam, deaf, screen := p.setFlags(m.Mic, m.Cam, m.Deaf, m.Screen)
 			if m.Hand != nil {
 				p.setHand(*m.Hand, func() int { return s.hub.nextHand(room) })
 			}
 			hand, seq := p.handState()
 			s.hub.broadcastTo(room, mustJSON(serverMsg{
-				T: "state", From: p.id, Mic: &mic, Cam: &cam, Deaf: &deaf,
+				T: "state", From: p.id, Mic: &mic, Cam: &cam, Deaf: &deaf, Screen: &screen,
 				Hand: &hand, HandSeq: seq,
 			}))
 		case "enc":
@@ -229,9 +229,9 @@ func (s *server) handleMod(p *Peer, m clientMsg) {
 			return
 		}
 		hand, seq := target.setHand(false, nil)
-		mic, cam, deaf := target.flags()
+		mic, cam, deaf, screen := target.flags()
 		s.hub.broadcastTo(room, mustJSON(serverMsg{
-			T: "state", From: target.id, Mic: &mic, Cam: &cam, Deaf: &deaf,
+			T: "state", From: target.id, Mic: &mic, Cam: &cam, Deaf: &deaf, Screen: &screen,
 			Hand: &hand, HandSeq: seq,
 		}))
 	case "kick":
@@ -295,10 +295,10 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
-		mic, cam, deaf := other.flags()
+		mic, cam, deaf, screen := other.flags()
 		hand, seq := other.handState()
 		peers = append(peers, peerInfo{
-			ID: other.id, Mic: mic, Cam: cam, Deaf: deaf, Admin: isAdmin[other.id],
+			ID: other.id, Mic: mic, Cam: cam, Deaf: deaf, Screen: screen, Admin: isAdmin[other.id],
 			Waiting: s.hub.isWaiting(other), Hand: hand, HandSeq: seq,
 		})
 	}
@@ -321,12 +321,12 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		Waiting:     selfWaiting,
 	})
 
-	ownMic, ownCam, ownDeaf := p.flags()
+	ownMic, ownCam, ownDeaf, ownScreen := p.flags()
 	ownHand, ownSeq := p.handState()
 	joinedMsg := mustJSON(serverMsg{
 		T: "peer-joined",
 		Peer: &peerInfo{
-			ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Admin: isAdmin[p.id],
+			ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Screen: ownScreen, Admin: isAdmin[p.id],
 			Waiting: selfWaiting, Hand: ownHand, HandSeq: ownSeq,
 		},
 	})

@@ -119,19 +119,22 @@ func TestRejoinAfterDropStartsFresh(t *testing.T) {
 	h.leave(b)
 }
 
-// A state message carries three flags now. A nil pointer must leave its flag
+// A state message carries four flags now. A nil pointer must leave its flag
 // as it was, so a client that sends only the microphone keeps the rest.
 func TestFlagsCarryDeafWithoutClearingTheRest(t *testing.T) {
 	p := newPeer()
-	mic, deaf := true, true
-	if m, c, d := p.setFlags(&mic, nil, &deaf); m != true || c != true || d != true {
-		t.Fatalf("setFlags = %v %v %v, want true true true", m, c, d)
+	mic, deaf, share := true, true, true
+	if m, c, d, sc := p.setFlags(&mic, nil, &deaf, &share); m != true || c != true || d != true || sc != true {
+		t.Fatalf("setFlags = %v %v %v %v, want true true true true", m, c, d, sc)
 	}
-	if m, c, d := p.setFlags(nil, nil, boolp(false)); m != true || c != true || d != false {
-		t.Fatalf("setFlags = %v %v %v, want true true false", m, c, d)
+	if m, c, d, sc := p.setFlags(nil, nil, boolp(false), nil); m != true || c != true || d != false || sc != true {
+		t.Fatalf("setFlags = %v %v %v %v, want true true false true", m, c, d, sc)
 	}
-	if m, c, d := p.flags(); m != true || c != true || d != false {
-		t.Fatalf("flags = %v %v %v, want true true false", m, c, d)
+	if m, c, d, sc := p.flags(); m != true || c != true || d != false || sc != true {
+		t.Fatalf("flags = %v %v %v %v, want true true false true", m, c, d, sc)
+	}
+	if m, c, d, sc := p.setFlags(nil, nil, nil, boolp(false)); m != true || c != true || d != false || sc != false {
+		t.Fatalf("setFlags = %v %v %v %v, want true true false false", m, c, d, sc)
 	}
 }
 
