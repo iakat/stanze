@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -126,33 +127,21 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", srv.handleWS)
 
-	var gzMu sync.Mutex
-	gz := make(map[string][]byte)
-	// packed returns the gzip copy of one asset, made once. It is a copy, not a
-	// transform: the bytes a client gets are the bytes of the file, so the
-	// sha256 of a download and the sha256 of the file agree.
-	packed := func(name string, body []byte) []byte {
-		gzMu.Lock()
-		defer gzMu.Unlock()
-		if b, ok := gz[name]; ok {
-			return b
-		}
-		var buf bytes.Buffer
-		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-		zw.Write(body)
-		zw.Close()
-		gz[name] = buf.Bytes()
-		return gz[name]
+	files := make(map[string]*asset, len(assets))
+	for name, body := range assets {
+		files[name] = newAsset(name, body)
 	}
-	compressible := func(name string) bool {
-		switch {
-		case strings.HasSuffix(name, ".wasm"), strings.HasSuffix(name, ".js"),
-			strings.HasSuffix(name, ".css"), strings.HasSuffix(name, ".html"),
-			strings.HasSuffix(name, ".svg"), strings.HasSuffix(name, ".md"):
-			return true
+	// The gzip copies are made in the background at start, so the first guest
+	// does not wait for the wasm to compress. A request that comes first makes
+	// the copy itself; each asset is compressed once and never under a shared
+	// lock, so one slow file does not hold up the others.
+	go func() {
+		for _, a := range files {
+			if a.gzTag != "" {
+				a.gzip()
+			}
 		}
-		return false
-	}
+	}()
 	serve := func(name string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -160,23 +149,37 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			body, ok := assets[name]
+			a, ok := files[name]
 			if !ok {
 				http.NotFound(w, r)
 				return
 			}
-			w.Header().Set("Content-Type", contentType(name))
-			w.Header().Set("Cache-Control", "no-store")
-			if compressible(name) {
-				// One gzip pass, cached: the page is 6.5 MB of source and
-				// 1.7 MB on the wire, and the wasm alone loses 3.9 MB.
-				w.Header().Set("Vary", "Accept-Encoding")
-				if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-					w.Header().Set("Content-Encoding", "gzip")
-					w.Write(packed(name, body))
-					return
-				}
+			// The copy is a copy, not a transform: the bytes a client gets are
+			// the bytes of the file, so the sha256 of a download and the sha256
+			// of the file agree. The page is 6.5 MB of source and 1.7 MB on the
+			// wire, and the wasm alone loses 3.9 MB.
+			body, tag, h := a.body, a.tag, w.Header()
+			gz := a.gzTag != "" && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+			if a.gzTag != "" {
+				h.Set("Vary", "Accept-Encoding")
 			}
+			if gz {
+				body, tag = a.gzip(), a.gzTag
+			}
+			// The files are public code and carry nothing of a room, so the
+			// browser may keep them; no-cache makes it ask first, and an
+			// unchanged file is a 304 with no body. A new binary has new tags.
+			h.Set("Cache-Control", "no-cache")
+			h.Set("ETag", tag)
+			if etagMatch(r.Header.Get("If-None-Match"), tag) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			h.Set("Content-Type", a.ctype)
+			if gz {
+				h.Set("Content-Encoding", "gzip")
+			}
+			h.Set("Content-Length", strconv.Itoa(len(body)))
 			w.Write(body)
 		}
 	}
@@ -214,6 +217,61 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	return securityHeaders(mux, srv.log), nil
 }
 
+// asset is one served client file with what a response needs, made once at
+// start: the content type and the two entity tags. The gzip copy is made at
+// most once, by whoever asks first.
+type asset struct {
+	body  []byte
+	ctype string
+	tag   string // entity tag of the plain bytes
+	gzTag string // entity tag of the gzip copy; empty for a type that is not compressed
+
+	gzOnce sync.Once
+	gz     []byte
+}
+
+func newAsset(name string, body []byte) *asset {
+	sum := sha256.Sum256(body)
+	id := hex.EncodeToString(sum[:16])
+	a := &asset{body: body, ctype: contentType(name), tag: `"` + id + `"`}
+	if compressible(name) {
+		a.gzTag = `"` + id + `-gzip"`
+	}
+	return a
+}
+
+func (a *asset) gzip() []byte {
+	a.gzOnce.Do(func() {
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		zw.Write(a.body)
+		zw.Close()
+		a.gz = buf.Bytes()
+	})
+	return a.gz
+}
+
+func compressible(name string) bool {
+	for _, ext := range [...]string{".wasm", ".js", ".css", ".html", ".svg", ".md"} {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// etagMatch reports whether an If-None-Match value names the tag. A weak
+// prefix is ignored, as the comparison for this header allows.
+func etagMatch(header, tag string) bool {
+	for _, t := range strings.Split(header, ",") {
+		t = strings.TrimPrefix(strings.TrimSpace(t), "W/")
+		if t == tag || t == "*" {
+			return true
+		}
+	}
+	return false
+}
+
 // binaryHash returns the sha256 of the executable that is running, or an empty
 // string when the file cannot be read, as with a memfd or a deleted image.
 // It is computed once, at start, so a later replacement on disk does not change
@@ -223,12 +281,16 @@ func binaryHash() string {
 	if err != nil {
 		return ""
 	}
-	data, err := os.ReadFile(exe)
+	f, err := os.Open(exe)
 	if err != nil {
 		return ""
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // docHandler serves one markdown file, from the docs directory when a copy is
@@ -317,8 +379,8 @@ func unpackArchive(out map[string][]byte) error {
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
+		data := make([]byte, hdr.Size)
+		if _, err := io.ReadFull(tr, data); err != nil {
 			return err
 		}
 		out[path.Clean(hdr.Name)] = data
