@@ -372,7 +372,6 @@ function probe(page) {
       identity: !!s.identity, sealFault: s.sealFault,
       sealing: typeof RTCRtpScriptTransform === 'function',
       counters: app.counters(),
-      linkText: (document.getElementById('link-text') || {}).textContent,
       say: (document.getElementById('stage-error') || {}).textContent,
       peers: [],
     };

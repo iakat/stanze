@@ -100,7 +100,6 @@ async function joinPage(context, name, room) {
         stageHidden: document.getElementById('stage').hidden,
         lobbyHidden: document.getElementById('lobby').hidden,
         self: window.e2eApp ? window.e2eApp.state.self : null,
-        linkText: (document.getElementById('link-text') || {}).textContent,
         say: (document.getElementById('status') || {}).textContent,
       })).catch((e) => ({ evaluate: String(e) }));
       console.log('RETRY ' + name + ' join attempt ' + (attempt + 1) + ' failed: ' + err

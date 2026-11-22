@@ -105,12 +105,10 @@ function newRoomID() {
     await until(pageA, () => !document.getElementById('stage').hidden, null, 'the call stage');
     const joined = await until(pageA, () => {
       const own = document.querySelector('.tile[data-local="yes"]');
-      const dot = document.getElementById('link-dot');
       const ws = state.ws;
       if (!own || !ws || ws.readyState !== 1) return null;
       return {
         socket: ws.url,
-        dotOn: dot.className.indexOf('on') >= 0,
         ownTile: !!own.querySelector('video'),
         mic: !!state.micTrack,
         cam: !!state.camTrack,
@@ -118,7 +116,6 @@ function newRoomID() {
       };
     }, null, 'an open socket and the own tile');
     pass('the socket opened on the page origin', joined.socket.indexOf(BASE.replace(/^http/, 'ws')) === 0, joined.socket);
-    pass('the connection dot is on', joined.dotOn);
     pass('the own tile is drawn with a live video', joined.ownTile);
     pass('the join brought camera and microphone', joined.mic && joined.cam, 'mic=' + joined.mic + ' cam=' + joined.cam);
     pass('the stage shows no error', joined.error === '', joined.error);
