@@ -6341,13 +6341,16 @@ async function asrStart() {
 }
 
 // paintAsr puts the state of the chosen engine on the tick row of the menu: a
-// tick while it runs, and a dimmed row while its model is on the way.
+// tick while it runs, and the same tick while its model is on the way, so the
+// row stays a way to cancel a download that has started. A start in progress
+// therefore does not lock the row.
 function paintAsr() {
   const box = /** @type {HTMLInputElement | null} */ (document.getElementById('asr-on'));
   if (!box) return;
   const engine = asrEngine();
-  box.checked = engine === 'omni' ? omni.on : asr.on;
-  box.disabled = engine === 'omni' ? omni.busy : asr.busy;
+  const busy = engine === 'omni' ? omni.busy : asr.busy;
+  box.checked = busy || (engine === 'omni' ? omni.on : asr.on);
+  box.disabled = false;
 }
 
 function initAsr() {
