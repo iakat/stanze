@@ -1251,6 +1251,20 @@ function levelText(peak) {
   return db > -90 ? `${pct}% ${Math.round(db)} dB` : '0% silent';
 }
 
+// micLevelCells splits the own input into the four columns of the microphone
+// row: the level in decibels, the share of the scale it fills, and the state
+// word. A peak under -60 dB is below anything a person hears, so it reads as
+// silent rather than as a number.
+function micLevelCells(peak) {
+  const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+  if (!(db > -60)) return { db: '0 dB', pct: '0 %', state: 'silent' };
+  return {
+    db: `${Math.round(db)} dB`,
+    pct: `${Math.round(((db + 60) / 60) * 100)} %`,
+    state: 'transmitting',
+  };
+}
+
 // micLevelLine reports the local input. A value near zero with a live track
 // points at the graph, not at the device.
 function micLevelLine() {
@@ -3531,23 +3545,22 @@ function ownPairs(total) {
   if (state.idKey) out.push(['key ', state.idKey.fp, undefined, 'mono']);
   const live = !!(state.mic && state.micTrack && state.micTrack.readyState === 'live');
   const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
-  let label = live ? 'on' : 'off';
-  // Safari reports no sample rate on an audio track, so the rate is a bonus
-  // and a missing rate never means off.
-  if (mic && mic.sampleRate) label += `, ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
-  if (live && state.micAnalyser) label += ', ' + levelText(state.meterPeak);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
   const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : 'off';
   out.push([VIDEO_ICON, [
     [...PICTURE_ICON, shot],
-    ['', '', `denoise ${state.denoiseOn ? 'on' : 'off'}`],
     rateCell('up', total ? total.up.video : 0),
     rateCell('down', total ? total.down.video : 0),
   ]]);
+  // The microphone row says the four things a speaker asks: is it on, how loud
+  // is it, how much of the scale does that fill and is anything going out.
+  const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
+  const sample = mic && mic.sampleRate ? `${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch` : '';
   out.push([AUDIO_ICON, [
-    ['', '', label],
-    rateCell('up', total ? total.up.audio : 0),
-    rateCell('down', total ? total.down.audio : 0),
+    ['', '', live ? (sample || 'on') : 'off'],
+    ['', '', level ? level.db : ''],
+    ['', '', level ? level.pct : ''],
+    ['', '', level ? level.state : ''],
   ]]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';

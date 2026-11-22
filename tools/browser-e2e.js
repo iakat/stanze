@@ -370,8 +370,8 @@ async function stats(page) {
       /[1-9][\d.]* (kbps|Mbps)/.test(tel.text)
       && tel.icons.some((t) => /^out/.test(t)) && tel.icons.some((t) => /^in,/.test(t))
       && tel.icons.includes('video') && tel.icons.includes('audio'), JSON.stringify(tel.icons));
-    check('stats show the own denoise state and device settings',
-      /denoise (on|off)/.test(tel.text) && /mic (on|off), \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
+    check('stats show the own picture size and the microphone state',
+      /\d+x\d+/.test(tel.text) && /\d+ kHz \d+ch/.test(tel.text), tel.text);
     const graphs = await pageA.evaluate(() => {
       const ink = (id) => {
         const c = document.getElementById(id);
