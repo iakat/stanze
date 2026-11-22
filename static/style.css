@@ -415,12 +415,23 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   grid-template-rows: minmax(0, 1fr);
   align-content: stretch;
 }
+.stage-main .tile { align-self: center; }
 .stage-main[data-alone="yes"] .tile {
   aspect-ratio: auto;
   min-height: 0;
+  align-self: stretch;
 }
 
+/* Three rings can hold on one tile at once: the talking light, the spotlight
+ * and the key state. Each one is a variable and the tile paints all three, in
+ * that order of priority. Written as three plain box-shadow rules, the later
+ * one replaced the others, so a guest with a sealed key never showed the
+ * talking light, which is every guest. */
 .tile {
+  --ring-talk: inset 0 0 0 0 transparent;
+  --ring-spot: inset 0 0 0 0 transparent;
+  --ring-e2e: inset 0 0 0 0 transparent;
+  cursor: pointer;
   position: relative;
   background: #101010;
   border: 2px solid;
@@ -459,15 +470,20 @@ label.check input { width: auto; min-height: 0; margin: 0; }
  * of the way, so the centre name is visible again. */
 .tile.camoff .avatar { display: grid; }
 
-/* The talking light: a green edge while a person speaks, and a brighter name
- * when the camera is off. */
-.tile.speaking {
-  box-shadow: inset 0 0 0 2px #00b000, 0 0 12px rgba(0, 255, 110, 0.35);
+/* The talking light: a flat green edge while a person speaks, and a brighter
+ * name when the camera is off. No glow, because nothing else here has one. */
+/* The rings are drawn by an element above the picture. An inset shadow on the
+ * tile itself paints under the video, so over a live picture it was never seen. */
+.tile .ring {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: var(--ring-talk), var(--ring-spot), var(--ring-e2e);
 }
-.tile.speaking .avatar {
-  color: #9dffb4;
-  text-shadow: 0 0 8px rgba(0, 255, 110, 0.6);
-}
+.tile.speaking { --ring-talk: inset 0 0 0 3px #00b000; }
+.tile.speaking .avatar { color: #9dffb4; }
+.tile:focus-visible { outline: 1px dotted #fff; outline-offset: -7px; }
 .tile.speaking .name {
   background: #d8ffd8;
 }
@@ -484,7 +500,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 }
 .tile .flags { display: flex; gap: 3px; }
 .tile .flags span,
-.tile .name, .tile .state {
+.tile .name, .tile .state, .tile .route {
   background: var(--panel);
   border: 1px solid;
   border-color: #fff var(--edge) var(--edge) #fff;
@@ -500,7 +516,24 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .tile[data-state="connected"] .state { color: var(--green); }
 .tile[data-state="failed"] .state,
 .tile[data-state="disconnected"] .state { color: var(--red); }
-.tile[data-relay="yes"] .state::after { content: " | relay"; color: var(--amber); }
+.tile .route { display: none; color: var(--amber); }
+/* The relay mark is a chip of its own. It used to be a suffix of the key chip,
+ * so a guest whose key was verified, the best case, hid the chip and the relay
+ * mark with it. */
+.tile[data-relay="yes"] .route { display: inline; }
+/* The lamp of the name: green while the microphone is open, red while it is
+ * muted, the same lamp a row of the rail carries. */
+.tile .name::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  vertical-align: 0.05em;
+  background: #007000;
+  border: 1px solid var(--edge);
+}
+.tile[data-mic="off"] .name::before { background: var(--red); }
 
 /* sealed rooms: the short code of a guest. It is a card at the foot of the
  * tile, made of OpenMoji drawings and the code in groups of four. It only
@@ -530,7 +563,8 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   pointer-events: none;
 }
 .tile:hover .sas,
-.tile:focus-within .sas { opacity: 1; visibility: visible; }
+.tile:focus-within .sas,
+.tile.ctl .sas { opacity: 1; visibility: visible; }
 /* The card lets the pointer through, except its buttons: the pin lives there. */
 .tile .sas button { pointer-events: auto; }
 .tile .sas-head {
@@ -578,9 +612,24 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   text-overflow: ellipsis;
   max-width: 100%;
 }
-.tile[data-e2e="ready"] { box-shadow: inset 0 0 0 2px #1c5b2a; }
-.tile[data-e2e="handshake"] { box-shadow: inset 0 0 0 2px #8a7a1c; }
-.tile[data-e2e="failed"] { box-shadow: inset 0 0 0 2px #a00000; }
+.tile[data-e2e="ready"] { --ring-e2e: inset 0 0 0 2px #1c5b2a; }
+.tile[data-e2e="handshake"] { --ring-e2e: inset 0 0 0 2px #8a7a1c; }
+.tile[data-e2e="failed"] { --ring-e2e: inset 0 0 0 2px #a00000; }
+
+/* The controls of a tile (volume, enlarge, host menu) show while the pointer is
+ * over that tile, while a control in it has the focus, and, on a touch screen
+ * with no hover, for a few seconds after a tap. At rest a full room is a
+ * picture and not a panel. */
+.tile .vol, .tile .zoom {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 90ms linear;
+}
+.tile:hover .vol, .tile:focus-within .vol, .tile.ctl .vol,
+.tile:hover .zoom, .tile:focus-within .zoom, .tile.ctl .zoom {
+  opacity: 1;
+  visibility: visible;
+}
 
 /* per peer volume: a small slider in the top left corner, so the three dot
  * menu keeps its own corner on the right and the hover still works */
@@ -588,6 +637,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   position: absolute;
   top: 4px;
   left: 4px;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -610,6 +660,36 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 }
 .tile .vol-range:focus { outline: 1px dotted var(--ink); outline-offset: -2px; }
 .tile .vol-num { min-width: 36px; text-align: right; }
+.tile .vol-ico { width: 16px; height: 16px; flex: none; display: block; }
+
+/* The enlarge button is a window manager maximize box, drawn in CSS: one box
+ * while the picture is in the grid, two overlapping boxes while it is
+ * enlarged, which is the restore box of the era. */
+.tile .zoom {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 22px;
+  min-width: 0;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+}
+body.is-admin .tile[data-peer] .zoom { right: 32px; }
+.tile .zoom::before,
+.tile .zoom::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--ink);
+  border-top-width: 2px;
+}
+.tile .zoom::before { left: 5px; top: 5px; width: 10px; height: 9px; }
+.tile .zoom::after { display: none; }
+.tile .zoom[aria-pressed="true"]::before { left: 4px; top: 8px; width: 8px; height: 7px; background: var(--panel); z-index: 1; }
+.tile .zoom[aria-pressed="true"]::after { display: block; left: 8px; top: 4px; width: 8px; height: 7px; }
+.tile .zoom:active { padding: 0; }
 
 /* host controls: a three dot button on a remote tile, only for the admin */
 .dots {
@@ -657,6 +737,7 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .stage-rail .tile {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   aspect-ratio: auto;
@@ -671,7 +752,12 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .stage-rail .tile video,
 .stage-rail .tile .avatar,
 .stage-rail .tile .sas,
+.stage-rail .tile .zoom,
 .stage-rail .tile .pin { display: none; }
+.stage-rail .tile .name::before { display: none; }
+.stage-rail .tile .vol { opacity: 1; visibility: visible; }
+.stage-rail .tile .vol-ico { display: none; }
+.stage-rail .tile:focus-visible { outline-color: var(--ink); outline-offset: -3px; }
 .stage-rail .tile .tag {
   order: 3;
   position: static;
@@ -723,11 +809,11 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .stage-rail .tile .vol {
   order: 4;
   position: static;
-  flex: none;
-  gap: 2px;
+  flex: 1 0 100%;
+  gap: 4px;
   padding: 0 2px;
 }
-.stage-rail .tile .vol-range { width: 52px; }
+.stage-rail .tile .vol-range { flex: 1; width: auto; min-width: 0; }
 .stage-rail .tile .vol-num { min-width: 28px; }
 .stage-rail .tile .dots {
   order: 5;
@@ -741,7 +827,7 @@ body.is-admin .tile[data-peer]:focus-within .dots {
    border for the panel, a white inner line for the frame behind it. */
 .tile.spot {
   border-color: var(--navy);
-  box-shadow: inset 0 0 0 2px #fff, inset 0 0 0 4px var(--navy);
+  --ring-spot: inset 0 0 0 2px #fff, inset 0 0 0 4px var(--navy);
 }
 
 /* Under 900 px the rail becomes a strip under the large area. The pictures
@@ -1070,3 +1156,14 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 
 .pin-btn:active { border-style: inset; }
 .pin-btn:focus-visible { outline: 2px solid #000080; outline-offset: 1px; }
+
+/* A touch screen: the controls of a tile are fingers' size. */
+@media (hover: none) {
+  .tile .vol-range { width: 110px; height: 26px; }
+  .tile .vol { padding: 3px 6px; }
+  .tile .zoom { width: 34px; height: 30px; }
+  .tile .zoom::before { left: 11px; top: 10px; }
+  .tile .zoom[aria-pressed="true"]::before { left: 10px; top: 13px; }
+  .tile .zoom[aria-pressed="true"]::after { left: 14px; top: 9px; }
+  body.is-admin .tile[data-peer] .zoom { right: 40px; }
+}
