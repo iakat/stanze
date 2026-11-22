@@ -321,7 +321,7 @@ function makeTile(id, name, local = false) {
     </div>`}
     <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
     <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${local ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
-    ${local ? '' : '<div class="sas" hidden></div><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
+    ${local ? '' : '<button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
   paintName(tile, name, local);
   // A remote guest is heard through its own gain node, so the video element
   // only ever carries pictures and stays muted.
@@ -354,15 +354,10 @@ function makeRow(id, name, local = false) {
   row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span>${local ? '<span class="row-you">you</span>' : `
     <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
     <span class="vol-num">100%</span>
-    <button class="row-sas" type="button" aria-label="sealed code" title="sealed code" hidden>code</button>
     <button class="dots" type="button" aria-label="member actions">&#8943;</button>
-    <div class="sas" hidden></div>
     <div class="menu" hidden></div>`}`;
   paintRowName(row, name, local);
-  if (!local) {
-    wireDots(row);
-    wireRowCode(row);
-  }
+  if (!local) wireDots(row);
   row.addEventListener('keydown', (event) => {
     if (event.target !== row || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
@@ -614,6 +609,14 @@ function wireDots(host) {
     }
     const noiseOn = !!(peer && peer.inNoise);
     add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => { void setPeerNoise(peer, !noiseOn); });
+    // The sealed code lives here, not as a banner over the picture: one card,
+    // built by the same function that feeds the stats panel.
+    if (peer && peer.sas) {
+      const card = document.createElement('div');
+      card.className = 'sas';
+      card.append(...sealedCodePanel(peer));
+      menu.appendChild(card);
+    }
     menu.hidden = false;
   });
 }
@@ -4888,8 +4891,7 @@ function updatePinCount() {
 function paintPin(peer) {
   updatePinCount();
   paintState(peer);
-  const idRow = peer.tile ? peer.tile.querySelector('.sas .id-row') : null;
-  if (idRow) idRow.replaceWith(sealedIdentityRow(peer));
+  for (const host of [peer.tile, rowOf.get(peer.tile)]) refreshCodeCard(host, peer);
   const chip = peer.tile ? peer.tile.querySelector('.pin') : null;
   if (!chip) return;
   const what = pinState(peer);
@@ -5476,47 +5478,25 @@ function sealedSetE2E(peer, status) {
   peer.tile.dataset.e2e = status;
   paintState(peer);
   paintPin(peer);
-  for (const host of [peer.tile, rowOf.get(peer.tile)]) paintCodeCard(host, peer);
 }
 
-// paintCodeCard fills the card of one host, a tile or a list row. A guest
-// without a picture has no tile to hover, so its row opens the same card
-// behind its own button; both cards carry the same drawings and the same pin.
-function paintCodeCard(host, peer) {
-  const sas = host ? /** @type {HTMLElement} */ (host.querySelector('.sas')) : null;
-  if (!sas) return;
-  // The names behind the drawings are a title, so a screen reader and a
-  // nervous guest can both tell what they are looking at.
-  sas.title = peer.sas ? verifyNames(peer.sas) + ' (' + peer.sas + ')' : '';
-  const button = host.querySelector('.row-sas');
-  if (button) {
-    button.hidden = !peer.sas;
-    if (!peer.sas) sas.hidden = true;
-  }
+// refreshCodeCard redraws the sealed card of one host, a tile or a list row,
+// when its menu is open. A closed menu reads the code when it opens; an open
+// one needs a redraw, because the code of a pair can arrive after it opened.
+function refreshCodeCard(host, peer) {
+  const menu = host ? host.querySelector('.menu') : null;
+  if (!menu || menu.hidden) return;
+  let card = menu.querySelector('.sas');
   if (!peer.sas) {
-    sas.hidden = true;
-    sas.replaceChildren();
+    if (card) card.remove();
     return;
   }
-  sas.replaceChildren(...sealedCodePanel(peer));
-  // A row card opens and closes on its own button, so a repaint keeps it as it is.
-  if (!button) sas.hidden = false;
-}
-
-// wireRowCode opens the sealed code card inside one row, and closes the card of
-// every other row, so one list never shows two cards at once.
-function wireRowCode(row) {
-  const button = row.querySelector('.row-sas');
-  const card = row.querySelector('.sas');
-  if (!button || !card) return;
-  button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    for (const other of document.querySelectorAll('.plist-row .sas:not([hidden])')) {
-      if (other !== card) /** @type {HTMLElement} */ (other).hidden = true;
-    }
-    card.hidden = !card.hidden;
-    button.setAttribute('aria-expanded', String(!card.hidden));
-  });
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'sas';
+    menu.appendChild(card);
+  }
+  card.replaceChildren(...sealedCodePanel(peer));
 }
 
 // paintState is the one place a tile says how far the link is. A ready link is
@@ -6195,7 +6175,7 @@ function init() {
   if (railEl) {
     railEl.addEventListener('click', (event) => {
       const target = /** @type {Element} */ (event.target);
-      if (target.closest('.vol-range, .vol-num, .dots, .menu, .sas, .row-sas')) return;
+      if (target.closest('.vol-range, .vol-num, .dots, .menu, .sas')) return;
       const row = target.closest('.plist-row');
       if (!row) return;
       const id = tileId(/** @type {HTMLElement} */ (row));
