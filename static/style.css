@@ -429,6 +429,25 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 .menu-item:hover,
 .menu-item:focus-within { background: var(--navy); color: #fff; }
 .menu-item input:focus-visible ~ .menu-text { outline: 1px dotted currentColor; outline-offset: 2px; }
+/* The transcription panel carries a picker in one of its rows and a line of
+ * state under the rows, so it is a little wider than the settings panel and
+ * the picker takes the room the words leave. */
+#menu-asr { min-width: 272px; }
+.menu-item select {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 1px 22px 1px 4px;
+  min-height: 0;
+  font-size: var(--fs-smaller);
+  line-height: 1.2;
+}
+.menu-note {
+  margin: 4px 6px 2px 21px;
+  font-size: var(--fs-tiny);
+  line-height: 1.3;
+  color: var(--soft);
+}
 .menu-sep {
   height: 0;
   margin: 3px 2px;

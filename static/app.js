@@ -148,8 +148,8 @@ const state = {
  *   perf: HTMLInputElement, sounds: HTMLInputElement, 'waiting-room': HTMLInputElement,
  *   'waiting-banner': HTMLElement, 'perf-live': HTMLInputElement,
  *   'perf-text': HTMLElement, 'perf-live-text': HTMLElement,
- *   'asr-pick': HTMLElement, 'asr-btn': HTMLButtonElement, 'asr-lang': HTMLSelectElement,
- *   'asr-note': HTMLElement,
+ *   'menu-asr-btn': HTMLButtonElement, 'asr-on': HTMLInputElement,
+ *   'asr-lang': HTMLSelectElement, 'asr-note': HTMLElement,
  * }} Elements
  */
 
@@ -243,68 +243,85 @@ function joinWords(list) {
 
 // ---------------------------------------------------------------- menu bar
 
-// settingsMenu opens or closes the one drop-down of the menu bar. The panel
-// keeps its own DOM, so a switch keeps its listener and its tick when the
-// panel closes. Opening puts the focus on the first row, the way a Windows
-// menu does, and Esc gives it back to the entry.
-function settingsMenu(open) {
-  const list = $('menu-settings');
-  const btn = $('menu-settings-btn');
-  if (!list || !btn) return;
-  const was = !list.hidden;
-  list.hidden = !open;
-  btn.setAttribute('aria-expanded', String(open));
-  if (open && !was) {
-    const first = /** @type {HTMLElement | null} */ (list.querySelector('input[type="checkbox"]'));
-    if (first) first.focus();
+// The menu bar carries one thin entry per drop-down. Both panels are wired by
+// the same code, and only one panel is open at a time, the way a Windows menu
+// bar behaves.
+const MENUS = [
+  ['menu-settings-btn', 'menu-settings'],
+  ['menu-asr-btn', 'menu-asr'],
+];
+
+// menuSet opens one panel, closes the others, and moves the focus to its first
+// row when it opens. A panel keeps its own DOM, so a switch keeps its listener
+// and its tick while the panel is closed.
+function menuSet(open, which) {
+  for (const [btnId, listId] of MENUS) {
+    const btn = $(btnId);
+    const list = $(listId);
+    if (!btn || !list) continue;
+    const on = open && (!which || which === listId);
+    const was = !list.hidden;
+    list.hidden = !on;
+    btn.setAttribute('aria-expanded', String(on));
+    if (on && !was) {
+      const first = /** @type {HTMLElement | null} */ (list.querySelector('input[type="checkbox"], select'));
+      if (first) first.focus();
+    }
   }
 }
 
-// settingsMenuClose closes the panel when it is open, and says whether it was,
-// so the global Esc handler can leave the rest of the page alone.
-function settingsMenuClose() {
-  const list = $('menu-settings');
-  if (!list || list.hidden) return false;
-  settingsMenu(false);
-  return true;
+// menuClose closes every panel and says whether one of them was open, so the
+// global Esc handler can leave the rest of the page alone.
+function menuClose() {
+  let any = false;
+  for (const [, listId] of MENUS) {
+    const list = $(listId);
+    if (list && !list.hidden) any = true;
+  }
+  if (any) menuSet(false);
+  return any;
 }
 
-// wireMenuBar gives the bar its behaviour: a click on the entry opens the
-// panel, a click in it keeps it open so several switches can be set at once,
-// a click anywhere else or Esc closes it, and the arrow keys walk the rows.
+// wireMenuBar gives each entry its behaviour: a click opens its panel and
+// closes the other one, a click inside the panel keeps it open so several
+// switches can be set at once, a click anywhere else or Esc closes it, and the
+// arrow keys walk the rows.
 function wireMenuBar() {
-  const btn = $('menu-settings-btn');
-  const list = $('menu-settings');
-  if (!btn || !list) return;
-  btn.addEventListener('click', (event) => {
-    event.stopPropagation();
-    settingsMenu(list.hidden);
-  });
-  list.addEventListener('click', (event) => event.stopPropagation());
+  for (const [btnId, listId] of MENUS) {
+    const btn = $(btnId);
+    const list = $(listId);
+    if (!btn || !list) continue;
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      menuSet(list.hidden, listId);
+    });
+    list.addEventListener('click', (event) => event.stopPropagation());
+    list.addEventListener('keydown', (event) => {
+      const rows = Array.from(list.querySelectorAll('input[type="checkbox"], select'))
+        .filter((el) => !el.hidden);
+      const at = rows.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        menuSet(false);
+        btn.focus();
+        return;
+      }
+      if (event.key === 'Tab') {
+        menuSet(false);
+        return;
+      }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      const next = /** @type {HTMLElement | undefined} */ (rows[(at + step + rows.length) % rows.length]);
+      if (next) next.focus();
+    });
+  }
   document.addEventListener('click', (event) => {
     const target = /** @type {Element} */ (event.target);
     if (target.closest('#menubar')) return;
-    settingsMenu(false);
-  });
-  list.addEventListener('keydown', (event) => {
-    const rows = Array.from(list.querySelectorAll('input[type="checkbox"]'));
-    const at = rows.indexOf(/** @type {HTMLInputElement} */ (document.activeElement));
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      settingsMenu(false);
-      btn.focus();
-      return;
-    }
-    if (event.key === 'Tab') {
-      settingsMenu(false);
-      return;
-    }
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    event.preventDefault();
-    const step = event.key === 'ArrowDown' ? 1 : -1;
-    const next = /** @type {HTMLElement | undefined} */ (rows[(at + step + rows.length) % rows.length]);
-    if (next) next.focus();
+    menuSet(false);
   });
 }
 
@@ -2826,7 +2843,7 @@ function leave(message) {
   $('stage-rail').replaceChildren();
   $('stage-rail').hidden = false;
   stopCallClock();
-  settingsMenu(false);
+  menuSet(false);
   $('stage').hidden = true;
   $('lobby').hidden = false;
   $('room-label').textContent = '';
@@ -5065,8 +5082,8 @@ async function asrProbe() {
   asr.models = list.filter((m) => m && typeof m.file === 'string' && m.file);
   if (!asr.models.length) return;
   asrPick(asrDefaultLang());
-  const pick = document.getElementById('asr-pick');
-  if (pick) pick.hidden = false;
+  const entry = document.getElementById('menu-asr-btn');
+  if (entry) entry.hidden = false;
 }
 
 // asrDefaultLang is the kept choice, else the language of the browser, else the
@@ -5103,8 +5120,8 @@ function asrPick(lang) {
     }));
     select.hidden = asr.models.length < 2;
   }
-  const btn = document.getElementById('asr-btn');
-  if (btn) btn.title = `transcription language ${model.lang}, ${mb(model.size)}`;
+  const btn = document.getElementById('menu-asr-btn');
+  if (btn) btn.title = `transcription, language ${model.lang}, ${mb(model.size)}`;
 }
 
 // asrCacheKey is a request that is only ever used as a key. The file name is in
@@ -5262,21 +5279,16 @@ function asrStop() {
   }
   asr.busy = false;
   if (was) asrSay({ s: 'off' });
-  const btn = document.getElementById('asr-btn');
-  if (btn) {
-    btn.textContent = 'transcribe';
-    btn.setAttribute('aria-pressed', 'false');
-  }
+  paintAsr();
   asrNote('');
   asrPaintOthers();
 }
 
 async function asrStart() {
-  const btn = document.getElementById('asr-btn');
   asr.busy = true;
   asr.abort = new AbortController();
   const signal = asr.abort.signal;
-  if (btn) btn.textContent = 'cancel';
+  paintAsr();
   try {
     let blob = await asrCached();
     if (!blob) {
@@ -5307,11 +5319,8 @@ async function asrStart() {
     asr.on = true;
     asr.busy = false;
     asr.abort = null;
-    if (btn) {
-      btn.textContent = 'stop transcribing';
-      btn.setAttribute('aria-pressed', 'true');
-    }
-    asrNote('You are transcribing this meeting. Every other guest has been told, and the text goes to the chat under your name. Your own voice is not transcribed.');
+    paintAsr();
+    asrNote('You transcribe this meeting. The text goes to the chat under your name, and your own voice is not transcribed.');
     asrSay({ s: 'on' });
     asrSync();
     asr.timer = setInterval(asrSync, 2000);
@@ -5322,15 +5331,21 @@ async function asrStart() {
   }
 }
 
+// paintAsr puts the state of the engine on the tick row of the menu: a tick
+// while it runs, and a dimmed row while the model is on its way.
+function paintAsr() {
+  const box = /** @type {HTMLInputElement | null} */ (document.getElementById('asr-on'));
+  if (!box) return;
+  box.checked = asr.on;
+  box.disabled = asr.busy;
+}
+
 function initAsr() {
-  const btn = document.getElementById('asr-btn');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    if (asr.on || asr.busy) {
-      asrStop();
-      return;
-    }
-    asrStart();
+  const box = /** @type {HTMLInputElement | null} */ (document.getElementById('asr-on'));
+  if (!box) return;
+  box.addEventListener('change', () => {
+    if (box.checked) asrStart();
+    else asrStop();
   });
   const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-lang'));
   if (select) {
@@ -7136,7 +7151,7 @@ function init() {
   document.addEventListener('click', closeMenus);
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    if (settingsMenuClose()) return;
+    if (menuClose()) return;
     closeMenus();
     if (state.spotlight) setSpotlight('');
   });
