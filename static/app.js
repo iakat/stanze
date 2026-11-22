@@ -6068,6 +6068,9 @@ function asrPaintEngineRow() {
       return o;
     }));
     select.value = asrEngine();
+    // The row and the select go together: a picker drawn inside a row the page
+    // declares hidden is not a picker a guest can use.
+    select.hidden = !both;
     const row = select.closest('.menu-item');
     if (row) /** @type {HTMLElement} */ (row).hidden = !both;
   }
