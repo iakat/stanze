@@ -1535,7 +1535,15 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 
 /* Performance slider, sound switch, waiting room switch, transcription. */
 .perf-pick input[type="range"] { width: 90px; vertical-align: middle; }
-.perf-name { font-size: var(--fs-smaller); color: var(--soft); }
+/* The step name has a box of its own, wide enough for the longest one, so a
+   move of the slider rewrites the word but never the width of the toolbar. */
+.perf-name {
+  display: inline-block;
+  width: 8em;
+  font-size: var(--fs-smaller);
+  color: var(--soft);
+  white-space: nowrap;
+}
 body:not(.is-admin) .admin-only { display: none; }
 #perf { width: 100%; box-sizing: border-box; }
 
