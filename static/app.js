@@ -40,6 +40,7 @@ const state = {
   cam: false,
   deaf: false,        // this browser plays no sound and sends no microphone
   micBeforeDeaf: false, // the microphone state to go back to when the ears open
+  camBeforeDeaf: false, // the camera state to go back to when the ears open
   camId: '',          // deviceId of the chosen camera, '' = the system device
   micId: '',          // the same for the microphone
   devCams: [],        // last enumerateDevices() video inputs
@@ -1057,19 +1058,26 @@ function refreshSelf() {
   updateButtons();
 }
 
-// setDeaf closes both directions at once: the microphone goes off and every
-// guest is turned down to zero, so nothing is sent and nothing is heard. The
-// stored microphone choice survives, so undeafen gives the guest their
-// microphone back, and every volume is where it was before.
+// setDeaf closes both directions at once: the microphone and the camera go
+// off, every guest is turned down to zero and no incoming picture is drawn, so
+// nothing is sent and nothing is heard or shown. The stored microphone and
+// camera choices survive, so undeafen gives the guest their devices back, and
+// every volume is where it was before. A screen share ends here: a deafened
+// guest does not keep sending a picture.
 function setDeaf(on) {
   if (state.deaf === on) return;
   state.deaf = on;
   if (on) {
     state.micBeforeDeaf = state.mic;
     if (state.mic) disableMic(false);
-  } else if (state.micBeforeDeaf) {
-    enableMic();
+    state.camBeforeDeaf = state.cam;
+    if (state.cam) disableCam(false);
+    if (state.screen) stopShare();
+  } else {
+    if (state.micBeforeDeaf) enableMic();
+    if (state.camBeforeDeaf) enableCam();
   }
+  paintRemoteVideo();
   for (const peer of state.peers.values()) paintVolume(peer);
   playSfx(on ? 'hammer' : 'timp');
   refreshSelf();
@@ -1200,6 +1208,30 @@ function paintSelfCam(on) {
   layoutStage();
 }
 
+// paintPeerVideo shows or hides the incoming picture of one guest. A deafened
+// guest draws no picture at all, so only names remain; the same track goes back
+// when the ears open, so no new negotiation is needed.
+function paintPeerVideo(peer) {
+  const video = peer.tile && peer.tile.querySelector('video');
+  if (!video) return;
+  if (!state.deaf && peer.videoTrack) {
+    const stream = new MediaStream([peer.videoTrack]);
+    if (video.srcObject !== stream) video.srcObject = stream;
+    peer.tile.classList.add('playing');
+    video.play().catch(() => {});
+  } else {
+    peer.tile.classList.remove('playing');
+    try { video.pause(); } catch { /* not playing */ }
+    video.srcObject = null;
+  }
+  layoutStage();
+}
+
+// paintRemoteVideo applies the deaf state to every guest already in the room.
+function paintRemoteVideo() {
+  for (const peer of state.peers.values()) paintPeerVideo(peer);
+}
+
 // adoptCam makes one camera track the live video. While a screen is shared the
 // screen stays what peers receive, so only the camera and the preview change. A
 // track that replaces an earlier camera is handed to the video sender that is
@@ -1288,9 +1320,9 @@ async function enableCam() {
   sendState();
 }
 
-function disableCam() {
+function disableCam(persist = true) {
   state.cam = false;
-  store('cam', 0);
+  if (persist) store('cam', 0);
   // A disabled track keeps the device open, so the camera light stays on. Stop
   // the track and drop it: enableCam asks the device again, and the video
   // sender that still holds the old track gets the new one in adoptCam.
@@ -1881,11 +1913,10 @@ function connectPeer(id, initiator, mic, cam) {
       track.addEventListener('ended', () => dropAudio(peer));
       return;
     }
-    const video = peer.tile.querySelector('video');
-    const stream = new MediaStream([track]);
-    if (video.srcObject !== stream) video.srcObject = stream;
-    peer.tile.classList.add('playing');
-    video.play().catch(() => {});
+    // The track is kept, so undeafen can put the same picture back without a
+    // new negotiation, and a deafened guest never draws it at all.
+    peer.videoTrack = track;
+    paintPeerVideo(peer);
     // A sender that stops its camera mutes the track here instead of ending
     // it, so both edges of the track move the guest between the zones.
     track.addEventListener('mute', () => layoutStage());
