@@ -144,13 +144,14 @@ const state = {
  *   'chat-text': HTMLInputElement, 'chat-note': HTMLElement, 'mic-btn': HTMLButtonElement,
  *   'chat-panel': HTMLElement, 'file-btn': HTMLButtonElement, 'file-input': HTMLInputElement,
  *   'cam-btn': HTMLButtonElement, 'deaf-btn': HTMLButtonElement,
-   'share-btn': HTMLButtonElement,
+ *   'hand-btn': HTMLButtonElement, 'share-btn': HTMLButtonElement,
  *   'stats-btn': HTMLButtonElement, 'stats-close': HTMLButtonElement,
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'voice-tiles': HTMLInputElement,
  *   menubar: HTMLElement, 'chrome-btn': HTMLButtonElement,
  *   'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
+ *   'menu-asr': HTMLElement,
  *   'menu-effects-btn': HTMLButtonElement, 'menu-effects': HTMLElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
@@ -280,6 +281,7 @@ function joinWords(list) {
 // The menu bar carries one thin entry per drop-down. Both panels are wired by
 // the same code, and only one panel is open at a time, the way a Windows menu
 // bar behaves.
+/** @type {[keyof Elements, keyof Elements][]} */
 const MENUS = [
   ['menu-settings-btn', 'menu-settings'],
   ['menu-effects-btn', 'menu-effects'],
@@ -379,7 +381,7 @@ function wireSubmenus() {
       const first = /** @type {HTMLElement | null} */ (list.querySelector('.menu-choice'));
       if (first) first.focus();
     });
-    list.addEventListener('keydown', (event) => {
+    list.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
@@ -403,9 +405,9 @@ function wireMenuBar() {
       menuSet(list.hidden, listId);
     });
     list.addEventListener('click', (event) => event.stopPropagation());
-    list.addEventListener('keydown', (event) => {
+    list.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
       const rows = Array.from(list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub'))
-        .filter((el) => !el.hidden);
+        .filter((el) => !(/** @type {HTMLElement} */ (el)).hidden);
       const at = rows.indexOf(/** @type {HTMLElement} */ (document.activeElement));
       if (event.key === 'Escape') {
         event.preventDefault();
