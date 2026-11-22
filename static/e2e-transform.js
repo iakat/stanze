@@ -101,13 +101,9 @@ self.onmessage = async (event) => {
   });
 };
 
-async function transformFrame(frame, controller, options) {
-  const pair = options.pair;
-  const dir = options.dir;
-  const kind = options.kind || '';
+async function transformFrame(frame, controller, ctx) {
+  const { pair, dir, kind, options, st, ad } = ctx;
   const slot = KEYS.get(pair);
-  const from = options.from || '';
-  const st = counters(pair, dir, kind);
   const data = new Uint8Array(frame.data);
 
   if (dir === 'send') {
@@ -116,19 +112,18 @@ async function transformFrame(frame, controller, options) {
       report(pair, dir, kind, st);
       return;
     }
-    const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+    const out = new Uint8Array(1 + IV_BYTES + data.length + TAG_BYTES);
+    const iv = crypto.getRandomValues(out.subarray(1, 1 + IV_BYTES));
     const sealed = new Uint8Array(await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: aad(pair, from, kind), tagLength: 128 },
+      { name: 'AES-GCM', iv, additionalData: ad, tagLength: 128 },
       slot.enc,
       data,
     ));
-    const out = new Uint8Array(1 + IV_BYTES + sealed.length);
     // Keep the codec's keyframe bit (VP8/VP9 put it in bit 0 of the first
     // payload byte) visible on the wire: the receiving stack reads it before
     // any transform runs and otherwise marks every frame as a delta frame,
     // so the decoder never starts. Only this one bit is exposed.
     out[0] = VERSION | (data[0] & 0x01);
-    out.set(iv, 1);
     out.set(sealed, 1 + IV_BYTES);
     frame.data = out.buffer;
     st.ok++;
@@ -161,9 +156,9 @@ async function transformFrame(frame, controller, options) {
     if (slot && slot.dec) {
       try {
         await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: data.slice(1, 1 + IV_BYTES), additionalData: aad(pair, from, kind), tagLength: 128 },
+          { name: 'AES-GCM', iv: data.subarray(1, 1 + IV_BYTES), additionalData: ad, tagLength: 128 },
           slot.dec,
-          data.slice(1 + IV_BYTES),
+          data.subarray(1 + IV_BYTES),
         );
         st.ok++;
         self.postMessage({ type: 'sample', dir: 'tap-opened', pair, peer: options.peer });
@@ -189,9 +184,9 @@ async function transformFrame(frame, controller, options) {
 
   try {
     const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: data.slice(1, 1 + IV_BYTES), additionalData: aad(pair, from, kind), tagLength: 128 },
+      { name: 'AES-GCM', iv: data.subarray(1, 1 + IV_BYTES), additionalData: ad, tagLength: 128 },
       slot.dec,
-      data.slice(1 + IV_BYTES),
+      data.subarray(1 + IV_BYTES),
     );
     frame.data = plain;
     st.ok++;
@@ -224,9 +219,15 @@ self.onrtctransform = (event) => {
   // The page asks for one key frame once the pair is connected, over the sealed
   // channel. This map is how the worker answers: the sender builds the frame.
   if (options.dir === 'send') SEND.set(options.pair + '|' + options.kind, transformer);
+  // Everything below is fixed for the life of a transformer, so it is worked out
+  // once here and not again for every audio and video frame.
+  const pair = options.pair;
+  const dir = options.dir;
+  const kind = options.kind || '';
+  const ctx = { pair, dir, kind, options, st: counters(pair, dir, kind), ad: aad(pair, options.from || '', kind) };
   const stream = new TransformStream({
     transform(frame, controller) {
-      return transformFrame(frame, controller, options);
+      return transformFrame(frame, controller, ctx);
     },
   });
   transformer.readable
