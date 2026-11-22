@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122i">
+<link rel="stylesheet" href="/style.css?v=20261122j">
 </head>
 <body>
 
@@ -90,6 +90,7 @@
     <div class="room-row">
       <section id="grid" class="grid">
         <div id="stage-main" class="stage-main"></div>
+        <div id="self-pip" class="self-pip" hidden></div>
       </section>
 
       <aside id="stats-panel" class="stats" hidden aria-label="call statistics">
@@ -115,7 +116,7 @@
       </aside>
 
       <div class="side">
-      <aside id="stage-rail" class="stage-rail" aria-label="guests without a picture" hidden></aside>
+      <aside id="stage-rail" class="stage-rail" aria-label="every member of the room"></aside>
 
       <aside class="chat" id="chat-panel">
         <div class="chat-head">chat <span id="chat-note" class="muted" hidden>(sealed, no server history)</span></div>
@@ -151,6 +152,7 @@
         </select>
       </label>
       <label class="pick check"><input id="mirror" type="checkbox" checked> mirror me</label>
+      <label class="pick check"><input id="pip" type="checkbox"> own view small</label>
       <label class="pick check"><input id="noise-live" type="checkbox" checked> denoise</label>
       <button id="leave-btn" type="button" class="ctrl danger">leave</button>
     </footer>
@@ -159,6 +161,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122i"></script>
+<script src="/app.js?v=20261122j"></script>
 </body>
 </html>

@@ -45,6 +45,7 @@ const state = {
   path: 'auto',
   quality: '1280x720@30',
   mirror: true,
+  selfPip: false,     // the own picture is a small preview, not a tile in the grid
   noiseWanted: true,
   leaving: false,
   reconnectTimer: null,
@@ -115,7 +116,7 @@ const state = {
  *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
  *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, 'link-dot': HTMLElement,
  *   'link-text': HTMLElement, grid: HTMLElement,
- *   'stage-main': HTMLElement, 'stage-rail': HTMLElement,
+ *   'stage-main': HTMLElement, 'stage-rail': HTMLElement, 'self-pip': HTMLElement,
  *   'pin-count': HTMLElement,
  *   'stats-panel': HTMLElement, 'stats-graph-box': HTMLElement,
  *   'stats-graph-down': HTMLCanvasElement, 'stats-graph-rtt': HTMLCanvasElement,
@@ -127,7 +128,7 @@ const state = {
  *   'cam-btn': HTMLButtonElement, 'share-btn': HTMLButtonElement,
  *   'stats-btn': HTMLButtonElement, 'stats-close': HTMLButtonElement,
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
- *   quality: HTMLSelectElement, mirror: HTMLInputElement,
+ *   quality: HTMLSelectElement, mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
  *   'cam-live': HTMLSelectElement, 'mic-live': HTMLSelectElement,
@@ -257,6 +258,10 @@ function send(msg) {
 
 // ---------------------------------------------------------------- tiles
 
+// rowOf maps a tile to its row in the list of members. Both nodes live for as
+// long as the tile does, so the map is weak and carries no name of its own.
+const rowOf = new WeakMap();
+
 // paintName keeps the small tag and the large centre label in step. The centre
 // label carries the whole name, so a guest without a camera is not a pair of
 // letters.
@@ -264,6 +269,16 @@ function paintName(tile, name, local) {
   tile.querySelector('.name').textContent = local ? `${name} (you)` : name;
   tile.querySelector('.avatar').textContent = name || '?';
   tile.setAttribute('aria-label', local ? `${name}, you` : name);
+  paintRowName(rowOf.get(tile), name, local);
+}
+
+// paintRowName keeps the label of a list row in step with the label of its
+// tile. A guest that names itself once the keys are proven shows the name in
+// both places at the same moment.
+function paintRowName(row, name, local) {
+  if (!row) return;
+  row.querySelector('.row-name').textContent = local ? `${name} (you)` : name;
+  row.setAttribute('aria-label', local ? `${name}, you` : name);
 }
 
 // tileId is the spotlight key of one tile: the peer id, or 'self'.
@@ -305,7 +320,43 @@ function makeTile(id, name, local = false) {
     if (id) setSpotlight(id);
   });
   $('stage-main').appendChild(tile);
+  rowOf.set(tile, makeRow(id, name, local));
   return tile;
+}
+
+// makeRow builds the list row of one member. Every member has one, with a
+// picture or without: the picture stays in the large area and the row carries
+// the name, the two lamps and the volume slider. The row is one line and the
+// slider is always open, so a pointer that crosses it never moves the stage.
+function makeRow(id, name, local = false) {
+  const row = document.createElement('div');
+  row.className = 'plist-row';
+  if (local) row.dataset.local = 'yes';
+  else row.dataset.peer = id;
+  row.dataset.state = 'new';
+  row.dataset.mic = 'on';
+  row.tabIndex = 0;
+  row.setAttribute('role', 'group');
+  row.innerHTML = `<span class="row-name"></span>${local ? '<span class="row-you">you</span>' : `
+    <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
+    <span class="vol-num">100%</span>
+    <button class="row-sas" type="button" aria-label="sealed code" title="sealed code" hidden>code</button>
+    <button class="dots" type="button" aria-label="host actions">&#8943;</button>
+    <div class="sas" hidden></div>
+    <div class="menu" hidden></div>`}`;
+  paintRowName(row, name, local);
+  if (!local) {
+    wireDots(row);
+    wireRowCode(row);
+  }
+  row.addEventListener('keydown', (event) => {
+    if (event.target !== row || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    const id = tileId(row);
+    if (id) setSpotlight(id);
+  });
+  $('stage-rail').appendChild(row);
+  return row;
 }
 
 // ---------------------------------------------------------------- stage layout
@@ -343,22 +394,36 @@ function spotlightTile() {
   return null;
 }
 
-// layoutStage moves the existing tiles between the large area and the rail. A
-// tile keeps its node, so its video element keeps its stream and its sliders
-// keep their listener. Without a spotlight, the tiles with a picture take the
-// large area and the rest become compact rows.
+// layoutStage picks the tiles that hold the large area and keeps the list of
+// members in step. A tile keeps its node, so its video element keeps its stream
+// and its sliders keep their listener. Without a spotlight, the tiles with a
+// picture take the large area; a tile without one stays out of the frame,
+// because its row in the list already names the guest. The list is a block of
+// reserved height that scrolls, so no tile and no row can move the stage.
 function layoutStage() {
   const main = $('stage-main');
   const rail = $('stage-rail');
+  const pipBox = $('self-pip');
   if (!main || !rail) return;
   const spot = spotlightTile();
   if (state.spotlight && !spot) state.spotlight = '';
+  const self = document.querySelector('.tile[data-local="yes"]');
+  // The own picture is a small preview while the switch is on. The node is
+  // moved, never copied, so the preview keeps the own stream and the mirror.
+  const pip = !!(self && pipBox && state.selfPip);
+  if (pipBox) pipBox.hidden = !pip;
+  if (self && pip && self.parentElement !== pipBox) pipBox.appendChild(self);
+  if (self && !pip && self.parentElement !== main) main.appendChild(self);
+  let shown = 0;
   for (const tile of stageTiles()) {
-    const big = spot ? tile === spot : tileHasPicture(tile);
-    const host = big ? main : rail;
-    if (tile.parentElement !== host) host.appendChild(tile);
+    const inPip = pip && tile === self;
+    const big = !inPip && (spot ? tile === spot : tileHasPicture(tile));
+    if (big) shown++;
+    tile.hidden = inPip ? false : !big;
     const on = big && !!spot;
     tile.classList.toggle('spot', on);
+    const row = rowOf.get(tile);
+    if (row) row.classList.toggle('spot', on);
     const zoom = tile.querySelector('.zoom');
     if (zoom) {
       zoom.setAttribute('aria-pressed', String(on));
@@ -366,15 +431,24 @@ function layoutStage() {
       zoom.title = on ? 'back to the grid' : 'enlarge';
     }
   }
-  const alone = main.childElementCount === 1 ? 'yes' : 'no';
+  const alone = shown === 1 ? 'yes' : 'no';
   if (main.dataset.alone !== alone) main.dataset.alone = alone;
-  main.hidden = main.childElementCount === 0;
-  rail.hidden = rail.childElementCount === 0;
+  main.hidden = shown === 0;
 }
 
 // setSpotlight puts one guest alone in the large area, or ends the spotlight
 // when that guest already holds it.
 function setSpotlight(id) {
+  // The own picture is a preview now, so asking for it puts it back in the
+  // grid instead of leaving an empty stage behind.
+  if (id === 'self' && state.selfPip) {
+    state.selfPip = false;
+    store('selfpip', 0);
+    updateButtons();
+    state.spotlight = '';
+    layoutStage();
+    return;
+  }
   state.spotlight = id && state.spotlight !== id ? id : '';
   for (const open of document.querySelectorAll('.tile.ctl')) open.classList.remove('ctl');
   layoutStage();
@@ -416,32 +490,43 @@ function saveVolume(peer) {
   if (peer.fp) store(`vol.fp.${peer.fp}`, peer.vol);
 }
 
-// paintVolume draws the percent of one peer on its slider, its label and the
-// live gain. It is called when the slider moves, and again when a sealed guest
+// volumePairs is every slider of one peer: the one on its tile and the one on
+// its row. Both write the one peer.vol, so the two can never disagree.
+function volumePairs(peer) {
+  const out = [];
+  for (const host of [peer.tile, rowOf.get(peer.tile)]) {
+    const range = host ? host.querySelector('.vol-range') : null;
+    const num = host ? host.querySelector('.vol-num') : null;
+    if (range && num) out.push({ range, num });
+  }
+  return out;
+}
+
+// paintVolume draws the percent of one peer on its sliders, its labels and the
+// live gain. It is called when a slider moves, and again when a sealed guest
 // tells us the name that its stored volume is kept under.
 function paintVolume(peer) {
-  const range = peer.tile ? peer.tile.querySelector('.vol-range') : null;
-  const num = peer.tile ? peer.tile.querySelector('.vol-num') : null;
-  if (num) num.textContent = `${peer.vol}%`;
-  if (range) range.value = String(peer.vol);
+  for (const { range, num } of volumePairs(peer)) {
+    num.textContent = `${peer.vol}%`;
+    range.value = String(peer.vol);
+  }
   if (peer.gain) peer.gain.gain.value = peer.vol / 100;
   // The element path is only a fallback and can not go over 100 percent.
   if (peer.audioEl) peer.audioEl.volume = Math.min(peer.vol / 100, 1);
 }
 
-// wireVolume connects one tile slider to one peer. The gain and the label are
-// painted from peer.vol, which the audio path and the slider share.
+// wireVolume connects the tile slider and the row slider of one peer to the
+// one value. The gain and the labels are painted from peer.vol, which the audio
+// path and both sliders share.
 function wireVolume(peer) {
-  const range = peer.tile.querySelector('.vol-range');
-  const num = peer.tile.querySelector('.vol-num');
-  if (!range || !num) return;
-  range.value = String(peer.vol);
-  range.addEventListener('input', () => {
-    const n = parseInt(range.value, 10);
-    peer.vol = Number.isFinite(n) ? Math.max(0, Math.min(200, n)) : 100;
-    paintVolume(peer);
-    saveVolume(peer);
-  });
+  for (const { range } of volumePairs(peer)) {
+    range.addEventListener('input', () => {
+      const n = parseInt(range.value, 10);
+      peer.vol = Number.isFinite(n) ? Math.max(0, Math.min(200, n)) : 100;
+      paintVolume(peer);
+      saveVolume(peer);
+    });
+  }
   paintVolume(peer);
 }
 
@@ -453,6 +538,12 @@ function applyFlags(tile, mic, cam, admin) {
   // disabled track is black, so the tile can not stay in the playing state.
   tile.classList.toggle('camoff', cam === false);
   tile.dataset.mic = mic === false ? 'off' : 'on';
+  // The row of this member shows the same two lamps and the same picture state.
+  const row = rowOf.get(tile);
+  if (row) {
+    row.dataset.mic = mic === false ? 'off' : 'on';
+    row.classList.toggle('camoff', cam === false);
+  }
   const box = tile.querySelector('.flags');
   if (!box) return;
   const out = [];
@@ -472,15 +563,16 @@ function applyFlags(tile, mic, cam, admin) {
 
 // ---------------------------------------------------------------- host control
 
-// wireDots opens the small menu on a remote tile. Only the admin sees it; the
-// CSS shows it on hover. The server checks the role again on every command.
-function wireDots(tile) {
-  const dots = tile.querySelector('.dots');
-  const menu = tile.querySelector('.menu');
+// wireDots opens the small host menu of one remote member. Only the admin sees
+// it; the CSS shows it. It takes the tile or the row of that member, because
+// both carry the peer id. The server checks the role again on every command.
+function wireDots(host) {
+  const dots = host.querySelector('.dots');
+  const menu = host.querySelector('.menu');
   if (!dots || !menu) return;
   dots.addEventListener('click', (event) => {
     event.stopPropagation();
-    const open = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.tile .menu:not([hidden])'));
+    const open = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('.menu:not([hidden])'));
     for (const other of open) {
       if (other !== menu) other.hidden = true;
     }
@@ -495,7 +587,7 @@ function wireDots(tile) {
       b.textContent = label;
       b.addEventListener('click', () => {
         menu.hidden = true;
-        send({ t: 'mod', to: tile.dataset.peer, action });
+        send({ t: 'mod', to: host.dataset.peer, action });
       });
       menu.appendChild(b);
     }
@@ -506,7 +598,7 @@ function wireDots(tile) {
 // closeMenus hides every host menu. One listener on the page does it, because
 // a listener per tile was never removed when its tile left.
 function closeMenus() {
-  for (const menu of document.querySelectorAll('.tile .menu:not([hidden])')) {
+  for (const menu of document.querySelectorAll('.menu:not([hidden])')) {
     /** @type {HTMLElement} */ (menu).hidden = true;
   }
 }
@@ -1246,7 +1338,12 @@ function paintSpeaking(tile, level, hold) {
   if (!tile) return;
   const now = performance.now();
   if (level >= SPEAK_ON) hold.last = now;
-  tile.classList.toggle('speaking', now - (hold.last || 0) < SPEAK_HOLD_MS);
+  const on = now - (hold.last || 0) < SPEAK_HOLD_MS;
+  tile.classList.toggle('speaking', on);
+  // The row of this member carries the same light, so a guest without a
+  // picture still shows that it talks.
+  const row = rowOf.get(tile);
+  if (row) row.classList.toggle('speaking', on);
 }
 
 function speakTick() {
@@ -1495,6 +1592,7 @@ function updateButtons() {
   $('share-btn').textContent = state.screen ? 'stop share' : 'share screen';
   $('share-btn').setAttribute('aria-pressed', String(!!state.screen));
   $('mirror').checked = state.mirror;
+  $('pip').checked = state.selfPip;
   // Without a microphone the switch still shows what the next microphone will
   // get, which is the stored choice.
   $('noise-live').checked = state.micSource ? state.denoiseOn : state.noiseWanted;
@@ -1784,6 +1882,8 @@ function setPeerState(peer, text) {
   // data attribute only. The status line carries no guest count: the chip at
   // the far end of it counts the peers, so the two can never disagree.
   if (peer.tile) peer.tile.dataset.state = text;
+  const row = peer.tile ? rowOf.get(peer.tile) : null;
+  if (row) row.dataset.state = text;
   if ((text === 'failed' || text === 'closed') && peer.tile) peer.tile.classList.remove('playing');
   layoutStage();
   if (text === 'connected') $('link-text').textContent = '';
@@ -1875,6 +1975,8 @@ function dropPeer(id) {
   dropAudio(peer);
   fileDropPeer(peer);
   if (peer.pc) peer.pc.close();
+  const row = peer.tile ? rowOf.get(peer.tile) : null;
+  if (row) row.remove();
   if (peer.tile) peer.tile.remove();
   // The pair secrets go with the peer, zeroed: no later join can resume them.
   wipeKeys(peer);
@@ -2240,8 +2342,10 @@ function leave(message) {
   $('stats-btn').setAttribute('aria-pressed', 'false');
   state.spotlight = '';
   $('stage-main').replaceChildren();
+  $('self-pip').replaceChildren();
+  $('self-pip').hidden = true;
   $('stage-rail').replaceChildren();
-  $('stage-rail').hidden = true;
+  $('stage-rail').hidden = false;
   stopCallClock();
   $('stage').hidden = true;
   $('lobby').hidden = false;
@@ -5217,19 +5321,47 @@ function sealedSetE2E(peer, status) {
   peer.tile.dataset.e2e = status;
   paintState(peer);
   paintPin(peer);
-  const sas = /** @type {HTMLElement} */ (peer.tile.querySelector('.sas'));
+  for (const host of [peer.tile, rowOf.get(peer.tile)]) paintCodeCard(host, peer);
+}
+
+// paintCodeCard fills the card of one host, a tile or a list row. A guest
+// without a picture has no tile to hover, so its row opens the same card
+// behind its own button; both cards carry the same drawings and the same pin.
+function paintCodeCard(host, peer) {
+  const sas = host ? /** @type {HTMLElement} */ (host.querySelector('.sas')) : null;
   if (!sas) return;
+  // The names behind the drawings are a title, so a screen reader and a
+  // nervous guest can both tell what they are looking at.
+  sas.title = peer.sas ? verifyNames(peer.sas) + ' (' + peer.sas + ')' : '';
+  const button = host.querySelector('.row-sas');
+  if (button) {
+    button.hidden = !peer.sas;
+    if (!peer.sas) sas.hidden = true;
+  }
   if (!peer.sas) {
     sas.hidden = true;
     sas.replaceChildren();
-    sas.removeAttribute('title');
     return;
   }
-  sas.hidden = false;
   sas.replaceChildren(...sealedCodePanel(peer));
-  // The names behind the drawings are a title, so a screen reader and a
-  // nervous guest can both tell what they are looking at.
-  sas.title = verifyNames(peer.sas) + ' (' + peer.sas + ')';
+  // A row card opens and closes on its own button, so a repaint keeps it as it is.
+  if (!button) sas.hidden = false;
+}
+
+// wireRowCode opens the sealed code card inside one row, and closes the card of
+// every other row, so one list never shows two cards at once.
+function wireRowCode(row) {
+  const button = row.querySelector('.row-sas');
+  const card = row.querySelector('.sas');
+  if (!button || !card) return;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    for (const other of document.querySelectorAll('.plist-row .sas:not([hidden])')) {
+      if (other !== card) /** @type {HTMLElement} */ (other).hidden = true;
+    }
+    card.hidden = !card.hidden;
+    button.setAttribute('aria-expanded', String(!card.hidden));
+  });
 }
 
 // paintState is the one place a tile says how far the link is. A ready link is
@@ -5276,6 +5408,7 @@ function sealedCodePanel(peer) {
     img.className = 'sas-emoji';
     img.src = `/openmoji/${hex}.svg`;
     img.alt = emoji;
+    img.title = name;
     const tip = document.createElement('span');
     tip.className = 'sas-tip';
     tip.textContent = name;
@@ -5750,6 +5883,10 @@ function init() {
   state.noiseWanted = load('noise') !== '0';
   $('noise').checked = state.noiseWanted;
   $('noise-live').checked = state.noiseWanted;
+  // The own picture stays a small preview in the next visit too, if the guest
+  // left it that way.
+  state.selfPip = load('selfpip') === '1';
+  $('pip').checked = state.selfPip;
 
   // The module is warming before the first click, so a failure is visible in
   // the lobby and the join is only a microphone prompt.
@@ -5826,6 +5963,14 @@ function init() {
     applyMirror();
   });
 
+  // The own picture leaves the large area and becomes a small preview in the
+  // corner of the stage. The choice is kept, like the other switches.
+  $('pip').addEventListener('change', () => {
+    state.selfPip = $('pip').checked;
+    store('selfpip', state.selfPip ? 1 : 0);
+    layoutStage();
+  });
+
   $('quality').addEventListener('change', async () => {
     state.quality = $('quality').value;
     store('quality', state.quality);
@@ -5862,6 +6007,14 @@ function init() {
   const touch = window.matchMedia ? window.matchMedia('(hover: none)') : { matches: false };
   $('grid').addEventListener('click', (event) => {
     const target = /** @type {Element} */ (event.target);
+    // A click on the small preview puts the own picture back in the grid.
+    if (target.closest('#self-pip')) {
+      state.selfPip = false;
+      store('selfpip', 0);
+      updateButtons();
+      layoutStage();
+      return;
+    }
     const tile = target.closest('.tile');
     if (!tile) {
       setSpotlight('');
@@ -5880,15 +6033,17 @@ function init() {
     }
     setSpotlight(id);
   });
-  // The guests without a picture sit in a strip of their own now, outside the
-  // frame of the grid, so they need their own listener for the enlarge click.
+  // The list of members sits outside the frame of the grid, so it carries its
+  // own listener: a click on a row enlarges that member, the way a click on a
+  // tile does.
   const railEl = $('stage-rail');
   if (railEl) {
     railEl.addEventListener('click', (event) => {
       const target = /** @type {Element} */ (event.target);
-      const tile = target.closest('.tile');
-      if (!tile || target.closest('.vol, .dots, .menu, .sas, .pin')) return;
-      const id = tileId(/** @type {HTMLElement} */ (tile));
+      if (target.closest('.vol-range, .vol-num, .dots, .menu, .sas, .row-sas')) return;
+      const row = target.closest('.plist-row');
+      if (!row) return;
+      const id = tileId(/** @type {HTMLElement} */ (row));
       if (id) setSpotlight(id);
     });
   }

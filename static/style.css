@@ -381,6 +381,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   flex: 1;
   min-width: 0;
   min-height: 0;
+  position: relative;
   display: flex;
   /* The pictures take the width and the height on top; a guest without a
      picture never takes a column of that width away from them, because a row
@@ -407,27 +408,49 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   grid-auto-rows: minmax(0, 1fr);
   align-content: center;
 }
+/* The list of every member of the room. Its block is reserved at a fixed
+   height, so a row that joins, leaves or opens its menu scrolls inside the
+   list and never moves the stage or the chat. */
 .stage-rail {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  height: clamp(112px, 22vh, 260px);
   min-width: 0;
   min-height: 0;
-  max-height: 40%;
   display: flex;
   flex-direction: column;
   flex-wrap: nowrap;
-  gap: 3px;
+  gap: 2px;
   overflow-y: auto;
   align-content: start;
 }
 .stage-main[hidden],
 .stage-rail[hidden] { display: none; }
-/* Nobody has a picture: the rail is the whole stage, so the rows get the
-   width and the black area is not left empty. */
 /* Nobody has a picture: the empty frame would be a black band, so the whole
-   width goes to the list of guests and to the chat. */
-.room-row:has(#stage-main:empty) #grid { display: none; }
-.room-row:has(#stage-main:empty) .side { flex: 1 1 auto; }
-.room-row:has(#stage-main:empty) .stage-rail { max-height: 60%; }
+   width goes to the list of members and to the chat. The small preview of the
+   own picture keeps the stage, because it has nowhere else to go. */
+.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) #grid { display: none; }
+.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) .side { flex: 1 1 auto; }
+/* The own picture as a small preview in the corner of the stage. The node is
+   moved, never copied, so the preview keeps the own stream and its mirror. */
+.self-pip {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  width: 168px;
+  height: 126px;
+  background: #000;
+  border: 2px solid;
+  border-color: var(--panel-hi) var(--edge) var(--edge) var(--panel-hi);
+}
+.self-pip .tile {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: auto;
+  border-width: 0;
+}
 /* One guest alone in the large area fills it, and the picture covers the
    whole frame instead of keeping a fixed ratio with black bars. */
 .stage-main[data-alone="yes"] {
@@ -564,11 +587,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
  * tile, made of OpenMoji drawings and the code in groups of four. It only
  * shows while the pointer is over that tile or while the host menu has the
  * focus, so the picture is free of clutter. */
-.tile .sas {
-  position: absolute;
-  left: 50%;
-  bottom: 34px;
-  transform: translateX(-50%);
+.sas {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -582,6 +601,12 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   font-size: var(--fs-tiny);
   line-height: 1.25;
   color: var(--ink);
+}
+.tile .sas {
+  position: absolute;
+  left: 50%;
+  bottom: 34px;
+  transform: translateX(-50%);
   opacity: 0;
   visibility: hidden;
   transition: opacity 90ms linear;
@@ -591,24 +616,24 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .tile:focus-within .sas,
 .tile.ctl .sas { opacity: 1; visibility: visible; }
 /* The card lets the pointer through, except its buttons: the pin lives there. */
-.tile .sas button { pointer-events: auto; }
-.tile .sas-head {
+.sas button { pointer-events: auto; }
+.sas-head {
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--soft);
 }
-.tile .sas-row { display: flex; gap: 4px; }
+.sas-row { display: flex; gap: 4px; }
 /* One drawing plus its name: the emoji is a target in its own right, so it
  * can be pointed at even though the card as a whole lets the pointer through. */
-.tile .sas-cell {
+.sas-cell {
   position: relative;
   display: block;
   pointer-events: auto;
   padding: 1px;
 }
-.tile .sas-emoji { width: 30px; height: 30px; display: block; }
-.tile .sas-cell:hover .sas-emoji { outline: 2px solid var(--ink); outline-offset: 1px; }
-.tile .sas-tip {
+.sas-emoji { width: 30px; height: 30px; display: block; }
+.sas-cell:hover .sas-emoji { outline: 2px solid var(--ink); outline-offset: 1px; }
+.sas-tip {
   position: absolute;
   left: 50%;
   bottom: calc(100% + 3px);
@@ -626,9 +651,9 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   pointer-events: none;
   transition: opacity 70ms linear;
 }
-.tile .sas-cell:hover .sas-tip,
-.tile .sas-cell:focus-within .sas-tip { opacity: 1; visibility: visible; }
-.tile .sas-code {
+.sas-cell:hover .sas-tip,
+.sas-cell:focus-within .sas-tip { opacity: 1; visibility: visible; }
+.sas-code {
   letter-spacing: 1px;
   font-weight: 700;
   color: var(--ink);
@@ -755,116 +780,124 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 .tile .menu button:hover { background: var(--navy); color: #fff; }
 
-/* A rail row is the same tile node in a compact form. The picture, the centre
-   name and the code card are out of the way, and the tag becomes the row: name,
-   the mute and camera chips, the link state, and the volume slider. The node is
-   moved, never copied, so the stream stays on the one video element. */
-.stage-rail .tile {
+/* One member of the room is one row of the list. The row is one line: the
+   microphone lamp, the name, the volume slider, the link lamp and, for the
+   admin, the host menu. The slider is always open, so the row keeps its height
+   and a pointer over it never moves the stage. */
+.plist-row {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 3px;
-  aspect-ratio: auto;
-  min-height: 20px;
+  gap: 4px;
+  min-height: 22px;
   padding: 0 4px;
   background: var(--panel);
   border: 1px solid;
   border-color: #fff var(--edge) var(--edge) #fff;
   font-size: var(--fs-tiny);
+  line-height: 16px;
   cursor: pointer;
 }
-.stage-rail .tile video,
-.stage-rail .tile .avatar,
-.stage-rail .tile .sas,
-.stage-rail .tile .zoom,
-.stage-rail .tile .pin { display: none; }
-.stage-rail .tile .name::before { display: none; }
-/* A rail row is one line while nobody touches it: the volume slider sits on a
-   second line and would make every row twice as tall, so it opens only while
-   the pointer is over that row, while a control in it has the focus, or after a
-   tap on a touch screen. A full room then stays a short list. */
-.stage-rail .tile .vol {
-  opacity: 1;
-  visibility: visible;
-  flex: 1 0 100%;
-  display: none;
-}
-.stage-rail .tile:hover,
-.stage-rail .tile:focus-within,
-.stage-rail .tile:focus-visible,
-.stage-rail .tile.ctl { flex-wrap: wrap; }
-.stage-rail .tile:hover .vol,
-.stage-rail .tile:focus-within .vol,
-.stage-rail .tile:focus-visible .vol,
-.stage-rail .tile.ctl .vol { display: flex; }
-.stage-rail .tile .vol-ico { display: none; }
-.stage-rail .tile:focus-visible { outline-color: var(--ink); outline-offset: -3px; }
-.stage-rail .tile .tag {
-  order: 3;
-  position: static;
-  flex: 1 1 auto;
-  min-width: 0;
-  align-items: center;
-  gap: 3px;
-  font-size: var(--fs-tiny);
-}
-/* The microphone lamp of a rail row: filled when the microphone is open, dark
-   red when it is muted, so the state reads without a word. */
-.stage-rail .tile::before {
+.plist-row:focus-visible { outline: 1px dotted var(--ink); outline-offset: -3px; }
+.plist-row.spot { border-color: var(--navy); }
+/* The microphone lamp: filled when the microphone is open, dark red when it is
+   muted, so the state reads without a word. */
+.plist-row::before {
   content: "";
-  order: 1;
   flex: none;
   width: 7px;
   height: 7px;
   background: var(--red);
   border: 1px solid var(--edge);
 }
-.stage-rail .tile[data-mic="on"]::before { background: #007000; }
-.stage-rail .tile .tag > * { min-width: 0; }
-.stage-rail .tile .name {
+.plist-row[data-mic="on"]::before { background: #007000; }
+.plist-row .row-name {
   flex: 1 1 auto;
-  max-width: none;
+  min-width: 0;
   padding: 0 2px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-/* A rail row has no width for the word of the sealing state: the ring of the
-   tile already draws it, so the words stay on the tile in the large area. */
-.stage-rail .tile .flags { display: none; }
-.stage-rail .tile .flags span,
-.stage-rail .tile .state { padding: 0 2px; }
-/* A row has no width for the words of the link state, so the link is a second
-   lamp beside the microphone lamp. The words stay on the tile in the large
-   area, in the status line and in the stats panel. */
-.stage-rail .tile .state { display: none; }
-.stage-rail .tile::after {
+.plist-row .row-you { flex: none; color: var(--soft); }
+.plist-row .vol-range {
+  flex: 0 0 62px;
+  width: 62px;
+  min-width: 0;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--panel-lo);
+  background: var(--panel-hi);
+}
+.plist-row .vol-range:focus { outline: 1px dotted var(--ink); outline-offset: -2px; }
+.plist-row .vol-num { flex: none; min-width: 30px; text-align: right; }
+/* The link lamp beside the name, the same pair of colours as the tile. */
+.plist-row::after {
   content: "";
-  order: 2;
   flex: none;
-  width: 12px;
+  width: 10px;
   height: 5px;
   background: var(--panel-lo);
   border: 1px solid var(--edge);
 }
-.stage-rail .tile[data-state="connected"]::after { background: #007000; }
-.stage-rail .tile[data-state="failed"]::after,
-.stage-rail .tile[data-state="disconnected"]::after { background: var(--red); }
-.stage-rail .tile .vol {
-  order: 4;
+.plist-row[data-state="connected"]::after { background: #007000; }
+.plist-row[data-state="failed"]::after,
+.plist-row[data-state="disconnected"]::after { background: var(--red); }
+/* A row shows the host menu to the admin only, and always: it is the one
+   control of that member left when the camera is off. */
+.plist-row .dots {
   position: static;
-  gap: 4px;
-  padding: 0 2px;
-}
-.stage-rail .tile .vol-range { flex: 1; width: auto; min-width: 0; }
-.stage-rail .tile .vol-num { min-width: 28px; }
-.stage-rail .tile .dots {
-  order: 5;
-  position: static;
+  flex: none;
+  display: none;
   min-width: 20px;
   min-height: 18px;
   padding: 0 2px;
 }
+body.is-admin .plist-row[data-peer] .dots { display: block; }
+/* The menu opens inside the row. The row wraps while it is open and the list
+   scrolls, so nothing outside the list moves. */
+.plist-row:has(.menu:not([hidden])) { flex-wrap: wrap; }
+.plist-row .menu {
+  position: static;
+  flex: 1 0 100%;
+  order: 9;
+  margin: 2px 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 2px solid;
+  border-color: var(--panel-hi) #000 #000 var(--panel-hi);
+  padding: 2px;
+}
+.plist-row .menu button {
+  min-width: 140px;
+  text-align: left;
+  font-size: var(--fs-smaller);
+  border-width: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 3px 7px;
+}
+.plist-row .menu button:hover { background: var(--navy); color: #fff; }
+/* A member that talks lights up like its tile does, so a guest without a
+   picture still shows that it talks. */
+.plist-row.speaking { border-color: #007000; }
+.plist-row.speaking::before { background: #00b000; }
+/* A guest without a picture has no tile to hover, so its row keeps the sealed
+   code card behind one button and opens it inside the list. The row wraps
+   around the card and the list scrolls, so nothing outside the list moves. */
+.plist-row .row-sas {
+  flex: none;
+  min-width: 20px;
+  min-height: 18px;
+  padding: 0 2px;
+}
+.plist-row .sas { flex: 1 0 100%; order: 10; margin: 2px 0; }
+.plist-row:has(.sas:not([hidden])) { flex-wrap: wrap; }
+.plist-row .sas-emoji { width: 22px; height: 22px; }
+.plist-row .sas .id-fp { white-space: normal; word-break: break-all; }
 
 /* The spotlight ring holds on the grey panel and on a black picture: a navy
    border for the panel, a white inner line for the frame behind it. */
