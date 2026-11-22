@@ -789,6 +789,9 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 }
 .stage-main .tile video { object-fit: contain; }
 .stage-main[data-alone="yes"] .tile video { object-fit: cover; }
+/* A shared screen is never cropped, not even alone: every part of the picture
+   has to stay readable. */
+.stage-main[data-alone="yes"] .tile.screenshare video { object-fit: contain; }
 
 /* Three rings can hold on one tile at once: the talking light, the spotlight
  * and the key state. Each one is a variable and the tile paints all three, in

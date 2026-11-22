@@ -37,6 +37,7 @@ const state = {
   playCtx: null,      // the remote audio graph, so a peer can go over 100%
   screen: null,       // display stream while sharing
   screenSource: null,
+  screenTile: null,   // own screen tile while sharing
   mic: false,         // live in this call, and the stored choice
   cam: false,
   deaf: false,        // this browser plays no sound and sends no microphone
@@ -500,16 +501,27 @@ function paintRowDeaf(row, deaf) {
   if (mark) mark.hidden = !deaf;
 }
 
-// tileId is the spotlight key of one tile: the peer id, or 'self'.
+// tileId is the spotlight key of one tile: the peer id, or 'self'. The screen
+// tile of a guest carries ':screen', so each picture is its own key.
 function tileId(tile) {
-  return tile.dataset.peer || (tile.dataset.local ? 'self' : '');
+  const id = tile.dataset.peer || (tile.dataset.local ? 'self' : '');
+  return id && tile.dataset.screen ? id + ':screen' : id;
 }
 
-function makeTile(id, name, local = false) {
+// makeTile builds one picture. A screen tile is the second picture of a guest:
+// it has no row and no volume of its own, because the row of the guest already
+// carries both.
+function makeTile(id, name, local = false, screen = false) {
   const tile = document.createElement('div');
   tile.className = 'tile';
   tile.dataset.state = 'new';
-  if (local) tile.dataset.local = 'yes';
+  if (local && !screen) tile.dataset.local = 'yes';
+  if (local && screen) tile.dataset.local = 'screen';
+  if (screen) {
+    tile.dataset.screen = 'yes';
+    tile.classList.add('screenshare');
+  }
+  const plain = local || screen;
   // The tile is a focus stop: Enter or Space on it enlarges that guest, the
   // same as a click. The controls on it show on hover, on focus and, on a
   // touch screen, after a tap.
@@ -519,20 +531,20 @@ function makeTile(id, name, local = false) {
     <video autoplay playsinline${local ? ' muted' : ''}></video>
     <div class="avatar"></div>
     <span class="ring" aria-hidden="true"></span>
-    ${local ? '' : `<div class="vol">
+    ${plain ? '' : `<div class="vol">
       <img class="vol-ico" src="/openmoji/1F50A.svg" alt="" width="16" height="16">
       <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
       <span class="vol-num">100%</span>
     </div>`}
     <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
-    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${local ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
-    ${local ? '' : '<button class="admit" type="button" title="let this guest into the room">let in</button><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
-  paintName(tile, name, local);
+    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${plain ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
+    ${plain ? '' : '<button class="admit" type="button" title="let this guest into the room">let in</button><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
+  paintName(tile, name, local && !screen);
   // A remote guest is heard through its own gain node, so the video element
   // only ever carries pictures and stays muted.
   if (!local) tile.querySelector('video').muted = true;
-  if (!local) wireDots(tile);
-  if (!local) wireAdmit(tile);
+  if (!plain) wireDots(tile);
+  if (!plain) wireAdmit(tile);
   tile.addEventListener('keydown', (event) => {
     if (event.target !== tile || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
@@ -540,7 +552,7 @@ function makeTile(id, name, local = false) {
     if (id) setSpotlight(id);
   });
   $('stage-main').appendChild(tile);
-  rowOf.set(tile, makeRow(id, name, local));
+  if (!screen) rowOf.set(tile, makeRow(id, name, local));
   return tile;
 }
 
@@ -581,33 +593,46 @@ function makeRow(id, name, local = false) {
 
 // stageTiles is every tile in a stable order: the own preview first, then the
 // guests in the order they joined. The order of the two zones follows it, so a
-// relayout never reshuffles the room.
+// relayout never reshuffles the room. A shared screen is its own tile and stands
+// right after the picture of the guest that shares it.
 function stageTiles() {
   const out = [];
   const self = document.querySelector('.tile[data-local="yes"]');
   if (self) out.push(self);
-  for (const peer of state.peers.values()) if (peer.tile) out.push(peer.tile);
+  if (state.screenTile) out.push(state.screenTile);
+  for (const peer of state.peers.values()) {
+    if (peer.tile) out.push(peer.tile);
+    if (peer.screenTile) out.push(peer.screenTile);
+  }
   return out;
 }
 
 // tileHasPicture answers "does this tile show a moving picture now". A camera
 // that is off, a track that the sender muted and a track that stopped all say
-// no, and that guest belongs in the rail as a row.
+// no, and that guest belongs in the rail as a row. A screen tile needs a
+// decoded frame too: its receiver track exists from the negotiation on, so the
+// live flag alone would show an empty box.
 function tileHasPicture(tile) {
   if (!tile || tile.classList.contains('camoff')) return false;
   const video = tile.querySelector('video');
   const stream = video && video.srcObject;
   if (!stream || typeof stream.getVideoTracks !== 'function') return false;
-  return stream.getVideoTracks().some((track) => track.readyState === 'live' && !track.muted);
+  const live = stream.getVideoTracks().some((track) => track.readyState === 'live' && !track.muted);
+  return live && (!tile.dataset.screen || video.videoWidth > 0);
 }
 
 // spotlightTile is the one tile that holds the large area while the spotlight
-// is on. A guest that left takes the spotlight with it.
+// is on. A guest that left takes the spotlight with it, and a screen tile is
+// its own key.
 function spotlightTile() {
   if (!state.spotlight) return null;
   if (state.spotlight === 'self') return document.querySelector('.tile[data-local="yes"]');
+  const screen = state.spotlight.endsWith(':screen');
+  const id = screen ? state.spotlight.slice(0, -7) : state.spotlight;
+  if (id === 'self') return document.querySelector('.tile[data-local="screen"]');
   for (const peer of state.peers.values()) {
-    if (peer.id === state.spotlight) return peer.tile;
+    if (peer.id !== id) continue;
+    return screen ? peer.screenTile : peer.tile;
   }
   return null;
 }
@@ -673,7 +698,9 @@ function layoutStage() {
   const bigs = [];
   for (const tile of stageTiles()) {
     const inPip = pip && tile === self;
-    const voice = state.voiceTiles && !tile.dataset.waiting;
+    // A screen tile without a picture has nothing to show: it leaves the stage
+    // instead of standing there as a name.
+    const voice = state.voiceTiles && !tile.dataset.waiting && !tile.dataset.screen;
     const big = !inPip && (spot ? tile === spot : (tileHasPicture(tile) || voice));
     if (big) bigs.push(tile);
     tile.hidden = inPip ? false : !big;
@@ -688,7 +715,9 @@ function layoutStage() {
       zoom.title = on ? 'back to the grid' : 'enlarge';
     }
   }
-  const small = !spot && !pip && bigs.length === 2 ? bigs[1] : null;
+  // The small corner goes to a person, not to a screen: a shared screen needs
+  // the whole frame.
+  const small = !spot && !pip && bigs.length === 2 ? bigs.find((t) => !t.dataset.screen) : null;
   if (cornerBox) {
     cornerBox.hidden = !small;
     for (const tile of stageTiles()) {
@@ -1064,6 +1093,7 @@ function paintWaiting() {
   $('chat-text').placeholder = state.waiting ? 'chat opens when you are let in' : 'say something';
   for (const peer of state.peers.values()) {
     if (peer.tile) applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+    if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
   }
   const self = document.querySelector('.tile[data-local="yes"]');
   if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
@@ -1081,6 +1111,7 @@ function admitPeer(id) {
     if (state.outStream) {
       for (const peer of state.peers.values()) {
         for (const track of state.outStream.getTracks()) attachTrack(peer, track);
+        attachScreen(peer);
       }
     }
     paintWaiting();
@@ -1094,6 +1125,7 @@ function admitPeer(id) {
   asrAnnounce(peer);
   if (peer.pc && state.outStream) {
     for (const track of state.outStream.getTracks()) attachTrack(peer, track);
+    attachScreen(peer);
   }
   paintWaiting();
 }
@@ -1113,6 +1145,7 @@ function markAdmins() {
   document.body.classList.toggle('is-admin', mine);
   for (const peer of state.peers.values()) {
     applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+    if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
   }
   const self = document.querySelector('.tile[data-local="yes"]');
   applyFlags(self, state.mic, state.cam, mine);
@@ -1551,7 +1584,7 @@ async function switchDevice(kind, id) {
     // A switch never changes the on and off choice of the call.
     if (!wasOn) {
       track.enabled = false;
-      if (!state.screen) paintSelfCam(false);
+      paintSelfCam(false);
     }
   } else {
     await adoptMic(track);
@@ -1582,7 +1615,7 @@ function onDeviceChange() {
     state.camTrack = null;
     if (state.cam) {
       state.cam = false;
-      if (!state.screen) paintSelfCam(false);
+      paintSelfCam(false);
       refreshSelf();
       sendState();
     }
@@ -1747,14 +1780,19 @@ function sealOne(peer, side, dir, kind) {
 
 // preparePeer makes one transceiver per kind, seals both directions of it and
 // puts the live track on its sender. It runs before the offer or the answer
-// leaves, so the first frame always meets a key, a transform and a track.
+// leaves, so the first frame always meets a key, a transform and a track. The
+// screen has a transceiver of its own from the start, so a share needs no
+// renegotiation and the camera keeps its sender.
 function preparePeer(peer) {
   if (peer.tx) return;
   peer.tx = {};
   peer.sealed = true;
-  for (const kind of ['audio', 'video']) {
-    let tr = peer.pc.getTransceivers().find((t) => !t.stopped && t.receiver.track.kind === kind);
-    if (!tr) tr = peer.pc.addTransceiver(kind, { direction: 'sendrecv' });
+  const used = new Set();
+  for (const kind of ['audio', 'video', 'screen']) {
+    const media = kind === 'screen' ? 'video' : kind;
+    let tr = peer.pc.getTransceivers().find((t) => !t.stopped && !used.has(t) && t.receiver.track.kind === media);
+    if (!tr) tr = peer.pc.addTransceiver(media, { direction: 'sendrecv' });
+    used.add(tr);
     // A transceiver from the remote offer is recvonly until this side says so.
     tr.direction = 'sendrecv';
     peer.tx[kind] = tr;
@@ -1765,7 +1803,9 @@ function preparePeer(peer) {
       peer.sealed = false;
       continue;
     }
-    const track = state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
+    const track = kind === 'screen'
+      ? state.screen && state.screen.getVideoTracks()[0]
+      : state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
     if (!track) continue;
     // A guest that waits outside gets none of our media until it is let in.
     if (peer.waiting) continue;
@@ -1783,6 +1823,15 @@ function attachTrack(peer, track) {
   if (!tr) return;
   tr.sender.replaceTrack(track).catch(() => {});
   if (track.kind === 'video') capVideoSender(tr.sender);
+}
+
+// attachScreen puts the live screen track on the screen sender of one peer.
+// Only the screen sender is touched; the camera keeps its own track.
+function attachScreen(peer) {
+  if (peer.sealed === false || peer.waiting) return;
+  const tr = peer.tx && peer.tx.screen;
+  const track = state.screen && state.screen.getVideoTracks()[0];
+  if (tr && track) tr.sender.replaceTrack(track).catch(() => {});
 }
 
 // publishTrack hands one new track to every connection that already has its
@@ -1872,21 +1921,63 @@ function paintPeerVideo(peer) {
 
 // paintRemoteVideo applies the deaf state to every guest already in the room.
 function paintRemoteVideo() {
-  for (const peer of state.peers.values()) paintPeerVideo(peer);
+  for (const peer of state.peers.values()) {
+    paintPeerVideo(peer);
+    paintPeerScreen(peer);
+  }
 }
 
-// adoptCam makes one camera track the live video. While a screen is shared the
-// screen stays what peers receive, so only the camera and the preview change. A
-// track that replaces an earlier camera is handed to the video sender that is
-// already there, so a switch needs no renegotiation.
+// makeScreenTile builds the second picture of a guest on its first screen
+// track. It has no row of its own: the list already carries the guest, and the
+// label says which picture it is. The node stays for the pair, so a share that
+// stops and starts again reuses it.
+function makeScreenTile(peer) {
+  if (peer.screenTile) return peer.screenTile;
+  peer.screenTile = makeTile(peer.id, `${peer.name}, screen`, false, true);
+  peer.screenTile.dataset.peer = peer.id;
+  // The receiver track of the screen exists from the negotiation on, so the
+  // tile stands in the stage only once its first frame is decoded.
+  peer.screenTile.querySelector('video').addEventListener('resize', () => layoutStage());
+  // The camera flag stays out of it: this tile is the screen, not the face.
+  applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
+  return peer.screenTile;
+}
+
+// paintPeerScreen shows or hides the shared screen of one guest. The tile is
+// built on the first live screen track, so no empty second tile stands in the
+// stage; a track that the sender muted for a stopped share, or that ended,
+// leaves the stage while the same track comes back when the share does.
+function paintPeerScreen(peer) {
+  const track = peer.screenTrack;
+  if (!track) return;
+  if (!state.deaf && track.readyState === 'live' && !track.muted) {
+    const tile = makeScreenTile(peer);
+    const video = tile.querySelector('video');
+    const stream = new MediaStream([track]);
+    if (video.srcObject !== stream) video.srcObject = stream;
+    tile.classList.add('playing');
+    video.play().catch(() => {});
+  } else if (peer.screenTile) {
+    const video = peer.screenTile.querySelector('video');
+    peer.screenTile.classList.remove('playing');
+    try { video.pause(); } catch { /* not playing */ }
+    video.srcObject = null;
+  }
+  layoutStage();
+}
+
+// adoptCam makes one camera track the live video. The camera keeps its own
+// sender while a screen is shared, so the picture goes to the camera sender and
+// the share is not touched. A track that replaces an earlier camera is handed to
+// the video sender that is already there, so a switch needs no renegotiation.
 async function adoptCam(track) {
   if (!track) return;
   const prev = state.camTrack;
   state.camTrack = track;
   track.contentHint = 'motion';
   track.enabled = true;
-  if (!state.screen) paintSelfCam(true);
-  if (!state.screen && state.outStream) {
+  paintSelfCam(true);
+  if (state.outStream) {
     for (const old of state.outStream.getVideoTracks()) {
       if (old !== track) state.outStream.removeTrack(old);
     }
@@ -1960,7 +2051,7 @@ async function enableCam() {
   state.cam = true;
   store('cam', 1);
   if (state.camTrack) state.camTrack.enabled = true;
-  if (!state.screen) paintSelfCam(true);
+  paintSelfCam(true);
   updateButtons();
   sendState();
 }
@@ -1978,7 +2069,7 @@ function disableCam(persist = true) {
   if (track) {
     try { track.stop(); } catch { /* already stopped */ }
   }
-  if (!state.screen) paintSelfCam(false);
+  paintSelfCam(false);
   updateButtons();
   sendState();
 }
@@ -2387,11 +2478,7 @@ function updateButtons() {
 function applyMirror() {
   const tile = document.querySelector('.tile[data-local="yes"]');
   if (!tile) return;
-  const camera = !state.screen;
-  tile.classList.toggle('mirrored', state.mirror && camera);
-  tile.classList.toggle('screenshare', !!state.screen);
-  const badge = tile.querySelector('.state');
-  if (badge) badge.textContent = state.screen ? 'your screen' : 'you';
+  tile.classList.toggle('mirrored', state.mirror);
   layoutStage();
 }
 
@@ -2409,9 +2496,10 @@ function lookTrack() {
 
 // lookStart builds the pipeline once: the camera feeds a video element, every
 // animation frame is drawn on a canvas with the colour step and the mask, and
-// the canvas track becomes what peers receive. Nothing is uploaded.
+// the canvas track becomes what peers receive. Nothing is uploaded. A shared
+// screen has its own sender, so a look never touches it.
 async function lookStart() {
-  if (!lookOn() || !state.camTrack || state.screen) return;
+  if (!lookOn() || !state.camTrack) return;
   if (state.lookPipe) return;
   const src = state.camTrack;
   const video = document.createElement('video');
@@ -2577,10 +2665,10 @@ function drawMask(ctx, W, H, which, a) {
   ctx.restore();
 }
 
-// lookPublish swaps the drawn track into every sender and the own preview. The
-// screen share keeps the stage, so a look never covers a shared screen.
+// lookPublish swaps the drawn track into every camera sender and the own
+// preview. The screen sender is left alone: it carries the share.
 async function lookPublish(track) {
-  if (!state.outStream || state.screen) return;
+  if (!state.outStream) return;
   for (const old of state.outStream.getVideoTracks()) {
     if (old !== track) state.outStream.removeTrack(old);
   }
@@ -2593,8 +2681,8 @@ async function lookPublish(track) {
   paintSelfCam(true);
 }
 
-// lookStop drops the pipeline. With restore it puts the camera track back on
-// the senders and the preview, unless a screen share is up.
+// lookStop drops the pipeline. With restore it puts the camera track back on the
+// camera senders and the preview.
 function lookStop(restore = true) {
   const p = state.lookPipe;
   state.lookPipe = null;
@@ -2607,7 +2695,7 @@ function lookStop(restore = true) {
       try { t.stop(); } catch { /* already stopped */ }
     }
   }
-  if (!restore || state.screen) return;
+  if (!restore) return;
   const track = state.camTrack;
   if (state.outStream) {
     for (const old of state.outStream.getVideoTracks()) state.outStream.removeTrack(old);
@@ -2625,7 +2713,7 @@ function lookStop(restore = true) {
 // when the track changes.
 async function lookRestart() {
   if (state.lookPipe) lookStop(false);
-  if (lookOn() && state.camTrack && !state.screen) await lookStart();
+  if (lookOn() && state.camTrack) await lookStart();
   else paintSelfCam(state.cam && !!state.camTrack);
 }
 
@@ -2672,25 +2760,12 @@ function lookResize() {
 
 // ---------------------------------------------------------------- screen share
 
-// replaceOutVideo swaps the track that is sent to every peer and keeps the
-// local preview in sync. replaceTrack on the video transceiver avoids a
-// renegotiation. The old camera track stays alive so the share can be stopped
-// again.
-async function replaceOutVideo(track) {
-  if (!state.outStream) return;
-  // A room never sends a clear frame: without the worker there is no transform,
-  // so the screen track is not offered at all.
-  if (track && (!sealingAvailable() || !state.worker)) {
-    state.sealFault = 'this browser cannot seal media frames, so no screen is sent';
-    say(state.sealFault);
-    return;
-  }
-  for (const old of state.outStream.getVideoTracks()) {
-    state.outStream.removeTrack(old);
-  }
-  if (track) state.outStream.addTrack(track);
+// replaceScreenTrack points the screen sender of every peer at the display
+// track, or at nothing. The camera sender is not touched, so the two pictures
+// travel side by side and a share needs no renegotiation.
+async function replaceScreenTrack(track) {
   for (const peer of state.peers.values()) {
-    const tr = peer.tx && peer.tx.video;
+    const tr = peer.tx && peer.tx.screen;
     if (tr && !peer.waiting) await tr.sender.replaceTrack(track || null).catch(() => {});
   }
 }
@@ -2700,7 +2775,7 @@ async function startShare() {
     say('screen sharing is not supported by this browser');
     return;
   }
-  if (!sealingAvailable()) {
+  if (!sealingAvailable() || !state.worker) {
     say('this browser cannot seal media frames, so screen sharing stays off');
     return;
   }
@@ -2713,15 +2788,21 @@ async function startShare() {
     return;
   }
   state.screen = display;
-  // A shared screen keeps its own picture; the look waits for the share to end.
-  lookStop(false);
   const video = display.getVideoTracks()[0];
   if (video) {
     video.contentHint = 'detail';
     video.addEventListener('ended', () => stopShare());
-    await replaceOutVideo(video);
-    const tile = document.querySelector('.tile[data-local="yes"]');
-    if (tile) tile.querySelector('video').srcObject = display;
+    await replaceScreenTrack(video);
+    // The screen gets its own tile, so the own camera keeps its picture, its
+    // mirror and its badge.
+    const tile = makeTile(state.name, state.name, true, true);
+    tile.dataset.state = 'connected';
+    tile.querySelector('.state').textContent = 'your screen';
+    tile.classList.add('playing');
+    const el = tile.querySelector('video');
+    el.srcObject = display;
+    el.play().catch(() => {});
+    state.screenTile = tile;
   }
   const audio = display.getAudioTracks()[0];
   if (audio && state.audioCtx) {
@@ -2729,7 +2810,7 @@ async function startShare() {
     state.screenSource.connect(state.mixer);
     resumeAudio();
   }
-  applyMirror();
+  layoutStage();
   updateButtons();
 }
 
@@ -2743,16 +2824,12 @@ async function stopShare() {
     state.screenSource = null;
   }
   state.screen = null;
-  await replaceOutVideo(state.cam ? state.camTrack : null);
-  // The look comes back on the camera after the share.
-  lookRestart();
-  const tile = document.querySelector('.tile[data-local="yes"]');
-  if (tile) {
-    const preview = new MediaStream();
-    if (state.camTrack) preview.addTrack(state.camTrack);
-    tile.querySelector('video').srcObject = preview;
+  await replaceScreenTrack(null);
+  if (state.screenTile) {
+    state.screenTile.remove();
+    state.screenTile = null;
   }
-  applyMirror();
+  layoutStage();
   updateButtons();
 }
 
@@ -2804,6 +2881,8 @@ function ensurePeer(id, mic, cam, deaf) {
     pc: null,
     tile: null,
     video: null,
+    screenTile: null, // the second tile of this guest, built on the first screen track
+    screenTrack: null,
     gain: null,
     audioSrc: null,
     audioEl: null,
@@ -2906,6 +2985,21 @@ function connectPeer(id, initiator, mic, cam) {
       // so it can be louder than the browser maximum and silent at 0 percent.
       routeAudio(peer, track);
       track.addEventListener('ended', () => dropAudio(peer));
+      return;
+    }
+    // The screen has a transceiver of its own, matched by its mid. Its track
+    // goes to a second tile, so the camera keeps its tile and its sender. A
+    // track that arrives before preparePeer runs is named by the second video
+    // transceiver, which is the same object that preparePeer seals.
+    const named = peer.tx && peer.tx.screen;
+    const screen = named || peer.pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video')[1];
+    if (screen && (event.transceiver === screen || (named && named.mid !== null && event.transceiver.mid === named.mid))) {
+      peer.screenTrack = track;
+      paintPeerScreen(peer);
+      // A share that stops or starts again mutes and unmutes the same track.
+      track.addEventListener('mute', () => paintPeerScreen(peer));
+      track.addEventListener('unmute', () => paintPeerScreen(peer));
+      track.addEventListener('ended', () => paintPeerScreen(peer));
       return;
     }
     // The track is kept, so undeafen can put the same picture back without a
@@ -3047,6 +3141,7 @@ function dropPeer(id) {
   const row = peer.tile ? rowOf.get(peer.tile) : null;
   if (row) row.remove();
   if (peer.tile) peer.tile.remove();
+  if (peer.screenTile) peer.screenTile.remove();
   // The pair secrets go with the peer, zeroed: no later join can resume them.
   wipeKeys(peer);
   state.peers.delete(id);
@@ -3223,6 +3318,7 @@ function handle(msg) {
         if (msg.cam !== undefined) peer.cam = msg.cam;
         if (msg.deaf !== undefined) peer.deaf = msg.deaf;
         applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+        if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
         paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
       }
       break;
@@ -3355,6 +3451,10 @@ function leave(message) {
       try { track.stop(); } catch { /* already stopped */ }
     }
     state.screen = null;
+    if (state.screenTile) {
+      state.screenTile.remove();
+      state.screenTile = null;
+    }
   }
   dropPeers();
   // The sealed worker holds the pair keys; it dies with the call. The module
@@ -6964,6 +7064,7 @@ function sealedSetName(peer, raw) {
   if (!name || peer.name === name) return;
   peer.name = name;
   if (peer.tile) paintName(peer.tile, name, false);
+  if (peer.screenTile) paintName(peer.screenTile, `${name}, screen`, false);
 }
 
 // sealedSetE2E paints the key state and the short code on one tile.
