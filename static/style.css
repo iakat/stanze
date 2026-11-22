@@ -855,13 +855,26 @@ body.is-admin .tile[data-peer]:focus-within .dots {
    written out rather than taken from the sheet above, so this block keeps its
    contrast if the rest of the palette is redrawn: each is at least 8:1 on the
    grey panel. Nothing here is rounded, because nothing else is. */
+/* The one chip at the far end of the status line: how many guests this browser
+   can name by identity. Green when every guest is verified, red when one is
+   not, and both stay above 8:1 on the grey panel. */
 .badge.pincount {
-  margin-left: 6px;
+  margin-left: auto;
   color: #141414;
   background: #dfdfdf;
   border: 1px solid #808080;
-  padding: 0 4px;
+  padding: 0 6px;
   font-size: var(--fs-tiny);
+}
+.badge.pincount[data-verified="all"] {
+  color: #eaffef;
+  background: #17501f;
+  border-color: #2f8b45;
+}
+.badge.pincount[data-verified="part"] {
+  color: #ffecec;
+  background: #7a1414;
+  border-color: #c04040;
 }
 
 .pin {

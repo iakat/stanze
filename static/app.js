@@ -113,7 +113,7 @@ const state = {
  *   'sealed-note': HTMLElement,
  *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
  *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, 'link-dot': HTMLElement,
- *   'link-text': HTMLElement, 'sealed-badge': HTMLElement, grid: HTMLElement,
+ *   'link-text': HTMLElement, grid: HTMLElement,
  *   'stage-main': HTMLElement, 'stage-rail': HTMLElement,
  *   'pin-count': HTMLElement,
  *   'stats-panel': HTMLElement, 'stats-graph-box': HTMLElement,
@@ -1727,12 +1727,13 @@ function connectPeer(id, initiator, mic, cam) {
 function setPeerState(peer, text) {
   peer.state = text;
   // The badge on the tile names the key state, so the link state lives in the
-  // data attribute only.
+  // data attribute only. The status line carries no guest count: the chip at
+  // the far end of it counts the peers, so the two can never disagree.
   if (peer.tile) peer.tile.dataset.state = text;
   if ((text === 'failed' || text === 'closed') && peer.tile) peer.tile.classList.remove('playing');
   layoutStage();
-  if (text === 'connected') $('link-text').textContent = `sealed, ${state.peers.size + 1} in the room`;
-  else if (text === 'failed') $('link-text').textContent = 'sealed, link failed';
+  if (text === 'connected') $('link-text').textContent = '';
+  else if (text === 'failed') $('link-text').textContent = 'link failed';
   updateCount();
 }
 
@@ -1825,7 +1826,7 @@ function dropPeer(id) {
   wipeKeys(peer);
   state.peers.delete(id);
   layoutStage();
-  updateSealedBadge();
+  updatePinCount();
   updateCount();
 }
 
@@ -1947,7 +1948,7 @@ function handle(msg) {
         sealedSendPub(peer);
       }
       markAdmins();
-      $('link-text').textContent = 'sealed, handshaking';
+      $('link-text').textContent = 'handshaking';
       // Tell the room the microphone and camera state; only the flags travel.
       sendState();
       updateCount();
@@ -2068,9 +2069,8 @@ async function enterRoom(room, pass) {
     $('room-label').textContent = room;
     $('room-label').title = room;
     $('chat-note').hidden = false;
-    $('sealed-badge').hidden = false;
-    updateSealedBadge();
-    $('link-text').textContent = 'sealed, connecting';
+    updatePinCount();
+    $('link-text').textContent = 'connecting';
     setHash(room);
     startCallClock();
     startSpeaking();
@@ -2143,12 +2143,9 @@ function leave(message) {
   state.wireLeaks = [];
   state.canaries = [];
   state.samples = [];
-  $('sealed-badge').hidden = true;
-  $('sealed-badge').textContent = '';
-  $('sealed-badge').removeAttribute('title');
   updatePinCount();
   $('chat-note').hidden = true;
-  $('link-text').textContent = 'connected';
+  $('link-text').textContent = '';
   if (state.micTrack) {
     try { state.micTrack.stop(); } catch { /* already stopped */ }
   }
@@ -4323,17 +4320,26 @@ function verifiedPeers() {
   return n;
 }
 
-// updatePinCount is the room summary: how many guests this browser can name by
-// identity, out of the guests present. Each pair still has its own code.
+// updatePinCount is the room summary at the far end of the status line: how
+// many guests this browser can name by identity, out of the guests present.
+// The chip is green when every guest is verified and red when one is not; a
+// pair whose keys do not match keeps it red and the title names that pair.
 function updatePinCount() {
   const el = $('pin-count');
   if (!el) return;
   const total = state.peers.size;
   const known = verifiedPeers();
-  el.textContent = total ? `verified ${known} of ${total}` : '';
-  el.title = total
-    ? `${known} of ${total} guests present an identity this browser pinned; each pair has its own code`
-    : '';
+  const failed = sealedFailedPairs();
+  el.hidden = total === 0;
+  el.textContent = total ? `verified ${known}/${total}` : '';
+  el.dataset.verified = total > 0 && known === total && failed.length === 0 ? 'all' : 'part';
+  if (total === 0) {
+    el.removeAttribute('title');
+  } else if (failed.length > 0) {
+    el.title = 'the keys do not match with ' + sealedPairNames(failed) + ', so do not trust this call';
+  } else {
+    el.title = `${known} of ${total} guests present an identity this browser pinned; each pair has its own code on its tile`;
+  }
 }
 
 function paintPin(peer) {
@@ -4501,7 +4507,7 @@ function sealedRefuse(peer, why) {
   wipeKeys(peer);
   sealedSetE2E(peer, 'failed');
   say(shortPeer(peer.id) + ' ' + why + '; the link stays closed');
-  updateSealedBadge();
+  updatePinCount();
 }
 
 // sealedRestart drops a pair's state so a new handshake can run. The deliberate
@@ -4922,7 +4928,7 @@ function sealedSetName(peer, raw) {
 // sealedSetE2E paints the key state and the short code on one tile.
 function sealedSetE2E(peer, status) {
   peer.ready = status;
-  updateSealedBadge();
+  updatePinCount();
   if (!peer.tile) return;
   peer.tile.dataset.e2e = status;
   paintState(peer);
@@ -5060,30 +5066,6 @@ function sealedFailedPairs() {
 
 function sealedPairNames(pairs) {
   return pairs.map((peer) => peer.name || shortPeer(peer.id)).join(', ');
-}
-
-// updateSealedBadge keeps the badge and the stats row on the same code. It is
-// called whenever a peer code appears, a peer state changes or a peer leaves,
-// so the two can never disagree.
-function updateSealedBadge() {
-  const badge = $('sealed-badge');
-  if (!badge) return;
-  badge.hidden = false;
-  const failed = sealedFailedPairs();
-  if (failed.length > 0) {
-    badge.textContent = 'pq-e2e key mismatch';
-    badge.title = 'the keys do not match with ' + sealedPairNames(failed) + ', so do not trust this call';
-    return;
-  }
-  const codes = sealedRoomCodes();
-  if (codes.size > 1) {
-    badge.textContent = 'pq-e2e one code per pair';
-    badge.title = state.peers.size + ' guests: each pair has its own code, compare the code on that guest tile by voice';
-    return;
-  }
-  const code = sealedRoomCode();
-  badge.textContent = code ? 'pq-e2e ' + verifyText(code) + ' ' + code : 'pq-e2e handshaking';
-  badge.title = code ? verifyNames(code) + ' (' + code + ')' : 'no peer code yet';
 }
 
 async function sealedOnOffer(peer, sdp) {
@@ -5475,13 +5457,6 @@ function init() {
   // The module is warming before the first click, so a failure is visible in
   // the lobby and the join is only a microphone prompt.
   preloadSealed();
-
-  // The pin summary sits next to the room badge. It is made here rather than in
-  // the page, so the count is never part of the markup a guest reads first.
-  const pinCount = document.createElement('span');
-  pinCount.id = 'pin-count';
-  pinCount.className = 'badge pincount';
-  $('sealed-badge').after(pinCount);
 
   $('newid-btn').addEventListener('click', (event) => {
     event.preventDefault();
