@@ -128,9 +128,10 @@ async function joinPage(context, name, room) {
   throw new Error(name + ' could not join');
 }
 
-// asrOn opens the transcribe menu, picks the engine if the menu offers a choice
-// and ticks the switch, the way a guest does. With one engine on offer the menu
-// has no row to pick from, so the listing decides which engine is in force.
+// asrOn opens the transcribe menu, picks from the one picker and ticks the
+// switch, the way a guest does. The picker lists every language with its size
+// and, when the server lists it, the multilingual model; a menu with a single
+// entry hides the picker, so the listing decides which engine is in force.
 async function asrOn(page, engine, listed) {
   const offered = await page.evaluate(() => {
     const btn = document.getElementById('menu-asr-btn');
@@ -139,17 +140,16 @@ async function asrOn(page, engine, listed) {
   if (!offered) throw new Error('the page does not offer transcription');
   await page.evaluate(() => document.getElementById('menu-asr-btn').click());
   const picked = await page.evaluate((want) => {
-    const sel = document.getElementById('asr-engine');
+    const sel = document.getElementById('asr-lang');
     if (!sel || sel.hidden) return 'single';
-    const has = [...sel.options].some((o) => o.value === want);
-    if (has) {
-      sel.value = want;
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    return has ? want : false;
+    const o = [...sel.options].find((x) => (want === 'omni' ? x.value === 'omni' : x.value.startsWith('vosk:')));
+    if (!o) return false;
+    sel.value = o.value;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return o.value;
   }, engine);
   if (picked === false) throw new Error('the menu does not offer the ' + engine + ' engine');
-  // With one engine the choice is made by what the server lists.
+  // With one entry the choice is made by what the server lists.
   if (picked === 'single' && (engine === 'omni' ? !listed.omni : !listed.vosk)) {
     throw new Error('the page offers no ' + engine + ' engine');
   }
@@ -261,6 +261,13 @@ async function runOneClip(browser, truth, engine) {
 
     const before = await stats(b.page);
     check('no engine runs before the guest asks', before.ready === false, JSON.stringify(before));
+
+    const labels = await b.page.evaluate(() => {
+      const sel = document.getElementById('asr-lang');
+      return sel ? [...sel.options].map((o) => o.textContent) : [];
+    });
+    check('every entry of the one picker carries its size',
+      labels.length > 0 && labels.every((t) => /\(\d+(\.\d+)? MB\)/.test(t)), labels.join(' | '));
 
     const started = Date.now();
     await asrOn(b.page, engine, offers);
