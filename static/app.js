@@ -1261,10 +1261,10 @@ function micLevelLine() {
 // inLevelLine reports what arrives from one peer, read at its source node
 // before the gain. A silent line beside a live inbound rate points at the
 // decode or the graph, not at the network; a live line with no sound points
-// after the gain.
+// after the gain. It returns the level alone, so the caller names the line.
 function inLevelLine(peer) {
-  if (!peer.audioSrc || !peer.meter) return 'in level none';
-  return `in level ${levelText(peer.meterPeak || 0)}`;
+  if (!peer.audioSrc || !peer.meter) return '';
+  return levelText(peer.meterPeak || 0);
 }
 
 // setNoise switches the microphone between the raw path and the GTCRN path.
@@ -3531,6 +3531,9 @@ function ownPairs() {
   // The denoise switch changes the same picture and the same microphone, so it
   // rides beside the camera instead of on a line of its own.
   out.push(['camera ', `${shot}, denoise ${state.denoiseOn ? 'on' : 'off'}`]);
+  // The long-term identity of this browser: the fingerprint alone, because
+  // where the key lives is the panel's noise and not the guest's question.
+  if (state.idKey) out.push(['key ', state.idKey.fp, undefined, 'mono']);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
   if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);
@@ -3559,21 +3562,27 @@ function peerPairs(peer, s) {
   if (peer.sas && sealedRoomCodes().size > 1) out.push(['code ', verifyText(peer.sas), undefined, true]);
   const pin = pinState(peer);
   if (peer.fp && pin !== 'new') {
-    out.push(['id ', `${pin === 'known' ? pinLabelOf(peer) : pin} ${peer.fp}`,
-      pin === 'changed' || pin === 'rollback' ? false : undefined, true]);
+    // The name on one line with a green tick when this browser can name that
+    // guest, and the fingerprint under it in monospace: a key is read letter
+    // by letter, a name is not.
+    const label = pin === 'known' ? pinLabelOf(peer) : pin;
+    const bad = pin === 'changed' || pin === 'rollback';
+    out.push(['name ', pin === 'known' ? [['2714', 'verified', label]] : label, bad ? false : undefined]);
+    out.push(['key ', peer.fp, bad ? false : undefined, 'mono']);
   }
   if (!peer.keys) out.push(['keys ', 'none', false, true]);
   else if (peer.ready === 'ready' && !peer.confirmed) out.push(['keys ', 'not confirmed', false, true]);
   const c = sealedPairCount(peer.id);
   if (c.refused) out.push(['frames ', `${c.refused} refused`, false, true]);
   const inLevel = inLevelLine(peer);
-  if (s && !/none$/.test(inLevel)) out.push(['in level ', inLevel.replace('in level ', ''), undefined, true]);
+  if (s && inLevel) out.push(['audio ', inLevel]);
   return out;
 }
 
 // statsRow is one card of the panel: a name and a short list of key/value
 // lines. A line is [key, value] or [key, value, mark] with a mark of true for
-// green and false for red, and a fourth true makes it an indented sub row.
+// green and false for red. The fourth field is true for an indented sub row,
+// or 'mono' for a value that is read letter by letter, such as a key.
 // statIcon is one OpenMoji drawing with the word it stands for in its title,
 // so a line can say "video" with a picture and still answer a hover.
 function statIcon(hex, title) {
@@ -3604,7 +3613,8 @@ function statValue(value) {
 
 function statLine(key, value, mark, sub) {
   const line = document.createElement('div');
-  line.className = 'sline' + (sub ? ' sub' : '') + (mark === true ? ' good' : mark === false ? ' bad' : '');
+  line.className = 'sline' + (sub === 'mono' ? ' mono' : sub ? ' sub' : '') +
+    (mark === true ? ' good' : mark === false ? ' bad' : '');
   const k = document.createElement('span');
   k.className = 'sk';
   // A key of two is [drawing, word]: the picture stands in for the word and
@@ -5185,7 +5195,7 @@ function wasmTestFaults(wt) {
   return out;
 }
 
-// sealedCards is the sealed half of the panel, below the person cards: what
+// sealedCards is the crypto half of the panel, below the person cards: what
 // the relay cannot see, in the few lines that answer it. A line that only
 // repeats the suite or says "not run yet" is left out.
 function sealedCards() {
@@ -5194,10 +5204,7 @@ function sealedCards() {
   const wt = state.wasmTest;
   const seal = [['media ', available ? 'sealed, every frame' : 'NO SEALING, no media is sent', available]];
   if (wt) seal.push(['self test ', wasmTestOk(wt) ? 'pass' : 'FAIL', wasmTestOk(wt)]);
-  out.push(statsRow('sealed', seal));
-
-  const me = state.idKey;
-  if (me) out.push(statsRow('identity', [['key ', `${me.kind} ${me.fp}`]]));
+  out.push(statsRow('crypto', seal));
 
   let refused = 0;
   for (const st of Object.values(state.frames)) {

@@ -802,6 +802,13 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .sline.sub { padding-left: 10px; }
 .sline.sub .sv { margin-left: 0; text-align: left; }
 .sline.sub:not(.good):not(.bad) .sv { color: var(--soft); }
+/* A key is read letter by letter, so its value is monospace and right aligned
+ * like every other value on the panel. */
+.sline.mono .sv {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.94em;
+  letter-spacing: 0.01em;
+}
 
 .controls {
   display: flex;
