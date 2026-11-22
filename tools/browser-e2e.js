@@ -369,6 +369,27 @@ async function stats(page) {
       && /video [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text) && /audio [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text), tel.text);
     check('stats show the own denoise state and device settings',
       /denoise (on|off)/.test(tel.text) && /mic (on|off), \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
+    const graphs = await pageA.evaluate(() => {
+      const ink = (id) => {
+        const c = document.getElementById(id);
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i]) n++;
+        return n;
+      };
+      return {
+        box: !document.getElementById('stats-graph-box').hidden,
+        widths: ['stats-graph-down', 'stats-graph-rtt', 'stats-graph-loss'].map((id) => document.getElementById(id).width),
+        inked: ['stats-graph-down', 'stats-graph-rtt', 'stats-graph-loss'].map(ink),
+        notes: ['stats-note-down', 'stats-note-rtt', 'stats-note-loss'].map((id) => document.getElementById(id).textContent),
+      };
+    });
+    check('the stats sheet draws the downlink, the round trip and the loss apart',
+      graphs.box && graphs.widths.every((w) => w > 0), JSON.stringify(graphs));
+    check('each drawing carries its own text line under it',
+      /^down /.test(graphs.notes[0]) && /^round trip /.test(graphs.notes[1]) && /^loss /.test(graphs.notes[2]),
+      JSON.stringify(graphs.notes));
+    check('every drawing puts ink on its canvas', graphs.inked.every((n) => n > 0), JSON.stringify(graphs.inked));
     const hiddenStop = await pageA.evaluate(() => {
       Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
       document.dispatchEvent(new Event('visibilitychange'));
