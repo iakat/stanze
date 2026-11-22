@@ -416,8 +416,11 @@ func contentType(name string) string {
 
 // securityHeaders keeps the client dependency-free and locked down. Room ids
 // live only in the URL fragment, so no path or query ever carries them.
+// 'unsafe-eval' is there for the optional transcription only: the vosk worker
+// names its emscripten wrappers with new Function, and a worker inherits this
+// policy. Without it the engine stops at the first recognizer.
 func securityHeaders(next http.Handler, log *slog.Logger) http.Handler {
-	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; " +
+	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; " +
 		"media-src 'self' blob:; connect-src 'self' blob: ws: wss:; font-src 'self'; " +
 		"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
