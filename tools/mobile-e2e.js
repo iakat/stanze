@@ -4,7 +4,9 @@
  * joins a room with a fake camera, audits the stage, opens the stats sheet and
  * a menu, and writes one screenshot per state. A finding is a rectangle that
  * leaves the screen without a clipping parent, a control a finger cannot hit,
- * or a text smaller than the sheet's 13 px floor.
+ * or a text smaller than the sheet's 13 px floor. On a phone the stage opens
+ * on the picture alone, so the check taps the handle first and the frame comes
+ * back, and it taps the picture again at the end to fold the frame away.
  *
  * env: PW (playwright-core directory), ROOMSBASE, OUTDIR
  */
@@ -123,6 +125,24 @@ function stageBox() {
   };
 }
 
+/* frameShown says which parts of the app frame the stylesheet keeps on the
+ * screen, so a folded call and an open one are told apart without a pixel. */
+function frameShown() {
+  const shown = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const s = getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden';
+  };
+  return {
+    title: shown('.stage > .titlebar'),
+    menu: shown('.menubar'),
+    controls: shown('.statusline'),
+    side: shown('.side'),
+    handle: shown('#chrome-btn'),
+  };
+}
+
 async function openPage(browser, viewport, room) {
   const ctx = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
@@ -179,6 +199,22 @@ async function openPage(browser, viewport, room) {
         }, null, 30000, 'own tile');
         await sleep(1200);
 
+        // A phone opens the call on the picture alone: one tap on the handle
+        // brings the frame of the app back, and the checks below measure the
+        // toolbar and the menus that the tap revealed.
+        const immersive = vp.width <= 620 || vp.height <= 520;
+        if (immersive) {
+          const folded = await a.page.evaluate(frameShown);
+          await a.page.screenshot({ path: OUT + '/' + tag + 'folded.png' });
+          check(tag + 'the call opens on the picture alone', !folded.menu && !folded.controls && !folded.side, JSON.stringify(folded));
+          check(tag + 'a handle offers the frame', folded.handle, JSON.stringify(folded));
+          await a.page.click('#chrome-btn');
+          await sleep(300);
+          const open = await a.page.evaluate(frameShown);
+          check(tag + 'one tap brings the frame back', open.menu && open.controls && open.side && open.title, JSON.stringify(open));
+          await a.page.screenshot({ path: OUT + '/' + tag + 'revealed.png' });
+        }
+
         const stage = await a.page.evaluate(audit);
         const box = await a.page.evaluate(stageBox);
         await a.page.screenshot({ path: OUT + '/' + tag + 'stage.png' });
@@ -217,6 +253,22 @@ async function openPage(browser, viewport, room) {
         });
         await a.page.screenshot({ path: OUT + '/' + tag + 'menu.png' });
         check(tag + 'settings menu fits the screen', menu && menu.x >= 0 && menu.x + menu.w <= vp.width + 1 && menu.y >= 0 && menu.y + menu.h <= vp.height + 1, JSON.stringify(menu));
+
+        // One tap on the picture folds the frame away again, and the menus go
+        // with it, because their buttons leave with the frame. The tap lands on
+        // the part of the picture that the bands of the frame leave free.
+        if (immersive) {
+          const spot = await a.page.evaluate(() => {
+            const top = document.querySelector('.menubar').getBoundingClientRect().bottom;
+            const bar = document.querySelector('.statusline').getBoundingClientRect().top;
+            return { x: Math.round(window.innerWidth / 2), y: Math.round((top + bar) / 2) };
+          });
+          await a.page.touchscreen.tap(spot.x, spot.y);
+          await sleep(300);
+          const back = await a.page.evaluate(frameShown);
+          await a.page.screenshot({ path: OUT + '/' + tag + 'folded-again.png' });
+          check(tag + 'a second tap folds the frame away', !back.menu && !back.controls && !back.side, JSON.stringify(back) + ' at ' + JSON.stringify(spot));
+        }
         check(tag + 'no page errors', a.errors.length === 0, a.errors.join(' | '));
       } finally {
         await a.ctx.close();

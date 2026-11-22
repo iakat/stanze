@@ -1538,6 +1538,121 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   .chat-form input, .chat-form button { min-height: 40px; font-size: 16px; }
 }
 
+/* A phone: the call is the picture. The frame of the app - the title bar, the
+   menus, the toolbar and the side column - folds away, and the tiles take the
+   whole screen. A tap brings the frame back over the picture, as bands at the
+   top and the bottom edges: the panels are opaque, so their words stay
+   readable, and the picture stays visible between them. A small handle on the
+   bottom edge says that the frame can come back. The class only arrives with
+   this same query, so a desktop never folds anything. */
+.chrome-handle { display: none; }
+
+@media (max-width: 620px), (max-height: 520px) and (hover: none) {
+  .stage.immersive:not(.chrome) > .titlebar,
+  .stage.immersive:not(.chrome) > .menubar,
+  .stage.immersive:not(.chrome) .statusline,
+  .stage.immersive:not(.chrome) .side,
+  .stage.immersive:not(.chrome) .stats { display: none; }
+  .stage.immersive .stage-body { padding: 0; gap: 0; }
+  .stage.immersive .room-row { gap: 0; }
+  /* The picture takes the screen, and inside the bars of a phone browser it
+     takes what they leave: 100dvh after 100vh for the browser that has it. */
+  .stage.immersive .grid {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 1;
+    border: 0;
+    padding: 0;
+    gap: 0;
+  }
+  .stage.immersive .stage-main { gap: 0; }
+  /* A word from the call outranks the picture: the notice of the stage stays on
+     the screen, above the frame if the frame is open, because the reason it
+     carries is the reason the call is not what the guest expected. */
+  .stage.immersive #stage-error {
+    position: fixed;
+    top: 66px;
+    left: 4px;
+    right: 4px;
+    z-index: 65;
+    margin: 0;
+  }
+
+  /* The handle is small and dark on the picture, so it reads as a way to the
+     frame and not as a part of the call. It sits above the name strip of the
+     tile, which keeps its own line at the bottom edge. */
+  .stage.immersive:not(.chrome) .chrome-handle {
+    display: block;
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    transform: translateX(-50%);
+    z-index: 30;
+    min-width: 0;
+    min-height: 22px;
+    padding: 0 16px;
+    line-height: 20px;
+    font-size: var(--fs-smaller);
+    color: #fff;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  }
+
+  /* The frame comes back as two bands over the picture. The toolbar sits under
+     the side column at the bottom edge, so the one bottom band holds both and
+     the picture keeps the middle of the screen. */
+  .stage.immersive { --chrome-side: min(40dvh, 320px); }
+  .stage.immersive.chrome > .titlebar,
+  .stage.immersive.chrome > .menubar,
+  .stage.immersive.chrome .statusline,
+  .stage.immersive.chrome .side {
+    display: flex;
+    position: fixed;
+    z-index: 60;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  }
+  .stage.immersive.chrome > .titlebar { top: 0; left: 0; right: 0; }
+  .stage.immersive.chrome > .menubar { top: 26px; left: 0; right: 0; }
+  .stage.immersive.chrome .statusline {
+    left: 4px; right: 4px;
+    bottom: calc(var(--chrome-side) + 10px);
+  }
+  .stage.immersive.chrome .side {
+    left: 4px; right: 4px; bottom: 4px;
+    height: var(--chrome-side);
+  }
+  /* The side column is a fixed sheet now, so the chat takes the height that
+     the list of names leaves instead of the height of the window. */
+  .stage.immersive.chrome .chat { height: auto; flex: 1 1 auto; min-height: 0; }
+  /* The stats sheet opens from its button in the toolbar, so it goes above the
+     frame that carries the button. */
+  .stage.immersive.chrome .stats { z-index: 70; }
+}
+
+/* A phone held sideways has no height to spare for a sheet at the bottom edge:
+   the frame comes back on the right edge instead, where the side column sits
+   at this height anyway, and the toolbar keeps the foot of the picture. */
+@media (max-height: 520px) and (hover: none) {
+  .stage.immersive.chrome .side {
+    top: 61px;
+    bottom: 4px;
+    left: auto;
+    right: 4px;
+    height: auto;
+    width: min(50vw, 300px);
+  }
+  .stage.immersive.chrome .statusline {
+    bottom: 4px;
+    left: 4px;
+    right: calc(min(50vw, 300px) + 12px);
+  }
+}
+
 /* The join card is a form for a finger on every touch screen, not only on the
    narrowest one: a tablet and a phone held sideways need the same targets. */
 @media (max-width: 620px), (hover: none) {
