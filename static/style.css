@@ -359,13 +359,18 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   display: flex;
   gap: 1px;
   padding: 1px 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
   background: var(--panel);
   border-bottom: 1px solid var(--edge);
 }
+.menubar::-webkit-scrollbar { display: none; }
 .menubar-slot { position: relative; display: flex; }
 .menubar-item {
   width: auto;
   min-width: 0;
+  flex: none;
+  white-space: nowrap;
   min-height: 20px;
   padding: 1px 9px 2px;
   border: 1px solid transparent;
@@ -394,6 +399,9 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.35);
 }
 .menubar-menu[hidden] { display: none; }
+/* A panel that would hang past the right edge hangs from the right edge of its
+   slot instead: the script sets this class when it measures the panel. */
+.menubar-menu.menu-flip { left: auto; right: 0; }
 /* One row of the panel: a tick gutter, then the words. The box of a checkbox
  * would be a form control in a menu, so the input is invisible and the tick
  * is drawn in the gutter, the way the era drew a chosen entry. */
@@ -1404,6 +1412,7 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   align-items: center;
   justify-content: center;
   gap: 6px;
+  position: relative;
   white-space: nowrap;
   flex: none;
 }
@@ -1422,10 +1431,62 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   margin: 0;
 }
 
+/* A narrow screen puts the chat under the pictures. The pictures keep the
+   height they need and the chat takes a share of the screen, not the other way
+   round, or a phone call shows a stamp of a picture above an empty page. */
 @media (max-width: 900px) {
   .room-row { flex-direction: column; }
-  .side { flex: 1 1 auto; }
-  .chat { width: auto; height: 160px; flex: 1 1 auto; }
+  .grid { flex: 1 1 auto; min-height: 180px; }
+  .side { flex: 0 0 auto; }
+  .stage-rail { height: clamp(64px, 10vh, 140px); }
+  .chat { width: auto; height: auto; flex: 0 1 30vh; min-height: 140px; }
+}
+
+/* A phone in portrait: the three bands are the pictures, one short list of
+   names and the chat. The chat is a height in vh with a floor and a ceiling,
+   not a share of the row, so a short screen always gives the rest to the
+   pictures; with 30vh of chat and a 140 px floor the chat, the list and the
+   banner under them added up past the screen, and the form of the chat was
+   cut off. The list of names is at most three rows high and scrolls. */
+@media (max-width: 620px) {
+  .room-row { gap: 4px; }
+  .grid { min-height: 0; }
+  .stage-rail { height: auto; max-height: 5.5em; }
+  .chat {
+    flex: 0 1 auto;
+    height: clamp(96px, 26vh, 240px);
+    min-height: 64px;
+  }
+  .stats { max-height: 70vh; }
+  /* The strip of a tile keeps its words: the name gives way first, because the
+     list of names under the pictures carries it a second time, and the chips
+     of the state were all cut to "mu..." when every one of them shrank. On the
+     own tile the last chip is "you", which its name already says. */
+  .tile .name { max-width: 45%; }
+  .tile .flags span,
+  .tile .state { flex: 0 0 auto; }
+  .tile[data-local="yes"] .tag .state { display: none; }
+  /* A fly-out to the right of a panel has no room on a phone: a submenu opens
+     inside its panel instead, as the rows of an accordion, and its arrow says
+     nothing then. */
+  .menubar-menu { max-width: calc(100vw - 8px); }
+  .menu-sub-list {
+    position: static;
+    left: auto;
+    top: auto;
+    min-width: 0;
+    max-height: 40vh;
+    margin: 2px 0 2px 6px;
+    box-shadow: none;
+  }
+  .menu-arrow { display: none; }
+}
+
+/* The five menus need 296 px on one line. Under that they wrap to a second
+   line, because a strip that scrolls without a scrollbar hides its last item
+   and nobody guesses that it moves. */
+@media (max-width: 350px) {
+  .menubar { flex-wrap: wrap; overflow-x: visible; }
 }
 
 /* A strip between the tiles and the chat is too short for the graphs and easy
@@ -1447,15 +1508,80 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   .stats-head button { min-width: 32px; min-height: 28px; font-size: var(--fs); }
 }
 
-@media (max-width: 560px) {
+/* A phone: one finger, one hand. The toolbar is a row of drawings, because
+   five labelled buttons do not fit 360 px, and the words stay in the document
+   as the name of the button. Every control is high enough for a finger and the
+   form fields are 16 px, the size at which a phone does not zoom the page. */
+@media (max-width: 620px), (max-height: 520px) and (hover: none) {
   .stage-main { grid-template-columns: 1fr; }
-  .ctrl { min-width: 0; width: auto; flex: 1; }
-  /* The picks sit on the toolbar line, so they keep their own width; a full
-     width field would push the toolbar down the screen. */
-  .pick { width: auto; }
-  .statusline .controls { gap: 4px; }
   .stage > .titlebar .timer { display: none; }
   .stage > .titlebar .tbbuttons { overflow: hidden; }
+  /* Six drawings on one line, the performance slider under them. A flex row
+     broke after the fifth button whatever the widths were, so the row is a
+     grid of six equal cells and leave takes the last cell of the first row. */
+  .controls {
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+    align-items: center; gap: 4px; width: 100%;
+  }
+  /* The five menus do not fit 360 px at the menu size: one step down, and the
+     last one is no longer cut at the edge. */
+  .menubar-item { font-size: var(--fs-tiny); padding: 1px 6px; }
+  .ctrl, #mic-btn, #cam-btn, #deaf-btn, #stats-btn, #leave-btn, #share-btn {
+    width: auto; min-width: 0; min-height: 44px; padding: 0 2px; grid-row: 1;
+  }
+  #leave-btn { grid-column: 6; }
+  .controls .perf-pick { grid-row: 2; grid-column: 1 / -1; min-height: 32px; justify-content: flex-end; }
+  .controls .perf-pick input[type="range"] { height: 32px; }
+  .ctrl span {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .chat-form input, .chat-form button { min-height: 40px; font-size: 16px; }
+}
+
+/* The join card is a form for a finger on every touch screen, not only on the
+   narrowest one: a tablet and a phone held sideways need the same targets. */
+@media (max-width: 620px), (hover: none) {
+  /* The label takes the room its word needs, the control takes the rest. A
+     fixed 78 px column was narrower than "microphone" at 16 px, so the two
+     pieces of the row painted over each other on a small phone. */
+  .lobby .field { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; font-size: var(--fs); margin-bottom: 6px; }
+  .lobby .field input, .lobby .field select,
+  .lobby .with-button button { min-height: 40px; font-size: 16px; padding: 4px 6px; }
+  .lobby label.check { min-height: 40px; font-size: var(--fs); }
+  .lobby label.check input { width: 28px; height: 28px; min-height: 0; }
+  .lobby .join-foot { flex-wrap: wrap; gap: 8px; }
+  /* The card is taller than a phone screen, and the enter button is its only
+     action: it stays at the bottom edge of the scrolling card. */
+  .lobby .join-foot {
+    position: sticky;
+    bottom: 0;
+    padding: 4px 0 2px;
+    background: var(--panel);
+    border-top: 1px solid var(--panel-hi);
+    box-shadow: 0 -1px 0 var(--panel-lo);
+  }
+  .lobby .join-foot a { display: inline-block; min-height: 40px; line-height: 40px; }
+  .lobby #enter-btn { min-height: 44px; font-size: var(--fs); }
+  /* The card is as tall as the screen on a phone held sideways: it starts at
+     the top edge and scrolls inside, instead of hanging off the bottom. The
+     phone rule carries the higher specificity of the desktop rule above, or
+     its 4 px of margin were added to a height that already filled the screen
+     and the page scrolled by exactly 4 px, stealing a scrollbar's width. */
+  body:not(.jit) .lobby {
+    margin: 4px auto;
+    max-height: calc(100vh - 8px);
+    max-height: calc(100dvh - 8px);
+  }
+}
+
+/* A phone held sideways, or any short window: the side column goes back to the
+   right of the pictures, or they lose all their height to the chat. */
+@media (max-height: 520px) and (min-width: 620px) {
+  .room-row { flex-direction: row; }
+  .side { flex: 0 0 250px; }
+  .stage-rail { height: 64px; }
+  .chat { flex: 1 1 auto; min-height: 0; }
 }
 
 /* ------------------------------------------------------------- identity pins */
@@ -1526,11 +1652,16 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 @media (hover: none) {
   .tile .vol-range { width: 110px; height: 26px; }
   .tile .vol { padding: 3px 6px; }
-  .tile .zoom { width: 34px; height: 30px; }
-  .tile .zoom::before { left: 11px; top: 10px; }
-  .tile .zoom[aria-pressed="true"]::before { left: 10px; top: 13px; }
-  .tile .zoom[aria-pressed="true"]::after { left: 14px; top: 9px; }
-  .tile[data-peer] .zoom { right: 40px; }
+  .tile .zoom { width: 40px; height: 36px; }
+  .tile .zoom::before { left: 12px; top: 11px; width: 16px; height: 14px; }
+  .tile .zoom[aria-pressed="true"]::before { left: 11px; top: 14px; width: 13px; height: 11px; }
+  .tile .zoom[aria-pressed="true"]::after { left: 17px; top: 9px; width: 13px; height: 11px; }
+  .tile[data-peer] .zoom { right: 46px; }
+  .menubar-item { min-height: 32px; }
+  .ctrl { min-height: 40px; }
+  .pick input[type="range"] { height: 36px; }
+  .chat-form input, .chat-form button { min-height: 40px; }
+  .stats-head button { min-width: 40px; min-height: 36px; }
 }
 
 /* Performance slider, sound switch, waiting room switch, transcription. */

@@ -282,6 +282,18 @@ const MENUS = [
   ['menu-devices-btn', 'menu-devices'],
 ];
 
+// fitMenu keeps a drop-down inside the window. A menu hangs from its slot to
+// the left, which is right for the left of the bar and wrong for the right: on
+// a narrow screen the last slot would push its panel past the edge. When the
+// panel does not fit, it flips to the far edge of its slot, the way a menu of
+// the era moved itself off the edge of the desktop.
+function fitMenu(list) {
+  if (!(list instanceof HTMLElement)) return;
+  list.classList.remove('menu-flip');
+  const room = document.documentElement.clientWidth;
+  if (list.getBoundingClientRect().right > room - 2) list.classList.add('menu-flip');
+}
+
 // menuSet opens one panel, closes the others, and moves the focus to its first
 // row when it opens. A panel keeps its own DOM, so a switch keeps its listener
 // and its tick while the panel is closed.
@@ -297,6 +309,7 @@ function menuSet(open, which) {
     if (!on) closeSubmenus(list);
     btn.setAttribute('aria-expanded', String(on));
     if (on && !was) {
+      fitMenu(list);
       const first = /** @type {HTMLElement | null} */ (list.querySelector('input[type="checkbox"], select, .menu-choice, .menu-sub'));
       if (first) first.focus();
     }
