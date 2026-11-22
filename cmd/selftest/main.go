@@ -32,6 +32,7 @@ var (
 	httpBase string
 	failures int
 	checks   int
+	b32Lower = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 )
 
 func report(name string, err error) {
@@ -420,7 +421,7 @@ func randomRoomID() (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)), nil
+	return b32Lower.EncodeToString(b), nil
 }
 
 // rawJoinMessage sends one join on a bare connection and returns the raw reply.

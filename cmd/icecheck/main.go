@@ -10,11 +10,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+var b32Lower = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
 func main() {
 	base := flag.String("base", "https://stanze.ch-test.katia.sh", "https base url")
@@ -35,7 +36,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "new room:", err)
 			os.Exit(1)
 		}
-		id = strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b))
+		id = b32Lower.EncodeToString(b)
 	}
 	fmt.Println("room:", id)
 

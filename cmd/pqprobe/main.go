@@ -31,6 +31,8 @@ import (
 
 var failures int
 
+var b32Lower = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
 func check(name string, ok bool, detail string) {
 	if ok {
 		fmt.Printf("PASS  %s", name)
@@ -187,7 +189,7 @@ func randomRoomID() (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)), nil
+	return b32Lower.EncodeToString(b), nil
 }
 
 func main() {

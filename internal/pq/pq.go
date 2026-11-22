@@ -28,7 +28,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // Protocol is mixed into every transcript, so a future version can never
@@ -67,7 +66,7 @@ var (
 	ErrRole  = errors.New("pq: wrong handshake role")
 )
 
-var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
+var b32Lower = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
 // Identity is a peer's per-call key material: one X25519 key and one
 // ML-KEM-768 key pair, drawn on every join and used for that call only. No
@@ -133,13 +132,8 @@ func VerifySignature(pub, msg, sig []byte) bool {
 func Fingerprint(pub []byte) string {
 	sum := sha256.Sum256(pub)
 	s := base32Lower(sum[:])[:fpChars]
-	groups := make([]string, 0, (len(s)+3)/4)
-	for i := 0; i < len(s); i += 4 {
-		groups = append(groups, s[i:min(i+4, len(s))])
-	}
-	return strings.Join(groups, "-")
+	return s[:4] + "-" + s[4:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:]
 }
-
 
 // NewIdentity draws a fresh X25519 key and ML-KEM-768 key pair.
 func NewIdentity() (*Identity, error) {
@@ -308,7 +302,6 @@ func checkPublic(p Public) error {
 	return nil
 }
 
-
 // VerifyConfirm checks the other side's key confirmation using the key this
 // side uses to receive that direction.
 func VerifyConfirm(keys Keys, tr, tag []byte) bool {
@@ -391,15 +384,7 @@ func splitKeys(okm []byte, initiator bool) Keys {
 	return k
 }
 
-func base32Lower(b []byte) string {
-	s := b32.EncodeToString(b)
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 'A' && s[i] <= 'Z' {
-			s = s[:i] + string(s[i]+32) + s[i+1:]
-		}
-	}
-	return s
-}
+func base32Lower(b []byte) string { return b32Lower.EncodeToString(b) }
 
 // Seal protects one payload with AES-256-GCM and a fresh random 96 bit nonce.
 // The output is version byte, nonce, ciphertext and tag, so it is self

@@ -21,7 +21,7 @@ const roomIDBytes = 16
 // roomIDLen is the length of a base32 encoded room id.
 const roomIDLen = (roomIDBytes*8 + 4) / 5
 
-var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
+var b32Lower = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
 // roomNameMax is the longest accepted room name. Custom names are allowed on
 // purpose (a room can be named after a topic), so a name is only checked for
@@ -50,7 +50,7 @@ func newRoomID() (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return strings.ToLower(b32.EncodeToString(b)), nil
+	return b32Lower.EncodeToString(b), nil
 }
 
 func newPeerID() (string, error) {
