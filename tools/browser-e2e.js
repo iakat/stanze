@@ -365,8 +365,8 @@ async function stats(page) {
     check('stats show the peer, the round trip time and the path',
       tel.text.includes('bob') && /\d+ ms/.test(tel.text) && /(direct|relay)/.test(tel.text), tel.text);
     check('stats show the outbound and inbound bitrate, in video and audio rows',
-      /up [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text) && /down [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text)
-      && /video [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text) && /audio [1-9][\d.]* (kbit|Mbit)\/s/.test(tel.text), tel.text);
+      /up [1-9][\d.]* (kb|Mb)\/s/.test(tel.text) && /down [1-9][\d.]* (kb|Mb)\/s/.test(tel.text)
+      && /video [1-9][\d.]* (kb|Mb)\/s/.test(tel.text) && /audio [1-9][\d.]* (kb|Mb)\/s/.test(tel.text), tel.text);
     check('stats show the own denoise state and device settings',
       /denoise (on|off)/.test(tel.text) && /mic (on|off), \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
     const graphs = await pageA.evaluate(() => {
