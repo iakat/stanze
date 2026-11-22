@@ -3326,7 +3326,10 @@ async function peerStats(peer) {
   if (!report || typeof report.forEach !== 'function') return null;
   if (!(peer.statLast instanceof Map)) peer.statLast = new Map();
 
-  const out = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 }, rtt: null, path: '', jitter: null, loss: null };
+  const out = {
+    up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 },
+    rtt: null, path: '', jitter: null, loss: null, shot: '',
+  };
   let jitterMax = null;   // seconds, the worse of the two inbound streams
   let lost = 0;           // packets lost in this tick, both streams
   let got = 0;            // packets received in this tick, both streams
@@ -3339,6 +3342,11 @@ async function peerStats(peer) {
         out.up[r.kind] += bitrate(peer.statLast, r, 'bytesSent');
       } else if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.kind === 'video')) {
         out.down[r.kind] += bitrate(peer.statLast, r, 'bytesReceived');
+        // The decoder reports the picture it is handed, which is the only
+        // size that matters: the sender may clamp for its own bandwidth.
+        if (r.kind === 'video' && r.frameWidth && r.frameHeight) {
+          out.shot = `${r.frameWidth}x${r.frameHeight}`;
+        }
         // Jitter and loss belong to the side that listens: a packet lost on
         // the way here is a packet gone for this guest, so this report is the
         // only honest place to read them.
@@ -3450,10 +3458,13 @@ const VIDEO_ICON = ['1F3A5', 'video'];
 const AUDIO_ICON = ['1F50A', 'audio'];
 
 /** @returns {(string | boolean | undefined)[][]} */
-function mediaPairs(dir, video, audio) {
+function mediaPairs(dir, video, audio, shot) {
   const total = video + audio;
   if (!(total > 0)) return [];
-  const out = [[MEDIA_DIR[dir], rateText(total)]];
+  // The picture size rides on the inbound line: what arrives is the rate and
+  // the shape of the picture that rate carries.
+  const value = shot ? [rateText(total), shot] : rateText(total);
+  const out = [[MEDIA_DIR[dir], value]];
   if (video > 0 && audio > 0) {
     out.push(['', [[...VIDEO_ICON, rateText(video)], [...AUDIO_ICON, rateText(audio)]], undefined, true]);
   }
@@ -3555,7 +3566,7 @@ function peerPairs(peer, s) {
     if (trip) out.push(['trip ', trip]);
     if (typeof s.loss === 'number') out.push(['loss ', lossText(s.loss), lossMark(s.loss)]);
     out.push(...mediaPairs('out', s.up.video, s.up.audio));
-    out.push(...mediaPairs('in', s.down.video, s.down.audio));
+    out.push(...mediaPairs('in', s.down.video, s.down.audio, s.shot));
   }
   // With one code in the room the code card below names it once, and a line
   // on every guest would say the same thing again.
@@ -3600,7 +3611,7 @@ function statIcon(hex, title) {
 function statValue(value) {
   const span = document.createElement('span');
   span.className = 'sv';
-  const parts = Array.isArray(value) ? value : [[value]];
+  const parts = Array.isArray(value) ? value.map((p) => (Array.isArray(p) ? p : [p])) : [[value]];
   for (const [i, p] of parts.entries()) {
     if (i) span.appendChild(document.createTextNode(', '));
     if (p.length > 1 && p[0]) span.appendChild(statIcon(p[0], p[1]));
