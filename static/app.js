@@ -2587,42 +2587,12 @@ function lookTrack() {
   return state.lookOut && state.lookOut.readyState === 'live' ? state.lookOut : null;
 }
 
-// The drawn track is painted by a clock, not by the display alone. A tab that
-// is not in front is handed no animation frames at all, so an animation frame
-// loop stops dead and the peers keep the last picture for ever. A worker timer
-// runs outside the page's timer budget, so it keeps asking for frames while the
-// tab is behind another one.
-const DRAW_CLOCK_SRC = 'let id = null;\n' +
-  'onmessage = (event) => {\n' +
-  '  if (event.data === "stop") { if (id !== null) clearInterval(id); id = null; return; }\n' +
-  '  if (id !== null) return;\n' +
-  '  id = setInterval(() => postMessage(1), 33);\n' +
-  '};';
-
-// drawClock gives the pipeline its worker, built once per pipeline.
-function drawClock(p) {
-  if (p.clock) return p.clock;
-  const url = URL.createObjectURL(new Blob([DRAW_CLOCK_SRC], { type: 'text/javascript' }));
-  const worker = new Worker(url);
-  p.clockUrl = url;
-  worker.onmessage = () => {
-    // The script has run at least once, so its URL can go.
-    if (p.clockUrl) {
-      URL.revokeObjectURL(p.clockUrl);
-      p.clockUrl = '';
-    }
-    if (state.lookPipe !== p || !document.hidden) return;
-    lookDraw(p);
-  };
-  p.clock = worker;
-  return worker;
-}
-
-// drawClockOn starts or stops the worker ticks. The animation frame loop stays
-// as it is: the display resumes it by itself when the tab comes back.
-function drawClockOn(p, on) {
-  drawClock(p).postMessage(on ? 'go' : 'stop');
-}
+// The drawn track is painted from a worker clock, not from an animation frame
+// loop: a tab that is not in front is handed no animation frames at all, so a
+// display-driven loop stops dead and the peers keep the last picture for ever.
+// The worker timer lives outside the page's timer budget and ticks at the rate
+// the canvas is captured at, in front or behind.
+const DRAW_CLOCK_URL = URL.createObjectURL(new Blob(['setInterval(() => postMessage(1), 33);'], { type: 'text/javascript' }));
 
 // lookStart builds the pipeline once: the camera feeds a video element, every
 // frame is drawn on a canvas with the colour step and the mask, and the canvas
@@ -2658,31 +2628,18 @@ async function lookStart() {
   sample.width = 64;
   sample.height = 48;
   const sctx = sample.getContext('2d', { alpha: false, willReadFrequently: true });
-  const pipe = { src, video, canvas, ctx, sample, sctx, stream, track, raf: 0, clock: null, clockUrl: '', follow: null, anchor: null, frame: 0 };
+  const pipe = { src, video, canvas, ctx, sample, sctx, stream, track, clock: new Worker(DRAW_CLOCK_URL), anchor: null, frame: 0 };
   state.lookPipe = pipe;
-  // The canvas track is captured at 30 fps, so a 60 or 120 Hz display needs no
-  // more than every second or fourth frame drawn; the rest only burn the filter.
-  let last = 0;
-  const tick = (now) => {
-    if (state.lookPipe !== pipe) return;
-    if (!(now - last < 30)) {
-      last = now;
-      lookDraw(pipe);
-    }
-    pipe.raf = requestAnimationFrame(tick);
+  pipe.clock.onmessage = () => {
+    if (state.lookPipe === pipe) lookDraw(pipe);
   };
-  pipe.raf = requestAnimationFrame(tick);
-  // The tab can be behind another one from the start, and it moves both ways.
-  pipe.follow = () => {
-    if (state.lookPipe !== pipe) return;
-    drawClockOn(pipe, document.hidden);
-    // A hidden tab can leave the source element paused, and the worker clock
-    // draws from it, so it is asked to play on the way in and on the way out.
+  // A hidden tab can leave the source element paused, and the clock draws from
+  // it, so it is asked to play on every move of the tab.
+  pipe.wake = () => {
     const playing = video.play();
     if (playing && playing.catch) playing.catch(() => {});
   };
-  document.addEventListener('visibilitychange', pipe.follow);
-  pipe.follow();
+  document.addEventListener('visibilitychange', pipe.wake);
   state.lookOut = track;
   await lookPublish(track);
 }
@@ -2840,17 +2797,8 @@ function lookStop(restore = true) {
   state.lookPipe = null;
   state.lookOut = null;
   if (p) {
-    cancelAnimationFrame(p.raf);
-    if (p.follow) document.removeEventListener('visibilitychange', p.follow);
-    if (p.clock) {
-      p.clock.postMessage('stop');
-      p.clock.terminate();
-      p.clock = null;
-    }
-    if (p.clockUrl) {
-      URL.revokeObjectURL(p.clockUrl);
-      p.clockUrl = '';
-    }
+    if (p.wake) document.removeEventListener('visibilitychange', p.wake);
+    if (p.clock) p.clock.terminate();
     try { p.video.pause(); } catch { /* already paused */ }
     p.video.srcObject = null;
     if (p.video.parentNode) p.video.parentNode.removeChild(p.video);
@@ -6000,10 +5948,10 @@ const omni = {
   recs: new Map(), // peer id -> { proc, src, sink }
 };
 
-// asrStats is what the engine last said about itself: the start, and the tail of
-// the phrases it decoded with the time each one took. A browser test reads it
-// through window.e2eApp; the page itself never does.
-const asrStats = { engine: '', ready: false, initMs: null, segments: [] };
+// asrStats is what the engine last said about itself: the start, the tail of
+// the phrases it decoded with the time each one took, and what the tap saw. A
+// browser test reads it through window.e2eApp; the page itself never does.
+const asrStats = { engine: '', ready: false, initMs: null, segments: [], blocks: 0, peak: 0, decoded: 0 };
 
 const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB`;
 
@@ -6581,6 +6529,9 @@ function omniOnWorker(msg) {
       omniSync();
       omni.timer = setInterval(omniSync, 2000);
       return;
+    case 'decoded':
+      asrStats.decoded++;
+      return;
     case 'line': {
       const ms = Number(msg.ms);
       const sec = Number(msg.sec);
@@ -6658,7 +6609,16 @@ function omniTap(peer) {
   const proc = ctx.createScriptProcessor(4096, 1, 1);
   proc.onaudioprocess = (event) => {
     if (!omni.on || omni.worker !== worker) return;
-    const samples = omniDown(event.inputBuffer.getChannelData(0), ctx.sampleRate);
+    const block = event.inputBuffer.getChannelData(0);
+    // What the tap saw, so a test can tell a silent source from a deaf engine.
+    asrStats.blocks++;
+    let top = 0;
+    for (let i = 0; i < block.length; i++) {
+      const v = block[i] < 0 ? -block[i] : block[i];
+      if (v > top) top = v;
+    }
+    if (top > asrStats.peak) asrStats.peak = top;
+    const samples = omniDown(block, ctx.sampleRate);
     if (!samples.length) return;
     try { worker.postMessage({ cmd: 'audio', id, samples }, [samples.buffer]); } catch { /* engine gone */ }
   };
@@ -7016,6 +6976,9 @@ function omniWorker(cfg) {
       return;
     }
     decoding = false;
+    // Every phrase decoded goes to the page, empty or not, so its counters show
+    // a deaf engine apart from a silent room.
+    post({ ev: 'decoded', ms: Math.round(performance.now() - t0), sec: job.samples.length / RATE, len: text.length });
     if (text) post({ ev: 'line', id: job.id, text, ms: Math.round(performance.now() - t0), sec: job.samples.length / RATE });
     // One phrase per turn of the event loop, so queued audio is read first.
     setTimeout(pump, 0);
