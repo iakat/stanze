@@ -3282,7 +3282,7 @@ function clearStatsPanel() {
   if (body) body.replaceChildren();
 }
 
-// bitrate turns two samples of one byte counter into kb/s. The first sample
+// bitrate turns two samples of one byte counter into kbps. The first sample
 // of a counter yields 0, which is honest: nothing was measured yet.
 function bitrate(last, report, field) {
   const bytes = report[field] || 0;
@@ -3403,8 +3403,8 @@ async function peerStats(peer) {
 // of zero returns an empty string, so a line with nothing to say is not drawn.
 function rateText(kbit) {
   if (!(kbit > 0)) return '';
-  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + ' Mb/s';
-  return Math.round(kbit) + ' kb/s';
+  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + ' Mbps';
+  return Math.round(kbit) + ' kbps';
 }
 
 // msText renders one round trip time in milliseconds.
@@ -3685,11 +3685,11 @@ function drawStatsGraphs() {
   const secs = `${hist.length} s`;
 
   // Downlink: the area says "steady" or "collapsing" at a glance. The floor of
-  // 100 kb/s keeps a quiet call on the floor of the box, not off it.
+  // 100 kbps keeps a quiet call on the floor of the box, not off it.
   const down = series('down');
   statsPlot($('stats-graph-down'), down, peak(down, 100), true, navy);
   const downMax = Math.max(0, ...values(down));
-  statsNote('stats-note-down', `down ${rateText(now(down)) || '0 kb/s'}, up to ${rateText(downMax) || '0 kb/s'} in ${secs}`);
+  statsNote('stats-note-down', `down ${rateText(now(down)) || '0 kbps'}, up to ${rateText(downMax) || '0 kbps'} in ${secs}`);
 
   // Round trip: a line, broken where a sample has no value, so a gap is a gap.
   const rtt = series('rtt');
