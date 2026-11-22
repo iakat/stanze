@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122z">
+<link rel="stylesheet" href="/style.css?v=20261122aa">
 </head>
 <body>
 
@@ -87,7 +87,6 @@
     <span class="tbbuttons">
       <span id="call-timer" class="timer" aria-label="call length"></span>
       <span id="peer-count" class="peercount"></span>
-      <button id="copy-btn" type="button">copy link</button>
     </span>
   </div>
 
@@ -135,6 +134,39 @@
         <p id="asr-note" class="menu-note" hidden></p>
       </div>
     </div>
+    <div class="menubar-slot">
+      <button id="menu-devices-btn" class="menubar-item" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-devices">input devices</button>
+      <div id="menu-devices" class="menubar-menu" role="menu" aria-labelledby="menu-devices-btn" hidden>
+        <div class="menu-subwrap">
+          <button class="menu-item menu-sub" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dev-mic-list">
+            <span class="menu-tick" aria-hidden="true"></span><span class="menu-text">microphone</span><span class="menu-arrow" aria-hidden="true">▸</span>
+          </button>
+          <div id="dev-mic-list" class="menu-sub-list" role="menu" aria-label="microphone" hidden></div>
+        </div>
+        <div class="menu-subwrap">
+          <button class="menu-item menu-sub" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dev-cam-list">
+            <span class="menu-tick" aria-hidden="true"></span><span class="menu-text">camera</span><span class="menu-arrow" aria-hidden="true">▸</span>
+          </button>
+          <div id="dev-cam-list" class="menu-sub-list" role="menu" aria-label="camera" hidden></div>
+        </div>
+        <div class="menu-sep" role="separator"></div>
+        <div class="menu-subwrap">
+          <button class="menu-item menu-sub" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dev-camq-list">
+            <span class="menu-tick" aria-hidden="true"></span><span class="menu-text">camera quality</span><span class="menu-arrow" aria-hidden="true">▸</span>
+          </button>
+          <div id="dev-camq-list" class="menu-sub-list" role="menu" aria-label="camera quality" hidden></div>
+        </div>
+        <div class="menu-subwrap">
+          <button class="menu-item menu-sub" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="dev-scrq-list">
+            <span class="menu-tick" aria-hidden="true"></span><span class="menu-text">screen quality</span><span class="menu-arrow" aria-hidden="true">▸</span>
+          </button>
+          <div id="dev-scrq-list" class="menu-sub-list" role="menu" aria-label="screen quality" hidden></div>
+        </div>
+      </div>
+    </div>
+    <div class="menubar-slot menubar-right">
+      <button id="copy-btn" class="menubar-item" type="button">copy link</button>
+    </div>
   </div>
 
   <div class="stage-body">
@@ -145,21 +177,6 @@
         <button id="deaf-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F507.svg" alt="" width="22" height="22"><span>deafen</span></button>
         <button id="share-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F5A5.svg" alt="" width="22" height="22"><span>share screen</span></button>
         <button id="stats-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F4C9.svg" alt="" width="22" height="22"><span>stats</span></button>
-        <label class="pick" id="cam-pick" hidden>camera
-          <select id="cam-live"><option value="">system camera</option></select>
-        </label>
-        <label class="pick" id="mic-pick" hidden>mic
-          <select id="mic-live"><option value="">system microphone</option></select>
-        </label>
-        <label class="pick">quality
-          <select id="quality">
-            <option value="640x360@30">360p 30</option>
-            <option value="1280x720@30" selected>720p 30</option>
-            <option value="1920x1080@30">1080p 30</option>
-            <option value="1920x1080@60">1080p 60</option>
-            <option value="2560x1440@30">1440p 30</option>
-          </select>
-        </label>
         <label class="pick perf-pick">performance
           <input id="perf-live" type="range" min="0" max="3" step="1" value="0" aria-label="performance: picture quality against bandwidth and compute">
           <span id="perf-live-text" class="perf-name"></span>
@@ -172,6 +189,7 @@
       <section id="grid" class="grid">
         <div id="stage-main" class="stage-main"></div>
         <div id="self-pip" class="self-pip" hidden></div>
+        <div id="guest-pip" class="guest-pip" hidden></div>
       </section>
 
       <aside id="stats-panel" class="stats" hidden aria-label="call statistics">
@@ -216,6 +234,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122z"></script>
+<script src="/app.js?v=20261122aa"></script>
 </body>
 </html>

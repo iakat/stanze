@@ -48,6 +48,7 @@ const state = {
   devMics: [],        // last enumerateDevices() audio inputs
   path: 'auto',
   quality: '1280x720@30',
+  shareQuality: '1920x1080@30', // the screen has its own quality step
   perf: 0,            // performance step, 0 = full quality (the default)
   sounds: true,       // the four cues and the lost connection chime
   waitingRoom: false, // the room switch an admin sets
@@ -130,6 +131,7 @@ const state = {
  *   'lobby-error': HTMLElement, stage: HTMLElement, 'room-label': HTMLElement,
  *   'peer-count': HTMLElement, 'copy-btn': HTMLButtonElement, grid: HTMLElement,
  *   'stage-main': HTMLElement, 'stage-rail': HTMLElement, 'self-pip': HTMLElement,
+ *   'guest-pip': HTMLElement,
  *   'pin-count': HTMLElement,
  *   'stats-panel': HTMLElement, 'stats-graph-box': HTMLElement,
  *   'stats-graph-down': HTMLCanvasElement, 'stats-graph-rtt': HTMLCanvasElement,
@@ -142,13 +144,14 @@ const state = {
    'share-btn': HTMLButtonElement,
  *   'stats-btn': HTMLButtonElement, 'stats-close': HTMLButtonElement,
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
- *   quality: HTMLSelectElement, mirror: HTMLInputElement, pip: HTMLInputElement,
+ *   mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'voice-tiles': HTMLInputElement,
  *   menubar: HTMLElement, 'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
- *   'cam-live': HTMLSelectElement, 'mic-live': HTMLSelectElement,
- *   'cam-pick': HTMLElement, 'mic-pick': HTMLElement,
+ *   'menu-devices-btn': HTMLButtonElement, 'menu-devices': HTMLElement,
+ *   'dev-mic-list': HTMLElement, 'dev-cam-list': HTMLElement,
+ *   'dev-camq-list': HTMLElement, 'dev-scrq-list': HTMLElement,
  *   perf: HTMLInputElement, sounds: HTMLInputElement, 'waiting-room': HTMLInputElement,
  *   'waiting-banner': HTMLElement, 'perf-live': HTMLInputElement,
  *   'perf-text': HTMLElement, 'perf-live-text': HTMLElement,
@@ -274,6 +277,7 @@ function joinWords(list) {
 const MENUS = [
   ['menu-settings-btn', 'menu-settings'],
   ['menu-asr-btn', 'menu-asr'],
+  ['menu-devices-btn', 'menu-devices'],
 ];
 
 // menuSet opens one panel, closes the others, and moves the focus to its first
@@ -287,9 +291,11 @@ function menuSet(open, which) {
     const on = open && (!which || which === listId);
     const was = !list.hidden;
     list.hidden = !on;
+    // A closed panel takes its nested lists with it.
+    if (!on) closeSubmenus(list);
     btn.setAttribute('aria-expanded', String(on));
     if (on && !was) {
-      const first = /** @type {HTMLElement | null} */ (list.querySelector('input[type="checkbox"], select'));
+      const first = /** @type {HTMLElement | null} */ (list.querySelector('input[type="checkbox"], select, .menu-choice, .menu-sub'));
       if (first) first.focus();
     }
   }
@@ -307,6 +313,58 @@ function menuClose() {
   return any;
 }
 
+// closeSubmenus puts every nested list of one panel back to closed.
+function closeSubmenus(panel) {
+  if (!panel) return;
+  for (const sub of Array.from(panel.querySelectorAll('.menu-sub-list'))) {
+    if (sub instanceof HTMLElement) sub.hidden = true;
+  }
+  for (const btn of Array.from(panel.querySelectorAll('.menu-sub'))) btn.setAttribute('aria-expanded', 'false');
+}
+
+// wireSubmenus gives every nested row its list: a hover opens it and closes
+// its siblings, a click toggles it, the right arrow walks in and the left
+// arrow walks back out, the way a Windows menu of the era behaved.
+function wireSubmenus() {
+  for (const wrap of Array.from(document.querySelectorAll('.menu-subwrap'))) {
+    const btn = /** @type {HTMLElement | null} */ (wrap.querySelector('.menu-sub'));
+    const list = /** @type {HTMLElement | null} */ (wrap.querySelector('.menu-sub-list'));
+    if (!btn || !list) continue;
+    /** @type {(on: boolean) => void} */
+    const openSub = (on) => {
+      list.hidden = !on;
+      btn.setAttribute('aria-expanded', String(on));
+      if (!on) return;
+      for (const other of Array.from(document.querySelectorAll('.menu-subwrap'))) {
+        if (other === wrap) continue;
+        const otherList = /** @type {HTMLElement | null} */ (other.querySelector('.menu-sub-list'));
+        const otherBtn = other.querySelector('.menu-sub');
+        if (otherList) otherList.hidden = true;
+        if (otherBtn) otherBtn.setAttribute('aria-expanded', 'false');
+      }
+    };
+    wrap.addEventListener('mouseenter', () => openSub(true));
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openSub(!list.hidden);
+    });
+    btn.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowRight' && event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      openSub(true);
+      const first = /** @type {HTMLElement | null} */ (list.querySelector('.menu-choice'));
+      if (first) first.focus();
+    });
+    list.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      openSub(false);
+      btn.focus();
+    });
+  }
+}
+
 // wireMenuBar gives each entry its behaviour: a click opens its panel and
 // closes the other one, a click inside the panel keeps it open so several
 // switches can be set at once, a click anywhere else or Esc closes it, and the
@@ -322,7 +380,7 @@ function wireMenuBar() {
     });
     list.addEventListener('click', (event) => event.stopPropagation());
     list.addEventListener('keydown', (event) => {
-      const rows = Array.from(list.querySelectorAll('input[type="checkbox"], select'))
+      const rows = Array.from(list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub'))
         .filter((el) => !el.hidden);
       const at = rows.indexOf(/** @type {HTMLElement} */ (document.activeElement));
       if (event.key === 'Escape') {
@@ -539,6 +597,37 @@ function spotlightTile() {
   return null;
 }
 
+// ---------------------------------------------------------------- corners
+
+// A stage with two pictures puts one guest small in a corner. A corner is two
+// letters, the vertical side first and then the horizontal one, and the own
+// preview gives way to the guest by taking the opposite corner while it is on.
+const CORNERS = ['tl', 'tr', 'bl', 'br'];
+const OPPOSITE_CORNER = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
+const cornerCall = new Map();   // peer id -> corner, this call only
+let cornerDropAt = 0;           // when a drag ended, so its click is not a zoom
+
+// peerOfTile is the peer record of one tile, or null for the own tile.
+function peerOfTile(tile) {
+  const id = tile && tile.dataset.peer;
+  return id && state.peers ? state.peers.get(id) || null : null;
+}
+
+// storedCorner reads the kept place of one guest. A guest that proved its key
+// keeps it on the disk under the fingerprint, the same key as its volume; a
+// guest without a key keeps it for this call only. The default is the bottom
+// right corner, where the own preview also sits.
+function storedCorner(peer) {
+  const raw = peer && peer.fp ? load(`corner.fp.${peer.fp}`) : (peer ? cornerCall.get(peer.id) || '' : '');
+  return CORNERS.includes(raw) ? raw : 'br';
+}
+
+function saveCorner(peer, corner) {
+  if (!peer || !CORNERS.includes(corner)) return;
+  cornerCall.set(peer.id, corner);
+  if (peer.fp) store(`corner.fp.${peer.fp}`, corner);
+}
+
 // layoutStage picks the tiles that hold the large area and keeps the list of
 // members in step. A tile keeps its node, so its video element keeps its stream
 // and its sliders keep their listener. Without a spotlight, the tiles with a
@@ -553,6 +642,7 @@ function layoutStage() {
   const main = $('stage-main');
   const rail = $('stage-rail');
   const pipBox = $('self-pip');
+  const cornerBox = $('guest-pip');
   if (!main || !rail) return;
   const spot = spotlightTile();
   if (state.spotlight && !spot) state.spotlight = '';
@@ -563,12 +653,14 @@ function layoutStage() {
   if (pipBox) pipBox.hidden = !pip;
   if (self && pip && self.parentElement !== pipBox) pipBox.appendChild(self);
   if (self && !pip && self.parentElement !== main) main.appendChild(self);
-  let shown = 0;
+  // Two pictures and no spotlight: the later guest sits small in a corner and
+  // the other one keeps the whole frame. The small tile keeps its node too.
+  const bigs = [];
   for (const tile of stageTiles()) {
     const inPip = pip && tile === self;
     const voice = state.voiceTiles && !tile.dataset.waiting;
     const big = !inPip && (spot ? tile === spot : (tileHasPicture(tile) || voice));
-    if (big) shown++;
+    if (big) bigs.push(tile);
     tile.hidden = inPip ? false : !big;
     const on = big && !!spot;
     tile.classList.toggle('spot', on);
@@ -581,9 +673,101 @@ function layoutStage() {
       zoom.title = on ? 'back to the grid' : 'enlarge';
     }
   }
-  const alone = shown === 1 ? 'yes' : 'no';
+  const small = !spot && !pip && bigs.length === 2 ? bigs[1] : null;
+  if (cornerBox) {
+    cornerBox.hidden = !small;
+    for (const tile of stageTiles()) {
+      if (tile !== small && tile.parentElement === cornerBox) main.appendChild(tile);
+    }
+    if (small && small.parentElement !== cornerBox) cornerBox.appendChild(small);
+    if (small) {
+      const corner = storedCorner(peerOfTile(small));
+      cornerBox.dataset.corner = corner;
+      // The own preview gives way to the guest: it takes the opposite corner.
+      if (pip && pipBox) pipBox.dataset.corner = OPPOSITE_CORNER[corner];
+    } else if (pipBox) {
+      pipBox.removeAttribute('data-corner');
+    }
+  }
+  const alone = bigs.length - (small ? 1 : 0) === 1 ? 'yes' : 'no';
   if (main.dataset.alone !== alone) main.dataset.alone = alone;
-  main.hidden = shown === 0;
+  main.hidden = bigs.length - (small ? 1 : 0) === 0;
+}
+
+// wireCornerDrag lets the small guest tile of a two person stage follow the
+// pointer and snap to the nearest of the four corners when it is let go. A
+// pointer that stays put does not start a drag, so a click on the tile keeps
+// its meaning and enlarges that guest.
+function wireCornerDrag() {
+  const box = $('guest-pip');
+  const grid = $('grid');
+  if (!box || !grid) return;
+  let drag = /** @type {any} */ (null);
+  box.addEventListener('pointerdown', (event) => {
+    if (!event.isPrimary) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    const target = /** @type {Element} */ (event.target);
+    if (target.closest('.vol, .vol-range, .vol-num, .dots, .menu, .sas, .pin, .admit, .zoom')) return;
+    const rect = box.getBoundingClientRect();
+    const frame = grid.getBoundingClientRect();
+    if (!frame.width || !frame.height) return;
+    drag = {
+      id: event.pointerId,
+      grabX: event.clientX - rect.left,
+      grabY: event.clientY - rect.top,
+      startX: event.clientX,
+      startY: event.clientY,
+      w: rect.width,
+      h: rect.height,
+      frame,
+      moved: false,
+    };
+    try { box.setPointerCapture(event.pointerId); } catch { /* no capture */ }
+  });
+  box.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (!drag.moved) {
+      if (Math.abs(event.clientX - drag.startX) < 4 && Math.abs(event.clientY - drag.startY) < 4) return;
+      drag.moved = true;
+      box.classList.add('dragging');
+      box.style.width = `${drag.w}px`;
+      box.style.height = `${drag.h}px`;
+      box.style.right = 'auto';
+      box.style.bottom = 'auto';
+    }
+    const frame = drag.frame;
+    const x = Math.min(Math.max(event.clientX - drag.grabX - frame.left, 0), Math.max(0, frame.width - drag.w));
+    const y = Math.min(Math.max(event.clientY - drag.grabY - frame.top, 0), Math.max(0, frame.height - drag.h));
+    box.style.left = `${x}px`;
+    box.style.top = `${y}px`;
+  });
+  const end = (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const moved = drag.moved;
+    const frame = drag.frame;
+    const rect = box.getBoundingClientRect();
+    drag = null;
+    try { box.releasePointerCapture(event.pointerId); } catch { /* already gone */ }
+    box.classList.remove('dragging');
+    box.style.width = '';
+    box.style.height = '';
+    box.style.left = '';
+    box.style.top = '';
+    box.style.right = '';
+    box.style.bottom = '';
+    if (!moved) return;
+    // The nearest corner wins: the side of each middle line that holds the
+    // centre of the tile.
+    const right = rect.left + rect.width / 2 > frame.left + frame.width / 2;
+    const bottom = rect.top + rect.height / 2 > frame.top + frame.height / 2;
+    const corner = `${bottom ? 'b' : 't'}${right ? 'r' : 'l'}`;
+    saveCorner(peerOfTile(box.querySelector('.tile')), corner);
+    box.dataset.corner = corner;
+    if (state.selfPip && $('self-pip')) $('self-pip').dataset.corner = OPPOSITE_CORNER[corner];
+    cornerDropAt = Date.now();
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
 }
 
 // setSpotlight puts one guest alone in the large area, or ends the spotlight
@@ -1005,9 +1189,10 @@ function camVideo() {
 }
 
 // shareVideo is the screen share request. A shared screen is read as text, so
-// it keeps the quality step and never takes the performance step.
+// it has a step of its own and never takes the performance step. The camera
+// step does not touch it.
 function shareVideo() {
-  return videoFor(qualityNow(), PERF[0]);
+  return videoFor(QUALITY[state.shareQuality] || QUALITY['1920x1080@30'], PERF[0]);
 }
 
 // perfText says what the chosen step sends, in words and in numbers.
@@ -1023,7 +1208,9 @@ function perfText() {
 function paintPerf() {
   for (const id of ['perf', 'perf-live']) {
     const el = /** @type {HTMLInputElement | null} */ (document.getElementById(id));
-    if (el) el.value = String(state.perf);
+    // The slider runs from the minimum on the left to the full quality on the
+    // right, so the stored step is turned round for it.
+    if (el) el.value = String(PERF.length - 1 - state.perf);
   }
   for (const id of ['perf-text', 'perf-live-text']) {
     const el = document.getElementById(id);
@@ -1127,7 +1314,7 @@ async function applyQuality() {
 const DEVICE_NOUN = { video: 'camera', audio: 'microphone' };
 
 function devicePickers(kind) {
-  return kind === 'video' ? [$('cam-select'), $('cam-live')] : [$('mic-select'), $('mic-live')];
+  return kind === 'video' ? [$('cam-select')] : [$('mic-select')];
 }
 
 function deviceList(kind) {
@@ -1198,8 +1385,7 @@ function paintDevices() {
       say(`the ${DEVICE_NOUN[kind]} you chose is gone; the system ${DEVICE_NOUN[kind]} will be used`);
     }
   }
-  $('cam-pick').hidden = deviceList('video').filter((d) => d.deviceId).length < 2;
-  $('mic-pick').hidden = deviceList('audio').filter((d) => d.deviceId).length < 2;
+  paintDeviceMenu();
 }
 
 // refreshDevices re-reads the device list and repaints the pickers. It runs at
@@ -1216,6 +1402,85 @@ async function refreshDevices() {
   state.devCams = all.filter((device) => device.kind === 'videoinput');
   state.devMics = all.filter((device) => device.kind === 'audioinput');
   paintDevices();
+}
+
+// The words of the quality steps, used by both quality lists.
+const QUALITY_LABEL = {
+  '640x360@30': '360p 30',
+  '1280x720@30': '720p 30',
+  '1920x1080@30': '1080p 30',
+  '1920x1080@60': '1080p 60',
+  '2560x1440@30': '1440p 30',
+};
+
+// deviceRows lists the system device, every enumerated device and, before the
+// first permission, the stored id as one extra row, the way the odd select did.
+function deviceRows(kind) {
+  const noun = DEVICE_NOUN[kind];
+  const rows = [{ value: '', label: `system ${noun}` }];
+  const seen = new Set();
+  let count = 0;
+  for (const device of deviceList(kind)) {
+    if (!device.deviceId || seen.has(device.deviceId)) continue;
+    seen.add(device.deviceId);
+    count++;
+    rows.push({ value: device.deviceId, label: device.label || `${noun} ${count}` });
+  }
+  const wanted = chosenDevice(kind);
+  if (wanted && !seen.has(wanted)) rows.push({ value: wanted, label: `${noun} (last used)` });
+  return rows;
+}
+
+// qualityRows lists every quality step with its words.
+function qualityRows() {
+  return Object.keys(QUALITY).map((value) => ({ value, label: QUALITY_LABEL[value] || value }));
+}
+
+// paintMenuChoice rewrites one submenu: a button row per choice, a tick on the
+// choice in force, and one callback per row.
+function paintMenuChoice(list, rows, current, pick) {
+  if (!list) return;
+  const frag = document.createDocumentFragment();
+  for (const row of rows) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'menu-item menu-choice';
+    button.setAttribute('aria-pressed', String(row.value === current));
+    const tick = document.createElement('span');
+    tick.className = 'menu-tick';
+    tick.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'menu-text';
+    text.textContent = row.label;
+    button.append(tick, text);
+    button.addEventListener('click', () => pick(row.value));
+    frag.appendChild(button);
+  }
+  list.replaceChildren(frag);
+}
+
+// paintDeviceMenu rebuilds the four lists: microphone, camera, camera quality
+// and screen quality. The tick marks the choice in force.
+function paintDeviceMenu() {
+  paintMenuChoice($('dev-mic-list'), deviceRows('audio'), state.micId, (value) => {
+    onDevicePicked('audio', value);
+    paintDeviceMenu();
+  });
+  paintMenuChoice($('dev-cam-list'), deviceRows('video'), state.camId, (value) => {
+    onDevicePicked('video', value);
+    paintDeviceMenu();
+  });
+  paintMenuChoice($('dev-camq-list'), qualityRows(), state.quality, (value) => {
+    state.quality = value;
+    store('quality', value);
+    paintDeviceMenu();
+    applyQuality();
+  });
+  paintMenuChoice($('dev-scrq-list'), qualityRows(), state.shareQuality, (value) => {
+    state.shareQuality = value;
+    store('sharequality', value);
+    paintDeviceMenu();
+  });
 }
 
 // constraintsFor builds one request: the chosen device when there is one, the
@@ -2981,7 +3246,6 @@ async function enterRoom(room, pass) {
   state.pass = pass;
   state.name = cleanSealedName($('name').value) || 'guest';
   state.path = $('path').value;
-  state.quality = $('quality').value;
   state.noiseWanted = $('noise').checked;
   state.mirror = true;
   state.leaving = false;
@@ -7229,10 +7493,11 @@ function init() {
   // The quality step comes back like the devices, and the picker shows it, so
   // the first camera request is already the chosen size.
   const storedQuality = load('quality');
-  if (QUALITY[storedQuality]) {
-    state.quality = storedQuality;
-    $('quality').value = storedQuality;
-  }
+  if (QUALITY[storedQuality]) state.quality = storedQuality;
+  // The screen has its own step, kept the same way.
+  const storedShare = load('sharequality');
+  if (QUALITY[storedShare]) state.shareQuality = storedShare;
+  paintDeviceMenu();
   // The performance step comes back too. No stored value is full quality.
   const storedPerf = parseInt(load('perf'), 10);
   state.perf = storedPerf >= 0 && storedPerf < PERF.length ? storedPerf : 0;
@@ -7343,13 +7608,6 @@ function init() {
     layoutStage();
   });
 
-  $('quality').addEventListener('change', async () => {
-    state.quality = $('quality').value;
-    store('quality', state.quality);
-    paintPerf();
-    await applyQuality();
-  });
-
   initLobbyWindow();
   initAsr();
   lookInit();
@@ -7361,7 +7619,8 @@ function init() {
     if (!el) continue;
     el.addEventListener('input', async () => {
       const n = parseInt(/** @type {HTMLInputElement} */ (el).value, 10);
-      state.perf = n >= 0 && n < PERF.length ? n : 0;
+      // The slider is minimum first; the stored step counts down.
+      state.perf = n >= 0 && n < PERF.length ? PERF.length - 1 - n : 0;
       store('perf', state.perf);
       paintPerf();
       await applyQuality();
@@ -7408,6 +7667,8 @@ function init() {
   }
 
   wireMenuBar();
+  wireCornerDrag();
+  wireSubmenus();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
 
@@ -7420,6 +7681,8 @@ function init() {
   // button, enlarges it. The controls close on their own after a few seconds.
   const touch = window.matchMedia ? window.matchMedia('(hover: none)') : { matches: false };
   $('grid').addEventListener('click', (event) => {
+    // The click that ends a drag of the small tile is not a zoom.
+    if (Date.now() - cornerDropAt < 300) return;
     const target = /** @type {Element} */ (event.target);
     // A click on the small preview puts the own picture back in the grid.
     if (target.closest('#self-pip')) {
