@@ -773,18 +773,28 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .stats-body > .srow:first-child { border-top: 0; padding-top: 0; }
 .sname { font-weight: bold; color: var(--navy); margin-bottom: 1px; }
 .sline {
-  display: flex;
+  display: grid;
+  grid-template-columns: 54px repeat(4, minmax(0, 1fr));
   align-items: baseline;
-  gap: 8px;
+  column-gap: 8px;
   color: var(--ink);
   line-height: 1.55;
 }
-.sline .sk { flex: none; min-width: 54px; color: var(--soft); }
-.sline .sv {
-  margin-left: auto;
+.sline .sk { min-width: 0; color: var(--soft); }
+/* The cells of one row are the columns of the table: one cell per number, so
+ * the same number sits on the same column in every row. */
+.sline .sv { display: contents; }
+.sline .cell {
   text-align: right;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
+}
+/* A thin rule between two cells is the line between two columns, and an empty
+ * cell leaves no rule behind. */
+.sline .cell:not(:first-child):not(:empty)::before {
+  content: '|';
+  margin-right: 6px;
+  color: #00000033;
 }
 .sline.good { color: var(--green); }
 .sline.bad { color: var(--red); }
@@ -804,11 +814,17 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .sline.sub:not(.good):not(.bad) .sv { color: var(--soft); }
 /* A key is read letter by letter, so its value is monospace and right aligned
  * like every other value on the panel. */
-.sline.mono .sv {
+.sline.mono .cell {
+  grid-column: 2 / -1;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.94em;
   letter-spacing: 0.01em;
 }
+/* A row that carries one value takes the whole width, so a sentence is not
+ * squeezed into the first column of the table. */
+.sline .cell:only-child { grid-column: 2 / -1; }
+/* A quiet row under a row keeps its text on the left of the value area. */
+.sline.sub .cell { grid-column: 2 / -1; text-align: left; }
 
 .controls {
   display: flex;

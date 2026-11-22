@@ -364,7 +364,8 @@ async function stats(page) {
     });
     check('the stats panel opens and polls once a second', tel.open && tel.timer, tel.text);
     check('stats show the peer, the round trip time and the path',
-      tel.text.includes('bob') && /\d+ ms/.test(tel.text) && /(direct|relay)/.test(tel.text), tel.text);
+      tel.text.includes('bob') && /\d+ ms/.test(tel.text)
+      && tel.icons.some((t) => /^(direct|relay)/.test(t)), JSON.stringify(tel.icons));
     check('stats show the outbound and inbound bitrate with a drawing for each kind',
       /[1-9][\d.]* (kbps|Mbps)/.test(tel.text)
       && tel.icons.some((t) => /^out/.test(t)) && tel.icons.some((t) => /^in,/.test(t))

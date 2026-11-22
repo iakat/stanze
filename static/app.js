@@ -3443,45 +3443,41 @@ function lossMark(pct) {
   return pct >= 2 ? false : undefined;
 }
 
-// mediaPairs is one direction: the two kinds added on its own line, then the
-// two parts together on the indented line under it. Three numbers on one line
-// is one too many, and two sub lines spend a line on a word. The direction and
-// the two kinds are OpenMoji drawings with the word in the title, so the panel
-// reads as pictures and a hover still says what each one is. The parts are
-// shown only when both are live, so a call with sound and no picture stays
-// short.
-const MEDIA_DIR = {
-  out: ['2B06', 'out, the media this browser sends'],
-  in: ['2B07', 'in, the media this browser receives'],
-};
+// The drawings of the panel. Each stands where a word would and carries the
+// word in its title, so a hover names it.
 const VIDEO_ICON = ['1F3A5', 'video'];
 const AUDIO_ICON = ['1F50A', 'audio'];
+const PICTURE_ICON = ['1F5BC', 'picture size'];
+const PING_ICON = ['1F3D3', 'round trip'];
+const JITTER_ICON = ['1F30A', 'jitter, how far apart the packets arrive'];
+const LOSS_ICON = ['1F4C9', 'packet loss'];
+const DIRECT_ICON = ['1F517', 'direct, the two browsers talk to each other'];
+const RELAY_ICON = ['1F4E1', 'relay, the media goes through the server'];
+const UP_ICON = ['2B06', 'out, what this browser sends'];
+const DOWN_ICON = ['2B07', 'in, what this browser receives'];
 
-/** @returns {(string | boolean | undefined)[][]} */
-function mediaPairs(dir, video, audio, shot) {
-  const total = video + audio;
-  if (!(total > 0)) return [];
-  // The picture size rides on the inbound line: what arrives is the rate and
-  // the shape of the picture that rate carries.
-  const value = shot ? [rateText(total), shot] : rateText(total);
-  const out = [[MEDIA_DIR[dir], value]];
-  if (video > 0 && audio > 0) {
-    out.push(['', [[...VIDEO_ICON, rateText(video)], [...AUDIO_ICON, rateText(audio)]], undefined, true]);
-  }
-  return out;
+// pathIcon is the drawing of one route: a link when the two browsers talk to
+// each other, a satellite when the media has to pass the server.
+function pathIcon(path) {
+  return path === 'direct' ? DIRECT_ICON : RELAY_ICON;
 }
 
-// tripText is the round trip and the jitter on one line: they describe the
-// same path, and a caller reads them together or not at all.
-function tripText(rtts, jitters) {
-  const parts = [];
-  if (rtts.length) {
-    const lo = Math.round(Math.min(...rtts));
-    const hi = Math.round(Math.max(...rtts));
-    parts.push(lo === hi ? msText(lo) : `${lo} to ${hi} ms`);
-  }
-  if (jitters.length) parts.push('jitter ' + jitterText(Math.max(...jitters)));
-  return parts.join(', ');
+// rateCell is one bitrate with the arrow of its direction. Both directions sit
+// on the same row, so the two rates of the video row and of the audio row line
+// up under each other.
+function rateCell(dir, kbit) {
+  return [...(dir === 'up' ? UP_ICON : DOWN_ICON), rateText(kbit)];
+}
+
+// tripCells are the three numbers of one path: how long a packet takes, how
+// far apart the packets arrive, and how many of them never arrive. A number
+// that is not there yet leaves its cell empty, and the column stays.
+function tripCells(rtt, jitter, loss) {
+  return [
+    [...PING_ICON, typeof rtt === 'number' ? msText(rtt) : ''],
+    [...JITTER_ICON, typeof jitter === 'number' ? jitterText(jitter) : ''],
+    [...LOSS_ICON, typeof loss === 'number' ? lossText(loss) : '', lossMark(loss)],
+  ];
 }
 
 // pathText is the word a guest reads for one route: the report says p2p for a
@@ -3501,92 +3497,103 @@ function callPath(live) {
 }
 
 // callPairs is the first card and the glance of the panel: the route with the
-// round trip time on one line, then the loss and the two bitrates of the whole
-// call. A number that does not exist yet is left out, so the card never shows
-// a dash.
-/** @returns {(string | boolean | undefined)[][]} */
+// three numbers of the path on one row, then what the whole call sends and
+// receives. A number that is not there yet leaves its cell empty, so the rows
+// below it still line up.
+/** @returns {(string | (string | boolean)[][])[][]} */
 function callPairs(live, total) {
   const out = [];
-  const rtts = live.map((s) => s.rtt).filter((n) => typeof n === 'number');
-  const jitters = live.map((s) => s.jitter).filter((n) => typeof n === 'number');
-  const trip = [callPath(live), tripText(rtts, jitters)].filter(Boolean).join(', ');
-  if (trip) out.push(['trip ', trip]);
-  const losses = live.map((s) => s.loss).filter((n) => typeof n === 'number');
-  if (losses.length) {
-    const worst = Math.max(...losses);
-    out.push(['loss ', lossText(worst), lossMark(worst)]);
+  const path = callPath(live);
+  const worst = (key) => {
+    const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
+    return nums.length ? Math.max(...nums) : null;
+  };
+  const rtt = worst('rtt');
+  const jitter = worst('jitter');
+  const loss = worst('loss');
+  if (path || rtt !== null || jitter !== null || loss !== null) {
+    out.push([pathIcon(path), tripCells(rtt, jitter, loss)]);
   }
-  out.push(...mediaPairs('out', total.up.video, total.up.audio));
-  out.push(...mediaPairs('in', total.down.video, total.down.audio));
+  out.push([VIDEO_ICON, [rateCell('up', total.up.video), rateCell('down', total.down.video)]]);
+  out.push([AUDIO_ICON, [rateCell('up', total.up.audio), rateCell('down', total.down.audio)]]);
   return out;
 }
 
-// ownPairs is the own card: what the browser holds, then what it moves. A live
-// track with a silent meter points at the graph; a dead context points at the
-// autoplay rule of a phone, so the sound state only shows when it needs a
-// click.
-/** @returns {(string | boolean | undefined)[][]} */
-function ownPairs() {
+// ownPairs is the own card: the key this browser holds, then what its own
+// camera and microphone do. A live track with a silent meter points at the
+// graph; a dead context points at the autoplay rule of a phone, so the sound
+// state only shows when it needs a click.
+/** @returns {(string | (string | boolean)[][])[][]} */
+function ownPairs(total) {
   const out = [];
+  // The long-term identity of this browser: the fingerprint alone, under the
+  // name of the card, because where the key lives is the panel's noise.
+  if (state.idKey) out.push(['key ', state.idKey.fp, undefined, 'mono']);
   const live = !!(state.mic && state.micTrack && state.micTrack.readyState === 'live');
   const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
   let label = live ? 'on' : 'off';
   // Safari reports no sample rate on an audio track, so the rate is a bonus
   // and a missing rate never means off.
   if (mic && mic.sampleRate) label += `, ${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`;
-  // The level belongs to the microphone it measures, on the same line.
   if (live && state.micAnalyser) label += ', ' + levelText(state.meterPeak);
-  out.push(['mic ', label]);
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
   const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : 'off';
-  // The denoise switch changes the same picture and the same microphone, so it
-  // rides beside the camera instead of on a line of its own.
-  out.push(['camera ', `${shot}, denoise ${state.denoiseOn ? 'on' : 'off'}`]);
-  // The long-term identity of this browser: the fingerprint alone, because
-  // where the key lives is the panel's noise and not the guest's question.
-  if (state.idKey) out.push(['key ', state.idKey.fp, undefined, 'mono']);
+  out.push([VIDEO_ICON, [
+    [...PICTURE_ICON, shot],
+    ['', '', `denoise ${state.denoiseOn ? 'on' : 'off'}`],
+    rateCell('up', total ? total.up.video : 0),
+    rateCell('down', total ? total.down.video : 0),
+  ]]);
+  out.push([AUDIO_ICON, [
+    ['', '', label],
+    rateCell('up', total ? total.up.audio : 0),
+    rateCell('down', total ? total.down.audio : 0),
+  ]]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
   if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);
   return out;
 }
 
-// peerPairs is one guest card: the route, the trip and the two rates of that
-// pair, then the sealed detail as indented rows. A row appears only when it
-// has a number, and with one guest in the room this card is the whole call.
-/** @returns {(string | boolean | undefined)[][]} */
+// peerPairs is one guest card: the identity first, then the path and the two
+// media rows of that pair. A cell with no number stays empty, so the columns
+// line up with the row above it, and with one guest in the room this card is
+// the whole call.
+/** @returns {(string | (string | boolean)[][])[][]} */
 function peerPairs(peer, s) {
   const out = [];
+  const pin = pinState(peer);
+  if (peer.fp && pin !== 'new') {
+    // The key sits right under the name of the card, with a green tick when
+    // this browser can name that guest and the state word when it cannot. A
+    // key is read letter by letter, so it is monospace.
+    const bad = pin === 'changed' || pin === 'rollback';
+    const cells = [pin === 'known' ? ['2714', 'verified', peer.fp] : ['', '', peer.fp]];
+    if (pin !== 'known') cells.push(['', '', pin]);
+    out.push(['key ', cells, bad ? false : undefined, 'mono']);
+  }
   if (!s) {
     out.push(['', 'connecting', undefined, true]);
   } else {
-    const trip = [s.path ? pathText(s.path) : '', tripText(
-      typeof s.rtt === 'number' ? [s.rtt] : [],
-      typeof s.jitter === 'number' ? [s.jitter] : [])].filter(Boolean).join(', ');
-    if (trip) out.push(['trip ', trip]);
-    if (typeof s.loss === 'number') out.push(['loss ', lossText(s.loss), lossMark(s.loss)]);
-    out.push(...mediaPairs('out', s.up.video, s.up.audio));
-    out.push(...mediaPairs('in', s.down.video, s.down.audio, s.shot));
+    out.push([s.path ? pathIcon(pathText(s.path)) : ['', 'the route is not known yet'], tripCells(s.rtt, s.jitter, s.loss)]);
+    out.push([VIDEO_ICON, [
+      [...PICTURE_ICON, s.shot || ''],
+      rateCell('up', s.up.video),
+      rateCell('down', s.down.video),
+    ]]);
+    out.push([AUDIO_ICON, [
+      ['', '', inLevelLine(peer)],
+      rateCell('up', s.up.audio),
+      rateCell('down', s.down.audio),
+    ]]);
   }
   // With one code in the room the code card below names it once, and a line
   // on every guest would say the same thing again.
   if (peer.sas && sealedRoomCodes().size > 1) out.push(['code ', verifyText(peer.sas), undefined, true]);
-  const pin = pinState(peer);
-  if (peer.fp && pin !== 'new') {
-    // The name on one line with a green tick when this browser can name that
-    // guest, and the fingerprint under it in monospace: a key is read letter
-    // by letter, a name is not.
-    const label = pin === 'known' ? pinLabelOf(peer) : pin;
-    const bad = pin === 'changed' || pin === 'rollback';
-    out.push(['name ', pin === 'known' ? [['2714', 'verified', label]] : label, bad ? false : undefined]);
-    out.push(['key ', peer.fp, bad ? false : undefined, 'mono']);
-  }
   if (!peer.keys) out.push(['keys ', 'none', false, true]);
   else if (peer.ready === 'ready' && !peer.confirmed) out.push(['keys ', 'not confirmed', false, true]);
   const c = sealedPairCount(peer.id);
   if (c.refused) out.push(['frames ', `${c.refused} refused`, false, true]);
-  const inLevel = inLevelLine(peer);
-  if (s && inLevel) out.push(['audio ', inLevel]);
   return out;
 }
 
@@ -3605,19 +3612,24 @@ function statIcon(hex, title) {
   return img;
 }
 
-// statValue fills one value cell. A plain string is the whole of it; a list is
-// parts on one line, where a part of one is text and a part of three is
-// [drawing, word, text], and the parts are told apart by a comma.
-function statValue(value) {
+// statCells fills one row with one cell per part. A part is text, or
+// [drawing, word, text] with the word in the title, or the same with a fourth
+// false to mark that cell red. An empty part keeps its column, so the numbers
+// of the row below still line up with it.
+function statCells(value) {
   const span = document.createElement('span');
   span.className = 'sv';
-  const parts = Array.isArray(value) ? value.map((p) => (Array.isArray(p) ? p : [p])) : [[value]];
-  for (const [i, p] of parts.entries()) {
-    if (i) span.appendChild(document.createTextNode(', '));
-    if (p.length > 1 && p[0]) span.appendChild(statIcon(p[0], p[1]));
+  const parts = Array.isArray(value) ? value : [value];
+  for (const raw of parts) {
+    const p = Array.isArray(raw) ? raw : [raw];
+    const cell = document.createElement('span');
+    cell.className = 'cell' + (p[3] === true ? ' good' : p[3] === false ? ' bad' : '');
+    if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
     const text = document.createElement('span');
-    text.textContent = p[p.length - 1];
-    span.appendChild(text);
+    const word = p.length > 1 ? p[2] : p[0];
+    text.textContent = word === null || word === undefined ? '' : String(word);
+    cell.appendChild(text);
+    span.appendChild(cell);
   }
   return span;
 }
@@ -3629,10 +3641,10 @@ function statLine(key, value, mark, sub) {
   const k = document.createElement('span');
   k.className = 'sk';
   // A key of two is [drawing, word]: the picture stands in for the word and
-  // the word is the hover.
-  if (Array.isArray(key)) k.appendChild(statIcon(key[0], key[1]));
-  else k.textContent = key;
-  line.append(k, statValue(value));
+  // the word is the hover. A key with no drawing keeps its word as text.
+  if (Array.isArray(key) && key[0]) k.appendChild(statIcon(key[0], key[1]));
+  else k.textContent = Array.isArray(key) ? (key[1] || '') : key;
+  line.append(k, statCells(value));
   return line;
 }
 
@@ -3800,7 +3812,7 @@ async function updateStats() {
       const pairs = peerPairs(peer, s);
       if (pairs.length) rows.push(statsRow(peer.name || shortPeer(peer.id), pairs));
     }
-    rows.push(statsRow('you', ownPairs()));
+    rows.push(statsRow('you', ownPairs(total)));
     body.replaceChildren(...sealedAlarms(), ...rows, ...sealedCards());
     drawStatsGraphs();
   } finally {
