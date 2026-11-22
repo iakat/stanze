@@ -147,7 +147,8 @@ const state = {
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'voice-tiles': HTMLInputElement,
- *   menubar: HTMLElement, 'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
+ *   menubar: HTMLElement, 'chrome-btn': HTMLButtonElement,
+ *   'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
  *   'menu-effects-btn': HTMLButtonElement, 'menu-effects': HTMLElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
@@ -3404,6 +3405,9 @@ async function enterRoom(room, pass) {
 
     $('lobby').hidden = true;
     $('stage').hidden = false;
+    // The call opens on the picture alone, and the frame waits for a tap.
+    $('stage').classList.remove('chrome');
+    applyImmersive();
     $('room-label').textContent = room;
     $('room-label').title = room;
     $('chat-note').hidden = false;
@@ -3537,6 +3541,7 @@ function leave(message) {
   menuSet(false);
   $('stage').hidden = true;
   $('lobby').hidden = false;
+  applyImmersive();
   $('room-label').textContent = '';
   $('peer-count').textContent = '';
   state.room = '';
@@ -7573,6 +7578,38 @@ async function paintRelay(peer) {
   }
 }
 
+// ---------------------------------------------------------------- phone frame
+
+// A phone shows the call as a picture. The class folds the frame of the app
+// away in the stylesheet, and a tap on the picture brings it back over it. The
+// query is the one the stylesheet uses, so a desktop never gets the class and
+// keeps its frame in place.
+const phoneQuery = window.matchMedia ? window.matchMedia('(max-width: 620px), (max-height: 520px) and (hover: none)') : null;
+
+// applyImmersive turns the folded call view on or off for the window that is
+// here now, and every window that comes after a rotation. It only ever folds a
+// stage that is on screen, so the lobby stays a whole card.
+function applyImmersive() {
+  const stage = $('stage');
+  const on = !!phoneQuery && phoneQuery.matches && !stage.hidden;
+  stage.classList.toggle('immersive', on);
+  if (!on) stage.classList.remove('chrome');
+  $('chrome-btn').setAttribute('aria-expanded', String(stage.classList.contains('chrome')));
+}
+
+// setChrome shows or folds the frame of the app. The menus and the stats sheet
+// go with it when it folds, because their buttons leave with the frame and a
+// sheet whose button is gone cannot be shut.
+function setChrome(show) {
+  const stage = $('stage');
+  if (!stage.classList.contains('immersive')) return;
+  stage.classList.toggle('chrome', show);
+  $('chrome-btn').setAttribute('aria-expanded', String(show));
+  if (show) return;
+  menuClose();
+  if (statsOpen()) setStatsOpen(false);
+}
+
 // ---------------------------------------------------------------- boot
 
 function init() {
@@ -7826,6 +7863,19 @@ function init() {
     }
     setSpotlight(id);
   });
+  // A tap on the picture folds the frame of the app away on a phone, and the
+  // next tap brings it back. A tap on the frame itself never folds it, or no
+  // button of the frame could be used while the frame is open. A desktop has
+  // no immersive class, so nothing here reaches it.
+  $('stage').addEventListener('click', (event) => {
+    if (Date.now() - cornerDropAt < 300) return;
+    if (!$('stage').classList.contains('immersive')) return;
+    const target = /** @type {Element} */ (event.target);
+    if (target.closest('.titlebar, .menubar, .statusline, .side, .stats, .chrome-handle')) return;
+    setChrome(!$('stage').classList.contains('chrome'));
+  });
+  $('chrome-btn').addEventListener('click', () => setChrome(true));
+  if (phoneQuery) phoneQuery.addEventListener('change', applyImmersive);
   // The list of members sits outside the frame of the grid, so it carries its
   // own listener: a click on a row enlarges that member, the way a click on a
   // tile does.
