@@ -25,14 +25,11 @@ import (
 //	/vosk/vosk.js              the vosk-browser library (Apache-2.0)
 //	/vosk/models               the models the directory holds, as JSON
 //	/vosk/model-<lang>.tar.gz  one model per language, <lang> like en or it
-//	/vosk/model.tar.gz         the older single name, read as en
 //
-// The label in a file name is for the picker, not a claim about the model: the
-// operator names the file, the guest picks the label.
+// One name, one shape: a model is always model-<lang>.tar.gz. The label is for
+// the picker, not a claim about the model: the operator names the file, the
+// guest picks the label. English is not a special file, it is the label en.
 const voskLib = "vosk.js"
-
-// voskLegacyName is the single model of the first version of the feature.
-const voskLegacyName = "model.tar.gz"
 
 // voskModelName matches one model file and captures its label.
 var voskModelName = regexp.MustCompile(`^model-([a-z]{2,3}(?:-[a-z0-9]{2,7})?)\.tar\.gz$`)
@@ -45,9 +42,9 @@ type voskModel struct {
 	Modified int64  `json:"modified"`
 }
 
-// voskModels reads the directory and returns the models it holds, en first and
-// the rest by label, so the picker has a stable order. A missing directory and
-// a failed read are both empty, because the page then offers nothing.
+// voskModels reads the directory and returns the models it holds, by label, so
+// the picker has a stable order. A missing directory and a failed read are both
+// empty, because the page then offers nothing.
 func voskModels(dir string) []voskModel {
 	if dir == "" {
 		return nil
@@ -57,16 +54,11 @@ func voskModels(dir string) []voskModel {
 		return nil
 	}
 	out := make([]voskModel, 0, len(entries))
-	legacy := false
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if name == voskLegacyName {
-			legacy = true
-			continue
-		}
 		m := voskModelName.FindStringSubmatch(name)
 		if m == nil {
 			continue
@@ -77,28 +69,9 @@ func voskModels(dir string) []voskModel {
 		}
 		out = append(out, voskModel{Lang: m[1], File: name, Size: info.Size(), Modified: info.ModTime().Unix()})
 	}
-	// The older single file is offered as en, and only while no en file is
-	// there, so the picker never shows en twice.
-	if legacy {
-		hasEn := false
-		for _, m := range out {
-			if m.Lang == "en" {
-				hasEn = true
-				break
-			}
-		}
-		if !hasEn {
-			if info, err := os.Stat(filepath.Join(dir, voskLegacyName)); err == nil {
-				out = append(out, voskModel{Lang: "en", File: voskLegacyName, Size: info.Size(), Modified: info.ModTime().Unix()})
-			}
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if (out[i].Lang == "en") != (out[j].Lang == "en") {
-			return out[i].Lang == "en"
-		}
-		return out[i].Lang < out[j].Lang
-	})
+	// One order for everybody: by label, so en comes first for free and no
+	// language needs a rule of its own.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Lang < out[j].Lang })
 	return out
 }
 

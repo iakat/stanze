@@ -4899,7 +4899,6 @@ function ensureReady() {
 // told that someone transcribes before the first line. A refused or failed
 // download leaves the call exactly as it was.
 const ASR_MODELS = '/vosk/models';
-const ASR_LEGACY = '/vosk/model.tar.gz';
 const ASR_LIB = '/vosk/vosk.js';
 const ASR_CACHE = 'stanze-vosk';
 const ASR_LINE_MAX = 400;
@@ -4908,7 +4907,6 @@ const asr = {
   probed: false,
   models: [],      // [{ lang, file, size, modified }] as the server lists them
   lang: '',        // the label the guest picked, en by default
-  probedLegacy: false,
   busy: false,     // a download or a start is under way
   on: false,
   abort: null,
@@ -4936,8 +4934,8 @@ function asrPaintOthers() {
 }
 
 // asrProbe asks the server, once, which models it offers. Without any model the
-// button stays hidden and nothing else changes. An older server that has only
-// the single model under the old name is read as one English model.
+// button stays hidden and nothing else changes, and there is no second name to
+// try: the list is the only offer.
 async function asrProbe() {
   if (asr.probed) return;
   asr.probed = true;
@@ -4949,18 +4947,6 @@ async function asrProbe() {
       list = (body && Array.isArray(body.langs)) ? body.langs : [];
     }
   } catch { /* offline or blocked: not offered */ }
-  if (!list.length) {
-    try {
-      const res = await fetch(ASR_LEGACY, { method: 'HEAD', cache: 'no-store' });
-      if (res.ok) {
-        list = [{
-          lang: 'en', file: 'model.tar.gz',
-          size: parseInt(res.headers.get('content-length') || '0', 10) || 0,
-          modified: 0,
-        }];
-      }
-    } catch { /* nothing to offer */ }
-  }
   asr.models = list.filter((m) => m && typeof m.file === 'string' && m.file);
   if (!asr.models.length) return;
   asrPick(asrDefaultLang());
@@ -5010,7 +4996,7 @@ function asrPick(lang) {
 // the key, so a second language gets its own entry and the old one goes.
 function asrCacheKey() {
   const model = asrModel();
-  const file = model ? model.file : 'model.tar.gz';
+  const file = model ? model.file : '';
   const stamp = model ? `${model.size}-${model.modified}` : '';
   return new Request(`${location.origin}/vosk/${file}?m=${encodeURIComponent(stamp)}`);
 }

@@ -42,12 +42,12 @@ fi
 cp "$tmp/package/dist/vosk.js" "$dir/vosk.js"
 
 echo "model: $MODEL_URL"
-curl -fsSL -o "$tmp/model.tar.gz" "$MODEL_URL"
-mgot="$(sha256sum "$tmp/model.tar.gz" | cut -d' ' -f1)"
+curl -fsSL -o "$tmp/model.tgz" "$MODEL_URL"
+mgot="$(sha256sum "$tmp/model.tgz" | cut -d' ' -f1)"
 if [ -n "${MODEL_SHA256:-}" ] && [ "$mgot" != "$MODEL_SHA256" ]; then
 	echo "model sha256 is $mgot, expected $MODEL_SHA256" >&2
 	exit 1
 fi
 [ -n "${MODEL_SHA256:-}" ] || echo "model sha256 (not pinned): $mgot"
-cp "$tmp/model.tar.gz" "$dir/model-$lang.tar.gz"
+cp "$tmp/model.tgz" "$dir/model-$lang.tar.gz"
 echo "done: $dir/model-$lang.tar.gz"

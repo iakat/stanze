@@ -167,7 +167,7 @@ Every flag has an environment variable equivalent. Flags win.
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
 | `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
-| `-vosk-dir` | `VOSK_DIR` | empty | directory with `vosk.js` and `model.tar.gz` for the optional in-browser transcription; empty means the feature is not offered (see `tools/fetch-vosk.sh`) |
+| `-vosk-dir` | `VOSK_DIR` | empty | directory with `vosk.js` and `model-<lang>.tar.gz` for the optional in-browser transcription; empty means the feature is not offered (see `tools/fetch-vosk.sh`) |
 | `-debug` | `DEBUG` | off | verbose logs (room ids are still only logged as a 8 hex character hash) |
 
 Room creation and join attempts are limited per client IP. Behind a reverse
@@ -247,11 +247,11 @@ well.
   build it with `--build-arg VOSK_MODEL_URL=... --build-arg VOSK_MODEL_SHA256=...`
   and it runs with `-vosk-dir /vosk` (the default `VOSK_DIR` in that image);
   without those arguments the directory is empty and the image is the same one
-  binary as before. A model file is named `model-en.tar.gz` or `model-it.tar.gz`
-  and the part after `model-` is the label in the picker; `LANG=it` on
+  binary as before. A model file is always named `model-<lang>.tar.gz` and the
+  part after `model-` is the label in the picker; `LANG=it` on
   `tools/fetch-vosk.sh` writes the Italian one, and a second run adds a second
-  language, so the page shows a language picker next to *transcribe* (the older
-  single `model.tar.gz` still works and is read as en). A guest who presses
+  language, so the page shows a language picker next to *transcribe*. English
+  is the label en, with no file name of its own. A guest who presses
   *transcribe* sees the size, downloads that one model (kept in the browser
   cache) and runs one recognizer per incoming voice in the tab. The text goes out as sealed chat
   labelled *transcript by NAME*, and every other guest is told that NAME

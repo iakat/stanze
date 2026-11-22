@@ -10,7 +10,8 @@ import (
 )
 
 // Without a directory the routes do not exist: nothing is offered and nothing
-// leaks about the disk.
+// leaks about the disk. The old single name is gone too, so it is a 404 like
+// any other name the list does not hold.
 func TestVoskOffMeans404(t *testing.T) {
 	h := voskHandler("")
 	for _, path := range []string{"/vosk/vosk.js", "/vosk/model.tar.gz", "/vosk/models", "/vosk/model-it.tar.gz", "/vosk/other"} {
@@ -72,7 +73,7 @@ func TestVoskServesTheListedFilesOnly(t *testing.T) {
 	}
 }
 
-// The list names every model with its label and its size, en first, and it
+// The list names every model with its label and its size, by label, and it
 // answers HEAD without a body.
 func TestVoskModelsList(t *testing.T) {
 	dir := t.TempDir()
@@ -113,33 +114,6 @@ func TestVoskModelsList(t *testing.T) {
 	h(rec, httptest.NewRequest(http.MethodHead, "/vosk/models", nil))
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Fatalf("HEAD models = %d with %d bytes, want 200 and none", rec.Code, rec.Body.Len())
-	}
-}
-
-// The older single file keeps working as English, and it moves aside once a
-// model-en file is there, so the picker never shows en twice.
-func TestVoskLegacySingleModelIsEnglish(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "model.tar.gz"), []byte("0123456789"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	list := voskModels(dir)
-	if len(list) != 1 || list[0].Lang != "en" || list[0].File != "model.tar.gz" {
-		t.Fatalf("legacy list = %+v, want one en entry named model.tar.gz", list)
-	}
-	h := voskHandler(dir)
-	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/vosk/model.tar.gz", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("legacy file = %d, want 200", rec.Code)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "model-en.tar.gz"), []byte("01234"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	list = voskModels(dir)
-	if len(list) != 1 || list[0].File != "model-en.tar.gz" {
-		t.Fatalf("list with both = %+v, want the en file only", list)
 	}
 }
 
