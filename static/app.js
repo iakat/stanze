@@ -2615,10 +2615,16 @@ async function lookStart() {
   sample.height = 48;
   const sctx = sample.getContext('2d', { alpha: false, willReadFrequently: true });
   state.lookPipe = { src, video, canvas, ctx, sample, sctx, stream, track, raf: 0, anchor: null, frame: 0 };
-  const tick = () => {
+  // The canvas track is captured at 30 fps, so a 60 or 120 Hz display needs no
+  // more than every second or fourth frame drawn; the rest only burn the filter.
+  let last = 0;
+  const tick = (now) => {
     const p = state.lookPipe;
     if (!p) return;
-    lookDraw(p);
+    if (!(now - last < 30)) {
+      last = now;
+      lookDraw(p);
+    }
     p.raf = requestAnimationFrame(tick);
   };
   state.lookPipe.raf = requestAnimationFrame(tick);
@@ -2629,9 +2635,10 @@ async function lookStart() {
 // lookDraw paints one frame: the colour step, then the mask on the face patch.
 function lookDraw(p) {
   if (p.video.readyState < 2 || !p.video.videoWidth) return;
-  p.ctx.filter = LOOKS[state.look] || 'none';
+  const filter = LOOKS[state.look] || 'none';
+  if (filter !== 'none') p.ctx.filter = filter;
   p.ctx.drawImage(p.video, 0, 0, p.canvas.width, p.canvas.height);
-  p.ctx.filter = 'none';
+  if (filter !== 'none') p.ctx.filter = 'none';
   if (!MASKS.includes(state.mask) || state.mask === 'none' || !p.sctx) return;
   p.frame++;
   if (p.frame % 2 === 1) lookAnchor(p);
@@ -5617,9 +5624,10 @@ function pqModule() {
 }
 
 function b64e(bytes) {
-  let raw = '';
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  for (let i = 0; i < view.length; i++) raw += String.fromCharCode(view[i]);
+  if ('toBase64' in view) return /** @type {any} */ (view).toBase64();
+  let raw = '';
+  for (let i = 0; i < view.length; i += 0x8000) raw += String.fromCharCode.apply(null, view.subarray(i, i + 0x8000));
   return btoa(raw);
 }
 
@@ -5665,10 +5673,6 @@ function verifyEmojis(code) {
 
 function verifyText(code) {
   return verifyEmojis(code).map((pair) => pair[0]).join(' ');
-}
-
-function verifyNames(code) {
-  return verifyEmojis(code).map((pair) => pair[1]).join(', ');
 }
 
 // The associated data names the protocol version, the pair and the sequence
@@ -7358,11 +7362,6 @@ function sealedRoomCodes() {
   const codes = new Set();
   for (const peer of state.peers.values()) if (peer.sas) codes.add(peer.sas);
   return codes;
-}
-
-function sealedRoomCode() {
-  const codes = sealedRoomCodes();
-  return codes.size === 1 ? [...codes][0] : '';
 }
 
 function sealedFailedPairs() {
