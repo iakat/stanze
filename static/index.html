@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122v">
+<link rel="stylesheet" href="/style.css?v=20261122w">
 </head>
 <body>
 
@@ -19,7 +19,7 @@
     <span class="tbbuttons"><span class="tbcap"></span><span class="tbcap"></span><span class="tbcap close">×</span></span>
   </div>
   <div class="window-body">
-    <p class="hint">Peer to peer audio and video, sealed in the browser. Nothing is stored and nothing is recorded.</p>
+    <p class="hint">Peer to peer video and audio, sealed in the browser. Nothing is recorded.</p>
 
     <form id="join-form" autocomplete="off">
       <div class="join-cols">
@@ -62,15 +62,14 @@
           <label class="field"><span>quality</span>
             <input id="perf" type="range" min="0" max="3" step="1" value="0" aria-describedby="perf-text">
           </label>
-          <p id="perf-text" class="note"></p>
         </fieldset>
       </div>
 
+      <p id="perf-text" class="note"></p>
       <p id="sealed-note" class="note" hidden></p>
-      <p class="note">Every room is sealed end to end in the browser, with X25519 + ML-KEM-768 and AES-256-GCM;
-        the server only forwards sealed blobs, so compare the emoji code with the other people. The path sets the
-        link: automatic takes the relay when it helps, direct never does, relay hides your address. Any name works;
-        a suggested id is hard to guess, a name you type is not.</p>
+      <p class="note">Sealed end to end in the browser with X25519 + ML-KEM-768 and AES-256-GCM; the server
+        forwards sealed blobs only. Compare the emoji code with the others. Path: automatic relays when it helps,
+        direct never, relay hides your address.</p>
 
       <div class="join-foot">
         <button id="enter-btn" type="submit">enter</button>
@@ -188,6 +187,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122v"></script>
+<script src="/app.js?v=20261122w"></script>
 </body>
 </html>

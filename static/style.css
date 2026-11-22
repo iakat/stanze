@@ -291,12 +291,14 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   padding: 1px 4px;
   min-height: 0;
   font-size: var(--fs-smaller);
+  line-height: 1.2;
 }
 .lobby .field select {
   margin: 0;
   padding: 1px 22px 1px 4px;
   min-height: 0;
   font-size: var(--fs-smaller);
+  line-height: 1.2;
 }
 .lobby .with-button button {
   min-height: 0;
@@ -305,7 +307,7 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 }
 .lobby label.check { margin: 6px 0 2px; font-size: var(--fs-smaller); }
 .lobby .note { margin: 3px 0 0; font-size: var(--fs-tiny); }
-.lobby #sealed-note { margin: 5px 0 0; }
+.lobby #perf-text, .lobby #sealed-note { margin: 4px 0 0; line-height: 1.35; }
 .lobby .join-foot { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .lobby .join-foot .foot { margin: 0; font-size: var(--fs-tiny); }
 .lobby #enter-btn { min-width: 96px; }
