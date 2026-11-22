@@ -209,6 +209,7 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	// Optional transcription files, served from disk only when an operator
 	// provides them; otherwise 404.
 	mux.HandleFunc("/vosk/", voskHandler(cfg.VoskDir))
+	mux.HandleFunc("/omni/", omniHandler(cfg.OmniDir))
 
 	return securityHeaders(mux, srv.log), nil
 }
@@ -419,6 +420,14 @@ func contentType(name string) string {
 // 'unsafe-eval' is there for the optional transcription only: the vosk worker
 // names its emscripten wrappers with new Function, and a worker inherits this
 // policy. Without it the engine stops at the first recognizer.
+//
+// The omnilingual engine is a pthread wasm build and allocates a
+// SharedArrayBuffer, which a page only gets when it is cross-origin isolated:
+// that is COOP same-origin plus COEP require-corp. Everything the page loads is
+// its own origin or a blob of it (no third party script, font, image or frame),
+// so require-corp costs nothing here; the browser suites still join, seal and
+// play a call with it on. CORP same-origin names the rule on our own answers,
+// so a resource of this page is not embedded elsewhere either.
 func securityHeaders(next http.Handler, log *slog.Logger) http.Handler {
 	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; " +
 		"media-src 'self' blob:; connect-src 'self' blob: ws: wss:; font-src 'self'; " +
@@ -431,6 +440,8 @@ func securityHeaders(next http.Handler, log *slog.Logger) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), geolocation=(), interest-cohort=()")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Embedder-Policy", "require-corp")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 
 		if log.Enabled(r.Context(), slog.LevelDebug) {
