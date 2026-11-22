@@ -5634,9 +5634,10 @@ function updatePinCount() {
   el.hidden = total === 0;
   el.textContent = total ? `verified ${known}/${total}` : '';
   el.dataset.verified = full ? 'all' : 'part';
-  const stage = $('stage');
-  if (total === 0) delete stage.dataset.verified;
-  else stage.dataset.verified = el.dataset.verified;
+  // The bar is never the plain blue one: green only when every guest present is
+  // verified, red otherwise, and red while the room is empty because nothing is
+  // verified yet.
+  $('stage').dataset.verified = full ? 'all' : 'part';
   if (total === 0) {
     el.removeAttribute('title');
   } else if (failed.length > 0) {
