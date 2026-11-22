@@ -3437,16 +3437,25 @@ function lossMark(pct) {
 
 // mediaPairs is one direction: the two kinds added on its own line, then the
 // two parts together on the indented line under it. Three numbers on one line
-// is one too many, and two sub lines spend a line on a word. The parts are
+// is one too many, and two sub lines spend a line on a word. The direction and
+// the two kinds are OpenMoji drawings with the word in the title, so the panel
+// reads as pictures and a hover still says what each one is. The parts are
 // shown only when both are live, so a call with sound and no picture stays
 // short.
+const MEDIA_DIR = {
+  out: ['2B06', 'out, the media this browser sends'],
+  in: ['2B07', 'in, the media this browser receives'],
+};
+const VIDEO_ICON = ['1F3A5', 'video'];
+const AUDIO_ICON = ['1F50A', 'audio'];
+
 /** @returns {(string | boolean | undefined)[][]} */
-function mediaPairs(label, video, audio) {
+function mediaPairs(dir, video, audio) {
   const total = video + audio;
   if (!(total > 0)) return [];
-  const out = [[label, rateText(total)]];
+  const out = [[MEDIA_DIR[dir], rateText(total)]];
   if (video > 0 && audio > 0) {
-    out.push(['', `video ${rateText(video)}, audio ${rateText(audio)}`, undefined, true]);
+    out.push(['', [[...VIDEO_ICON, rateText(video)], [...AUDIO_ICON, rateText(audio)]], undefined, true]);
   }
   return out;
 }
@@ -3480,24 +3489,24 @@ function callPath(live) {
   return 'mixed: ' + [...words].join(', ');
 }
 
-// callPairs is the first card and the glance of the panel: the route, the
-// round trip time and the two bitrates of the whole call. A number that does
-// not exist yet is left out, so the card never shows a dash.
+// callPairs is the first card and the glance of the panel: the route with the
+// round trip time on one line, then the loss and the two bitrates of the whole
+// call. A number that does not exist yet is left out, so the card never shows
+// a dash.
 /** @returns {(string | boolean | undefined)[][]} */
 function callPairs(live, total) {
   const out = [];
-  const path = callPath(live);
-  if (path) out.push(['path ', path]);
   const rtts = live.map((s) => s.rtt).filter((n) => typeof n === 'number');
   const jitters = live.map((s) => s.jitter).filter((n) => typeof n === 'number');
-  if (rtts.length || jitters.length) out.push(['trip ', tripText(rtts, jitters)]);
+  const trip = [callPath(live), tripText(rtts, jitters)].filter(Boolean).join(', ');
+  if (trip) out.push(['trip ', trip]);
   const losses = live.map((s) => s.loss).filter((n) => typeof n === 'number');
   if (losses.length) {
     const worst = Math.max(...losses);
     out.push(['loss ', lossText(worst), lossMark(worst)]);
   }
-  out.push(...mediaPairs('up ', total.up.video, total.up.audio));
-  out.push(...mediaPairs('down ', total.down.video, total.down.audio));
+  out.push(...mediaPairs('out', total.up.video, total.up.audio));
+  out.push(...mediaPairs('in', total.down.video, total.down.audio));
   return out;
 }
 
@@ -3537,14 +3546,13 @@ function peerPairs(peer, s) {
   if (!s) {
     out.push(['', 'connecting', undefined, true]);
   } else {
-    if (s.path) out.push(['path ', pathText(s.path)]);
-    const trip = tripText(
+    const trip = [s.path ? pathText(s.path) : '', tripText(
       typeof s.rtt === 'number' ? [s.rtt] : [],
-      typeof s.jitter === 'number' ? [s.jitter] : []);
+      typeof s.jitter === 'number' ? [s.jitter] : [])].filter(Boolean).join(', ');
     if (trip) out.push(['trip ', trip]);
     if (typeof s.loss === 'number') out.push(['loss ', lossText(s.loss), lossMark(s.loss)]);
-    out.push(...mediaPairs('up ', s.up.video, s.up.audio));
-    out.push(...mediaPairs('down ', s.down.video, s.down.audio));
+    out.push(...mediaPairs('out', s.up.video, s.up.audio));
+    out.push(...mediaPairs('in', s.down.video, s.down.audio));
   }
   // With one code in the room the code card below names it once, and a line
   // on every guest would say the same thing again.
@@ -3566,16 +3574,44 @@ function peerPairs(peer, s) {
 // statsRow is one card of the panel: a name and a short list of key/value
 // lines. A line is [key, value] or [key, value, mark] with a mark of true for
 // green and false for red, and a fourth true makes it an indented sub row.
+// statIcon is one OpenMoji drawing with the word it stands for in its title,
+// so a line can say "video" with a picture and still answer a hover.
+function statIcon(hex, title) {
+  const img = document.createElement('img');
+  img.className = 'sico';
+  img.src = `/openmoji/${hex}.svg`;
+  img.alt = title;
+  img.title = title;
+  return img;
+}
+
+// statValue fills one value cell. A plain string is the whole of it; a list is
+// parts on one line, where a part of one is text and a part of three is
+// [drawing, word, text], and the parts are told apart by a comma.
+function statValue(value) {
+  const span = document.createElement('span');
+  span.className = 'sv';
+  const parts = Array.isArray(value) ? value : [[value]];
+  for (const [i, p] of parts.entries()) {
+    if (i) span.appendChild(document.createTextNode(', '));
+    if (p.length > 1 && p[0]) span.appendChild(statIcon(p[0], p[1]));
+    const text = document.createElement('span');
+    text.textContent = p[p.length - 1];
+    span.appendChild(text);
+  }
+  return span;
+}
+
 function statLine(key, value, mark, sub) {
   const line = document.createElement('div');
   line.className = 'sline' + (sub ? ' sub' : '') + (mark === true ? ' good' : mark === false ? ' bad' : '');
   const k = document.createElement('span');
   k.className = 'sk';
-  k.textContent = key;
-  const v = document.createElement('span');
-  v.className = 'sv';
-  v.textContent = String(value);
-  line.append(k, v);
+  // A key of two is [drawing, word]: the picture stands in for the word and
+  // the word is the hover.
+  if (Array.isArray(key)) k.appendChild(statIcon(key[0], key[1]));
+  else k.textContent = key;
+  line.append(k, statValue(value));
   return line;
 }
 

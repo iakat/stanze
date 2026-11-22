@@ -788,6 +788,15 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 .sline.good { color: var(--green); }
 .sline.bad { color: var(--red); }
+/* An OpenMoji drawing stands where a word would: it is sized to the text and
+ * sits on the baseline, and its title carries the word for a hover. */
+.sico {
+  width: 1.05em;
+  height: 1.05em;
+  display: inline-block;
+  vertical-align: -0.16em;
+  margin-right: 4px;
+}
 /* An indented row carries the part under a total, and its value is quiet:
  * the total is the number to read first. */
 .sline.sub { padding-left: 10px; }

@@ -359,14 +359,16 @@ async function stats(page) {
         open: !document.getElementById('stats-panel').hidden,
         timer: !!state.statsTimer,
         text: body ? body.textContent : '',
+        icons: body ? [...body.querySelectorAll('img.sico')].map((i) => i.title) : [],
       };
     });
     check('the stats panel opens and polls once a second', tel.open && tel.timer, tel.text);
     check('stats show the peer, the round trip time and the path',
       tel.text.includes('bob') && /\d+ ms/.test(tel.text) && /(direct|relay)/.test(tel.text), tel.text);
-    check('stats show the outbound and inbound bitrate, in video and audio rows',
-      /up [1-9][\d.]* (kbps|Mbps)/.test(tel.text) && /down [1-9][\d.]* (kbps|Mbps)/.test(tel.text)
-      && /video [1-9][\d.]* (kbps|Mbps)/.test(tel.text) && /audio [1-9][\d.]* (kbps|Mbps)/.test(tel.text), tel.text);
+    check('stats show the outbound and inbound bitrate with a drawing for each kind',
+      /[1-9][\d.]* (kbps|Mbps)/.test(tel.text)
+      && tel.icons.some((t) => /^out/.test(t)) && tel.icons.some((t) => /^in,/.test(t))
+      && tel.icons.includes('video') && tel.icons.includes('audio'), JSON.stringify(tel.icons));
     check('stats show the own denoise state and device settings',
       /denoise (on|off)/.test(tel.text) && /mic (on|off), \d+ kHz \d+ch/.test(tel.text) && /camera \d+x\d+/.test(tel.text), tel.text);
     const graphs = await pageA.evaluate(() => {
