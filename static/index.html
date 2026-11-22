@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122m">
+<link rel="stylesheet" href="/style.css?v=20261122n">
 </head>
 <body>
 
@@ -85,6 +85,32 @@
       <span class="dot" id="link-dot"></span>
       <span class="muted" id="link-text">connected</span>
       <span id="pin-count" class="badge pincount" hidden></span>
+      <div class="controls">
+        <button id="mic-btn" type="button" class="ctrl" aria-pressed="true"><img class="ico" src="/openmoji/1F3A4.svg" alt="" width="22" height="22"><span>mic on</span></button>
+        <button id="cam-btn" type="button" class="ctrl" aria-pressed="true"><img class="ico" src="/openmoji/1F4F7.svg" alt="" width="22" height="22"><span>camera on</span></button>
+        <button id="deaf-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F507.svg" alt="" width="22" height="22"><span>deafen</span></button>
+        <button id="share-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F5A5.svg" alt="" width="22" height="22"><span>share screen</span></button>
+        <button id="stats-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F4C9.svg" alt="" width="22" height="22"><span>stats</span></button>
+        <label class="pick" id="cam-pick" hidden>camera
+          <select id="cam-live"><option value="">system camera</option></select>
+        </label>
+        <label class="pick" id="mic-pick" hidden>mic
+          <select id="mic-live"><option value="">system microphone</option></select>
+        </label>
+        <label class="pick">quality
+          <select id="quality">
+            <option value="640x360@30">360p 30</option>
+            <option value="1280x720@30" selected>720p 30</option>
+            <option value="1920x1080@30">1080p 30</option>
+            <option value="1920x1080@60">1080p 60</option>
+            <option value="2560x1440@30">1440p 30</option>
+          </select>
+        </label>
+        <label class="pick check"><input id="mirror" type="checkbox" checked> mirror me</label>
+        <label class="pick check"><input id="pip" type="checkbox"> own view small</label>
+        <label class="pick check"><input id="noise-live" type="checkbox" checked> noise cancel</label>
+        <button id="leave-btn" type="button" class="ctrl danger"><img class="ico" src="/openmoji/1F6AA.svg" alt="" width="22" height="22"><span>leave</span></button>
+      </div>
     </div>
 
     <div class="room-row">
@@ -131,37 +157,10 @@
       </div>
     </div>
 
-    <footer class="controls">
-      <button id="mic-btn" type="button" class="ctrl" aria-pressed="true"><img class="ico" src="/openmoji/1F3A4.svg" alt="" width="16" height="16"><span>mic on</span></button>
-      <button id="cam-btn" type="button" class="ctrl" aria-pressed="true"><img class="ico" src="/openmoji/1F4F7.svg" alt="" width="16" height="16"><span>camera on</span></button>
-      <button id="deaf-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F507.svg" alt="" width="16" height="16"><span>deafen</span></button>
-      <button id="share-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F5A5.svg" alt="" width="16" height="16"><span>share screen</span></button>
-      <button id="stats-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F4C9.svg" alt="" width="16" height="16"><span>stats</span></button>
-      <label class="pick" id="cam-pick" hidden>camera
-        <select id="cam-live"><option value="">system camera</option></select>
-      </label>
-      <label class="pick" id="mic-pick" hidden>mic
-        <select id="mic-live"><option value="">system microphone</option></select>
-      </label>
-      <label class="pick">quality
-        <select id="quality">
-          <option value="640x360@30">360p 30</option>
-          <option value="1280x720@30" selected>720p 30</option>
-          <option value="1920x1080@30">1080p 30</option>
-          <option value="1920x1080@60">1080p 60</option>
-          <option value="2560x1440@30">1440p 30</option>
-        </select>
-      </label>
-      <label class="pick check"><input id="mirror" type="checkbox" checked> mirror me</label>
-      <label class="pick check"><input id="pip" type="checkbox"> own view small</label>
-      <label class="pick check"><input id="noise-live" type="checkbox" checked> noise cancel</label>
-      <button id="leave-btn" type="button" class="ctrl danger"><img class="ico" src="/openmoji/1F6AA.svg" alt="" width="16" height="16"><span>leave</span></button>
-    </footer>
-
     <p id="stage-error" class="error" hidden></p>
   </div>
 </main>
 
-<script src="/app.js?v=20261122m"></script>
+<script src="/app.js?v=20261122n"></script>
 </body>
 </html>

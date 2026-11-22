@@ -143,6 +143,87 @@ input, select {
   min-height: 26px;
 }
 select { padding: 2px 3px; }
+/* A dropdown of 1995: no native arrow and no rounded field, a sunken white
+ * box and a bevelled square button at the right edge with a black triangle.
+ * The button is drawn as the background of the field, so it keeps the look
+ * in every browser and needs no wrapper element. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding: 2px 22px 2px 4px;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Crect width='16' height='16' fill='%23c0c0c0'/%3E%3Cpath d='M0 0h16v1H0zM0 0h1v16H0z' fill='%23ffffff'/%3E%3Cpath d='M15 1h1v15h-1zM1 15h15v1H1z' fill='%23404040'/%3E%3Cpath d='M4 6h8l-4 5z' fill='%23141414'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1px center;
+  background-size: 16px 16px;
+}
+select:hover { background-color: #f2f2f2; }
+/* A checkbox is a sunken white box with a black tick, not the native round
+ * control of a later era. */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  padding: 0;
+  background: #fff;
+  border: 2px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+  box-shadow: inset 1px 1px 0 #b0b0b0;
+  display: inline-block;
+  vertical-align: -3px;
+  flex: none;
+}
+input[type="checkbox"]:checked {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15'%3E%3Cpath d='M3 7.5l3 3 6-7' fill='none' stroke='%23141414' stroke-width='2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+}
+input[type="checkbox"]:focus-visible { outline: 1px dotted var(--ink); outline-offset: 1px; }
+/* A slider is a sunken groove with a raised handle, the one every settings
+ * box of the era had. The peer volume sliders use the same drawing. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  min-height: 0;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px;
+  background: var(--panel);
+  border: 1px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 16px;
+  margin-top: -5px;
+  background: var(--panel);
+  border: 1px solid;
+  border-color: #fff var(--edge) var(--edge) #fff;
+  box-shadow: inset 1px 1px 0 var(--panel-hi);
+  border-radius: 0;
+}
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  background: var(--panel);
+  border: 1px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 14px;
+  background: var(--panel);
+  border: 1px solid;
+  border-color: #fff var(--edge) var(--edge) #fff;
+  border-radius: 0;
+}
+input[type="range"]:focus { outline: 1px dotted var(--ink); outline-offset: 2px; }
 /* The placeholder is text, so it is measured like text: 8.9:1 on the white
  * field, and never left at the browser default that fades to a mid grey. */
 ::placeholder { color: var(--grey); opacity: 1; }
@@ -156,6 +237,7 @@ label {
 label input, label select { margin-top: 3px; }
 label.check { display: flex; align-items: center; gap: 6px; margin: 7px 0; }
 label.check input { width: auto; min-height: 0; margin: 0; }
+label.check input[type="checkbox"], .pick.check input[type="checkbox"] { width: 15px; }
 
 .with-button { display: flex; gap: 4px; }
 .with-button input { flex: 1; min-width: 0; }
@@ -203,12 +285,15 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   padding: 5px;
 }
 /* On the teal desktop no text reaches 7:1, so the status line is a toolbar:
- * grey, bevelled, and readable. */
+ * grey, bevelled, and readable. The controls live on this row, because the
+ * top of the stage has the room, and a footer cost the pictures a whole band
+ * of height for nothing. */
 .statusline {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 1px 5px;
+  gap: 5px;
+  padding: 2px 4px;
   font-size: var(--fs-smaller);
   background: var(--panel);
   border: 2px solid;
@@ -233,10 +318,9 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   margin-right: 6px;
 }
 
-/* The sealed badge sits at the far end of the status line and carries the short
- * code, so the state of the room is visible without opening the stats. */
+/* The sealed badge carries the short code right after the link state, so the
+ * state of the room is visible without opening the stats. */
 .badge {
-  margin-left: auto;
   padding: 1px 9px;
   font-size: var(--fs-smaller);
   letter-spacing: 0.08em;
@@ -287,10 +371,15 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .chat { width: auto; flex: 1 1 auto; min-height: 0; }
 .stats { width: 320px; }
 .chat-head, .stats-head {
-  background: var(--navy);
+  /* The chat head is a title bar of the era: the same navy gradient as the
+     window title, with a light edge on top and on the left. */
+  background: linear-gradient(90deg, var(--navy), #084a80);
+  border: 1px solid;
+  border-color: #9ec8e8 var(--navy) var(--navy) #9ec8e8;
   color: #fff;
+  font-weight: bold;
   font-size: var(--fs-smaller);
-  padding: 2px 5px;
+  padding: 1px 4px;
   flex: none;
 }
 .stats-head {
@@ -317,10 +406,12 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  margin: 1px 0;
+  margin: 2px 0;
   padding: 3px 5px;
   list-style: none;
   background: #fff;
+  border: 1px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
   font-size: var(--fs-smaller);
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -332,8 +423,10 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  margin: 1px 0;
+  margin: 2px 0;
   background: #fff;
+  border: 1px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
   -webkit-overflow-scrolling: touch;
 }
 .stats .stats-body {
@@ -342,8 +435,30 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   margin: 0;
 }
 .chat-log li { margin: 0; }
-.chat-log .when { color: var(--grey); margin-right: 4px; }
+/* A chat line is a row, and a dotted rule separates it from the one above,
+ * the way the chat windows of the era did it. */
+.chat-log li + li { border-top: 1px dotted #b4b4b4; padding-top: 1px; margin-top: 1px; }
+.chat-log .when { color: var(--grey); margin-right: 4px; font-family: monospace; }
 .chat-log .who { color: var(--navy); font-weight: bold; }
+/* Grey, square, bevelled scrollbars: the native bar is the one modern thing
+ * left on the panel. */
+.chat-log, .stats-scroll, .stats-body, .stage-rail { scrollbar-color: var(--panel) #e4e4e4; }
+.chat-log::-webkit-scrollbar,
+.stats-scroll::-webkit-scrollbar,
+.stats-body::-webkit-scrollbar,
+.stage-rail::-webkit-scrollbar { width: 16px; height: 16px; background: #e4e4e4; }
+.chat-log::-webkit-scrollbar-thumb,
+.stats-scroll::-webkit-scrollbar-thumb,
+.stats-body::-webkit-scrollbar-thumb,
+.stage-rail::-webkit-scrollbar-thumb {
+  background: var(--panel);
+  border: 1px solid;
+  border-color: #fff var(--edge) var(--edge) #fff;
+}
+.chat-log::-webkit-scrollbar-corner,
+.stats-scroll::-webkit-scrollbar-corner,
+.stats-body::-webkit-scrollbar-corner,
+.stage-rail::-webkit-scrollbar-corner { background: #e4e4e4; }
 .chat-form {
   display: flex;
   gap: 2px;
@@ -583,16 +698,16 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 }
 .tile[data-mic="off"] .name::before { background: var(--red); }
 
-/* sealed rooms: the short code of a guest. It is a card at the foot of the
- * tile, made of OpenMoji drawings and the code in groups of four. It only
- * shows while the pointer is over that tile or while the host menu has the
- * focus, so the picture is free of clutter. */
+/* sealed rooms: the short code of a guest. It is a card inside the member
+ * menu, made of OpenMoji drawings and the code in groups of four, so it never
+ * covers a picture. One builder feeds the menu and the stats panel. */
 .sas {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
   max-width: 100%;
+  margin-top: 2px;
   padding: 5px 4px 6px;
   background: var(--panel);
   border: 2px solid;
@@ -602,21 +717,6 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   line-height: 1.25;
   color: var(--ink);
 }
-.tile .sas {
-  position: absolute;
-  left: 50%;
-  bottom: 34px;
-  transform: translateX(-50%);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 90ms linear;
-  pointer-events: none;
-}
-.tile:hover .sas,
-.tile:focus-within .sas,
-.tile.ctl .sas { opacity: 1; visibility: visible; }
-/* The card lets the pointer through, except its buttons: the pin lives there. */
-.sas button { pointer-events: auto; }
 .sas-head {
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -705,8 +805,6 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   height: 16px;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--panel-lo);
-  background: var(--panel-hi);
 }
 .tile .vol-range:focus { outline: 1px dotted var(--ink); outline-offset: -2px; }
 .tile .vol-num { min-width: 36px; text-align: right; }
@@ -763,6 +861,8 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   z-index: 5;
   display: flex;
   flex-direction: column;
+  min-width: 190px;
+  max-width: min(300px, calc(100vw - 16px));
   background: var(--panel);
   border: 2px solid;
   border-color: var(--panel-hi) #000 #000 var(--panel-hi);
@@ -832,8 +932,6 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   height: 16px;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--panel-lo);
-  background: var(--panel-hi);
 }
 .plist-row .vol-range:focus { outline: 1px dotted var(--ink); outline-offset: -2px; }
 .plist-row .vol-num { flex: none; min-width: 30px; text-align: right; }
@@ -889,17 +987,9 @@ label.check input { width: auto; min-height: 0; margin: 0; }
    picture still shows that it talks. */
 .plist-row.speaking { border-color: #007000; }
 .plist-row.speaking::before { background: #00b000; }
-/* A guest without a picture has no tile to hover, so its row keeps the sealed
-   code card behind one button and opens it inside the list. The row wraps
-   around the card and the list scrolls, so nothing outside the list moves. */
-.plist-row .row-sas {
-  flex: none;
-  min-width: 20px;
-  min-height: 18px;
-  padding: 0 2px;
-}
-.plist-row .sas { flex: 1 0 100%; order: 10; margin: 2px 0; }
-.plist-row:has(.sas:not([hidden])) { flex-wrap: wrap; }
+/* The sealed code card sits inside the member menu of a row too, and the menu
+   carries the column, so the row only wraps around the open menu. */
+.plist-row .menu .sas { width: 100%; }
 .plist-row .sas-emoji { width: 22px; height: 22px; }
 .plist-row .sas .id-fp { white-space: normal; word-break: break-all; }
 
@@ -1104,27 +1194,30 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   transition: width 120ms linear;
 }
 
+/* The controls are a toolbar group on the status line. The group takes the
+ * free space at the right and wraps on a narrow window, so no control is
+ * ever hidden. */
 .controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 5px;
-  background: var(--panel);
-  border: 2px solid;
-  border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
+  justify-content: flex-end;
+  gap: 5px;
+  margin-left: auto;
+  padding: 0;
 }
 .ctrl {
-  min-width: 104px;
+  min-width: 100px;
+  min-height: 32px;
+  padding: 3px 9px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
 }
-/* A toolbar button carries its drawing left of the label, so the buttons are
-   told apart by a picture and not only by a word. */
-.ctrl .ico { flex: none; width: 16px; height: 16px; }
+/* A toolbar button carries a big drawing left of the label, so the buttons
+   are told apart by a picture and not only by a word. */
+.ctrl .ico { flex: none; width: 22px; height: 22px; }
 .pick { display: flex; align-items: center; gap: 4px; margin: 0; font-size: var(--fs-smaller); }
 .pick select { width: auto; margin: 0; }
 .pick.check { margin: 0; }
@@ -1161,7 +1254,10 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 @media (max-width: 560px) {
   .stage-main { grid-template-columns: 1fr; }
   .ctrl { min-width: 0; flex: 1; }
-  .pick { width: 100%; justify-content: space-between; }
+  /* The picks sit on the toolbar line, so they keep their own width; a full
+     width field would push the toolbar down the screen. */
+  .pick { width: auto; }
+  .statusline .controls { gap: 4px; }
 }
 
 /* ------------------------------------------------------------- identity pins */
@@ -1174,12 +1270,12 @@ label.check input { width: auto; min-height: 0; margin: 0; }
    can name by identity. Green when every guest is verified, red when one is
    not, and both stay above 8:1 on the grey panel. */
 .badge.pincount {
-  margin-left: auto;
   color: #141414;
   background: #dfdfdf;
   border: 1px solid #808080;
   padding: 0 6px;
   font-size: var(--fs-tiny);
+  flex: none;
 }
 .badge.pincount[data-verified="all"] {
   color: #eaffef;
