@@ -85,22 +85,16 @@ func (p *passHash) matches(pass string) bool {
 
 func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
 	prf := hmac.New(sha256.New, password)
-	block := make([]byte, 0, len(salt)+4)
-	block = append(block, salt...)
-	block = append(block, 0, 0, 0, 1)
-	prf.Write(block)
+	prf.Write(salt)
+	prf.Write([]byte{0, 0, 0, 1})
 	u := prf.Sum(nil)
-	out := make([]byte, len(u))
-	copy(out, u)
+	out := append([]byte(nil), u...)
 	for i := 1; i < iter; i++ {
 		prf.Reset()
 		prf.Write(u)
 		u = prf.Sum(u[:0])
 		for j := range out {
 			out[j] ^= u[j]
-		}
-		if keyLen < len(out) {
-			return out[:keyLen]
 		}
 	}
 	return out[:keyLen]
