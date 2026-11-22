@@ -1,9 +1,9 @@
 /* Headless Chromium check for a sealed room with three guests.
  *
- * A mesh has one code per pair, so three guests mean three codes. The room
- * badge must not read that as a mismatch: it says that a mesh has one code per
- * pair and each code stays on its own tile. A failed key confirmation is the
- * only alarm, and it stays on that pair.
+ * A mesh has one code per pair, so three guests mean three codes, and each code
+ * stays on its own tile. The chip at the far end of the status line counts the
+ * guests this browser pinned and turns green only when all of them are pinned.
+ * A failed key confirmation is the only alarm, and it stays on that pair.
  *
  * env: PW (playwright-core directory), ROOMSBASE, OUTDIR
  */
@@ -90,11 +90,11 @@ function meshState(page) {
       tileSas: p.tile ? p.tile.dataset.sas || '' : '',
       fp: p.fp || '', proven: !!p.proven,
     }));
-    const badge = document.getElementById('sealed-badge');
+    const chip = document.getElementById('pin-count');
     const stats = document.getElementById('stats-body') ? document.getElementById('stats-body').textContent : '';
     return {
       self: s.self, room: s.room, peers,
-      badge: { text: badge.textContent, title: badge.title, hidden: badge.hidden },
+      chip: { text: chip.textContent, title: chip.title, hidden: chip.hidden, verified: chip.dataset.verified || '' },
       stats,
       confirmFailures: window.e2eApp.counters().confirmFailures,
       workerErrors: window.e2eApp.counters().workerErrors.length,
@@ -166,18 +166,19 @@ async function dump(page, label, errors) {
       await openStats(g.page);
       const st = await meshState(g.page);
       const label = st.peers.map((p) => p.name).sort().join('+');
-      info('guest state', JSON.stringify({ self: st.self, room: st.room, peers: st.peers.map((p) => p.name + ':' + p.sas), badge: st.badge.text }));
+      info('guest state', JSON.stringify({ self: st.self, room: st.room, peers: st.peers.map((p) => p.name + ':' + p.sas), chip: st.chip.text }));
       const codes = st.peers.map((p) => p.sas);
       check('the two pair codes differ at one guest (' + label + ')', codes[0] !== codes[1], codes.join(' vs '));
       check('both pair codes are on the tiles (' + label + ')',
         st.peers.every((p) => p.tileSas === p.sas), JSON.stringify(st.peers.map((p) => p.tileSas)));
-      check('the badge says one code per pair (' + label + ')',
-        st.badge.text === 'pq-e2e one code per pair', JSON.stringify(st.badge));
-      check('the badge title names the guest count (' + label + ')',
-        /2 guests/.test(st.badge.title) && /own code/.test(st.badge.title), st.badge.title);
-      check('the badge is visible (' + label + ')', st.badge.hidden === false);
-      check('the badge is not an alarm (' + label + ')', !/differ|mismatch/i.test(st.badge.text), st.badge.text);
-      check('the stats row agrees with the badge (' + label + ')',
+      check('the chip counts the guests this browser pinned (' + label + ')',
+        st.chip.text === 'verified 0/2' && st.chip.hidden === false, JSON.stringify(st.chip));
+      check('the chip is red while no guest is pinned (' + label + ')',
+        st.chip.verified === 'part', JSON.stringify(st.chip));
+      check('the chip title says each pair has its own code (' + label + ')',
+        /own code/.test(st.chip.title), st.chip.title);
+      check('the chip is not an alarm (' + label + ')', !/differ|mismatch/i.test(st.chip.title), st.chip.title);
+      check('the stats row keeps the per pair summary (' + label + ')',
         /one code per pair/.test(st.stats) && !/KEY MISMATCH|CODES DIFFER/.test(st.stats), st.stats.slice(0, 160));
       check('no key confirmation failure (' + label + ')', st.confirmFailures === 0, st.confirmFailures);
       check('no worker error (' + label + ')', st.workerErrors === 0, JSON.stringify(st.workerErrorList));
@@ -333,8 +334,8 @@ async function dump(page, label, errors) {
     }, bobPeer.id);
     check('an old key that comes back is an alarm', oldBack === 'rollback', oldBack);
 
-    // A guest leaves: one pair remains, so the badge goes back to one code and
-    // that code is the code of the remaining pair.
+    // A guest leaves: one pair remains, so the chip counts one guest and that
+    // guest keeps its own code on its tile.
     await c.page.click('#leave-btn');
     for (const g of [a, b]) {
       await until(g.page, () => window.e2eApp.peers().length === 1 && window.e2eApp.peers()[0].ready === 'ready',
@@ -344,9 +345,11 @@ async function dump(page, label, errors) {
     for (const [g, label] of [[a, 'alice'], [b, 'bob']]) {
       const st = await meshState(g.page);
       const code = st.peers.length === 1 ? st.peers[0].sas : '';
-      info('after the third guest left', JSON.stringify({ label, peers: st.peers.map((p) => p.name), badge: st.badge }));
-      check('the badge carries the single pair code again (' + label + ')',
-        !!code && st.badge.text.includes(code), st.badge.text);
+      info('after the third guest left', JSON.stringify({ label, peers: st.peers.map((p) => p.name), chip: st.chip }));
+      check('the chip counts one guest again (' + label + ')',
+        st.chip.text === 'verified 0/1', st.chip.text);
+      check('the remaining tile keeps its pair code (' + label + ')',
+        !!code && st.peers.every((p) => p.tileSas === p.sas), code);
     }
 
     // The F2 case, both halves. A guest that completes a handshake but does

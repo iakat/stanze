@@ -291,12 +291,18 @@ async function frameDump(page, label) {
     info('A peer', JSON.stringify(sa.peers));
     info('B peer', JSON.stringify(sb.peers));
     check('both sides derive the same short code', sa.peers[0].sas === sb.peers[0].sas, sa.peers[0].sas);
-    const badge = await a.page.evaluate(() => ({
-      text: document.getElementById('sealed-badge').textContent,
-      test: window.e2eApp.state.wasmTest ? window.e2eApp.state.wasmTest.sas : '',
-    }));
-    check('the badge carries the peer code, not the self test code',
-      badge.text.includes(sa.peers[0].sas) && !(badge.test && badge.text.includes(badge.test)), badge.text);
+    const chip = await a.page.evaluate(() => {
+      const el = document.getElementById('pin-count');
+      return {
+        text: el.textContent, verified: el.dataset.verified || '', hidden: el.hidden,
+        codes: [...document.querySelectorAll('.tile[data-sas]')].map((t) => t.dataset.sas).filter(Boolean),
+        test: window.e2eApp.state.wasmTest ? window.e2eApp.state.wasmTest.sas : '',
+      };
+    });
+    check('the top right chip counts the guests this browser pinned, and is red while one is unverified',
+      chip.text === 'verified 0/1' && chip.verified === 'part' && chip.hidden === false, JSON.stringify(chip));
+    check('the pair code sits on the guest tile, not the self test code',
+      chip.codes.includes(sa.peers[0].sas) && !chip.codes.includes(chip.test), JSON.stringify(chip.codes));
     check('A sees the decrypted name bob', sa.peers[0].name === 'bob', sa.peers[0].name);
     check('B sees the decrypted name alice', sb.peers[0].name === 'alice', sb.peers[0].name);
 
