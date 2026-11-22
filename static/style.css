@@ -762,10 +762,10 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   line-height: 1.4;
 }
 
-/* One card per person or per group: a name, then key/value lines. The key is
-   small and quiet on the left, the value sits on the right in tabular figures,
-   so a column of numbers reads in one look and nothing has to be parsed out of
-   a sentence. */
+/* One card per person or per group: a name, then one line per thing that is
+   measured. A line keeps its key small and quiet on the left and its numbers
+   on the right, and the numbers take the room they need, so no fixed column
+   and no margin can squeeze a rate onto a second line. */
 .srow {
   padding: 6px 0 3px;
   border-top: 1px solid #0000001f;
@@ -774,27 +774,31 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 .sname { font-weight: bold; color: var(--navy); margin-bottom: 1px; }
 .sline {
   display: grid;
-  grid-template-columns: 54px repeat(4, minmax(0, 1fr));
+  grid-template-columns: 46px minmax(0, 1fr);
   align-items: baseline;
-  column-gap: 8px;
+  column-gap: 5px;
   color: var(--ink);
   line-height: 1.55;
 }
-.sline .sk { min-width: 0; color: var(--soft); }
-/* The cells of one row are the columns of the table: one cell per number, so
- * the same number sits on the same column in every row. */
-.sline .sv { display: contents; }
-.sline .cell {
+.sline .sk { min-width: 0; color: var(--soft); white-space: nowrap; }
+/* The cells of a line sit side by side at the right edge with a small gap, and
+ * an empty cell keeps no room at all. */
+.sline .sv {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 0 6px;
+  min-width: 0;
   text-align: right;
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
 }
-/* A thin rule between two cells is the line between two columns, and an empty
- * cell leaves no rule behind. */
-.sline .cell:not(:first-child):not(:empty)::before {
-  content: '|';
-  margin-right: 6px;
-  color: #00000033;
+.sline .cell { font-variant-numeric: tabular-nums; }
+.sline .cell:empty { display: none; }
+/* A number is read digit by digit against the line above, so it is monospace
+ * and one digit is one width. */
+.sline .cell.num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.94em;
 }
 .sline.good { color: var(--green); }
 .sline.bad { color: var(--red); }
@@ -810,21 +814,14 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 /* An indented row carries the part under a total, and its value is quiet:
  * the total is the number to read first. */
 .sline.sub { padding-left: 10px; }
-.sline.sub .sv { margin-left: 0; text-align: left; }
+.sline.sub .sv { justify-content: flex-start; text-align: left; }
 .sline.sub:not(.good):not(.bad) .sv { color: var(--soft); }
-/* A key is read letter by letter, so its value is monospace and right aligned
- * like every other value on the panel. */
+/* A key is read letter by letter, so its value is monospace. */
 .sline.mono .cell {
-  grid-column: 2 / -1;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.94em;
   letter-spacing: 0.01em;
 }
-/* A row that carries one value takes the whole width, so a sentence is not
- * squeezed into the first column of the table. */
-.sline .cell:only-child { grid-column: 2 / -1; }
-/* A quiet row under a row keeps its text on the left of the value area. */
-.sline.sub .cell { grid-column: 2 / -1; text-align: left; }
 
 .controls {
   display: flex;

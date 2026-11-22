@@ -3626,10 +3626,10 @@ function statIcon(hex, title) {
   return img;
 }
 
-// statCells fills one row with one cell per part. A part is text, or
+// statCells fills one line with one cell per part. A part is text, or
 // [drawing, word, text] with the word in the title, or the same with a fourth
-// false to mark that cell red. An empty part keeps its column, so the numbers
-// of the row below still line up with it.
+// false to mark that cell red. A cell that carries a digit is a number, and a
+// number is monospace so one digit is one width against the line above it.
 function statCells(value) {
   const span = document.createElement('span');
   span.className = 'sv';
@@ -3637,11 +3637,12 @@ function statCells(value) {
   for (const raw of parts) {
     const p = Array.isArray(raw) ? raw : [raw];
     const cell = document.createElement('span');
-    cell.className = 'cell' + (p[3] === true ? ' good' : p[3] === false ? ' bad' : '');
     if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
     const text = document.createElement('span');
     const word = p.length > 1 ? p[2] : p[0];
     text.textContent = word === null || word === undefined ? '' : String(word);
+    cell.className = 'cell' + (/\d/.test(text.textContent) ? ' num' : '') +
+      (p[3] === true ? ' good' : p[3] === false ? ' bad' : '');
     cell.appendChild(text);
     span.appendChild(cell);
   }
