@@ -55,6 +55,7 @@ const state = {
   insideFps: new Set(), // fingerprints of proven guests seen inside this call, for a quick return
   mirror: true,
   selfPip: false,     // the own picture is a small preview, not a tile in the grid
+  voiceTiles: false,  // a guest without a camera also gets a tile in the large area
   noiseWanted: true,
   leaving: false,
   reconnectTimer: null,
@@ -138,6 +139,7 @@ const state = {
  *   'stats-btn': HTMLButtonElement, 'stats-close': HTMLButtonElement,
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   quality: HTMLSelectElement, mirror: HTMLInputElement, pip: HTMLInputElement,
+ *   'voice-tiles': HTMLInputElement,
  *   'noise-live': HTMLInputElement, 'stage-error': HTMLElement,
  *   'cam-select': HTMLSelectElement, 'mic-select': HTMLSelectElement,
  *   'cam-live': HTMLSelectElement, 'mic-live': HTMLSelectElement,
@@ -431,8 +433,11 @@ function spotlightTile() {
 // members in step. A tile keeps its node, so its video element keeps its stream
 // and its sliders keep their listener. Without a spotlight, the tiles with a
 // picture take the large area; a tile without one stays out of the frame,
-// because its row in the list already names the guest. The list is a block of
-// reserved height that scrolls, so no tile and no row can move the stage.
+// because its row in the list already names the guest. The voice-only switch
+// gives such a tile its place in the frame again, with its avatar and its name
+// in the size of a picture tile; a guest that still waits stays in the rail.
+// The list is a block of reserved height that scrolls, so no tile and no row
+// can move the stage.
 function layoutStage() {
   const main = $('stage-main');
   const rail = $('stage-rail');
@@ -450,7 +455,8 @@ function layoutStage() {
   let shown = 0;
   for (const tile of stageTiles()) {
     const inPip = pip && tile === self;
-    const big = !inPip && (spot ? tile === spot : tileHasPicture(tile));
+    const voice = state.voiceTiles && !tile.dataset.waiting;
+    const big = !inPip && (spot ? tile === spot : (tileHasPicture(tile) || voice));
     if (big) shown++;
     tile.hidden = inPip ? false : !big;
     const on = big && !!spot;
@@ -1973,6 +1979,7 @@ function updateButtons() {
   setCtrl('share-btn', state.screen ? 'stop share' : 'share screen', !!state.screen);
   $('mirror').checked = state.mirror;
   $('pip').checked = state.selfPip;
+  $('voice-tiles').checked = state.voiceTiles;
   // Without a microphone the switch still shows what the next microphone will
   // get, which is the stored choice.
   $('noise-live').checked = state.micSource ? state.denoiseOn : state.noiseWanted;
@@ -6840,6 +6847,10 @@ function init() {
   // left it that way.
   state.selfPip = load('selfpip') === '1';
   $('pip').checked = state.selfPip;
+  // The voice-only switch comes back too, so a guest who wants every voice in
+  // the frame keeps that frame on the next visit.
+  state.voiceTiles = load('voicetiles') === '1';
+  $('voice-tiles').checked = state.voiceTiles;
 
   // The module is warming before the first click, so a failure is visible in
   // the lobby and the join is only a microphone prompt.
@@ -6921,6 +6932,14 @@ function init() {
   $('pip').addEventListener('change', () => {
     state.selfPip = $('pip').checked;
     store('selfpip', state.selfPip ? 1 : 0);
+    layoutStage();
+  });
+
+  // A guest without a camera can take a tile of its own instead of a rail row
+  // alone. The choice is kept, like the other switches.
+  $('voice-tiles').addEventListener('change', () => {
+    state.voiceTiles = $('voice-tiles').checked;
+    store('voicetiles', state.voiceTiles ? 1 : 0);
     layoutStage();
   });
 
