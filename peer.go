@@ -21,11 +21,12 @@ type Peer struct {
 	// are only indicators for the other tiles and the member list; the media
 	// itself decides the truth. The read loop of this peer writes them and
 	// the join of another peer reads them, so fmu guards both.
-	fmu  sync.Mutex
-	mic  bool
-	cam  bool
-	deaf bool
-	hand bool
+	fmu    sync.Mutex
+	mic    bool
+	cam    bool
+	deaf   bool
+	screen bool
+	hand   bool
 	// handSeq is the queue number of a raised hand: the oldest raised hand of
 	// the room is 1. It is 0 while the hand is down, and it never goes back
 	// to an old number, so a hand that is lowered and raised again goes to
@@ -66,9 +67,11 @@ func (p *Peer) enqueue(msg []byte) {
 	}
 }
 
-// setFlags stores the flags that a state message carries and returns all
-// three values as they are now. A nil pointer leaves that flag as it was.
-func (p *Peer) setFlags(mic, cam, deaf *bool) (bool, bool, bool) {
+// setFlags stores the flags that a state message carries and returns all four
+// values as they are now. A nil pointer leaves that flag as it was. A share is
+// a flag like the others, because a picture that stops must leave the stage for
+// everyone at once, not only for the guest whose capture ended.
+func (p *Peer) setFlags(mic, cam, deaf, screen *bool) (bool, bool, bool, bool) {
 	p.fmu.Lock()
 	defer p.fmu.Unlock()
 	if mic != nil {
@@ -80,14 +83,17 @@ func (p *Peer) setFlags(mic, cam, deaf *bool) (bool, bool, bool) {
 	if deaf != nil {
 		p.deaf = *deaf
 	}
-	return p.mic, p.cam, p.deaf
+	if screen != nil {
+		p.screen = *screen
+	}
+	return p.mic, p.cam, p.deaf, p.screen
 }
 
-// flags returns the last reported microphone, camera and deaf flags.
-func (p *Peer) flags() (bool, bool, bool) {
+// flags returns the last reported microphone, camera, deaf and screen flags.
+func (p *Peer) flags() (bool, bool, bool, bool) {
 	p.fmu.Lock()
 	defer p.fmu.Unlock()
-	return p.mic, p.cam, p.deaf
+	return p.mic, p.cam, p.deaf, p.screen
 }
 
 // setHand writes the raised hand and returns it with its queue number. next is
@@ -150,10 +156,11 @@ func (p *Peer) close() {
 
 type peerInfo struct {
 	ID    string `json:"id"`
-	Mic   bool   `json:"mic"`
-	Cam   bool   `json:"cam"`
-	Deaf  bool   `json:"deaf,omitempty"`
-	Admin bool   `json:"admin,omitempty"`
+	Mic    bool   `json:"mic"`
+	Cam    bool   `json:"cam"`
+	Deaf   bool   `json:"deaf,omitempty"`
+	Screen bool   `json:"screen,omitempty"`
+	Admin  bool   `json:"admin,omitempty"`
 	// Waiting is true for a guest that the room has not let in yet.
 	Waiting bool `json:"waiting,omitempty"`
 	// Hand is a raised hand, and HandSeq is its place in the queue.
@@ -180,8 +187,9 @@ type clientMsg struct {
 	// mic, cam, deaf and hand are pointers so "not sent" and "false" differ.
 	Mic  *bool `json:"mic,omitempty"`
 	Cam  *bool `json:"cam,omitempty"`
-	Deaf *bool `json:"deaf,omitempty"`
-	Hand *bool `json:"hand,omitempty"`
+	Deaf   *bool `json:"deaf,omitempty"`
+	Screen *bool `json:"screen,omitempty"`
+	Hand   *bool `json:"hand,omitempty"`
 
 	// action is the admin command: kick, mute, admin, lowerhand or
 	// waitingroom.
@@ -210,6 +218,7 @@ type serverMsg struct {
 	Mic       *bool           `json:"mic,omitempty"`
 	Cam       *bool           `json:"cam,omitempty"`
 	Deaf      *bool           `json:"deaf,omitempty"`
+	Screen    *bool           `json:"screen,omitempty"`
 	Hand      *bool           `json:"hand,omitempty"`
 	HandSeq   int             `json:"handSeq,omitempty"`
 	Admins    []string        `json:"admins,omitempty"`

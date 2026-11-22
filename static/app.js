@@ -1973,7 +1973,7 @@ function makeScreenTile(peer) {
 function paintPeerScreen(peer) {
   const track = peer.screenTrack;
   if (!track) return;
-  if (!state.deaf && track.readyState === 'live' && !track.muted) {
+  if (!state.deaf && peer.screenShared !== false && track.readyState === 'live' && !track.muted) {
     const tile = makeScreenTile(peer);
     const video = tile.querySelector('video');
     const stream = new MediaStream([track]);
@@ -1986,6 +1986,20 @@ function paintPeerScreen(peer) {
     try { video.pause(); } catch { /* not playing */ }
     video.srcObject = null;
   }
+  layoutStage();
+}
+
+// dropPeerScreen takes the screen tile of a guest out of the stage and lets go
+// of the frozen last frame. The receiver track itself stays for the pair, so the
+// next share of that guest reuses it and needs no new negotiation.
+function dropPeerScreen(peer) {
+  if (!peer.screenTile) return;
+  const video = peer.screenTile.querySelector('video');
+  peer.screenTile.classList.remove('playing');
+  try { video.pause(); } catch { /* not playing */ }
+  video.srcObject = null;
+  peer.screenTile.remove();
+  peer.screenTile = null;
   layoutStage();
 }
 
@@ -2470,7 +2484,7 @@ async function setPeerNoise(peer, on) {
 function sendState() {
   refreshSelf();
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    send({ t: 'state', mic: state.mic, cam: state.cam, deaf: state.deaf, hand: state.hand });
+    send({ t: 'state', mic: state.mic, cam: state.cam, deaf: state.deaf, screen: !!state.screen, hand: state.hand });
   }
 }
 
@@ -2892,6 +2906,7 @@ async function startShare() {
     state.screenSource.connect(state.mixer);
     resumeAudio();
   }
+  sendState();
   layoutStage();
   updateButtons();
 }
@@ -2906,6 +2921,7 @@ async function stopShare() {
     state.screenSource = null;
   }
   state.screen = null;
+  sendState();
   await replaceScreenTrack(null);
   if (state.screenTile) {
     state.screenTile.remove();
@@ -3361,6 +3377,8 @@ function handle(msg) {
         if (!info) continue;
         const peer = ensurePeer(info.id, info.mic, info.cam, info.deaf, info.hand, info.handSeq);
         peer.waiting = !!info.waiting;
+        // A guest who shares nothing on join has no tile to wait for.
+        peer.screenShared = !!info.screen;
         sealedSendPub(peer);
       }
       markAdmins();
@@ -3374,6 +3392,7 @@ function handle(msg) {
       if (!msg.peer) break;
       const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam, msg.peer.deaf, msg.peer.hand, msg.peer.handSeq);
       peer.waiting = !!msg.peer.waiting;
+      peer.screenShared = !!msg.peer.screen;
       if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
       paintWaiting();
@@ -3427,6 +3446,14 @@ function handle(msg) {
         if (msg.mic !== undefined) peer.mic = msg.mic;
         if (msg.cam !== undefined) peer.cam = msg.cam;
         if (msg.deaf !== undefined) peer.deaf = msg.deaf;
+        if (msg.screen !== undefined) {
+          peer.screenShared = !!msg.screen;
+          // A share that stops must leave the stage, not stand there frozen on
+          // its last frame: the sender's track stays live and unmuted when it
+          // only replaces it with nothing, so the flag is the only news.
+          if (peer.screenShared) paintPeerScreen(peer);
+          else dropPeerScreen(peer);
+        }
         if (msg.hand !== undefined) {
           const was = peer.hand;
           peer.hand = !!msg.hand;
