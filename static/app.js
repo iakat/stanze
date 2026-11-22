@@ -56,6 +56,10 @@ const state = {
   mirror: true,
   selfPip: false,     // the own picture is a small preview, not a tile in the grid
   voiceTiles: true,   // a guest without a camera also gets a tile in the large area
+  look: 'none',       // the look of the own camera, drawn in this tab
+  mask: 'none',       // a mask drawn on the face of the own camera
+  lookPipe: null,     // the canvas pipeline while a look or a mask is on
+  lookOut: null,      // the canvas video track that peers receive
   noiseWanted: true,
   leaving: false,
   reconnectTimer: null,
@@ -150,6 +154,7 @@ const state = {
  *   'perf-text': HTMLElement, 'perf-live-text': HTMLElement,
  *   'menu-asr-btn': HTMLButtonElement, 'asr-on': HTMLInputElement,
  *   'asr-lang': HTMLSelectElement, 'asr-note': HTMLElement,
+ *   'look-filter': HTMLSelectElement, 'look-mask': HTMLSelectElement, 'look-note': HTMLElement,
  * }} Elements
  */
 
@@ -179,6 +184,26 @@ const QUALITY = {
   '1920x1080@60': { w: 1920, h: 1080, fps: 60, max: 5000000 },
   '2560x1440@30': { w: 2560, h: 1440, fps: 30, max: 6000000 },
 };
+
+// The look of the own camera. A colour step is a canvas filter, and a mask is
+// drawn on the face patch that a small skin tone search finds. Both run in this
+// tab before the frame is sealed: the other side needs nothing, and the camera
+// keeps working, so its light stays on. One choice per guest, off by default.
+/** @type {Record<string, string>} */
+const LOOKS = {
+  none: '',
+  soft: 'brightness(1.05) contrast(0.97) saturate(1.03) blur(0.5px)',
+  warm: 'saturate(1.15) sepia(0.18) brightness(1.04)',
+  cool: 'saturate(1.06) hue-rotate(-10deg) brightness(1.02)',
+  mono: 'grayscale(1) contrast(1.06)',
+  sepia: 'sepia(0.85) contrast(1.04)',
+  vivid: 'saturate(1.4) contrast(1.08)',
+};
+/** @type {string[]} */
+const MASKS = ['none', 'glasses', 'moustache', 'cat'];
+// The long side of the canvas. A camera step above this is scaled down before
+// the look runs, so a filter never costs more pixels than it has to.
+const LOOK_MAX = 1280;
 
 // newRoomID builds a 128 bit room id in the client, so the lobby can suggest
 // one without asking the server.
@@ -1058,8 +1083,9 @@ async function capVideoSender(sender) {
 // screen share is left alone, because the share keeps its own quality.
 function capCameraSenders(pc) {
   if (!pc || !state.camTrack) return;
+  const drawn = lookTrack();
   for (const sender of pc.getSenders()) {
-    if (sender.track !== state.camTrack) continue;
+    if (sender.track !== state.camTrack && sender.track !== drawn) continue;
     capVideoSender(sender);
   }
 }
@@ -1079,11 +1105,13 @@ async function applyQuality() {
   }
   for (const peer of state.peers.values()) {
     if (!peer.pc) continue;
+    const drawn = lookTrack();
     for (const sender of peer.pc.getSenders()) {
-      if (!sender.track || sender.track !== track) continue;
+      if (!sender.track || (sender.track !== track && sender.track !== drawn)) continue;
       if (!(await capVideoSender(sender))) refused = true;
     }
   }
+  lookResize();
   if (refused) say('the browser refused the new camera quality; the old one stays in effect');
 }
 
@@ -1529,8 +1557,9 @@ function paintSelfCam(on) {
   const self = document.querySelector('.tile[data-local="yes"]');
   if (!self) return;
   const video = self.querySelector('video');
-  if (on && state.camTrack) {
-    const stream = new MediaStream([state.camTrack]);
+  const track = lookTrack() || state.camTrack;
+  if (on && track) {
+    const stream = new MediaStream([track]);
     if (video.srcObject !== stream) video.srcObject = stream;
     self.classList.add('playing');
     video.play().catch(() => {});
@@ -1583,6 +1612,8 @@ async function adoptCam(track) {
     }
     if (!state.outStream.getVideoTracks().includes(track)) state.outStream.addTrack(track);
     publishTrack(track);
+    // A look or a mask follows the camera it was drawn from.
+    await lookRestart();
   }
   if (prev && prev !== track) {
     try { prev.stop(); } catch { /* already stopped */ }
@@ -1662,6 +1693,8 @@ function disableCam(persist = true) {
   // sender that still holds the old track gets the new one in adoptCam.
   const track = state.camTrack;
   state.camTrack = null;
+  // The drawn track reads from the camera, so it goes with it.
+  lookStop();
   if (track) {
     try { track.stop(); } catch { /* already stopped */ }
   }
@@ -2082,6 +2115,281 @@ function applyMirror() {
   layoutStage();
 }
 
+// ---------------------------------------------------------------- camera look
+
+// lookOn answers "is any drawn step wanted". The camera itself is not touched.
+function lookOn() {
+  return (state.look && state.look !== 'none') || (state.mask && state.mask !== 'none');
+}
+
+// lookTrack is the drawn track while it is live, or null.
+function lookTrack() {
+  return state.lookOut && state.lookOut.readyState === 'live' ? state.lookOut : null;
+}
+
+// lookStart builds the pipeline once: the camera feeds a video element, every
+// animation frame is drawn on a canvas with the colour step and the mask, and
+// the canvas track becomes what peers receive. Nothing is uploaded.
+async function lookStart() {
+  if (!lookOn() || !state.camTrack || state.screen) return;
+  if (state.lookPipe) return;
+  const src = state.camTrack;
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = new MediaStream([src]);
+  try { await video.play(); } catch { /* the first frame comes later */ }
+  const settings = src.getSettings ? src.getSettings() : {};
+  const scale = Math.min(1, LOOK_MAX / Math.max(settings.width || 1280, settings.height || 720));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(2, Math.round((settings.width || 1280) * scale));
+  canvas.height = Math.max(2, Math.round((settings.height || 720) * scale));
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) return;
+  const stream = canvas.captureStream(30);
+  const track = stream.getVideoTracks()[0];
+  if (!track) return;
+  track.contentHint = 'motion';
+  // A 64 x 48 sample for the skin patch of a mask. It is read in this tab
+  // only, and it never leaves it.
+  const sample = document.createElement('canvas');
+  sample.width = 64;
+  sample.height = 48;
+  const sctx = sample.getContext('2d', { alpha: false, willReadFrequently: true });
+  state.lookPipe = { src, video, canvas, ctx, sample, sctx, stream, track, raf: 0, anchor: null, frame: 0 };
+  const tick = () => {
+    const p = state.lookPipe;
+    if (!p) return;
+    lookDraw(p);
+    p.raf = requestAnimationFrame(tick);
+  };
+  state.lookPipe.raf = requestAnimationFrame(tick);
+  state.lookOut = track;
+  await lookPublish(track);
+}
+
+// lookDraw paints one frame: the colour step, then the mask on the face patch.
+function lookDraw(p) {
+  if (p.video.readyState < 2 || !p.video.videoWidth) return;
+  p.ctx.filter = LOOKS[state.look] || 'none';
+  p.ctx.drawImage(p.video, 0, 0, p.canvas.width, p.canvas.height);
+  p.ctx.filter = 'none';
+  if (!MASKS.includes(state.mask) || state.mask === 'none' || !p.sctx) return;
+  p.frame++;
+  if (p.frame % 2 === 1) lookAnchor(p);
+  const a = p.anchor || { x: 0.5, y: 0.42, w: 0.4, h: 0.42 };
+  drawMask(p.ctx, p.canvas.width, p.canvas.height, state.mask, a);
+}
+
+// lookAnchor finds the face patch with the classic skin tone test on the small
+// sample, and moves the last place towards it, so a mask does not jump.
+function lookAnchor(p) {
+  try { p.sctx.drawImage(p.video, 0, 0, 64, 48); } catch { return; }
+  let data;
+  try { data = p.sctx.getImageData(0, 0, 64, 48).data; } catch { return; }
+  let n = 0, sx = 0, sy = 0, x0 = 64, y0 = 48, x1 = 0, y1 = 0;
+  for (let y = 0; y < 48; y++) {
+    for (let x = 0; x < 64; x++) {
+      const i = (y * 64 + x) * 4;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (r > 95 && g > 40 && b > 20 && r > b + 15 && r > g && g > b && Math.abs(r - g) > 15) {
+        n++; sx += x; sy += y;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  // Too few skin pixels: no face in this frame, so the last place stays.
+  if (n < 50) return;
+  const next = { x: sx / n / 64, y: sy / n / 48, w: (x1 - x0 + 1) / 64, h: (y1 - y0 + 1) / 48 };
+  if (!p.anchor) { p.anchor = next; return; }
+  const k = 0.25;
+  p.anchor = {
+    x: p.anchor.x + (next.x - p.anchor.x) * k,
+    y: p.anchor.y + (next.y - p.anchor.y) * k,
+    w: p.anchor.w + (next.w - p.anchor.w) * k,
+    h: p.anchor.h + (next.h - p.anchor.h) * k,
+  };
+}
+
+// roundPath draws a rounded rectangle path, so the glasses fit a face.
+function roundPath(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+// drawMask puts one mask on a face patch given as fractions of the frame: the
+// eyes a little above the middle, the ears on the top edge, the moustache
+// under the nose.
+function drawMask(ctx, W, H, which, a) {
+  const cx = a.x * W;
+  const cy = a.y * H;
+  const fw = Math.max(a.w * W, W * 0.22);
+  const fh = Math.max(a.h * H, H * 0.26);
+  const eyeY = cy - fh * 0.12;
+  const lensW = fw * 0.34;
+  const lensH = fw * 0.24;
+  const gap = fw * 0.08;
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  if (which === 'glasses') {
+    ctx.fillStyle = 'rgba(20, 24, 32, 0.5)';
+    ctx.strokeStyle = '#14181f';
+    ctx.lineWidth = Math.max(2, fw * 0.022);
+    for (const side of [-1, 1]) {
+      const x = side < 0 ? cx - gap - lensW : cx + gap;
+      roundPath(ctx, x, eyeY - lensH / 2, lensW, lensH, lensH * 0.4);
+      ctx.fill();
+      ctx.stroke();
+      // One temple arm towards each ear.
+      ctx.beginPath();
+      ctx.moveTo(side < 0 ? x : x + lensW, eyeY);
+      ctx.lineTo(side < 0 ? x - fw * 0.1 : x + lensW + fw * 0.1, eyeY - fh * 0.03);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(cx - gap, eyeY);
+    ctx.lineTo(cx + gap, eyeY);
+    ctx.stroke();
+  } else if (which === 'moustache') {
+    const my = cy + fh * 0.3;
+    ctx.fillStyle = '#2a1c14';
+    ctx.beginPath();
+    ctx.moveTo(cx, my - fh * 0.03);
+    ctx.bezierCurveTo(cx - fw * 0.1, my - fh * 0.09, cx - fw * 0.24, my - fh * 0.05, cx - fw * 0.26, my + fh * 0.04);
+    ctx.bezierCurveTo(cx - fw * 0.14, my + fh * 0.02, cx - fw * 0.05, my + fh * 0.06, cx, my + fh * 0.04);
+    ctx.bezierCurveTo(cx + fw * 0.05, my + fh * 0.06, cx + fw * 0.14, my + fh * 0.02, cx + fw * 0.26, my + fh * 0.04);
+    ctx.bezierCurveTo(cx + fw * 0.24, my - fh * 0.05, cx + fw * 0.1, my - fh * 0.09, cx, my - fh * 0.03);
+    ctx.closePath();
+    ctx.fill();
+  } else if (which === 'cat') {
+    const top = cy - fh * 0.52;
+    ctx.strokeStyle = '#20242c';
+    ctx.lineWidth = Math.max(1.5, fw * 0.012);
+    for (const side of [-1, 1]) {
+      const ex = cx + side * fw * 0.3;
+      ctx.fillStyle = '#3a3f4b';
+      ctx.beginPath();
+      ctx.moveTo(ex - fw * 0.15, top + fh * 0.2);
+      ctx.lineTo(ex, top - fh * 0.1);
+      ctx.lineTo(ex + fw * 0.15, top + fh * 0.2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#e08aa8';
+      ctx.beginPath();
+      ctx.moveTo(ex - fw * 0.07, top + fh * 0.16);
+      ctx.lineTo(ex, top - fh * 0.02);
+      ctx.lineTo(ex + fw * 0.07, top + fh * 0.16);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// lookPublish swaps the drawn track into every sender and the own preview. The
+// screen share keeps the stage, so a look never covers a shared screen.
+async function lookPublish(track) {
+  if (!state.outStream || state.screen) return;
+  for (const old of state.outStream.getVideoTracks()) {
+    if (old !== track) state.outStream.removeTrack(old);
+  }
+  if (!state.outStream.getVideoTracks().includes(track)) state.outStream.addTrack(track);
+  await Promise.all(Array.from(state.peers.values()).map(async (peer) => {
+    const tr = peer.tx && peer.tx.video;
+    if (!tr || peer.waiting) return;
+    await tr.sender.replaceTrack(track).catch(() => {});
+  }));
+  paintSelfCam(true);
+}
+
+// lookStop drops the pipeline. With restore it puts the camera track back on
+// the senders and the preview, unless a screen share is up.
+function lookStop(restore = true) {
+  const p = state.lookPipe;
+  state.lookPipe = null;
+  state.lookOut = null;
+  if (p) {
+    cancelAnimationFrame(p.raf);
+    try { p.video.pause(); } catch { /* already paused */ }
+    p.video.srcObject = null;
+    for (const t of p.stream.getTracks()) {
+      try { t.stop(); } catch { /* already stopped */ }
+    }
+  }
+  if (!restore || state.screen) return;
+  const track = state.camTrack;
+  if (state.outStream) {
+    for (const old of state.outStream.getVideoTracks()) state.outStream.removeTrack(old);
+    if (track) state.outStream.addTrack(track);
+    for (const peer of state.peers.values()) {
+      const tr = peer.tx && peer.tx.video;
+      if (tr && !peer.waiting) tr.sender.replaceTrack(track || null).catch(() => {});
+    }
+  }
+  paintSelfCam(!!track && state.cam);
+}
+
+// lookRestart starts or stops the pipeline to match the current choice and the
+// live camera. It is the one path the menu uses, and the camera path calls it
+// when the track changes.
+async function lookRestart() {
+  if (state.lookPipe) lookStop(false);
+  if (lookOn() && state.camTrack && !state.screen) await lookStart();
+  else paintSelfCam(state.cam && !!state.camTrack);
+}
+
+// lookInit puts the stored choice on the two menu rows and wires them. A
+// change restarts the pipeline at once; the camera is not asked again.
+function lookInit() {
+  const saved = load('look');
+  state.look = Object.prototype.hasOwnProperty.call(LOOKS, saved) ? saved : 'none';
+  const mask = load('mask');
+  state.mask = MASKS.includes(mask) ? mask : 'none';
+  const lookPick = $('look-filter');
+  if (lookPick) {
+    lookPick.value = state.look;
+    lookPick.addEventListener('change', () => {
+      state.look = Object.prototype.hasOwnProperty.call(LOOKS, lookPick.value) ? lookPick.value : 'none';
+      store('look', state.look);
+      lookRestart();
+    });
+  }
+  const maskPick = $('look-mask');
+  if (maskPick) {
+    maskPick.value = state.mask;
+    maskPick.addEventListener('change', () => {
+      state.mask = MASKS.includes(maskPick.value) ? maskPick.value : 'none';
+      store('mask', state.mask);
+      lookRestart();
+    });
+  }
+}
+
+// lookResize follows a camera step so the canvas keeps the picture's shape.
+function lookResize() {
+  const p = state.lookPipe;
+  if (!p) return;
+  const s = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : {};
+  const scale = Math.min(1, LOOK_MAX / Math.max(s.width || 1280, s.height || 720));
+  const w = Math.max(2, Math.round((s.width || 1280) * scale));
+  const h = Math.max(2, Math.round((s.height || 720) * scale));
+  if (w !== p.canvas.width || h !== p.canvas.height) {
+    p.canvas.width = w;
+    p.canvas.height = h;
+  }
+}
+
 // ---------------------------------------------------------------- screen share
 
 // replaceOutVideo swaps the track that is sent to every peer and keeps the
@@ -2125,6 +2433,8 @@ async function startShare() {
     return;
   }
   state.screen = display;
+  // A shared screen keeps its own picture; the look waits for the share to end.
+  lookStop(false);
   const video = display.getVideoTracks()[0];
   if (video) {
     video.contentHint = 'detail';
@@ -2154,6 +2464,8 @@ async function stopShare() {
   }
   state.screen = null;
   await replaceOutVideo(state.cam ? state.camTrack : null);
+  // The look comes back on the camera after the share.
+  lookRestart();
   const tile = document.querySelector('.tile[data-local="yes"]');
   if (tile) {
     const preview = new MediaStream();
@@ -7040,6 +7352,7 @@ function init() {
 
   initLobbyWindow();
   initAsr();
+  lookInit();
 
   // One stored value per guest, written by both sliders. A step that the
   // camera refuses leaves the old size in effect and says so.

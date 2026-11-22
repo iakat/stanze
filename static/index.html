@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122y">
+<link rel="stylesheet" href="/style.css?v=20261122z">
 </head>
 <body>
 
@@ -98,6 +98,27 @@
         <label class="menu-item"><input id="mirror" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">mirror me</span></label>
         <label class="menu-item"><input id="pip" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">own view small</span></label>
         <label class="menu-item"><input id="voice-tiles" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">hide voice-only tiles</span></label>
+        <div class="menu-sep" role="separator"></div>
+        <label class="menu-item"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">look</span>
+          <select id="look-filter" aria-label="camera look">
+            <option value="none">plain</option>
+            <option value="soft">soft</option>
+            <option value="warm">warm</option>
+            <option value="cool">cool</option>
+            <option value="mono">black and white</option>
+            <option value="sepia">old film</option>
+            <option value="vivid">vivid</option>
+          </select>
+        </label>
+        <label class="menu-item"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">mask</span>
+          <select id="look-mask" aria-label="camera mask">
+            <option value="none">none</option>
+            <option value="glasses">glasses</option>
+            <option value="moustache">moustache</option>
+            <option value="cat">cat ears</option>
+          </select>
+        </label>
+        <p id="look-note" class="menu-note">The look is drawn in this tab before the frame is sealed. The camera keeps working, so its light stays on.</p>
         <div class="menu-sep" role="separator"></div>
         <label class="menu-item"><input id="noise-live" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">noise cancel</span></label>
         <label class="menu-item"><input id="sounds" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">sounds</span></label>
@@ -195,6 +216,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122y"></script>
+<script src="/app.js?v=20261122z"></script>
 </body>
 </html>
