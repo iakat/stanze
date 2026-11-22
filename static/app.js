@@ -3435,19 +3435,20 @@ function lossMark(pct) {
   return pct >= 2 ? false : undefined;
 }
 
-// mediaPairs is one direction on one line: the two kinds added, then each kind
-// that moved a byte in brackets, since the line has the room for it and three
-// short lines read slower than one. The parts are shown only when both are
-// live, so a call with sound and no picture stays short.
+// mediaPairs is one direction: the two kinds added on its own line, then the
+// two parts together on the indented line under it. Three numbers on one line
+// is one too many, and two sub lines spend a line on a word. The parts are
+// shown only when both are live, so a call with sound and no picture stays
+// short.
 /** @returns {(string | boolean | undefined)[][]} */
 function mediaPairs(label, video, audio) {
   const total = video + audio;
   if (!(total > 0)) return [];
-  const parts = [];
-  if (video > 0) parts.push('video ' + rateText(video));
-  if (audio > 0) parts.push('audio ' + rateText(audio));
-  const text = parts.length > 1 ? `${rateText(total)} (${parts.join(', ')})` : rateText(total);
-  return [[label, text]];
+  const out = [[label, rateText(total)]];
+  if (video > 0 && audio > 0) {
+    out.push(['', `video ${rateText(video)}, audio ${rateText(audio)}`, undefined, true]);
+  }
+  return out;
 }
 
 // tripText is the round trip and the jitter on one line: they describe the
