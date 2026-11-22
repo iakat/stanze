@@ -118,7 +118,7 @@ const state = {
   sealFault: '',       // why this browser can not seal media, if it can not
   wireFrames: 0,       // signaling frames inspected by the audit
   wireLeaks: [],       // a canary that appeared on the wire, must stay empty
-  canaries: [],        // the name and the chat lines that must never leak
+  canaries: new Set(), // the name and the chat lines that must never leak
   samples: [],         // a few frame samples, for the in-page lab proof
 };
 
@@ -609,13 +609,18 @@ function makeRow(id, name, local = false) {
 
 // ---------------------------------------------------------------- stage layout
 
+let localTile = null; // the own preview tile, made once per room
+function ownTile() {
+  return localTile && localTile.isConnected ? localTile : null;
+}
+
 // stageTiles is every tile in a stable order: the own preview first, then the
 // guests in the order they joined. The order of the two zones follows it, so a
 // relayout never reshuffles the room. A shared screen is its own tile and stands
 // right after the picture of the guest that shares it.
 function stageTiles() {
   const out = [];
-  const self = document.querySelector('.tile[data-local="yes"]');
+  const self = ownTile();
   if (self) out.push(self);
   if (state.screenTile) out.push(state.screenTile);
   for (const peer of state.peers.values()) {
@@ -644,7 +649,7 @@ function tileHasPicture(tile) {
 // its own key.
 function spotlightTile() {
   if (!state.spotlight) return null;
-  if (state.spotlight === 'self') return document.querySelector('.tile[data-local="yes"]');
+  if (state.spotlight === 'self') return ownTile();
   const screen = state.spotlight.endsWith(':screen');
   const id = screen ? state.spotlight.slice(0, -7) : state.spotlight;
   if (id === 'self') return document.querySelector('.tile[data-local="screen"]');
@@ -704,7 +709,7 @@ function layoutStage() {
   if (!main || !rail) return;
   const spot = spotlightTile();
   if (state.spotlight && !spot) state.spotlight = '';
-  const self = document.querySelector('.tile[data-local="yes"]');
+  const self = ownTile();
   // The own picture is a small preview while the switch is on. The node is
   // moved, never copied, so the preview keeps the own stream and the mirror.
   const pip = !!(self && pipBox && state.selfPip);
@@ -1119,7 +1124,7 @@ function paintWaiting() {
     if (peer.tile) applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
     if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
   }
-  const self = document.querySelector('.tile[data-local="yes"]');
+  const self = ownTile();
   if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   updateCount();
   paintHandQueue();
@@ -1172,7 +1177,7 @@ function markAdmins() {
     applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
     if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
   }
-  const self = document.querySelector('.tile[data-local="yes"]');
+  const self = ownTile();
   applyFlags(self, state.mic, state.cam, mine);
   paintHandQueue();
 }
@@ -1740,6 +1745,7 @@ function prepareLocal() {
   // The own tile exists even with no camera and no microphone, so the mirror
   // preview, the name and the mute flags always have a place.
   const self = makeTile(state.name, state.name, true);
+  localTile = self;
   self.dataset.state = 'connected';
   self.querySelector('.state').textContent = 'you';
   applyFlags(self, state.mic, state.cam, isAdmin(state.self));
@@ -1749,7 +1755,7 @@ function prepareLocal() {
 
 // refreshSelf paints the own tile flags and the buttons from the live state.
 function refreshSelf() {
-  const self = document.querySelector('.tile[data-local="yes"]');
+  const self = ownTile();
   applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   paintRowDeaf(document.querySelector('.plist-row[data-local="yes"]'), state.deaf);
   updateButtons();
@@ -1905,17 +1911,25 @@ async function adoptMic(track) {
   }
 }
 
+// setVideoTrack reuses the stream when the same track is still attached, so a
+// repaint does not restart the element.
+function setVideoTrack(video, track) {
+  const stream = video.srcObject;
+  if (!stream || typeof stream.getVideoTracks !== 'function' || stream.getVideoTracks()[0] !== track) {
+    video.srcObject = new MediaStream([track]);
+  }
+}
+
 // paintSelfCam paints the local preview from the camera state. A disabled
 // track gives black frames, so the element is emptied and the tile leaves the
 // playing state: the centre name is back until the camera works again.
 function paintSelfCam(on) {
-  const self = document.querySelector('.tile[data-local="yes"]');
+  const self = ownTile();
   if (!self) return;
   const video = self.querySelector('video');
   const track = lookTrack() || state.camTrack;
   if (on && track) {
-    const stream = new MediaStream([track]);
-    if (video.srcObject !== stream) video.srcObject = stream;
+    setVideoTrack(video, track);
     self.classList.add('playing');
     video.play().catch(() => {});
   } else {
@@ -1933,8 +1947,7 @@ function paintPeerVideo(peer) {
   const video = peer.tile && peer.tile.querySelector('video');
   if (!video) return;
   if (!state.deaf && peer.videoTrack) {
-    const stream = new MediaStream([peer.videoTrack]);
-    if (video.srcObject !== stream) video.srcObject = stream;
+    setVideoTrack(video, peer.videoTrack);
     peer.tile.classList.add('playing');
     video.play().catch(() => {});
   } else {
@@ -1979,8 +1992,7 @@ function paintPeerScreen(peer) {
   if (!state.deaf && peer.screenShared !== false && track.readyState === 'live' && !track.muted) {
     const tile = makeScreenTile(peer);
     const video = tile.querySelector('video');
-    const stream = new MediaStream([track]);
-    if (video.srcObject !== stream) video.srcObject = stream;
+    setVideoTrack(video, track);
     tile.classList.add('playing');
     video.play().catch(() => {});
   } else if (peer.screenTile) {
@@ -2189,7 +2201,7 @@ function paintSpeaking(tile, level, hold) {
 }
 
 function speakTick() {
-  const own = document.querySelector('.tile[data-local="yes"]');
+  const own = ownTile();
   // One read of the microphone tap feeds the talking light and the stats row.
   // The peak falls slowly, so one stats tick can still see a word.
   const level = analyserLevel(state.micAnalyser);
@@ -2498,7 +2510,7 @@ function setHand(on) {
   if (state.waiting || state.hand === on) return;
   state.hand = on;
   if (!on) state.handSeq = 0;
-  const self = document.querySelector('.tile[data-local="yes"]');
+  const self = ownTile();
   if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   updateButtons();
   sendState();
@@ -2569,7 +2581,7 @@ function updateButtons() {
 }
 
 function applyMirror() {
-  const tile = document.querySelector('.tile[data-local="yes"]');
+  const tile = ownTile();
   if (!tile) return;
   tile.classList.toggle('mirrored', state.mirror);
   layoutStage();
@@ -3476,7 +3488,7 @@ function handle(msg) {
         if (msg.mic !== undefined) state.mic = msg.mic;
         if (msg.cam !== undefined) state.cam = msg.cam;
         if (msg.deaf !== undefined) state.deaf = msg.deaf;
-        const self = document.querySelector('.tile[data-local="yes"]');
+        const self = ownTile();
         if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
         updateButtons();
         paintHandQueue();
@@ -3676,7 +3688,7 @@ function leave(message) {
   state.sealFault = '';
   state.wireFrames = 0;
   state.wireLeaks = [];
-  state.canaries = [];
+  state.canaries = new Set();
   state.samples = [];
   asrStop();
   omniStop();
@@ -3726,6 +3738,7 @@ function leave(message) {
   $('stats-panel').hidden = true;
   $('stats-btn').setAttribute('aria-pressed', 'false');
   state.spotlight = '';
+  localTile = null;
   $('stage-main').replaceChildren();
   $('self-pip').replaceChildren();
   $('self-pip').hidden = true;
@@ -7454,7 +7467,7 @@ async function storageAudit() {
 // the client half of the server log check.
 function canary(value) {
   const s = String(value || '');
-  if (s.length >= 4 && !state.canaries.includes(s)) state.canaries.push(s);
+  if (s.length >= 4) state.canaries.add(s);
 }
 
 function auditWire(where, raw) {
