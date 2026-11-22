@@ -59,9 +59,35 @@ COPY --from=client /src/packed/static.tgz packed/static.tgz
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOAMD64=${GOAMD64} \
     go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/rooms .
 
+# Optional in-browser transcription files. Left at their empty default the
+# stage makes an empty /vosk and the image is still the one binary above. Given
+# VOSK_MODEL_URL (and VOSK_MODEL_SHA256, recommended) the stage fetches the
+# library and one model with the repo's own script, and the image carries them,
+# so the server runs with -vosk-dir /vosk and needs no host files at all.
+# VOSK_MODEL_LANG is the label of that model, en by default; a second language
+# is a second build, or a directory of models mounted over /vosk.
+ARG VOSK_MODEL_URL=
+ARG VOSK_MODEL_SHA256=
+ARG VOSK_MODEL_LANG=en
+FROM --platform=$BUILDPLATFORM alpine:3.20 AS vosk
+ARG VOSK_MODEL_URL
+ARG VOSK_MODEL_SHA256
+ARG VOSK_MODEL_LANG
+RUN apk add --no-cache curl
+COPY tools/fetch-vosk.sh /fetch-vosk.sh
+RUN if [ -n "$VOSK_MODEL_URL" ]; then \
+	MODEL_URL="$VOSK_MODEL_URL" MODEL_SHA256="$VOSK_MODEL_SHA256" LANG="$VOSK_MODEL_LANG" sh /fetch-vosk.sh /vosk; \
+	else \
+	mkdir -p /vosk; \
+	fi
+
 FROM scratch
 # Only the binary: the client, the queue and the done list are embedded.
 COPY --from=server /out/rooms /rooms
+# The transcription directory is empty unless the build asked for a model; the
+# server offers the feature only when the library and a model are there.
+COPY --from=vosk /vosk /vosk
+ENV VOSK_DIR=/vosk
 # scratch has no /etc/passwd, so nobody is named by number. It matches the
 # runAsUser of the deployment and holds no privileges the binary could use.
 USER 65534:65534
