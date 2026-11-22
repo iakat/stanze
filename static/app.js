@@ -5012,10 +5012,7 @@ function asrLoadLib() {
 
 // asrSay sends one sealed transcription message to everyone inside.
 function asrSay(obj) {
-  for (const peer of state.peers.values()) {
-    if (!peer.keys || peer.waiting) continue;
-    sealedSend(peer, { k: 'asr', ...obj });
-  }
+  toSealed({ k: 'asr', ...obj });
 }
 
 // asrAnnounce tells a guest who joined later that we transcribe.
@@ -6154,6 +6151,15 @@ function sealedSend(peer, obj) {
   sealedSendOpaque(peer.id, { k: 'app', q: seq, b: out.b });
 }
 
+// toSealed sends one sealed message to every guest in the room. A guest that
+// waits outside has no keys, and the room is not its yet, so it gets nothing.
+function toSealed(obj) {
+  for (const peer of state.peers.values()) {
+    if (!peer.keys || peer.waiting) continue;
+    sealedSend(peer, obj);
+  }
+}
+
 function sendSealedChat() {
   const input = $('chat-text');
   const text = (input.value || '').trim();
@@ -6162,11 +6168,7 @@ function sendSealedChat() {
   canary(text);
   addChatLine(state.name, text, Date.now());
   state.chatSent++;
-  for (const peer of state.peers.values()) {
-    // A guest that waits outside is not in the room, so it gets no chat.
-    if (!peer.keys || peer.waiting) continue;
-    sealedSend(peer, { k: 'chat', n: state.name, x: text, ts: Date.now() });
-  }
+  toSealed({ k: 'chat', n: state.name, x: text, ts: Date.now() });
 }
 
 // sealedSetName paints the decrypted name. The volume is kept under the peer
