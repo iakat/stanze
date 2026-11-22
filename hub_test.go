@@ -118,3 +118,21 @@ func TestRejoinAfterDropStartsFresh(t *testing.T) {
 	}
 	h.leave(b)
 }
+
+// A state message carries three flags now. A nil pointer must leave its flag
+// as it was, so a client that sends only the microphone keeps the rest.
+func TestFlagsCarryDeafWithoutClearingTheRest(t *testing.T) {
+	p := newPeer()
+	mic, deaf := true, true
+	if m, c, d := p.setFlags(&mic, nil, &deaf); m != true || c != true || d != true {
+		t.Fatalf("setFlags = %v %v %v, want true true true", m, c, d)
+	}
+	if m, c, d := p.setFlags(nil, nil, boolp(false)); m != true || c != true || d != false {
+		t.Fatalf("setFlags = %v %v %v, want true true false", m, c, d)
+	}
+	if m, c, d := p.flags(); m != true || c != true || d != false {
+		t.Fatalf("flags = %v %v %v, want true true false", m, c, d)
+	}
+}
+
+func boolp(v bool) *bool { return &v }

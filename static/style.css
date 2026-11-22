@@ -821,6 +821,11 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   white-space: nowrap;
 }
 .plist-row .row-you { flex: none; color: var(--soft); }
+/* The deafened mark on a member row. It is the same drawing as the toolbar
+   button. A hidden mark must stay hidden over the flex rule. */
+.plist-row .row-deaf { flex: none; display: flex; align-items: center; }
+.plist-row .row-deaf[hidden] { display: none; }
+.plist-row .row-deaf img { width: 15px; height: 15px; }
 .plist-row .vol-range {
   flex: 0 0 62px;
   width: 62px;
@@ -1111,7 +1116,16 @@ body.is-admin .plist-row[data-peer] .dots { display: block; }
   border: 2px solid;
   border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
 }
-.ctrl { min-width: 104px; }
+.ctrl {
+  min-width: 104px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+/* A toolbar button carries its drawing left of the label, so the buttons are
+   told apart by a picture and not only by a word. */
+.ctrl .ico { flex: none; width: 16px; height: 16px; }
 .pick { display: flex; align-items: center; gap: 4px; margin: 0; font-size: var(--fs-smaller); }
 .pick select { width: auto; margin: 0; }
 .pick.check { margin: 0; }

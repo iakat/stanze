@@ -38,6 +38,8 @@ const state = {
   screenSource: null,
   mic: false,         // live in this call, and the stored choice
   cam: false,
+  deaf: false,        // this browser plays no sound and sends no microphone
+  micBeforeDeaf: false, // the microphone state to go back to when the ears open
   camId: '',          // deviceId of the chosen camera, '' = the system device
   micId: '',          // the same for the microphone
   devCams: [],        // last enumerateDevices() video inputs
@@ -125,7 +127,8 @@ const state = {
  *   'stats-sum': HTMLElement, 'stats-body': HTMLElement, 'chat-log': HTMLElement, 'chat-form': HTMLFormElement,
  *   'chat-text': HTMLInputElement, 'chat-note': HTMLElement, 'mic-btn': HTMLButtonElement,
  *   'chat-panel': HTMLElement, 'file-btn': HTMLButtonElement, 'file-input': HTMLInputElement,
- *   'cam-btn': HTMLButtonElement, 'share-btn': HTMLButtonElement,
+ *   'cam-btn': HTMLButtonElement, 'deaf-btn': HTMLButtonElement,
+   'share-btn': HTMLButtonElement,
  *   'stats-btn': HTMLButtonElement, 'stats-close': HTMLButtonElement,
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   quality: HTMLSelectElement, mirror: HTMLInputElement, pip: HTMLInputElement,
@@ -281,6 +284,15 @@ function paintRowName(row, name, local) {
   row.setAttribute('aria-label', local ? `${name}, you` : name);
 }
 
+// paintRowDeaf shows the deafened drawing on the list row of one member. The
+// row is the only place that carries the state: a deaf member hears nothing
+// and sends nothing, and every other member sees that on their list.
+function paintRowDeaf(row, deaf) {
+  if (!row) return;
+  const mark = row.querySelector('.row-deaf');
+  if (mark) mark.hidden = !deaf;
+}
+
 // tileId is the spotlight key of one tile: the peer id, or 'self'.
 function tileId(tile) {
   return tile.dataset.peer || (tile.dataset.local ? 'self' : '');
@@ -337,7 +349,7 @@ function makeRow(id, name, local = false) {
   row.dataset.mic = 'on';
   row.tabIndex = 0;
   row.setAttribute('role', 'group');
-  row.innerHTML = `<span class="row-name"></span>${local ? '<span class="row-you">you</span>' : `
+  row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span>${local ? '<span class="row-you">you</span>' : `
     <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
     <span class="vol-num">100%</span>
     <button class="row-sas" type="button" aria-label="sealed code" title="sealed code" hidden>code</button>
@@ -510,9 +522,9 @@ function paintVolume(peer) {
     num.textContent = `${peer.vol}%`;
     range.value = String(peer.vol);
   }
-  if (peer.gain) peer.gain.gain.value = peer.vol / 100;
+  if (peer.gain) peer.gain.gain.value = state.deaf ? 0 : peer.vol / 100;
   // The element path is only a fallback and can not go over 100 percent.
-  if (peer.audioEl) peer.audioEl.volume = Math.min(peer.vol / 100, 1);
+  if (peer.audioEl) peer.audioEl.volume = state.deaf ? 0 : Math.min(peer.vol / 100, 1);
 }
 
 // wireVolume connects the tile slider and the row slider of one peer to the
@@ -1041,7 +1053,27 @@ function prepareLocal() {
 function refreshSelf() {
   const self = document.querySelector('.tile[data-local="yes"]');
   applyFlags(self, state.mic, state.cam, isAdmin(state.self));
+  paintRowDeaf(document.querySelector('.plist-row[data-local="yes"]'), state.deaf);
   updateButtons();
+}
+
+// setDeaf closes both directions at once: the microphone goes off and every
+// guest is turned down to zero, so nothing is sent and nothing is heard. The
+// stored microphone choice survives, so undeafen gives the guest their
+// microphone back, and every volume is where it was before.
+function setDeaf(on) {
+  if (state.deaf === on) return;
+  state.deaf = on;
+  if (on) {
+    state.micBeforeDeaf = state.mic;
+    if (state.mic) disableMic(false);
+  } else if (state.micBeforeDeaf) {
+    enableMic();
+  }
+  for (const peer of state.peers.values()) paintVolume(peer);
+  playSfx(on ? 'hammer' : 'timp');
+  refreshSelf();
+  sendState();
 }
 
 // sealOne puts the frame transform on one sender or receiver. This is the only
@@ -1515,7 +1547,7 @@ function routeAudio(peer, track) {
     const el = peer.audioEl || new Audio();
     el.autoplay = true;
     el.srcObject = new MediaStream([track]);
-    el.volume = Math.min(peer.vol / 100, 1);
+    el.volume = state.deaf ? 0 : Math.min(peer.vol / 100, 1);
     el.play().catch(() => {});
     peer.audioEl = el;
     return;
@@ -1532,7 +1564,7 @@ function routeAudio(peer, track) {
   pump.play().catch(() => {});
   peer.pump = pump;
   peer.gain = ctx.createGain();
-  peer.gain.gain.value = peer.vol / 100;
+  peer.gain.gain.value = state.deaf ? 0 : peer.vol / 100;
   peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
   peer.audioSrc.connect(peer.gain);
   peer.gain.connect(ctx.destination);
@@ -1580,17 +1612,26 @@ function dropAudio(peer) {
 function sendState() {
   refreshSelf();
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    send({ t: 'state', mic: state.mic, cam: state.cam });
+    send({ t: 'state', mic: state.mic, cam: state.cam, deaf: state.deaf });
   }
 }
 
+// setCtrl writes the label of one toolbar button and its pressed state. The
+// drawing sits in its own place left of the label, so only the label text and
+// the pressed state change here.
+function setCtrl(id, text, on) {
+  const btn = $(id);
+  const label = btn.querySelector('span');
+  if (label) label.textContent = text;
+  else btn.textContent = text;
+  btn.setAttribute('aria-pressed', String(!!on));
+}
+
 function updateButtons() {
-  $('mic-btn').textContent = state.mic ? 'mic on' : 'mic off';
-  $('mic-btn').setAttribute('aria-pressed', String(state.mic));
-  $('cam-btn').textContent = state.cam ? 'camera on' : 'camera off';
-  $('cam-btn').setAttribute('aria-pressed', String(state.cam));
-  $('share-btn').textContent = state.screen ? 'stop share' : 'share screen';
-  $('share-btn').setAttribute('aria-pressed', String(!!state.screen));
+  setCtrl('mic-btn', state.mic ? 'mic on' : 'mic off', state.mic);
+  setCtrl('cam-btn', state.cam ? 'camera on' : 'camera off', state.cam);
+  setCtrl('deaf-btn', state.deaf ? 'undeafen' : 'deafen', state.deaf);
+  setCtrl('share-btn', state.screen ? 'stop share' : 'share screen', !!state.screen);
   $('mirror').checked = state.mirror;
   $('pip').checked = state.selfPip;
   // Without a microphone the switch still shows what the next microphone will
@@ -1713,13 +1754,15 @@ function rtcConfig() {
   };
 }
 
-function ensurePeer(id, mic, cam) {
+function ensurePeer(id, mic, cam, deaf) {
   let peer = state.peers.get(id);
   if (peer) {
-    if (mic !== undefined || cam !== undefined) {
+    if (mic !== undefined || cam !== undefined || deaf !== undefined) {
       peer.mic = mic === undefined ? peer.mic : mic;
       peer.cam = cam === undefined ? peer.cam : cam;
+      peer.deaf = deaf === undefined ? peer.deaf : deaf;
       applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+      paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
     }
     return peer;
   }
@@ -1731,6 +1774,7 @@ function ensurePeer(id, mic, cam) {
     name: initial,
     mic: mic === undefined ? true : mic,
     cam: cam === undefined ? true : cam,
+    deaf: deaf === undefined ? false : deaf,
     vol: 100,
     pc: null,
     tile: null,
@@ -1781,6 +1825,7 @@ function ensurePeer(id, mic, cam) {
   peer.video = peer.tile.querySelector('video');
   peer.tile.dataset.peer = id;
   applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+  paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
   wireVolume(peer);
   state.peers.set(id, peer);
   layoutStage();
@@ -2102,7 +2147,7 @@ function handle(msg) {
       setAdmins(msg.admins);
       for (const info of msg.peers || []) {
         if (!info) continue;
-        const peer = ensurePeer(info.id, info.mic, info.cam);
+        const peer = ensurePeer(info.id, info.mic, info.cam, info.deaf);
         sealedSendPub(peer);
       }
       markAdmins();
@@ -2114,7 +2159,7 @@ function handle(msg) {
     }
     case 'peer-joined': {
       if (!msg.peer) break;
-      const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam);
+      const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam, msg.peer.deaf);
       if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
       sealedSendPub(peer);
@@ -2138,7 +2183,9 @@ function handle(msg) {
       if (peer) {
         if (msg.mic !== undefined) peer.mic = msg.mic;
         if (msg.cam !== undefined) peer.cam = msg.cam;
+        if (msg.deaf !== undefined) peer.deaf = msg.deaf;
         applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+        paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
       }
       break;
     }
@@ -6075,6 +6122,8 @@ function init() {
     if (state.cam) disableCam();
     else enableCam();
   });
+
+  $('deaf-btn').addEventListener('click', () => setDeaf(!state.deaf));
 
   $('leave-btn').addEventListener('click', () => leave(''));
 

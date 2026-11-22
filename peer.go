@@ -13,13 +13,14 @@ type Peer struct {
 	id   string
 	room *Room
 
-	// mic and cam are the flags the client reported last. They are only
-	// indicators for the other tiles; the media itself decides the truth.
-	// The read loop of this peer writes them and the join of another peer
-	// reads them, so fmu guards both.
-	fmu sync.Mutex
-	mic bool
-	cam bool
+	// mic, cam and deaf are the flags the client reported last. They are
+	// only indicators for the other tiles and the member list; the media
+	// itself decides the truth. The read loop of this peer writes them and
+	// the join of another peer reads them, so fmu guards both.
+	fmu  sync.Mutex
+	mic  bool
+	cam  bool
+	deaf bool
 
 	// wmu serialises writes to the websocket. gorilla allows one concurrent
 	// writer, and both the write loop and the read loop (terminal errors)
@@ -55,9 +56,9 @@ func (p *Peer) enqueue(msg []byte) {
 	}
 }
 
-// setFlags stores the flags that a state message carries and returns both
-// values as they are now. A nil pointer leaves that flag as it was.
-func (p *Peer) setFlags(mic, cam *bool) (bool, bool) {
+// setFlags stores the flags that a state message carries and returns all
+// three values as they are now. A nil pointer leaves that flag as it was.
+func (p *Peer) setFlags(mic, cam, deaf *bool) (bool, bool, bool) {
 	p.fmu.Lock()
 	defer p.fmu.Unlock()
 	if mic != nil {
@@ -66,14 +67,17 @@ func (p *Peer) setFlags(mic, cam *bool) (bool, bool) {
 	if cam != nil {
 		p.cam = *cam
 	}
-	return p.mic, p.cam
+	if deaf != nil {
+		p.deaf = *deaf
+	}
+	return p.mic, p.cam, p.deaf
 }
 
-// flags returns the last reported microphone and camera flags.
-func (p *Peer) flags() (bool, bool) {
+// flags returns the last reported microphone, camera and deaf flags.
+func (p *Peer) flags() (bool, bool, bool) {
 	p.fmu.Lock()
 	defer p.fmu.Unlock()
-	return p.mic, p.cam
+	return p.mic, p.cam, p.deaf
 }
 
 // write sends one text frame. It is the only place that calls WriteMessage.
@@ -114,6 +118,7 @@ type peerInfo struct {
 	ID    string `json:"id"`
 	Mic   bool   `json:"mic"`
 	Cam   bool   `json:"cam"`
+	Deaf  bool   `json:"deaf,omitempty"`
 	Admin bool   `json:"admin,omitempty"`
 }
 
@@ -133,9 +138,10 @@ type clientMsg struct {
 	SDP       string          `json:"sdp,omitempty"`
 	Candidate json.RawMessage `json:"candidate,omitempty"`
 
-	// mic and cam are pointers so "not sent" and "false" differ.
-	Mic *bool `json:"mic,omitempty"`
-	Cam *bool `json:"cam,omitempty"`
+	// mic, cam and deaf are pointers so "not sent" and "false" differ.
+	Mic  *bool `json:"mic,omitempty"`
+	Cam  *bool `json:"cam,omitempty"`
+	Deaf *bool `json:"deaf,omitempty"`
 
 	// action is the admin command: kick, mute or admin.
 	Action string `json:"action,omitempty"`
@@ -158,6 +164,7 @@ type serverMsg struct {
 	Candidate json.RawMessage `json:"candidate,omitempty"`
 	Mic       *bool           `json:"mic,omitempty"`
 	Cam       *bool           `json:"cam,omitempty"`
+	Deaf      *bool           `json:"deaf,omitempty"`
 	Admins    []string        `json:"admins,omitempty"`
 	Action    string          `json:"action,omitempty"`
 	Code      string          `json:"code,omitempty"`

@@ -144,12 +144,13 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			s.hub.relay(p, m.To, mustJSON(serverMsg{T: "ice", From: p.id, Candidate: m.Candidate}))
 		case "state":
-			// A mute or camera toggle is a small indicator for the other
-			// tiles. It carries no media, and the server keeps the last value
-			// only for the lifetime of the connection.
-			mic, cam := p.setFlags(m.Mic, m.Cam)
+			// A mute, camera or deafen toggle is a small indicator for the
+			// other tiles and the member list. It carries no media, and the
+			// server keeps the last value only for the lifetime of the
+			// connection.
+			mic, cam, deaf := p.setFlags(m.Mic, m.Cam, m.Deaf)
 			s.hub.broadcast(p, mustJSON(serverMsg{
-				T: "state", From: p.id, Mic: &mic, Cam: &cam,
+				T: "state", From: p.id, Mic: &mic, Cam: &cam, Deaf: &deaf,
 			}))
 		case "enc":
 			// Opaque end-to-end payload: forwarded verbatim, never stored.
@@ -244,9 +245,9 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
-		mic, cam := other.flags()
+		mic, cam, deaf := other.flags()
 		peers = append(peers, peerInfo{
-			ID: other.id, Mic: mic, Cam: cam, Admin: isAdmin[other.id],
+			ID: other.id, Mic: mic, Cam: cam, Deaf: deaf, Admin: isAdmin[other.id],
 		})
 	}
 
@@ -264,10 +265,10 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		Admins: admins,
 	})
 
-	ownMic, ownCam := p.flags()
+	ownMic, ownCam, ownDeaf := p.flags()
 	joinedMsg := mustJSON(serverMsg{
 		T:    "peer-joined",
-		Peer: &peerInfo{ID: p.id, Mic: ownMic, Cam: ownCam, Admin: isAdmin[p.id]},
+		Peer: &peerInfo{ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Admin: isAdmin[p.id]},
 	})
 	for _, other := range existing {
 		other.enqueue(joinedMsg)
