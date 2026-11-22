@@ -243,9 +243,17 @@ well.
   forgotten, and the list ends with the call).
 - **Transcription.** Off by default. The server offers it only with
   `-vosk-dir`; `tools/fetch-vosk.sh` fills that directory with the pinned
-  vosk-browser library and one model. A guest who presses *transcribe* sees the
-  size, downloads the model once (kept in the browser cache) and runs one
-  recognizer per incoming voice in the tab. The text goes out as sealed chat
+  vosk-browser library and one model. The official image can carry both:
+  build it with `--build-arg VOSK_MODEL_URL=... --build-arg VOSK_MODEL_SHA256=...`
+  and it runs with `-vosk-dir /vosk` (the default `VOSK_DIR` in that image);
+  without those arguments the directory is empty and the image is the same one
+  binary as before. A model file is named `model-en.tar.gz` or `model-it.tar.gz`
+  and the part after `model-` is the label in the picker; `LANG=it` on
+  `tools/fetch-vosk.sh` writes the Italian one, and a second run adds a second
+  language, so the page shows a language picker next to *transcribe* (the older
+  single `model.tar.gz` still works and is read as en). A guest who presses
+  *transcribe* sees the size, downloads that one model (kept in the browser
+  cache) and runs one recognizer per incoming voice in the tab. The text goes out as sealed chat
   labelled *transcript by NAME*, and every other guest is told that NAME
   transcribes. A guest's own voice is not transcribed. A failed download leaves
   the call alone. The CSP allows `blob:` for workers and fetches, which the

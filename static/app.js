@@ -145,6 +145,8 @@ const state = {
  *   perf: HTMLInputElement, sounds: HTMLInputElement, 'waiting-room': HTMLInputElement,
  *   'waiting-banner': HTMLElement, 'perf-live': HTMLInputElement,
  *   'perf-text': HTMLElement, 'perf-live-text': HTMLElement,
+ *   'asr-pick': HTMLElement, 'asr-btn': HTMLButtonElement, 'asr-lang': HTMLSelectElement,
+ *   'asr-note': HTMLElement,
  * }} Elements
  */
 
@@ -4896,15 +4898,17 @@ function ensureReady() {
 // labelled with the name of the guest who transcribes, and every other guest is
 // told that someone transcribes before the first line. A refused or failed
 // download leaves the call exactly as it was.
-const ASR_URL = '/vosk/model.tar.gz';
+const ASR_MODELS = '/vosk/models';
+const ASR_LEGACY = '/vosk/model.tar.gz';
 const ASR_LIB = '/vosk/vosk.js';
 const ASR_CACHE = 'stanze-vosk';
 const ASR_LINE_MAX = 400;
 
 const asr = {
   probed: false,
-  size: 0,         // bytes of the model, from the server
-  stamp: '',       // size and date of the model, the key of the cache entry
+  models: [],      // [{ lang, file, size, modified }] as the server lists them
+  lang: '',        // the label the guest picked, en by default
+  probedLegacy: false,
   busy: false,     // a download or a start is under way
   on: false,
   abort: null,
@@ -4931,24 +4935,84 @@ function asrPaintOthers() {
   asrNote(names.length ? `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} transcribing this meeting. The text appears in the chat.` : '');
 }
 
-// asrProbe asks the server, once, whether it offers the model. Without it the
-// button stays hidden and nothing else changes.
+// asrProbe asks the server, once, which models it offers. Without any model the
+// button stays hidden and nothing else changes. An older server that has only
+// the single model under the old name is read as one English model.
 async function asrProbe() {
   if (asr.probed) return;
   asr.probed = true;
+  let list = [];
   try {
-    const res = await fetch(ASR_URL, { method: 'HEAD', cache: 'no-store' });
-    if (!res.ok) return;
-    asr.size = parseInt(res.headers.get('content-length') || '0', 10) || 0;
-    asr.stamp = `${asr.size}-${res.headers.get('last-modified') || ''}`;
-    const pick = document.getElementById('asr-pick');
-    if (pick) pick.hidden = false;
+    const res = await fetch(ASR_MODELS, { cache: 'no-store' });
+    if (res.ok) {
+      const body = await res.json();
+      list = (body && Array.isArray(body.langs)) ? body.langs : [];
+    }
   } catch { /* offline or blocked: not offered */ }
+  if (!list.length) {
+    try {
+      const res = await fetch(ASR_LEGACY, { method: 'HEAD', cache: 'no-store' });
+      if (res.ok) {
+        list = [{
+          lang: 'en', file: 'model.tar.gz',
+          size: parseInt(res.headers.get('content-length') || '0', 10) || 0,
+          modified: 0,
+        }];
+      }
+    } catch { /* nothing to offer */ }
+  }
+  asr.models = list.filter((m) => m && typeof m.file === 'string' && m.file);
+  if (!asr.models.length) return;
+  asrPick(asrDefaultLang());
+  const pick = document.getElementById('asr-pick');
+  if (pick) pick.hidden = false;
 }
 
-// asrCacheKey is a request that is only ever used as a key.
+// asrDefaultLang is the kept choice, else the language of the browser, else the
+// first model the server lists, which is en by the server's order.
+function asrDefaultLang() {
+  const have = asr.models.map((m) => m.lang);
+  const kept = load('asr.lang');
+  if (kept && have.includes(kept)) return kept;
+  const want = String(navigator.language || '').toLowerCase().slice(0, 2);
+  if (want && have.includes(want)) return want;
+  return have[0];
+}
+
+// asrModel is the entry the guest picked, and never nothing once a model is on
+// offer.
+function asrModel() {
+  return asr.models.find((m) => m.lang === asr.lang) || asr.models[0] || null;
+}
+
+// asrPick sets the label, fills the picker and paints the size of that model.
+function asrPick(lang) {
+  const model = asr.models.find((m) => m.lang === lang) || asr.models[0];
+  if (!model) return;
+  asr.lang = model.lang;
+  store('asr.lang', model.lang);
+  const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-lang'));
+  if (select) {
+    select.replaceChildren(...asr.models.map((m) => {
+      const o = document.createElement('option');
+      o.value = m.lang;
+      o.textContent = m.lang;
+      o.selected = m.lang === asr.lang;
+      return o;
+    }));
+    select.hidden = asr.models.length < 2;
+  }
+  const btn = document.getElementById('asr-btn');
+  if (btn) btn.title = `transcription language ${model.lang}, ${mb(model.size)}`;
+}
+
+// asrCacheKey is a request that is only ever used as a key. The file name is in
+// the key, so a second language gets its own entry and the old one goes.
 function asrCacheKey() {
-  return new Request(`${location.origin}${ASR_URL}?m=${encodeURIComponent(asr.stamp)}`);
+  const model = asrModel();
+  const file = model ? model.file : 'model.tar.gz';
+  const stamp = model ? `${model.size}-${model.modified}` : '';
+  return new Request(`${location.origin}/vosk/${file}?m=${encodeURIComponent(stamp)}`);
 }
 
 async function asrCached() {
@@ -4963,9 +5027,11 @@ async function asrCached() {
 // asrFetchModel downloads the model with a progress line. It reads the body to
 // the end, keeps it in the cache and returns the blob.
 async function asrFetchModel(signal) {
-  const res = await fetch(ASR_URL, { signal, cache: 'no-store' });
+  const model = asrModel();
+  if (!model) throw new Error('no model is on offer');
+  const res = await fetch(`/vosk/${model.file}`, { signal, cache: 'no-store' });
   if (!res.ok || !res.body) throw new Error(`the server answered ${res.status}`);
-  const total = asr.size || parseInt(res.headers.get('content-length') || '0', 10) || 0;
+  const total = model.size || parseInt(res.headers.get('content-length') || '0', 10) || 0;
   const reader = res.body.getReader();
   const parts = [];
   let got = 0;
@@ -5113,7 +5179,8 @@ async function asrStart() {
   try {
     let blob = await asrCached();
     if (!blob) {
-      const size = asr.size ? mb(asr.size) : 'a large file';
+      const model = asrModel();
+      const size = model && model.size ? mb(model.size) : 'a large file';
       // The guest asked for transcription; this is the size, before any byte.
       if (!window.confirm(`Transcription runs in this tab and needs a one-time download of ${size}. The model is kept in the browser cache. Download it now?`)) {
         asrStop();
@@ -5164,6 +5231,17 @@ function initAsr() {
     }
     asrStart();
   });
+  const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('asr-lang'));
+  if (select) {
+    select.addEventListener('change', () => {
+      // The engine holds one model at a time, so a change restarts it on the
+      // other model: stop first, then start on the new label.
+      const was = asr.on;
+      asrStop();
+      asrPick(select.value);
+      if (was) asrStart();
+    });
+  }
 }
 
 // asrOnMessage handles a sealed transcription message from a guest.
