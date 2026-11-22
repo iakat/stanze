@@ -92,24 +92,11 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	p.onClose = func() {
 		close(done)
 		conn.Close()
-		var peers []*Peer
-		room := p.room
-		if room != nil {
-			peers = s.hub.peersOf(room, p.id)
-			s.hub.leave(p)
-		}
-		left, _ := json.Marshal(serverMsg{T: "peer-left", From: p.id})
-		for _, other := range peers {
-			other.enqueue(left)
-		}
-		// An empty room is gone, so it gets no admin list.
-		if room != nil && len(peers) > 0 {
-			adminMsg := mustJSON(serverMsg{T: "admin", Admins: s.hub.adminsOf(room)})
-			for _, other := range peers {
-				other.enqueue(adminMsg)
-			}
-		}
-		if p.id != "" {
+		// The peer is out of the room, so both messages reach the rest of it
+		// and an empty room, already gone, gets no admin list.
+		if room := s.hub.leave(p); room != nil {
+			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "peer-left", From: p.id}))
+			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admin", Admins: s.hub.adminsOf(room)}))
 			s.log.Debug("peer left")
 		}
 	}
@@ -135,7 +122,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			p.writeNow(conn, serverMsg{T: "error", Code: "bad-message"})
 			continue
 		}
-		if p.room == nil {
+		if s.hub.roomOf(p) == nil {
 			if m.T != "join" {
 				p.writeNow(conn, serverMsg{T: "error", Code: "unavailable"})
 				return
@@ -180,7 +167,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 // handleMod runs one admin command. The server is the authority: a peer that
 // is not an admin is ignored, and the target must be in the same room.
 func (s *server) handleMod(p *Peer, m clientMsg) {
-	room := p.room
+	room := s.hub.roomOf(p)
 	if room == nil || m.To == "" || m.To == p.id {
 		return
 	}
@@ -219,7 +206,7 @@ func (s *server) sendAdmins(room *Room) {
 // same room, an empty target or "*" sends it to every other peer. Nothing is
 // decoded, counted or kept, so the relay stays blind in both directions.
 func (s *server) handleEnc(p *Peer, m clientMsg) {
-	if p.room == nil || m.B == "" || len(m.B) > 96<<10 {
+	if s.hub.roomOf(p) == nil || m.B == "" || len(m.B) > 96<<10 {
 		return
 	}
 	msg := mustJSON(serverMsg{T: "enc", From: p.id, B: m.B})

@@ -221,12 +221,14 @@ func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
 	return room, nil
 }
 
-func (h *Hub) leave(p *Peer) {
+// leave removes the peer from its room and returns that room, or nil when the
+// peer held the last place in it, so the caller can address the rest of it.
+func (h *Hub) leave(p *Peer) *Room {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	room := p.room
 	if room == nil {
-		return
+		return nil
 	}
 	delete(room.peers, p.id)
 	for i, id := range room.order {
@@ -243,7 +245,7 @@ func (h *Hub) leave(p *Peer) {
 			delete(h.rooms, room.id)
 		}
 		p.room = nil
-		return
+		return nil
 	}
 	if len(room.admins) == 0 {
 		for _, id := range room.order {
@@ -254,6 +256,14 @@ func (h *Hub) leave(p *Peer) {
 		}
 	}
 	p.room = nil
+	return room
+}
+
+// roomOf reads the room of a peer under the hub lock.
+func (h *Hub) roomOf(p *Peer) *Room {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return p.room
 }
 
 // peersOf returns a copy of the peer list of a room, excluding skip.
@@ -262,10 +272,9 @@ func (h *Hub) peersOf(room *Room, skip string) []*Peer {
 	defer h.mu.Unlock()
 	out := make([]*Peer, 0, len(room.peers))
 	for id, p := range room.peers {
-		if id == skip {
-			continue
+		if id != skip {
+			out = append(out, p)
 		}
-		out = append(out, p)
 	}
 	return out
 }
@@ -292,9 +301,6 @@ func (h *Hub) relay(p *Peer, to string, payload []byte) {
 func (h *Hub) adminsOf(room *Room) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if room == nil {
-		return nil
-	}
 	out := make([]string, 0, len(room.admins))
 	for _, id := range room.order {
 		if room.admins[id] {
@@ -348,7 +354,11 @@ func (h *Hub) broadcastTo(room *Room, payload []byte) {
 
 // broadcast sends one message to every other peer in the room.
 func (h *Hub) broadcast(p *Peer, payload []byte) {
-	for _, other := range h.peersOf(p.room, p.id) {
+	room := h.roomOf(p)
+	if room == nil {
+		return
+	}
+	for _, other := range h.peersOf(room, p.id) {
 		other.enqueue(payload)
 	}
 }
