@@ -274,7 +274,17 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
   padding: 1px;
 }
-.chat { width: 290px; }
+/* The right column: a guest without a picture sits above the chat, and the
+   chat takes the rest of the height. */
+.side {
+  flex: 0 0 290px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.chat { width: auto; flex: 1 1 auto; min-height: 0; }
 .stats { width: 320px; }
 .chat-head, .stats-head {
   background: var(--navy);
@@ -398,14 +408,14 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   align-content: center;
 }
 .stage-rail {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
   min-height: 0;
-  max-height: 30%;
+  max-height: 40%;
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 3px;
   overflow-y: auto;
   align-content: start;
 }
@@ -413,13 +423,11 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .stage-rail[hidden] { display: none; }
 /* Nobody has a picture: the rail is the whole stage, so the rows get the
    width and the black area is not left empty. */
-.stage-main[hidden] + .stage-rail {
-  flex: 1 1 auto;
-  max-height: none;
-  flex-direction: column;
-  flex-wrap: nowrap;
-}
-.stage-main[hidden] + .stage-rail .tile { flex: 1 1 auto; max-width: none; }
+/* Nobody has a picture: the empty frame would be a black band, so the whole
+   width goes to the list of guests and to the chat. */
+.room-row:has(#stage-main:empty) #grid { display: none; }
+.room-row:has(#stage-main:empty) .side { flex: 1 1 auto; }
+.room-row:has(#stage-main:empty) .stage-rail { max-height: 60%; }
 /* One guest alone in the large area fills it, and the picture covers the
    whole frame instead of keeping a fixed ratio with black bars. */
 .stage-main[data-alone="yes"] {
@@ -752,8 +760,7 @@ body.is-admin .tile[data-peer]:focus-within .dots {
    the mute and camera chips, the link state, and the volume slider. The node is
    moved, never copied, so the stream stays on the one video element. */
 .stage-rail .tile {
-  flex: 1 1 180px;
-  max-width: 320px;
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
@@ -868,11 +875,6 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 
 /* Under 900 px the rail becomes a strip under the large area. The pictures
    keep the width, and the strip keeps a small height of its own. */
-@media (max-width: 900px) {
-  /* The strip is already under the pictures at every width; on a phone it is
-     the same strip, only the rail keeps its 30 percent of the height. */
-  .stage-rail .tile { max-width: none; }
-}
 
 /* The verdict: one lamp and one sentence for the whole call, in a sunken field
  * above the graphs. The lamp is a flat square like every other lamp here. */
@@ -1087,7 +1089,8 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 
 @media (max-width: 900px) {
   .room-row { flex-direction: column; }
-  .chat { width: auto; height: 160px; }
+  .side { flex: 1 1 auto; }
+  .chat { width: auto; height: 160px; flex: 1 1 auto; }
 }
 
 /* A strip between the tiles and the chat is too short for the graphs and easy

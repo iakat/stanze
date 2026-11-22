@@ -5880,6 +5880,18 @@ function init() {
     }
     setSpotlight(id);
   });
+  // The guests without a picture sit in a strip of their own now, outside the
+  // frame of the grid, so they need their own listener for the enlarge click.
+  const railEl = $('stage-rail');
+  if (railEl) {
+    railEl.addEventListener('click', (event) => {
+      const target = /** @type {Element} */ (event.target);
+      const tile = target.closest('.tile');
+      if (!tile || target.closest('.vol, .dots, .menu, .sas, .pin')) return;
+      const id = tileId(/** @type {HTMLElement} */ (tile));
+      if (id) setSpotlight(id);
+    });
+  }
   document.addEventListener('click', closeMenus);
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
