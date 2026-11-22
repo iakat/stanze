@@ -285,14 +285,18 @@ const MENUS = [
 
 // fitMenu keeps a drop-down inside the window. A menu hangs from its slot to
 // the left, which is right for the left of the bar and wrong for the right: on
-// a narrow screen the last slot would push its panel past the edge. When the
-// panel does not fit, it flips to the far edge of its slot, the way a menu of
-// the era moved itself off the edge of the desktop.
+// a narrow screen the last slot would push its panel past the edge. The panel
+// is slid back by the pixels it hangs out, and never past the left edge, so a
+// wrapped bar of two lines still keeps every panel on the glass.
 function fitMenu(list) {
   if (!(list instanceof HTMLElement)) return;
-  list.classList.remove('menu-flip');
   const room = document.documentElement.clientWidth;
-  if (list.getBoundingClientRect().right > room - 2) list.classList.add('menu-flip');
+  list.style.left = '';
+  const box = list.getBoundingClientRect();
+  let shift = 0;
+  if (box.right > room - 2) shift = room - 2 - box.right;
+  if (box.left + shift < 2) shift = 2 - box.left;
+  if (shift) list.style.left = Math.round(shift) + 'px';
 }
 
 // menuSet opens one panel, closes the others, and moves the focus to its first

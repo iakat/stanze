@@ -353,18 +353,18 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 /* The menu bar sits under the title bar as a thin grey strip, the one line a
  * Windows program gave its settings. The drop-down is drawn by the page: a
  * bevelled panel of tick rows, not the browser's own list, so the look of the
- * era holds and every switch keeps its place. */
+ * era holds and every switch keeps its place. The strip wraps instead of
+ * scrolling: a scroll box would clip the panel that hangs out of it, and the
+ * menus came first. */
 .menubar {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   gap: 1px;
   padding: 1px 3px;
-  overflow-x: auto;
-  scrollbar-width: none;
   background: var(--panel);
   border-bottom: 1px solid var(--edge);
 }
-.menubar::-webkit-scrollbar { display: none; }
 .menubar-slot { position: relative; display: flex; }
 .menubar-item {
   width: auto;
@@ -399,9 +399,6 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.35);
 }
 .menubar-menu[hidden] { display: none; }
-/* A panel that would hang past the right edge hangs from the right edge of its
-   slot instead: the script sets this class when it measures the panel. */
-.menubar-menu.menu-flip { left: auto; right: 0; }
 /* One row of the panel: a tick gutter, then the words. The box of a checkbox
  * would be a form control in a menu, so the input is invisible and the tick
  * is drawn in the gutter, the way the era drew a chosen entry. */
@@ -1471,9 +1468,15 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   .tile[data-local="yes"] .tag .state { display: none; }
   /* A fly-out to the right of a panel has no room on a phone: a submenu opens
      inside its panel instead, as the rows of an accordion, and its arrow says
-     nothing then. */
-  .menubar-menu { max-width: calc(100vw - 8px); }
-  .menu-sub-list {
+     nothing then. The panel name is in the selector, because the rule for the
+     fly-out near the end of the sheet is one class too and came later: a bare
+     .menu-sub-list lost the fight and the list went past the right edge. */
+  .menubar-menu {
+    max-width: calc(100vw - 8px);
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+  }
+  .menubar .menu-sub-list {
     position: static;
     left: auto;
     top: auto;
@@ -1483,13 +1486,6 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
     box-shadow: none;
   }
   .menu-arrow { display: none; }
-}
-
-/* The five menus need 296 px on one line. Under that they wrap to a second
-   line, because a strip that scrolls without a scrollbar hides its last item
-   and nobody guesses that it moves. */
-@media (max-width: 350px) {
-  .menubar { flex-wrap: wrap; overflow-x: visible; }
 }
 
 /* A strip between the tiles and the chat is too short for the graphs and easy
