@@ -275,7 +275,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   padding: 1px;
 }
 .chat { width: 290px; }
-.stats { width: 300px; }
+.stats { width: 320px; }
 .chat-head, .stats-head {
   background: var(--navy);
   color: #fff;
@@ -292,10 +292,11 @@ label.check input { width: auto; min-height: 0; margin: 0; }
 .chat-head .muted { color: var(--navy-soft); }
 .stats-head button {
   font: inherit;
+  font-weight: bold;
   line-height: 1;
-  padding: 1px 5px;
-  min-width: 0;
-  min-height: 0;
+  padding: 0 6px 2px;
+  min-width: 20px;
+  min-height: 18px;
   background: var(--panel);
   color: var(--navy);
   border: 1px solid;
@@ -313,6 +314,22 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   font-size: var(--fs-smaller);
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+/* The stats panel scrolls as one sheet: the verdict, the graphs and the cards
+ * move together, so a short window never leaves the graphs holding the whole
+ * panel while the numbers sit under a sliver of scroll. */
+.stats-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 1px 0;
+  background: #fff;
+  -webkit-overflow-scrolling: touch;
+}
+.stats .stats-body {
+  flex: none;
+  overflow: visible;
+  margin: 0;
 }
 .chat-log li { margin: 0; }
 .chat-log .when { color: var(--grey); margin-right: 4px; }
@@ -741,65 +758,132 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   .stage-rail .tile { flex: 1 1 180px; }
 }
 
-/* A small graph under the title bar: one filled area for the downlink and one
- * line for the round trip. The numbers stay in the rows below and in the note,
- * so a guest who cannot read the shapes loses nothing. */
-.sgraph-box {
+/* The verdict: one lamp and one sentence for the whole call, in a sunken field
+ * above the graphs. The lamp is a flat square like every other lamp here. */
+.stats-sum { padding: 5px 5px 0; }
+.stats-sum .srow { margin-bottom: 5px; }
+.ssum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  background: var(--panel);
+  border: 2px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+}
+.slamp, .sbadge::before {
+  content: "";
   flex: none;
-  padding: 4px 5px 3px;
+  width: 11px;
+  height: 11px;
+  background: var(--panel-lo);
+  border: 1px solid var(--edge);
+}
+.ssum[data-level="good"] .slamp { background: #007000; }
+.ssum[data-level="fair"] .slamp { background: #c08a00; }
+.ssum[data-level="poor"] .slamp { background: #b00000; }
+.ssum-head { font-weight: bold; color: var(--ink); line-height: 1.25; }
+.ssum[data-level="good"] .ssum-head { color: var(--green); }
+.ssum[data-level="poor"] .ssum-head { color: var(--red); }
+.ssum[data-level="fair"] .ssum-head { color: var(--amber); }
+.ssum-sub { font-size: var(--fs-tiny); color: var(--soft); line-height: 1.35; }
+
+/* The graphs of the last minute: a black screen with a dark grid, like the
+ * performance monitor of the era. The text line above each one carries the
+ * numbers, so a guest who cannot read the shapes loses nothing. */
+.sgraph-box {
+  padding: 6px 5px 4px;
   border-bottom: 1px solid #0000001f;
 }
 .sgraph {
   display: block;
   width: 100%;
-  height: 40px;
-  background: #b4b4b4;
+  height: 36px;
+  background: #000;
+  border: 2px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
 }
 .sgnote {
-  margin: 2px 0 0;
+  margin: 4px 0 2px;
   font-size: var(--fs-tiny);
-  color: var(--soft);
-  line-height: 1.4;
+  color: var(--ink);
+  line-height: 1.3;
 }
+.sgnote:first-child { margin-top: 0; }
 
-/* One card per person or per group: a name, then key/value lines. The key is
-   small and quiet on the left, the value sits on the right in tabular figures,
-   so a column of numbers reads in one look and nothing has to be parsed out of
-   a sentence. */
+/* One card per person or per group: a name with the verdict of that link, then
+ * lines of a label and its numbers. Every line is a grid with a fixed label
+ * column, so the same number sits in the same column in every card, and a cell
+ * never wraps: it is cut with an ellipsis instead of breaking a number in two. */
 .srow {
-  padding: 6px 0 3px;
+  padding: 7px 0 4px;
   border-top: 1px solid #0000001f;
 }
-.stats-body > .srow:first-child { border-top: 0; padding-top: 0; }
-.sname { font-weight: bold; color: var(--navy); margin-bottom: 1px; }
+.stats-body > .srow:first-child { border-top: 0; }
+.sname {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  font-weight: bold;
+  color: var(--navy);
+}
+.stitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sbadge {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-tiny);
+  font-weight: normal;
+  color: var(--ink);
+}
+.sbadge::before { width: 9px; height: 9px; }
+.sbadge[data-level="good"]::before { background: #007000; }
+.sbadge[data-level="fair"]::before { background: #c08a00; }
+.sbadge[data-level="poor"]::before { background: #b00000; }
+.sbadge[data-level="good"] { color: var(--green); }
+.sbadge[data-level="fair"] { color: var(--amber); }
+.sbadge[data-level="poor"] { color: var(--red); }
+
 .sline {
   display: grid;
-  grid-template-columns: 54px repeat(4, minmax(0, 1fr));
+  grid-template-columns: 66px minmax(0, 1fr);
   align-items: baseline;
-  column-gap: 8px;
+  column-gap: 6px;
   color: var(--ink);
-  line-height: 1.55;
+  line-height: 1.6;
 }
-.sline .sk { min-width: 0; color: var(--soft); }
-/* The cells of one row are the columns of the table: one cell per number, so
- * the same number sits on the same column in every row. */
+.sline[data-n="2"] { grid-template-columns: 66px repeat(2, minmax(0, 1fr)); }
+.sline[data-n="3"] { grid-template-columns: 66px minmax(0, 1.35fr) repeat(2, minmax(0, 1fr)); }
+.sline[data-n="4"] { grid-template-columns: 66px repeat(4, minmax(0, 1fr)); }
+.sline .sk {
+  min-width: 0;
+  color: var(--soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .sline .sv { display: contents; }
 .sline .cell {
+  min-width: 0;
   text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
 }
-/* A thin rule between two cells is the line between two columns, and an empty
- * cell leaves no rule behind. */
-.sline .cell:not(:first-child):not(:empty)::before {
-  content: '|';
-  margin-right: 6px;
-  color: #00000033;
-}
+/* A line with one value is a sentence or a key, and it may wrap. */
+.sline[data-n="1"] .cell { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.sline .cell:first-child:not(:only-child) { text-align: left; }
 .sline.good { color: var(--green); }
 .sline.bad { color: var(--red); }
-/* An OpenMoji drawing stands where a word would: it is sized to the text and
- * sits on the baseline, and its title carries the word for a hover. */
+.sline .cell.good { color: var(--green); }
+.sline .cell.bad { color: var(--red); }
+
+/* An OpenMoji drawing stands beside the word it means, sized to the text and
+ * sitting on the baseline; its title carries the whole explanation for a hover. */
 .sico {
   width: 1.05em;
   height: 1.05em;
@@ -807,24 +891,63 @@ body.is-admin .tile[data-peer]:focus-within .dots {
   vertical-align: -0.16em;
   margin-right: 4px;
 }
-/* An indented row carries the part under a total, and its value is quiet:
- * the total is the number to read first. */
+.sline .sk .sico { margin-right: 3px; }
+
+/* The link line: three small fields, each a label over its number. */
+.sline.metrics { align-items: stretch; margin: 2px 0; }
+.sline.metrics .cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.25;
+  padding: 1px 5px 2px;
+  background: var(--panel);
+  border: 1px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+}
+.sline.metrics .cell:first-child { text-align: left; }
+.sline.metrics .cl { font-size: var(--fs-tiny); color: var(--soft); }
+.sline.metrics .cv { font-weight: bold; }
+.sline.metrics .cell.bad .cv { color: var(--red); }
+.sline.metrics .sk { align-self: center; }
+.sline.metrics[data-n="3"] { grid-template-columns: 66px repeat(3, minmax(0, 1fr)); column-gap: 3px; }
+
+/* An indented row carries the part under a total, and its value is quiet. */
 .sline.sub { padding-left: 10px; }
-.sline.sub .sv { margin-left: 0; text-align: left; }
-.sline.sub:not(.good):not(.bad) .sv { color: var(--soft); }
-/* A key is read letter by letter, so its value is monospace and right aligned
- * like every other value on the panel. */
+.sline.sub:not(.good):not(.bad) .cell { color: var(--soft); }
+/* A key is read letter by letter, so its value is monospace. */
 .sline.mono .cell {
-  grid-column: 2 / -1;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.94em;
   letter-spacing: 0.01em;
 }
-/* A row that carries one value takes the whole width, so a sentence is not
- * squeezed into the first column of the table. */
-.sline .cell:only-child { grid-column: 2 / -1; }
-/* A quiet row under a row keeps its text on the left of the value area. */
-.sline.sub .cell { grid-column: 2 / -1; text-align: left; }
+
+.slegend {
+  margin: 6px 0 2px;
+  padding-top: 5px;
+  border-top: 1px solid #0000001f;
+  font-size: var(--fs-tiny);
+  color: var(--soft);
+  line-height: 1.35;
+}
+
+/* The meter row: a Win95 progress bar made of blocks, then the level. */
+.sline.meterline { grid-template-columns: 66px minmax(0, 1fr) 64px; }
+.meter {
+  display: block;
+  height: 12px;
+  align-self: center;
+  padding: 1px;
+  background: #fff;
+  border: 2px solid;
+  border-color: var(--panel-lo) #fff #fff var(--panel-lo);
+}
+.meter i {
+  display: block;
+  height: 100%;
+  background: repeating-linear-gradient(90deg, var(--navy) 0 6px, transparent 6px 8px);
+  transition: width 120ms linear;
+}
 
 .controls {
   display: flex;
@@ -849,14 +972,12 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 @media (max-width: 900px) {
   .room-row { flex-direction: column; }
   .chat { width: auto; height: 160px; }
-  .stats { width: auto; height: 140px; }
 }
 
-/* A phone cannot spare a column for the stats, and a narrow strip between the
-   tiles and the chat is easy to miss. Under 700 px the panel becomes a sheet
-   that covers the lower part of the screen, with its own close button, so the
-   numbers can be read with one hand. */
-@media (max-width: 700px) {
+/* A strip between the tiles and the chat is too short for the graphs and easy
+   to miss. Under 900 px the stats are a sheet that covers the lower part of the
+   screen, with its own close button, so the numbers can be read with one hand. */
+@media (max-width: 900px) {
   .stats {
     position: fixed;
     left: 0;
@@ -864,15 +985,12 @@ body.is-admin .tile[data-peer]:focus-within .dots {
     bottom: 0;
     width: auto;
     height: auto;
-    max-height: 55vh;
+    max-height: 60vh;
     z-index: 40;
     box-shadow: 0 -3px 14px rgba(0, 0, 0, 0.35);
   }
   .stats-head { padding: 4px 8px; }
-  .stats-body {
-    padding: 6px 8px;
-    -webkit-overflow-scrolling: touch;
-  }
+  .stats-head button { min-width: 32px; min-height: 28px; font-size: var(--fs); }
 }
 
 @media (max-width: 560px) {

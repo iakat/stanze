@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261122c">
+<link rel="stylesheet" href="/style.css?v=20261122e">
 </head>
 <body>
 
@@ -93,23 +93,26 @@
         <aside id="stage-rail" class="stage-rail" aria-label="guests without a picture" hidden></aside>
       </section>
 
-      <aside id="stats-panel" class="stats" hidden>
+      <aside id="stats-panel" class="stats" hidden aria-label="call statistics">
         <div class="stats-head">
           <span>stats</span>
-          <button id="stats-close" type="button" aria-label="close the stats">x</button>
+          <button id="stats-close" type="button" aria-label="close the stats" title="close">&times;</button>
         </div>
-        <div id="stats-graph-box" class="sgraph-box" hidden>
-          <canvas id="stats-graph-down" class="sgraph" height="34" role="img"
-            aria-label="downlink rate as a filled area over the last minute"></canvas>
-          <p id="stats-note-down" class="sgnote"></p>
-          <canvas id="stats-graph-rtt" class="sgraph" height="34" role="img"
-            aria-label="round trip time as a line over the last minute"></canvas>
-          <p id="stats-note-rtt" class="sgnote"></p>
-          <canvas id="stats-graph-loss" class="sgraph" height="34" role="img"
-            aria-label="packet loss as a filled area over the last minute"></canvas>
-          <p id="stats-note-loss" class="sgnote"></p>
+        <div class="stats-scroll">
+          <div id="stats-sum" class="stats-sum" aria-live="polite"></div>
+          <div id="stats-graph-box" class="sgraph-box" hidden>
+            <p id="stats-note-down" class="sgnote"></p>
+            <canvas id="stats-graph-down" class="sgraph" height="36" role="img"
+              aria-label="downlink rate as a filled area over the last minute"></canvas>
+            <p id="stats-note-rtt" class="sgnote"></p>
+            <canvas id="stats-graph-rtt" class="sgraph" height="36" role="img"
+              aria-label="round trip time as a line over the last minute"></canvas>
+            <p id="stats-note-loss" class="sgnote"></p>
+            <canvas id="stats-graph-loss" class="sgraph" height="36" role="img"
+              aria-label="packet loss as a line over the last minute"></canvas>
+          </div>
+          <div id="stats-body" class="stats-body"></div>
         </div>
-        <div id="stats-body" class="stats-body"></div>
       </aside>
 
       <aside class="chat" id="chat-panel">
@@ -153,6 +156,6 @@
   </div>
 </main>
 
-<script src="/app.js?v=20261122c"></script>
+<script src="/app.js?v=20261122e"></script>
 </body>
 </html>
