@@ -6423,8 +6423,22 @@ async function omniStart() {
     return;
   }
   const size = omni.size ? mb(omni.size) : 'a large file';
+  // The model is best effort in the browser cache, so ask for a durable store
+  // and say when the space is not there, before the download and not after it.
+  let tight = false;
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      Promise.resolve(navigator.storage.persist()).catch(() => {});
+    }
+    const est = navigator.storage && navigator.storage.estimate
+      ? await navigator.storage.estimate() : null;
+    tight = !!(est && est.quota && est.quota - est.usage < omni.size);
+  } catch { /* no estimate */ }
+  const keep = tight
+    ? 'The browser has less free storage than that, so the model cannot be kept and the next visit downloads it again.'
+    : 'The model is kept in the browser cache, so this is the only download.';
   // The guest asked for transcription; this is the size, before any byte.
-  if (!window.confirm(`Multilingual transcription runs in this tab and needs a one-time download of ${size}. The model is kept in the browser cache. Download it now?`)) {
+  if (!window.confirm(`Multilingual transcription runs in this tab and needs a one-time download of ${size}. ${keep} Download it now?`)) {
     paintAsr();
     return;
   }
