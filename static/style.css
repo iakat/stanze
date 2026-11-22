@@ -272,7 +272,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   padding: 1px;
 }
 .chat { width: 290px; }
-.stats { width: 260px; }
+.stats { width: 300px; }
 .chat-head, .stats-head {
   background: var(--navy);
   color: #fff;
@@ -349,7 +349,7 @@ label.check input { width: auto; min-height: 0; margin: 0; }
   min-height: 0;
   display: grid;
   gap: 5px;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   align-content: center;
   background: #000;
   border: 2px solid;
@@ -586,9 +586,33 @@ body.is-admin .tile[data-peer]:focus-within .dots {
 }
 .tile .menu button:hover { background: var(--navy); color: #fff; }
 
-.srow { margin-bottom: 7px; }
-.sname { font-weight: bold; color: var(--navy); }
-.sline { color: var(--ink); }
+/* One card per person or per group: a name, then key/value lines. The key is
+   small and quiet on the left, the value sits on the right in tabular figures,
+   so a column of numbers reads in one look and nothing has to be parsed out of
+   a sentence. */
+.srow {
+  padding: 6px 0 3px;
+  border-top: 1px solid #0000001f;
+}
+.stats-body > .srow:first-child { border-top: 0; padding-top: 0; }
+.sname { font-weight: bold; color: var(--navy); margin-bottom: 1px; }
+.sline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink);
+  line-height: 1.55;
+}
+.sline .sk { flex: none; min-width: 54px; color: var(--soft); }
+.sline .sv {
+  margin-left: auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.sline.sub { padding-left: 10px; }
+.sline.sub .sv { margin-left: 0; text-align: left; }
+.sline.sub:not(.good):not(.bad) .sv { color: var(--soft); }
 .sline.good { color: var(--green); }
 .sline.bad { color: var(--red); }
 
