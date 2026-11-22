@@ -5165,25 +5165,7 @@ function sealedCards() {
   out.push(statsRow('sealed', seal));
 
   const me = state.idKey;
-  if (me) {
-    out.push(statsRow('identity', [
-      ['key ', `${me.kind} ${me.fp}`],
-      ['device ', deviceNote(), undefined, true],
-    ]));
-  }
-
-  const code = sealedRoomCode();
-  const codes = sealedRoomCodes();
-  if (codes.size > 1) {
-    const pairs = [['codes ', `${codes.size} guests, one code per pair`, true]];
-    for (const c of codes) pairs.push(['', `${verifyText(c)} ${c}`, undefined, true]);
-    out.push(statsRow('room code', pairs));
-  } else if (code) {
-    out.push(statsRow('room code', [
-      ['code ', code, true],
-      ['words ', verifyNames(code), undefined, true],
-    ]));
-  }
+  if (me) out.push(statsRow('identity', [['key ', `${me.kind} ${me.fp}`]]));
 
   let refused = 0;
   for (const st of Object.values(state.frames)) {
