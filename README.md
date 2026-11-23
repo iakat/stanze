@@ -55,6 +55,9 @@ which is why the default cap is eight.
 ## Requirements
 
 - Go 1.24 or newer to build.
+- Node 20 or newer and `npm --prefix client install` once, for the client
+  bundle. A tree that already carries a built `static/app.js` skips it with
+  `SKIP_CLIENT=1 ./build.sh`.
 - A modern browser with `RTCRtpScriptTransform` for a sealed room (Chromium,
   Firefox and Safari current at the time of writing).
 - A TLS terminator for anything but `http://localhost`, because
@@ -63,10 +66,16 @@ which is why the default cap is eight.
 ## Build
 
 ```sh
-./build.sh          # -> bin/stanze, bin/selftest
+npm --prefix client install   # once, for esbuild
+./build.sh                    # client bundle, then bin/stanze and bin/selftest
 # or
 make build
 ```
+
+The client source is TypeScript under `client/src`, one module per area.
+`client/build.mjs` bundles it into `static/app.js` with esbuild, and the build
+does that before packing. The bundle is the file the page loads, so a client
+change is one build and no server change.
 
 The client is packed and embedded as one gzip compressed tar, with sorted names
 and no timestamps, so two builds of one commit produce the same archive.
@@ -245,9 +254,9 @@ PW=/tmp/pw/node_modules/playwright-core ROOMSBASE=http://127.0.0.1:8095 \
   node tools/browser-e2e.js
 ```
 
-`make` targets: `build`, `selftest`, `run`, `test` (selftest against `ADDR`),
-`typecheck` (`tsc --checkJs` over the client), `smoke`, `sealed`, `check`
-(typecheck then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
+`make` targets: `build`, `client`, `selftest`, `run`, `test` (selftest against
+`ADDR`), `typecheck` (the TypeScript client), `lint`, `format`, `smoke`,
+`sealed`, `check` (typecheck, lint, then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
 for a one-shot join. With gcc present, `go test -race ./...` also runs.
 
 ## Repository layout

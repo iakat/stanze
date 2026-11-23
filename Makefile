@@ -3,16 +3,19 @@
 GO ?= go
 BIN ?= bin
 NODE ?= /data/workspace/node/bin
-TSC ?= /data/workspace/tools/tscheck/node_modules/.bin/tsc
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build selftest run test typecheck smoke sealed check clean
+.PHONY: all build client selftest run test typecheck lint format smoke sealed check clean
 
 all: build selftest
 
-build:
+build: client
 	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/stanze .
+
+# One bundle from the TypeScript tree. The page loads static/app.js.
+client:
+	$(NODE)/node client/build.mjs
 
 selftest:
 	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/selftest ./cmd/selftest
@@ -25,9 +28,15 @@ run: build
 test: selftest
 	$(BIN)/selftest -addr $${ADDR:-http://127.0.0.1:8095}
 
-# Type check the client as JavaScript (no build step, no emit).
+# Type check the client source.
 typecheck:
-	PATH=$(NODE):$$PATH $(TSC) -p .
+	PATH=$(NODE):$$PATH client/node_modules/.bin/tsc -p client/tsconfig.json
+
+lint:
+	PATH=$(NODE):$$PATH client/node_modules/.bin/eslint client
+
+format:
+	PATH=$(NODE):$$PATH client/node_modules/.bin/prettier --write "client/src/**/*.ts" client/build.mjs client/eslint.config.mjs
 
 # One real browser, one real join. Fails on the first uncaught exception.
 smoke:
@@ -45,7 +54,7 @@ gate:
 	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) OUTDIR=$(OUTDIR) $(NODE)/node tools/gate-e2e.js
 
 # What a normal check runs: the types first, then the browser.
-check: typecheck smoke
+check: typecheck lint smoke
 
 clean:
 	rm -rf $(BIN) packed/static.tgz
