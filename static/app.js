@@ -990,9 +990,13 @@ function applyFlags(tile, mic, cam, admin) {
     row.classList.toggle('camoff', cam === false);
   }
   // A guest that waits is marked on its tile and its row, and a member sees the
-  // let in button there; the CSS shows it.
+  // let in button there; the CSS shows it. The button belongs to a room that is
+  // really holding guests, so a stale held flag can not leave one behind in a
+  // room whose switch is off.
   const who = tile.dataset.peer ? state.peers.get(tile.dataset.peer) : null;
-  const waiting = who ? !!who.waiting : !!(tile.dataset.local && state.waiting);
+  const waiting = who
+    ? !!(who.waiting && state.waitingRoom)
+    : !!(tile.dataset.local && state.waiting);
   tile.dataset.waiting = waiting ? 'yes' : '';
   if (row) row.dataset.waiting = waiting ? 'yes' : '';
   const box = tile.querySelector('.flags');
@@ -9517,6 +9521,9 @@ function sealedOnWait(peer, obj) {
   state.wait = { on, n };
   state.waitingRoom = on;
   paintWaiting();
+  // A switch that goes off opens the room: every held guest is let in now,
+  // because a held guest only asks a few times and then waits in silence.
+  if (!on) admitAllHeld();
 }
 
 // setWaitingRoom is the admin switch: one sealed commit to every pair. A page
@@ -9528,6 +9535,7 @@ function setWaitingRoom(on) {
   state.waitingRoom = !!on;
   toSealed({ k: 'wait', on: !!on, n });
   paintWaiting();
+  if (!on) admitAllHeld();
 }
 
 // sealedAdmit lets one held guest in. Any member may do it: the gate proof
@@ -9535,6 +9543,20 @@ function setWaitingRoom(on) {
 function sealedAdmit(peer) {
   if (!peer || state.waiting) return;
   sealedSend(peer, { k: 'admit' });
+}
+
+// admitAllHeld lets every guest that is still outside in. A guest asks only a
+// few times and then goes quiet, so the room must not rely on another ask: the
+// switch going off opens the room at once, and a member never keeps a let in
+// button for a room that is not holding anyone. The admit is idempotent, so
+// every page may send it.
+function admitAllHeld() {
+  if (state.waiting) return;
+  for (const peer of state.peers.values()) {
+    if (!peer.waiting) continue;
+    sealedAdmit(peer);
+    admitPeer(peer.id);
+  }
 }
 
 // maybeAdmitHeld runs when a held guest says so. A member with the switch off
