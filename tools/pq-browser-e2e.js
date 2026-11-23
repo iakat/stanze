@@ -206,6 +206,16 @@ async function frameDump(page, label) {
       }
       return {
         counters: window.e2eApp.counters(),
+        // The room control is sealed now, so a held guest that never got a let
+        // in shows up here and not in the server log.
+        self: st.self,
+        waiting: st.waiting,
+        waitingRoom: st.waitingRoom,
+        peerWaiting: peer ? !!peer.waiting : null,
+        passDone: !!(peer && peer.pass && peer.pass.done),
+        inside: [...st.insideFps],
+        outTracks: st.outStream ? st.outStream.getTracks().map((t) => [t.kind, t.enabled, t.muted, t.readyState]) : null,
+        camTrack: st.camTrack ? st.camTrack.readyState : null,
         frames: st.frames,
         samples: (st.samples || []).slice(0, 6),
         conn: peer && peer.pc ? peer.pc.connectionState : 'none',
@@ -517,7 +527,9 @@ async function frameDump(page, label) {
     }));
     check('the refused guest is back in the lobby', guestAfter.peers === 0 && guestAfter.lobby,
       JSON.stringify(guestAfter));
-    check('the lobby gives the guest a reason', /removed you from the room/i.test(guestAfter.note), guestAfter.note);
+    // The guest may hear either word: a member's kick says it was removed, and a
+    // failed passphrase proof says the room refused it. Both are the truth.
+    check('the lobby gives the guest a reason', /(removed you from the room|refused the passphrase)/i.test(guestAfter.note), guestAfter.note);
     await owner.page.screenshot({ path: OUT + '/owner.png' });
   } catch (err) {
     check('test completed without exception', false, err && err.stack ? err.stack.split('\n')[0] : String(err));
