@@ -226,7 +226,7 @@ const LOOKS = {
   vivid: 'saturate(1.4) contrast(1.08)',
 };
 /** @type {string[]} */
-const MASKS = ['none', 'big', 'wide', 'small', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
+const MASKS = ['none', 'big', 'wide', 'small', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku', 'potion'];
 // The landmarker is three files of this origin: the module, the wasm and the
 // model. Nothing of a face leaves the tab, and no byte comes from outside.
 const MESH_DIR = '/facemesh/';
@@ -2898,6 +2898,7 @@ function lookDraw(p) {
     if (which === 'big') lookWarp(p, a, filter);
     else if (which === 'wide') lookWide(p, a, filter);
     else if (which === 'small') lookSmall(p, a, filter);
+    else if (which === 'potion') lookPotion(p, a);
     else drawMask(p.ctx, p.canvas.width, p.canvas.height, which, a);
   }
   armPublish(p);
@@ -3413,6 +3414,47 @@ function lookSmall(p, a, filter) {
   if (filter && filter !== 'none') p.ctx.filter = filter;
   p.ctx.drawImage(c, 0, 0, iw, ih, pcx - prx, pcy - pry, 2 * prx, 2 * pry);
   if (filter && filter !== 'none') p.ctx.filter = 'none';
+}
+
+// lookPotion stretches a head into the proportions of the potion seller: a
+// tall forehead and a small chin. The band of the head is cut into horizontal
+// strips and each strip goes back at another height, so the change is smooth in
+// both directions. The band keeps the full width of the frame and its map is
+// the same at its top and bottom edge, so no seam can show: the picture beside
+// the head moves with it, and the effect reads as one glass, not a patch.
+function lookPotion(p, a) {
+  const W = p.canvas.width, H = p.canvas.height;
+  // The band of the head: above the hairline and below the chin.
+  const y0 = Math.max(0, Math.round((a.y - a.h * 1.15) * H));
+  const y1 = Math.min(H, Math.round((a.y + a.h * 1.2) * H));
+  const ih = y1 - y0;
+  if (ih < 32 || W < 32) return;
+  if (!p.potionCanvas) {
+    p.potionCanvas = document.createElement('canvas');
+    p.potionCtx = p.potionCanvas.getContext('2d');
+  }
+  const c = p.potionCanvas, cc = p.potionCtx;
+  if (c.width !== W || c.height !== ih) {
+    c.width = W;
+    c.height = ih;
+  }
+  // The unwarped band, so a strip never reads a strip that this frame already
+  // moved.
+  cc.clearRect(0, 0, W, ih);
+  cc.drawImage(p.canvas, 0, y0, W, ih, 0, 0, W, ih);
+  // The sine moves the top half of the band up and the bottom half down, so the
+  // forehead grows and the chin shrinks; it is the same at both ends, so the
+  // rows at the edge of the band do not move at all.
+  const N = 28, STRETCH = 0.095;
+  const put = (s) => s + STRETCH * Math.sin(2 * Math.PI * s);
+  for (let i = 0; i < N; i++) {
+    const s0 = i / N, s1 = (i + 1) / N;
+    const sy = s0 * ih, sh = (s1 - s0) * ih;
+    const dy = put(s0) * ih, dh = (put(s1) - put(s0)) * ih;
+    if (dh <= 0) continue;
+    // One extra pixel of height hides the seam between two strips.
+    p.ctx.drawImage(c, 0, sy, W, sh, 0, y0 + dy, W, dh + 1);
+  }
 }
 
 // warpPatch draws one ellipse of the video, widened by kx and heightened by ky
