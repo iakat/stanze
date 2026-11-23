@@ -101,6 +101,9 @@ export let meshOpenTask = null;
 export function meshOpen() {
   if (!meshOpenTask) {
     meshOpenTask = (async () => {
+      // The bundle sits in our own static directory: a constant prefix and a
+      // constant file name, so no message reaches the specifier.
+      // eslint-disable-next-line no-unsanitized/method
       const vision = await import(MESH_DIR + 'vision_bundle.mjs');
       const files = await vision.FilesetResolver.forVisionTasks(MESH_DIR.slice(0, -1));
       // The cpu delegate: a software renderer and a driver without webgl2 both

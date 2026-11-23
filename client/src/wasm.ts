@@ -55,6 +55,14 @@ export function loadWasmModule() {
   });
 }
 
+// fpShape is the shape of a fingerprint: five groups of four base32 letters,
+// joined by dashes.
+function fpShape(fp) {
+  const parts = String(fp || '').split('-');
+  if (parts.length !== 5) return false;
+  return parts.every((part) => part.length === 4 && /^[a-z2-7]+$/.test(part));
+}
+
 // pqSelfTest runs the handshake twice inside the module and proves that both
 // halves agree and that one side can open what the other seals. It runs once
 // per page and the result is shown in the stats panel.
@@ -255,7 +263,7 @@ export function pqSelfTest() {
     idSign:
       idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
     idUnsigned: !!noSig.error,
-    idFp: /^[a-z2-7]{4}(-[a-z2-7]{4}){4}$/.test(idFp.fp || ''),
+    idFp: fpShape(idFp.fp),
     passGood: !!(passGood.match && passGood.ok),
     passBad: !!(passBad.match === false && passBad.ok === false),
   };

@@ -57,6 +57,46 @@ export function tileId(tile) {
   return id && tile.dataset.screen ? id + ':screen' : id;
 }
 
+// el builds one element from a tag, its attributes and its children. The tile
+// and the row carry fixed markup, so the nodes are made here and nothing is
+// parsed from a string. A true attribute is set with no value.
+function el(
+  tag: string,
+  attrs: Record<string, string | number | boolean> = {},
+  ...kids: (Node | string)[]
+): HTMLElement {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === false || value === null || value === undefined) continue;
+    node.setAttribute(key, value === true ? '' : String(value));
+  }
+  for (const kid of kids) node.append(kid);
+  return node;
+}
+
+// the small pickers that a remote guest carries on its tile and on its row
+function volRange(): HTMLElement {
+  return el('input', {
+    class: 'vol-range',
+    type: 'range',
+    min: 0,
+    max: 200,
+    step: 5,
+    value: 100,
+    'aria-label': 'volume of this participant',
+  });
+}
+function lineButton(): HTMLElement[] {
+  return [
+    el(
+      'button',
+      { class: 'admit', type: 'button', title: 'let this guest into the room' },
+      'let in',
+    ),
+    el('button', { class: 'dots', type: 'button', 'aria-label': 'member actions' }, '\u22ef'),
+  ];
+}
+
 // makeTile builds one picture. A screen tile is the second picture of a guest:
 // it has no row and no volume of its own, because the row of the guest already
 // carries both.
@@ -76,22 +116,57 @@ export function makeTile(id, name, local = false, screen = false) {
   // touch screen, after a tap.
   tile.tabIndex = 0;
   tile.setAttribute('role', 'group');
-  tile.innerHTML = `
-    <video autoplay playsinline${local ? ' muted' : ''}></video>
-    <div class="avatar"></div>
-    <span class="ring" aria-hidden="true"></span>
-    ${
-      plain
-        ? ''
-        : `<div class="vol">
-      <img class="vol-ico" src="/openmoji/1F50A.svg" alt="" width="16" height="16">
-      <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
-      <span class="vol-num">100%</span>
-    </div>`
-    }
-    <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
-    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${plain ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
-    ${plain ? '' : '<button class="admit" type="button" title="let this guest into the room">let in</button><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
+  tile.append(
+    el(
+      'video',
+      local
+        ? { autoplay: true, playsinline: true, muted: true }
+        : { autoplay: true, playsinline: true },
+    ),
+    el('div', { class: 'avatar' }),
+    el('span', { class: 'ring', 'aria-hidden': 'true' }),
+  );
+  if (!plain) {
+    tile.append(
+      el(
+        'div',
+        { class: 'vol' },
+        el('img', { class: 'vol-ico', src: '/openmoji/1F50A.svg', alt: '', width: 16, height: 16 }),
+        volRange(),
+        el('span', { class: 'vol-num' }, '100%'),
+      ),
+    );
+  }
+  tile.append(
+    el('button', {
+      class: 'zoom',
+      type: 'button',
+      'aria-pressed': 'false',
+      'aria-label': 'enlarge this picture',
+      title: 'enlarge',
+    }),
+    el(
+      'div',
+      { class: 'tag' },
+      el('span', { class: 'name' }),
+      el('span', { class: 'flags' }),
+      el('span', { class: 'state' }),
+      ...(plain
+        ? []
+        : [
+            el(
+              'span',
+              { class: 'route', title: 'the media goes through the relay server' },
+              'relay',
+            ),
+            el('span', { class: 'pin', hidden: true }),
+          ]),
+    ),
+  );
+  if (!plain) {
+    tile.append(...lineButton());
+    tile.append(el('div', { class: 'menu', hidden: true }));
+  }
   paintName(tile, name, local && !screen);
   // A remote guest is heard through its own gain node, so the video element
   // only ever carries pictures and stays muted.
@@ -122,15 +197,26 @@ export function makeRow(id, name, local = false) {
   row.dataset.mic = 'on';
   row.tabIndex = 0;
   row.setAttribute('role', 'group');
-  row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span><span class="row-hand" hidden>hand</span>${
-    local
-      ? '<span class="row-you">you</span>'
-      : `
-    <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
-    <span class="vol-num">100%</span>
-    <button class="admit" type="button" title="let this guest into the room">let in</button>
-    <button class="dots" type="button" aria-label="member actions">&#8943;</button>`
-  }`;
+  row.append(
+    el('span', { class: 'row-name' }),
+    el(
+      'span',
+      { class: 'row-deaf', hidden: true },
+      el('img', {
+        src: '/openmoji/1F507.svg',
+        alt: 'deafened',
+        title: 'deafened',
+        width: 16,
+        height: 16,
+      }),
+    ),
+    el('span', { class: 'row-hand', hidden: true }, 'hand'),
+  );
+  if (local) {
+    row.append(el('span', { class: 'row-you' }, 'you'));
+  } else {
+    row.append(volRange(), el('span', { class: 'vol-num' }, '100%'), ...lineButton());
+  }
   paintRowName(row, name, local);
   if (!local) {
     wireDots(row);
