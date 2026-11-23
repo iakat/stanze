@@ -245,7 +245,7 @@ async function frameDump(page, label) {
     check('the lobby says every room is sealed', /sealed end to end/.test(defaults.note), defaults.note);
 
     a = await joinPage(ctxA, 'alice', '');
-    check('A loaded the post-quantum module', !!(a.app.test && a.app.test.sasMatch && a.app.test.confirm && a.app.test.open && a.app.test.wrongKeyRefused),
+    check('A loaded the post-quantum module', !!(a.app.test && a.app.test.sasMatch && a.app.test.confirm && a.app.test.open && a.app.test.wrongKeyRefused && a.app.test.pad),
       JSON.stringify(a.app.test));
     const room = a.app.room;
     check('A has a 26 character random room id', /^[a-z2-7]{26}$/.test(room), room);

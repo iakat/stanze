@@ -6743,6 +6743,7 @@ function pqSelfTest() {
   return {
     sas: off.keys.sas,
     sasMatch: off.keys.sas === acc.keys.sas,
+    pad: padRoundTripOk(),
     confirm: !!(verifyA.ok && verifyB.ok && !verifyNoSig.ok),
     open: opened.pt === pt,
     wrongKeyRefused: !!wrong.error,
@@ -8838,6 +8839,7 @@ function sealedOnApp(peer, b, seq) {
     return;
   }
   peer.seqIn = seq;
+  if (obj.z !== undefined) delete obj.z; // the padding bucket, never content
   if (obj.k === 'name') {
     sealedSetName(peer, obj.n);
   } else if ((obj.k === 'chat' || obj.k === 'file') && peer.waiting) {
@@ -8860,13 +8862,54 @@ function sealedAnnounceName(peer) {
   sealedSend(peer, { k: 'name', n: state.name });
 }
 
+// A sealed payload is padded to a fixed bucket before it is sealed, so the
+// length of the ciphertext stops saying what was sent: a two word chat line, a
+// name and a file offer all leave as the same size. The true length travels
+// inside as the filler field, and the receiver drops it. Buckets are powers of
+// two and the biggest repeats, so a large payload still lands on a round size.
+const PAD_BUCKETS = [512, 2048, 8192];
+const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
+
+function padPayload(obj) {
+  const withPad = /** @type {any} */ (Object.assign({}, obj, { z: '' }));
+  const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
+  let target = PAD_BUCKETS.find((n) => n >= bytes);
+  if (!target) target = Math.ceil(bytes / PAD_LAST) * PAD_LAST;
+  const need = target - bytes;
+  if (need > 0) withPad.z = 'A'.repeat(need);
+  return JSON.stringify(withPad);
+}
+
+// padRoundTripOk proves the padding is a round trip and that every outgoing
+// size lands on a bucket or a whole multiple of the biggest one. It runs in the
+// post-quantum self test, so a change that breaks the buckets shows up before a
+// call starts.
+function padRoundTripOk() {
+  const cases = [
+    { k: 'name', n: 'abc' },
+    { k: 'chat', n: 'katia', x: 'ciao', ts: 1 },
+    { k: 'chat', n: 'x', x: 'é'.repeat(400) },
+    { k: 'asr', n: 'y', x: 'z'.repeat(9000) },
+  ];
+  for (const c of cases) {
+    const raw = JSON.stringify(c);
+    const out = padPayload(c);
+    const bytes = sealUtf8.encode(out).length;
+    const onBucket = PAD_BUCKETS.includes(bytes) || bytes % PAD_LAST === 0;
+    const back = JSON.parse(out);
+    delete back.z;
+    if (!onBucket || JSON.stringify(back) !== raw) return false;
+  }
+  return true;
+}
+
 function sealedSend(peer, obj) {
   if (!peer.keys) return;
   const seq = peer.seqOut + 1;
   const out = pqCall((json) => pqModule().seal(json), {
     key: b64e(peer.keys.sendChat),
     aad: b64e(chatAAD(peer.id, seq)),
-    pt: b64e(sealUtf8.encode(JSON.stringify(obj))),
+    pt: b64e(sealUtf8.encode(padPayload(obj))),
   });
   if (!out || !out.b) return;
   peer.seqOut = seq;
@@ -9107,7 +9150,7 @@ function sealedAlarms() {
 
 function wasmTestOk(wt) {
   return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused &&
-    wt.idSign && wt.idUnsigned && wt.idFp);
+    wt.idSign && wt.idUnsigned && wt.idFp && wt.pad);
 }
 
 // wasmTestFaults lists only the checks that failed.
@@ -9119,6 +9162,7 @@ function wasmTestFaults(wt) {
     ['sas ', wt.sasMatch ? 'match' : 'no', !!wt.sasMatch],
     ['confirm ', wt.confirm ? 'ok' : 'no', !!wt.confirm],
     ['open ', wt.open ? 'ok' : 'no', !!wt.open],
+    ['padding ', wt.pad ? 'ok' : 'BROKEN', !!wt.pad],
     ['wrong key ', wt.wrongKeyRefused ? 'refused' : 'OPENED', !!wt.wrongKeyRefused],
     ['identity ', wt.idSign ? 'signs' : 'BROKEN', !!wt.idSign],
     ['unsigned ', wt.idUnsigned ? 'refused' : 'ACCEPTED', !!wt.idUnsigned],
