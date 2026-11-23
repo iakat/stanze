@@ -243,12 +243,15 @@ type joinedPeer struct {
 	ice  []iceCfg
 }
 
-func join(room, pass string) (*joinedPeer, error) {
+// join enters a room. It sends no passphrase, because the server has none to
+// check: the room secret proves itself between the guests, in the sealed
+// handshake, and a wrong one fails there and nowhere else.
+func join(room string) (*joinedPeer, error) {
 	c, err := dialSig()
 	if err != nil {
 		return nil, err
 	}
-	if err := c.send(map[string]any{"t": "join", "room": room, "pass": pass}); err != nil {
+	if err := c.send(map[string]any{"t": "join", "room": room}); err != nil {
 		c.close()
 		return nil, err
 	}
@@ -344,7 +347,7 @@ func testHTTPSurface() {
 func testUnauthorizedJoin() {
 	// An id with characters outside the allowed set is refused, and nothing is
 	// created. Any other name is a legit room name and is created by the join.
-	malformed, err := rawJoinMessage("$bad/id", "")
+	malformed, err := rawJoinMessage("$bad/id")
 	if err != nil {
 		report("invalid room id rejected", err)
 		return
@@ -355,31 +358,30 @@ func testUnauthorizedJoin() {
 		report("invalid room id rejected with a generic error", nil)
 	}
 
-	// Wrong passphrase on a real room must produce a byte identical answer.
-	// The first join sets the passphrase, so a holder peer keeps it alive.
+	// The room secret is not a server gate. A join that still carries a pass
+	// field is an old client: the field is unknown now, so it is ignored and
+	// the guest is let in. The sealed handshake is the only place where a
+	// passphrase is judged, and it judges it between the guests.
 	room, err := randomRoomID()
 	if err != nil {
-		report("wrong passphrase rejected", err)
+		report("legacy pass field is ignored", err)
 		return
 	}
-	holder, err := join(room, "secret")
+	holder, err := join(room)
 	if err != nil {
-		report("wrong passphrase rejected", err)
+		report("legacy pass field is ignored", err)
 		return
 	}
 	defer holder.c.close()
-	wrongPass, err := rawJoinMessage(room, "nope")
+	legacy, err := rawJoinMessageFields(map[string]any{"t": "join", "room": room, "pass": "anything"})
 	if err != nil {
-		report("wrong passphrase rejected", err)
+		report("legacy pass field is ignored", err)
 		return
 	}
-	if !strings.Contains(wrongPass, `"code":"unavailable"`) {
-		report("wrong passphrase rejected", fmt.Errorf("unexpected answer %q", wrongPass))
-	} else {
-		report("wrong passphrase rejected with a generic error", nil)
-	}
-	report("invalid id and wrong passphrase are byte identical", errOr(nil,
-		malformed != wrongPass, fmt.Sprintf("%q vs %q", malformed, wrongPass)))
+	report("a legacy pass field is ignored, not refused", errOr(nil,
+		strings.Contains(legacy, `"code":"unavailable"`), fmt.Sprintf("unexpected answer %q", legacy)))
+	report("the join answer does not echo the pass value", errOr(nil,
+		strings.Contains(legacy, "anything"), "the answer carries the pass value"))
 
 	// Every failure mode of a join must look the same, including a full room.
 	// That is covered by the cap test as well, but check the shape here.
@@ -387,14 +389,13 @@ func testUnauthorizedJoin() {
 		strings.Contains(malformed, "room") && !strings.Contains(malformed, `"room":`),
 		"error mentions the room id"))
 
-	// A well formed id that nobody made yet is created by the first join, and
-	// the passphrase of that join becomes the room passphrase.
+	// A well formed id that nobody made yet is created by the first join.
 	id, err := randomRoomID()
 	if err != nil {
 		report("join creates a missing room", err)
 		return
 	}
-	a, err := join(id, "open-sesame")
+	a, err := join(id)
 	if err != nil {
 		report("join creates a missing room", err)
 		return
@@ -402,7 +403,7 @@ func testUnauthorizedJoin() {
 	defer a.c.close()
 	report("join creates a missing room", nil)
 
-	b, err := join(id, "open-sesame")
+	b, err := join(id)
 	if err != nil {
 		report("second peer joins the created room", err)
 		return
@@ -413,12 +414,6 @@ func testUnauthorizedJoin() {
 	m, err := a.c.wait("peer-joined", 3*time.Second)
 	report("created room announces the second peer", errOr(err,
 		m.Peer == nil || m.Peer.ID != b.self, "wrong peer id"))
-
-	if _, err := join(id, ""); err == nil {
-		report("created room keeps its passphrase", errors.New("join without passphrase accepted"))
-	} else {
-		report("created room keeps its passphrase", nil)
-	}
 }
 
 // randomRoomID builds a room id in the same shape the server uses, without
@@ -432,7 +427,13 @@ func randomRoomID() (string, error) {
 }
 
 // rawJoinMessage sends one join on a bare connection and returns the raw reply.
-func rawJoinMessage(room, pass string) (string, error) {
+func rawJoinMessage(room string) (string, error) {
+	return rawJoinMessageFields(map[string]any{"t": "join", "room": room})
+}
+
+// rawJoinMessageFields sends an arbitrary join frame, so a test can prove that
+// a field the server no longer knows is ignored instead of refused.
+func rawJoinMessageFields(fields map[string]any) (string, error) {
 	endpoint, err := wsEndpoint()
 	if err != nil {
 		return "", err
@@ -442,7 +443,7 @@ func rawJoinMessage(room, pass string) (string, error) {
 		return "", err
 	}
 	defer conn.Close()
-	payload, _ := json.Marshal(map[string]any{"t": "join", "room": room, "pass": pass})
+	payload, _ := json.Marshal(fields)
 	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		return "", err
 	}
@@ -493,14 +494,14 @@ func testRelay() {
 		report("relay room", err)
 		return
 	}
-	a, err := join(room, "")
+	a, err := join(room)
 	if err != nil {
 		report("peer A joins", err)
 		return
 	}
 	defer a.c.close()
 
-	b, err := join(room, "")
+	b, err := join(room)
 	if err != nil {
 		report("peer B joins", err)
 		return
@@ -553,13 +554,13 @@ func testHandQueue() {
 		report("hand: room", err)
 		return
 	}
-	a, err := join(room, "")
+	a, err := join(room)
 	if err != nil {
 		report("hand: peer A joins", err)
 		return
 	}
 	defer a.c.close()
-	b, err := join(room, "")
+	b, err := join(room)
 	if err != nil {
 		report("hand: peer B joins", err)
 		return
@@ -665,14 +666,14 @@ func testNoNameInJoin() {
 		report("no name: room", err)
 		return
 	}
-	if first, err := rawJoinMessage(room, ""); err != nil {
+	if first, err := rawJoinMessage(room); err != nil {
 		report("no name: first join", err)
 		return
 	} else if strings.Contains(first, `"name"`) || strings.Contains(first, `"sealed"`) {
 		report("no name: first join", fmt.Errorf("reply carries a name or a mode flag: %s", first))
 		return
 	}
-	second, err := rawJoinMessage(room, "")
+	second, err := rawJoinMessage(room)
 	if err != nil {
 		report("no name: second join", err)
 		return
@@ -685,13 +686,13 @@ func testNoNameInJoin() {
 func testRoomIsolation() {
 	room1, _ := randomRoomID()
 	room2, _ := randomRoomID()
-	a, err := join(room1, "")
+	a, err := join(room1)
 	if err != nil {
 		report("isolation: A joins", err)
 		return
 	}
 	defer a.c.close()
-	d, err := join(room2, "")
+	d, err := join(room2)
 	if err != nil {
 		report("isolation: D joins", err)
 		return
@@ -715,13 +716,13 @@ func testRoomIsolation() {
 // and everyone is told.
 func testWaitingRoom() {
 	room, _ := randomRoomID()
-	a, err := join(room, "")
+	a, err := join(room)
 	if err != nil {
 		report("waiting room: A joins", err)
 		return
 	}
 	defer a.c.close()
-	b, err := join(room, "")
+	b, err := join(room)
 	if err != nil {
 		report("waiting room: B joins", err)
 		return
@@ -740,7 +741,7 @@ func testWaitingRoom() {
 	m, err = b.c.wait("waiting-room", 2*time.Second)
 	report("waiting room: the admin switches it on and the room is told", errOr(err, m.WaitingRoom == nil || !*m.WaitingRoom, "switch not true"))
 
-	c, err := join(room, "")
+	c, err := join(room)
 	if err != nil {
 		report("waiting room: C joins", err)
 		return
@@ -762,14 +763,15 @@ func testWaitingRoom() {
 }
 
 // testRoomLifetime proves a room is gone as soon as its last peer leaves: the
-// same id joins at once as a new room, so the old passphrase opens nothing.
+// same id joins again as a new room, with a new first guest and no admin left
+// over from the old one.
 func testRoomLifetime() {
 	room, err := randomRoomID()
 	if err != nil {
 		report("lifetime: room", err)
 		return
 	}
-	a, err := join(room, "first-pass")
+	a, err := join(room)
 	if err != nil {
 		report("lifetime: first peer joins", err)
 		return
@@ -781,7 +783,7 @@ func testRoomLifetime() {
 	var b *joinedPeer
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		b, err = join(room, "second-pass")
+		b, err = join(room)
 		if err == nil {
 			break
 		}
@@ -794,12 +796,10 @@ func testRoomLifetime() {
 	defer b.c.close()
 	report("last leave drops the room", nil)
 
-	// The dropped room took its passphrase with it.
-	if _, err := join(room, "first-pass"); err == nil {
-		report("dropped room forgot its passphrase", errors.New("the old passphrase still opens the room"))
-	} else {
-		report("dropped room forgot its passphrase", nil)
-	}
+	// The new room has one guest and a fresh id, so nothing of the old room
+	// survives it.
+	report("the new room starts with a new first guest", errOr(nil,
+		b.self == a.self, "the new room reused the old peer id"))
 }
 
 func testLimits() {
@@ -816,7 +816,7 @@ func testLimits() {
 	}()
 	rejected := 0
 	for i := 0; i < 12; i++ {
-		p, err := join(room, "")
+		p, err := join(room)
 		if err != nil {
 			if strings.Contains(err.Error(), "unavailable") {
 				rejected++
@@ -1081,13 +1081,13 @@ func testWebRTCMesh() {
 		report("webrtc: room", err)
 		return
 	}
-	a, err := join(room, "")
+	a, err := join(room)
 	if err != nil {
 		report("webrtc: A joins", err)
 		return
 	}
 	defer a.c.close()
-	b, err := join(room, "")
+	b, err := join(room)
 	if err != nil {
 		report("webrtc: B joins", err)
 		return
@@ -1136,13 +1136,13 @@ func testTURNRelay() {
 		report("relay: room", err)
 		return
 	}
-	a, err := join(room, "")
+	a, err := join(room)
 	if err != nil {
 		report("relay: A joins", err)
 		return
 	}
 	defer a.c.close()
-	b, err := join(room, "")
+	b, err := join(room)
 	if err != nil {
 		report("relay: B joins", err)
 		return

@@ -8,9 +8,13 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"math/big"
+	"sync"
 	"syscall/js"
 
 	"stanze/internal/pq"
+	"stanze/internal/spake2"
 )
 
 func main() {
@@ -30,6 +34,12 @@ func main() {
 		"idsign":   js.FuncOf(idsign),
 		"idverify": js.FuncOf(idverify),
 		"idfp":     js.FuncOf(idfp),
+		// The room passphrase never leaves the page. It becomes a scalar here,
+		// and the exchange that proves it runs here too.
+		"spakew":      js.FuncOf(spakew),
+		"spakestart":  js.FuncOf(spakeStart),
+		"spakefinish": js.FuncOf(spakeFinish),
+		"spakeverify": js.FuncOf(spakeverify),
 	}))
 	select {}
 }
@@ -395,4 +405,145 @@ func open(_ js.Value, args []js.Value) any {
 		return reply(map[string]any{"error": "authentication failed"})
 	}
 	return reply(map[string]string{"pt": b64e(pt)})
+}
+
+// ---------------------------------------------------------------- spake2
+
+// spakeRuns holds the exchanges in flight, so the scalar of a run stays in this
+// module and never reaches the page. The page only sees an id.
+var (
+	spakeMu   sync.Mutex
+	spakeSeq  int
+	spakeRuns = map[int]*spake2.Side{}
+)
+
+// spakew derives w from the room passphrase. The salt is the room id, so the
+// same passphrase in another room gives another scalar.
+func spakew(_ js.Value, args []js.Value) any {
+	var in struct {
+		Pass string `json:"pass"`
+		Salt string `json:"salt"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return fail(err)
+	}
+	w, err := spake2.Passphrase([]byte(in.Pass), []byte(in.Salt))
+	if err != nil {
+		return fail(err)
+	}
+	out := make([]byte, 32)
+	w.FillBytes(out)
+	return reply(map[string]string{"w": b64e(out)})
+}
+
+func spakeScalar(s string) (*big.Int, error) {
+	raw, err := b64d(s)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || len(raw) > 32 {
+		return nil, errors.New("spake2: bad scalar")
+	}
+	return new(big.Int).SetBytes(raw), nil
+}
+
+func spakeStart(_ js.Value, args []js.Value) any {
+	var in struct {
+		W    string `json:"w"`
+		Role string `json:"role"`
+		A    string `json:"a"`
+		B    string `json:"b"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return fail(err)
+	}
+	w, err := spakeScalar(in.W)
+	if err != nil {
+		return fail(err)
+	}
+	a, err := b64d(in.A)
+	if err != nil {
+		return fail(err)
+	}
+	b, err := b64d(in.B)
+	if err != nil {
+		return fail(err)
+	}
+	role := spake2.A
+	if in.Role == "B" {
+		role = spake2.B
+	}
+	side, err := spake2.Start(role, w, a, b)
+	if err != nil {
+		return fail(err)
+	}
+	spakeMu.Lock()
+	spakeSeq++
+	id := spakeSeq
+	spakeRuns[id] = side
+	spakeMu.Unlock()
+	return reply(map[string]any{"id": id, "msg": b64e(side.Message())})
+}
+
+func spakeLookup(id int) (*spake2.Side, error) {
+	spakeMu.Lock()
+	defer spakeMu.Unlock()
+	side, ok := spakeRuns[id]
+	if !ok {
+		return nil, errors.New("spake2: no such exchange")
+	}
+	return side, nil
+}
+
+func spakeDrop(id int) {
+	spakeMu.Lock()
+	delete(spakeRuns, id)
+	spakeMu.Unlock()
+}
+
+func spakeFinish(_ js.Value, args []js.Value) any {
+	var in struct {
+		ID  int    `json:"id"`
+		Msg string `json:"msg"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return fail(err)
+	}
+	side, err := spakeLookup(in.ID)
+	if err != nil {
+		return fail(err)
+	}
+	msg, err := b64d(in.Msg)
+	if err != nil {
+		return fail(err)
+	}
+	ke, conf, err := side.Finish(msg)
+	if err != nil {
+		spakeDrop(in.ID)
+		return reply(map[string]any{"error": "not a point"})
+	}
+	return reply(map[string]string{"ke": b64e(ke), "conf": b64e(conf)})
+}
+
+// spakeverify checks the peer's confirmation and drops the run, so one exchange
+// can not be replayed against the module.
+func spakeverify(_ js.Value, args []js.Value) any {
+	var in struct {
+		ID  int    `json:"id"`
+		Tag string `json:"tag"`
+	}
+	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {
+		return fail(err)
+	}
+	side, err := spakeLookup(in.ID)
+	if err != nil {
+		return fail(err)
+	}
+	tag, err := b64d(in.Tag)
+	if err != nil {
+		return fail(err)
+	}
+	ok := side.Verify(tag)
+	spakeDrop(in.ID)
+	return reply(map[string]any{"ok": ok})
 }

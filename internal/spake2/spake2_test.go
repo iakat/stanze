@@ -124,11 +124,11 @@ func TestRFC9382Vectors(t *testing.T) {
 
 // A wrong password must not agree on a key and must fail both confirmations.
 func TestWrongPassphrase(t *testing.T) {
-	wA, err := Passphrase([]byte("correct horse"), []byte("room"), 1000)
+	wA, err := Passphrase([]byte("correct horse"), []byte("room"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	wB, err := Passphrase([]byte("correct horsf"), []byte("room"), 1000)
+	wB, err := Passphrase([]byte("correct horsf"), []byte("room"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestWrongPassphrase(t *testing.T) {
 
 // An element that is not on the curve, or not a point at all, must abort.
 func TestBadElement(t *testing.T) {
-	w, err := Passphrase([]byte("pw"), []byte("salt"), 10)
+	w, err := Passphrase([]byte("pw"), []byte("salt"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,8 +18,8 @@ binary.
   the last leave deletes it. No id ever reaches a URL path, a query string or
   the disk.
 - **Nothing to enumerate.** There is no route that lists, counts or names a
-  room, at any log level. Unknown room, wrong passphrase and full room return
-  the same error.
+  room, at any log level. A malformed room id and a full room return the same
+  error.
 - **Sealed by default.** Names, chat, files and every media frame are encrypted
   in the browser. The server forwards opaque `enc` blobs and has no clear path
   to fall back to.
@@ -86,8 +86,9 @@ TURN_PUBLIC_IP=203.0.113.10 \
 
 Open the page, type a name, press enter. An empty room field creates a new room
 and its id lands in the URL fragment (`#r=...`); a pasted id joins that room. A
-passphrase typed in the same form becomes the room passphrase when the room is
-created.
+passphrase typed in the same form is never sent: the page turns it into a SPAKE2
+scalar and the guests prove it to each other inside the sealed channel, so a
+wrong passphrase costs one failed handshake and the server never sees it.
 
 ## Configuration
 
@@ -182,7 +183,7 @@ One JSON object per WebSocket text frame. Client to server:
 
 | Message | Fields |
 | --- | --- |
-| `join` | `room`, `pass` |
+| `join` | `room` (the passphrase is never on the wire; a `pass` field from an old client is ignored) |
 | `enc` | `to` (empty or `*` for the room), `b` (sealed description, candidate, name, chat or file) |
 | `state` | `mic`, `cam` |
 | `mod` | `to`, `action` (`kick`, `mute`, `admin`) or `waitingroom` with `on` |
@@ -215,8 +216,9 @@ the shared secret). Nothing else is handed out.
 ```
 
 It covers: the embedded client is served, every plausible room-listing path is
-a 404, a room id never appears in a response, unknown rooms and wrong
-passphrases produce byte-identical errors, a clear description is refused and
+a 404, a room id never appears in a response, a malformed id and a full room
+produce byte-identical errors, an old `pass` field is ignored, a clear
+description is refused and
 never relayed while the same description inside `enc` arrives intact,
 `peer-left` arrives, a freed id is a new room, the room cap holds, cross-room
 relaying is dropped, oversized messages close the connection, and two peers

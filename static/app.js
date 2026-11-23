@@ -17,7 +17,6 @@ const state = {
   ws: null,
   self: null,
   room: '',
-  pass: '',
   name: '',
   ice: [],
   peers: new Map(),
@@ -98,6 +97,7 @@ const state = {
   idKey: null,         // our long-term Ed25519 identity, kept by the browser
   device: '',          // kept, fresh (a reset record) or session (nothing kept)
   sid: '',             // session id of this call, public, never a secret
+  w: '',               // SPAKE2 scalar of the room passphrase, never sent
   pins: new Map(),     // local label -> {label, fp, first, last}
   revoked: new Map(),  // fingerprint -> {fp, label, at}, a pin that was replaced
   identityFailures: 0, // a peer that sent no identity or could not prove one
@@ -4236,9 +4236,11 @@ function connectWS() {
   ws.onopen = () => {
     state.reconnectDelay = 500;
     stopLost();
-    // The join carries no name: the server announces every peer as its
-    // placeholder, and the real name travels sealed once the keys exist.
-    send({ t: 'join', room: state.room, pass: state.pass });
+    // The join carries no name and no passphrase: the server announces every
+    // peer as its placeholder, and the real name travels sealed once the keys
+    // exist. The passphrase proves itself in the sealed handshake, so a wrong
+    // one costs a failed exchange and never a server-side check.
+    send({ t: 'join', room: state.room });
   };
 
   ws.onmessage = (event) => {
@@ -4429,7 +4431,6 @@ async function enterRoom(room, pass) {
   cancelReconnect();
   state.fatal = '';
   state.room = room;
-  state.pass = pass;
   state.name = cleanSealedName($('name').value) || 'guest';
   state.path = $('path').value;
   state.noiseWanted = $('noise').checked;
@@ -4460,11 +4461,16 @@ async function enterRoom(room, pass) {
       $('sealed-note').textContent = 'the sealed client did not start: ' + why;
       // No silent fallback: the lobby says what failed and the visitor decides.
       state.room = '';
-      state.pass = '';
       say('cannot open a sealed room: ' + why);
       return;
     }
 
+    // The passphrase becomes a scalar before the socket opens, and the plain
+    // text is dropped right after: the join frame carries the room id only,
+    // and the scalar is the only form the proof ever needs.
+    $('sealed-note').textContent = 'deriving the room key';
+    canary(pass);
+    state.w = roomW(pass, room);
     startSealedWorker();
     const made = JSON.parse(pqModule().gen());
     // The secret halves stay Uint8Arrays, so leave can zero them.
@@ -4545,6 +4551,7 @@ function leave(message) {
     state.worker = null;
   }
   wipeIdentity();
+  state.w = '';
   state.sid = '';
   state.identityFailures = 0;
   state.keyWait.clear();
@@ -4625,7 +4632,6 @@ function leave(message) {
   $('room-label').textContent = '';
   $('peer-count').textContent = '';
   state.room = '';
-  state.pass = '';
   state.self = null;
   state.ice = [];
   state.fatal = '';
@@ -6725,6 +6731,29 @@ function pqSelfTest() {
     id: k1.pub, msg: b64e(sealUtf8.encode('another transcript')), sig: helloSig.sig,
   })));
   const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
+  // The room passphrase proof: the same passphrase agrees on a key and passes
+  // both confirmations, and a different one agrees on nothing.
+  const w1 = JSON.parse(pq.spakew(JSON.stringify({ pass: 'a', salt: 'room' }))).w;
+  const wBad = (() => {
+    const raw = b64d(w1);
+    raw[raw.length - 1] ^= 1;
+    return b64e(raw);
+  })();
+  const passRun = (wa, wb) => {
+    const one = JSON.parse(pq.spakestart(JSON.stringify({ w: wa, role: 'A', a: b64e(sealUtf8.encode('a')), b: b64e(sealUtf8.encode('b')) })));
+    const two = JSON.parse(pq.spakestart(JSON.stringify({ w: wb, role: 'B', a: b64e(sealUtf8.encode('a')), b: b64e(sealUtf8.encode('b')) })));
+    if (!one.id || !two.id) return { error: true };
+    const finA = JSON.parse(pq.spakefinish(JSON.stringify({ id: one.id, msg: two.msg })));
+    const finB = JSON.parse(pq.spakefinish(JSON.stringify({ id: two.id, msg: one.msg })));
+    const okA = JSON.parse(pq.spakeverify(JSON.stringify({ id: one.id, tag: finB.conf })));
+    const okB = JSON.parse(pq.spakeverify(JSON.stringify({ id: two.id, tag: finA.conf })));
+    return {
+      match: !!finA.ke && finA.ke === finB.ke,
+      ok: !!(okA.ok && okB.ok),
+    };
+  };
+  const passGood = passRun(w1, w1);
+  const passBad = passRun(w1, wBad);
   // A hello without a signature is refused, which is the downgrade path.
   const noSig = JSON.parse(pq.respond(JSON.stringify({
     self: 'b', peer: 'a',
@@ -6742,6 +6771,8 @@ function pqSelfTest() {
     idSign: idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
     idUnsigned: !!noSig.error,
     idFp: /^[a-z2-7]{4}(-[a-z2-7]{4}){4}$/.test(idFp.fp || ''),
+    passGood: !!(passGood.match && passGood.ok),
+    passBad: !!(passBad.match === false && passBad.ok === false),
   };
 }
 
@@ -6759,7 +6790,7 @@ function ensureWasm() {
       const test = pqSelfTest();
       state.wasmTest = test;
       if (!test.sasMatch || !test.confirm || !test.open || !test.wrongKeyRefused ||
-        !test.idSign || !test.idUnsigned || !test.idFp) {
+        !test.idSign || !test.idUnsigned || !test.idFp || !test.passGood || !test.passBad) {
         throw new Error('crypto self test failed');
       }
       state.wasmOk = true;
@@ -8480,8 +8511,11 @@ function sealedRestart(peer, resend) {
   peer.seqOut = 0;
   peer.seqIn = 0;
   peer.announcedName = '';
-  // Frames held for the old pair can never open with the new keys.
+  // Frames held for the old pair can never belong to the new one.
   peer.appPending = [];
+  peer.appHeld = [];
+  peer.pass = null;
+  peer.passEarly = [];
   peer.ctlPending = [];
   fileDropPeer(peer);
   if (peer.pc) {
@@ -8740,17 +8774,104 @@ async function sealedOnProof(peer, msg) {
       : 'proved an identity another label here holds');
     return;
   }
+  // The keys go to the worker now: the passphrase proof itself travels sealed,
+  // and a frame that can not be opened would stall the proof. The keys are not
+  // permission, though. Every application frame of this pair waits for the
+  // proof, so a peer that ran the handshake gets no room until it shows the
+  // passphrase.
   peer.keyPromise = sealedInstallKeys(peer);
   sealedSetE2E(peer, 'ready');
-  // The name and the offer both wait for the keys in the worker: a name sent
-  // before that point is dropped by the guard and would never be sent again.
   Promise.resolve(peer.keyPromise).then((ok) => {
     if (!ok || !state.peers.has(peer.id) || state.leaving) return;
-    sealedAnnounceName(peer);
-    for (const held of peer.appPending || []) sealedHandleOpaque(peer.id, encOpaque(held));
-    peer.appPending = [];
-    if (!peer.pc && String(state.self) < String(peer.id)) connectPeer(peer.id, true);
+    sealedFlushApp(peer);
+    sealedStartPass(peer);
   });
+}
+
+// sealedFlushApp replays the sealed frames that arrived before this side had
+// its keys in the worker. They are in socket order, so the pair counters stay
+// in step.
+function sealedFlushApp(peer) {
+  const held = peer.appPending || [];
+  peer.appPending = [];
+  for (const msg of held) sealedHandleOpaque(peer.id, encOpaque(msg));
+}
+
+// sealedStartPass proves the room passphrase to this peer. Keys alone bind the
+// two ends of one handshake, and anyone can run a handshake; the proof is what
+// makes the room a room.
+function sealedStartPass(peer) {
+  if (!state.w) {
+    sealedRefuse(peer, 'this page holds no room key');
+    return;
+  }
+  const first = String(state.self) < String(peer.id);
+  const a = b64e(sealUtf8.encode(first ? state.self : peer.id));
+  const b = b64e(sealUtf8.encode(first ? peer.id : state.self));
+  const out = pqCall((json) => pqModule().spakestart(json), {
+    w: state.w, role: first ? 'A' : 'B', a, b,
+  });
+  if (!out || !out.id) {
+    sealedRefuse(peer, 'the room key could not be used');
+    return;
+  }
+  peer.pass = { id: out.id, mine: '', peerOk: false, finished: false, done: false };
+  sealedSend(peer, { k: 'spake', m: out.msg });
+  sealedDrainPass(peer);
+}
+
+// sealedDrainPass replays a proof frame that arrived before the exchange it
+// belongs to existed.
+function sealedDrainPass(peer) {
+  const held = peer.passEarly || [];
+  peer.passEarly = [];
+  for (const msg of held) sealedOnPassFrame(peer, msg);
+}
+
+function sealedOnPassFrame(peer, msg) {
+  if (!peer.pass) {
+    (peer.passEarly = peer.passEarly || []).push(msg);
+    return;
+  }
+  if (msg.k === 'spake') {
+    if (peer.pass.finished) return;
+    const out = pqCall((json) => pqModule().spakefinish(json), { id: peer.pass.id, msg: msg.m });
+    if (!out || !out.conf) {
+      sealedRefuse(peer, 'the passphrase exchange failed');
+      return;
+    }
+    peer.pass.finished = true;
+    peer.pass.mine = out.conf;
+    sealedSend(peer, { k: 'spakeok', c: out.conf });
+    sealedDrainPass(peer);
+    sealedPassMaybe(peer);
+    return;
+  }
+  // spakeok: the peer's confirmation of the key our side derived.
+  const out = pqCall((json) => pqModule().spakeverify(json), { id: peer.pass.id, tag: msg.c });
+  if (!out || !out.ok) {
+    sealedRefuse(peer, 'does not know the room passphrase');
+    return;
+  }
+  peer.pass.peerOk = true;
+  sealedPassMaybe(peer);
+}
+
+function sealedPassMaybe(peer) {
+  if (!peer.pass || peer.pass.done || !peer.pass.finished || !peer.pass.peerOk) return;
+  peer.pass.done = true;
+  sealedPassDone(peer);
+}
+
+// sealedPassDone is the point where a pair becomes usable: both ends proved
+// the passphrase, so the frames held behind the proof are released and the
+// connection may start.
+function sealedPassDone(peer) {
+  sealedAnnounceName(peer);
+  const held = peer.appHeld || [];
+  peer.appHeld = [];
+  for (const obj of held) sealedDispatchApp(peer, obj);
+  if (!peer.pc && String(state.self) < String(peer.id)) connectPeer(peer.id, true);
 }
 
 // sealedHoldCtl keeps a handshake frame that arrived before the state it needs.
@@ -8835,6 +8956,17 @@ function sealedOnApp(peer, b, seq) {
   }
   peer.seqIn = seq;
   if (obj.z !== undefined) delete obj.z; // the padding bucket, never content
+  // The proof is the only kind that may pass before the room is open. Anything
+  // else waits here: a peer that can run a handshake can still be a stranger,
+  // and an offer applied early would build a link to that stranger.
+  if (obj.k !== 'spake' && obj.k !== 'spakeok' && !(peer.pass && peer.pass.done)) {
+    if ((peer.appHeld = peer.appHeld || []).length < 256) peer.appHeld.push(obj);
+    return;
+  }
+  sealedDispatchApp(peer, obj);
+}
+
+function sealedDispatchApp(peer, obj) {
   if (obj.k === 'sdp') {
     // A sealed description is the only kind this client sends. It arrives after
     // the keys, so no clear offer is ever made or accepted from here.
@@ -8848,6 +8980,10 @@ function sealedOnApp(peer, b, seq) {
     // the description is still being applied.
     if (peer.pc) onCandidate(peer, obj.c);
     else (peer.candEarly = peer.candEarly || []).push(obj.c);
+    return;
+  }
+  if (obj.k === 'spake' || obj.k === 'spakeok') {
+    sealedOnPassFrame(peer, obj);
     return;
   }
   if (obj.k === 'name') {
@@ -8913,6 +9049,21 @@ function padRoundTripOk() {
     if (!onBucket || JSON.stringify(back) !== raw) return false;
   }
   return true;
+}
+
+// roomW turns the room passphrase into the SPAKE2 scalar. The count is high on
+// purpose: it is the price of one guess at the passphrase after a dump, and it
+// is paid here, so the server never sees the passphrase at all.
+function roomW(pass, room) {
+  // An open room has no passphrase, and an empty password would make SPAKE2
+  // prove the same public constant to everyone. That is exactly what an open
+  // room means, so the empty case gets a fixed label and the exchange still
+  // runs: a room with a passphrase is indistinguishable from an open one on
+  // the wire.
+  const secret = pass === '' ? '\u0000open room' : pass;
+  const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
+  if (!out || !out.w) throw new Error('the room key could not be derived');
+  return out.w;
 }
 
 // Sealed negotiation. An offer, an answer and a candidate travel inside the
@@ -9178,7 +9329,7 @@ function sealedAlarms() {
 
 function wasmTestOk(wt) {
   return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused &&
-    wt.idSign && wt.idUnsigned && wt.idFp && wt.pad);
+    wt.idSign && wt.idUnsigned && wt.idFp && wt.pad && wt.passGood && wt.passBad);
 }
 
 // wasmTestFaults lists only the checks that failed.
@@ -9195,6 +9346,8 @@ function wasmTestFaults(wt) {
     ['identity ', wt.idSign ? 'signs' : 'BROKEN', !!wt.idSign],
     ['unsigned ', wt.idUnsigned ? 'refused' : 'ACCEPTED', !!wt.idUnsigned],
     ['fingerprint ', wt.idFp ? 'ok' : 'BROKEN', !!wt.idFp],
+    ['room key ', wt.passGood ? 'ok' : 'BROKEN', !!wt.passGood],
+    ['wrong key ', wt.passBad ? 'refused' : 'ACCEPTED', !!wt.passBad],
   ];
   const out = [['', 'FAIL', false]];
   for (const b of bad) if (!b[2]) out.push(b);

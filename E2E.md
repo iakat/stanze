@@ -85,7 +85,8 @@ has no plaintext mode to switch off and no flag is involved.
 
 The wire carries no name and no chat field at all:
 
-- a `join` has a room and a passphrase, nothing else;
+- a `join` has a room and nothing else: the passphrase is proved between the
+  guests inside the sealed channel;
 - a peer entry in `joined` or `peer-joined` has an id, the microphone and camera
   flags and the admin flag;
 - logs carry paths, status, an eight-hex room fingerprint and peer counts, but

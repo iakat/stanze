@@ -193,7 +193,6 @@ type iceServer struct {
 type clientMsg struct {
 	T    string `json:"t"`
 	Room string `json:"room,omitempty"`
-	Pass string `json:"pass,omitempty"`
 	To   string `json:"to,omitempty"`
 
 	// mic, cam, deaf and hand are pointers so "not sent" and "false" differ.

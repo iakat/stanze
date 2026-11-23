@@ -7,10 +7,10 @@ func newTestHub(t *testing.T) *Hub {
 	return newHub(&Config{MaxPeers: 8, MaxRooms: 50})
 }
 
-func joinPeer(t *testing.T, h *Hub, roomID, pass string) (*Peer, *Room) {
+func joinPeer(t *testing.T, h *Hub, roomID string) (*Peer, *Room) {
 	t.Helper()
 	p := newPeer()
-	room, err := h.join(roomID, pass, p)
+	room, err := h.join(roomID, p)
 	if err != nil {
 		t.Fatalf("join %q: %v", roomID, err)
 	}
@@ -33,7 +33,7 @@ func roomInMap(h *Hub, id string) *Room {
 func TestLastLeaveDropsRoomAtOnce(t *testing.T) {
 	h := newTestHub(t)
 
-	p, room := joinPeer(t, h, "abc", "")
+	p, room := joinPeer(t, h, "abc")
 	if got := roomCount(h); got != 1 {
 		t.Fatalf("rooms after join = %d, want 1", got)
 	}
@@ -58,8 +58,8 @@ func TestLastLeaveDropsRoomAtOnce(t *testing.T) {
 func TestRoomSurvivesOneLeaveOfTwo(t *testing.T) {
 	h := newTestHub(t)
 
-	a, _ := joinPeer(t, h, "abc", "")
-	b, _ := joinPeer(t, h, "abc", "")
+	a, _ := joinPeer(t, h, "abc")
+	b, _ := joinPeer(t, h, "abc")
 
 	h.leave(a)
 
@@ -80,8 +80,8 @@ func TestRoomSurvivesOneLeaveOfTwo(t *testing.T) {
 func TestAdminReassignedWhenAdminLeaves(t *testing.T) {
 	h := newTestHub(t)
 
-	a, room := joinPeer(t, h, "abc", "")
-	b, _ := joinPeer(t, h, "abc", "")
+	a, room := joinPeer(t, h, "abc")
+	b, _ := joinPeer(t, h, "abc")
 	if admins := h.adminsOf(room); len(admins) != 1 || admins[0] != a.id {
 		t.Fatalf("admins after two joins = %v, want [%s]", admins, a.id)
 	}
@@ -98,23 +98,23 @@ func TestAdminReassignedWhenAdminLeaves(t *testing.T) {
 }
 
 // Everything the room held dies with it: a later join starts from nothing, so
-// no state and a passphrase the newcomer picks.
+// no admin, no waiting room and no order.
 func TestRejoinAfterDropStartsFresh(t *testing.T) {
 	h := newTestHub(t)
 
-	a, room := joinPeer(t, h, "abc", "first-pass")
+	a, room := joinPeer(t, h, "abc")
 	h.leave(a)
 
 	if got := roomCount(h); got != 0 {
 		t.Fatalf("rooms after the last leave = %d, want 0", got)
 	}
 
-	b, fresh := joinPeer(t, h, "abc", "second-pass")
+	b, fresh := joinPeer(t, h, "abc")
 	if fresh == room {
 		t.Fatal("rejoin reused the dropped room")
 	}
-	if _, err := h.join("abc", "first-pass", newPeer()); err != errRoomUnavailable {
-		t.Fatalf("old passphrase on the new room: err = %v, want errRoomUnavailable", err)
+	if len(fresh.admins) != 1 || !fresh.admins[b.id] {
+		t.Fatalf("the first guest of the new room is not admin: %v", fresh.admins)
 	}
 	h.leave(b)
 }
@@ -143,8 +143,8 @@ func boolp(v bool) *bool { return &v }
 // With the switch off nobody waits, whatever the room holds.
 func TestWaitingRoomOffLetsEveryoneIn(t *testing.T) {
 	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc", "")
-	b, _ := joinPeer(t, h, "abc", "")
+	a, room := joinPeer(t, h, "abc")
+	b, _ := joinPeer(t, h, "abc")
 	if h.isWaiting(a) || h.isWaiting(b) {
 		t.Fatal("a guest waited while the waiting room was off")
 	}
@@ -157,9 +157,9 @@ func TestWaitingRoomOffLetsEveryoneIn(t *testing.T) {
 // and a waiting guest never gets the admin role.
 func TestWaitingRoomHoldsLaterGuests(t *testing.T) {
 	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc", "")
+	a, room := joinPeer(t, h, "abc")
 	h.setWaitingRoom(room, true)
-	b, _ := joinPeer(t, h, "abc", "")
+	b, _ := joinPeer(t, h, "abc")
 
 	if h.isWaiting(a) {
 		t.Fatal("a member was put in the waiting room by the switch")
@@ -178,10 +178,10 @@ func TestWaitingRoomHoldsLaterGuests(t *testing.T) {
 // A room switched on before anybody joined still lets the first guest in.
 func TestWaitingRoomFirstGuestIsNeverHeld(t *testing.T) {
 	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc", "")
+	a, room := joinPeer(t, h, "abc")
 	h.setWaitingRoom(room, true)
 	h.leave(a)
-	c, _ := joinPeer(t, h, "abc", "")
+	c, _ := joinPeer(t, h, "abc")
 	if h.isWaiting(c) {
 		t.Fatal("the first guest of a fresh room waited for nobody")
 	}
@@ -191,10 +191,10 @@ func TestWaitingRoomFirstGuestIsNeverHeld(t *testing.T) {
 // waits in the same room.
 func TestAdmitRules(t *testing.T) {
 	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc", "")
+	a, room := joinPeer(t, h, "abc")
 	h.setWaitingRoom(room, true)
-	b, _ := joinPeer(t, h, "abc", "")
-	c, _ := joinPeer(t, h, "abc", "")
+	b, _ := joinPeer(t, h, "abc")
+	c, _ := joinPeer(t, h, "abc")
 
 	if h.admit(b, c.id) {
 		t.Fatal("a waiting guest let another guest in")
@@ -205,7 +205,7 @@ func TestAdmitRules(t *testing.T) {
 	if h.admit(a, "nobody") {
 		t.Fatal("an unknown id was admitted")
 	}
-	other, _ := joinPeer(t, h, "elsewhere", "")
+	other, _ := joinPeer(t, h, "elsewhere")
 	if h.admit(other, b.id) {
 		t.Fatal("a guest of another room let a guest in")
 	}
@@ -232,10 +232,10 @@ func TestAdmitRules(t *testing.T) {
 // that guest, not to one who still waits.
 func TestLastMemberLeavesLetsOldestWaiterIn(t *testing.T) {
 	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc", "")
+	a, room := joinPeer(t, h, "abc")
 	h.setWaitingRoom(room, true)
-	b, _ := joinPeer(t, h, "abc", "")
-	c, _ := joinPeer(t, h, "abc", "")
+	b, _ := joinPeer(t, h, "abc")
+	c, _ := joinPeer(t, h, "abc")
 
 	_, letIn := h.leaveWith(a)
 	if letIn != b.id {
@@ -256,10 +256,10 @@ func TestLastMemberLeavesLetsOldestWaiterIn(t *testing.T) {
 // A member leaving while another member stays lets nobody in.
 func TestMemberLeaveKeepsWaiterOutside(t *testing.T) {
 	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc", "")
-	b, _ := joinPeer(t, h, "abc", "")
+	a, room := joinPeer(t, h, "abc")
+	b, _ := joinPeer(t, h, "abc")
 	h.setWaitingRoom(room, true)
-	c, _ := joinPeer(t, h, "abc", "")
+	c, _ := joinPeer(t, h, "abc")
 
 	_, letIn := h.leaveWith(a)
 	if letIn != "" {

@@ -15,7 +15,6 @@ import (
 	"crypto/elliptic"
 	"crypto/hkdf"
 	"crypto/hmac"
-	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -23,6 +22,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"math/big"
+
+	"golang.org/x/crypto/argon2"
 )
 
 var curve = elliptic.P256()
@@ -58,17 +59,22 @@ func mustDecompress(h string) point {
 // RFC requires the abort: a sloppy element is an attack, not a typo.
 var ErrNotOnCurve = errors.New("spake2: peer element is not a group point")
 
+// Argon2id parameters for a room passphrase. Every guess after a dump pays the
+// memory as well as the time, which a GPU farm can not amortise the way it can
+// with a plain iterated hash.
+const (
+	argonTime    = 2
+	argonMemory  = 32 * 1024 // KiB, so 32 MiB per guess
+	argonThreads = 1
+)
+
 // Passphrase turns a password into w, the scalar both sides share. The digest
-// is longer than the group order on purpose, and the work factor belongs to the
-// caller: a higher count makes each guess cost more.
-func Passphrase(pass, salt []byte, iter int) (*big.Int, error) {
+// is longer than the group order on purpose (RFC 9382 section 3.2).
+func Passphrase(pass, salt []byte) (*big.Int, error) {
 	if len(pass) == 0 {
 		return nil, errors.New("spake2: empty passphrase")
 	}
-	sum, err := pbkdf2.Key(sha256.New, string(pass), salt, iter, 64)
-	if err != nil {
-		return nil, err
-	}
+	sum := argon2.IDKey(pass, salt, argonTime, argonMemory, argonThreads, 64)
 	return new(big.Int).Mod(new(big.Int).SetBytes(sum), curve.Params().N), nil
 }
 

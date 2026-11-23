@@ -1,10 +1,8 @@
 package main
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -43,49 +41,11 @@ func newPeerID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// passHash is a PBKDF2-HMAC-SHA256 digest of a room passphrase with a random
-// per-room salt. Only the digest is kept, and only in memory.
-type passHash struct {
-	salt []byte
-	hash []byte
-}
-
-const passIterations = 150000
-
-func hashPassphrase(pass string) (*passHash, error) {
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, err
-	}
-	return &passHash{salt: salt, hash: pbkdf2SHA256([]byte(pass), salt, passIterations, 32)}, nil
-}
-
-func (p *passHash) matches(pass string) bool {
-	got := pbkdf2SHA256([]byte(pass), p.salt, passIterations, len(p.hash))
-	return subtle.ConstantTimeCompare(got, p.hash) == 1
-}
-
-func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
-	prf := hmac.New(sha256.New, password)
-	prf.Write(salt)
-	prf.Write([]byte{0, 0, 0, 1})
-	u := prf.Sum(nil)
-	out := append([]byte(nil), u...)
-	for i := 1; i < iter; i++ {
-		prf.Reset()
-		prf.Write(u)
-		u = prf.Sum(u[:0])
-		for j := range out {
-			out[j] ^= u[j]
-		}
-	}
-	return out[:keyLen]
-}
-
-// Room lives only in memory and is dropped with its last peer.
+// Room lives only in memory and is dropped with its last peer. It holds no
+// room secret: the passphrase stays in the browser and becomes a SPAKE2
+// scalar there, so the server has nothing to compare and nothing to leak.
 type Room struct {
 	id    string
-	pass  *passHash
 	peers map[string]*Peer
 	// never set again: the last leave drops the room, so only a room that
 	// was created ahead of the first join waits in the map while empty.
@@ -109,14 +69,6 @@ type Hub struct {
 	rooms    map[string]*Room
 	maxPeers int
 	maxRooms int
-	hashSem  chan struct{}
-}
-
-// hashSlot bounds how many passphrase hashes run at once, so join attempts
-// cannot turn into a CPU amplifier.
-func (h *Hub) hashSlot() func() {
-	h.hashSem <- struct{}{}
-	return func() { <-h.hashSem }
 }
 
 func newHub(cfg *Config) *Hub {
@@ -124,60 +76,30 @@ func newHub(cfg *Config) *Hub {
 		rooms:    make(map[string]*Room),
 		maxPeers: cfg.MaxPeers,
 		maxRooms: cfg.MaxRooms,
-		hashSem:  make(chan struct{}, 4),
 	}
 }
 
 // join attaches a peer to a room. A room that does not exist yet is created by
-// the first join, and the passphrase sent with that join becomes the room
-// passphrase. Every other failure mode returns the same error so a client
-// cannot tell a malformed id from a wrong passphrase or a full room.
-func (h *Hub) join(roomID, passphrase string, p *Peer) (*Room, error) {
+// the first join. The passphrase is not a server matter: a wrong one fails the
+// sealed handshake between the guests and costs them one attempt, while this
+// function only sees a room id, so a malformed id and a full room still fail
+// with the same error and nothing else is distinguishable.
+func (h *Hub) join(roomID string, p *Peer) (*Room, error) {
 	roomID = strings.ToLower(strings.TrimSpace(roomID))
 	if !validRoomName(roomID) {
 		return nil, errRoomUnavailable
 	}
 
-	// Look up the passphrase digest without holding the lock: hashing is slow
-	// on purpose and must not stall every other room.
-	h.mu.Lock()
-	room, ok := h.rooms[roomID]
-	var hash *passHash
-	if ok {
-		hash = room.pass
-	}
-	h.mu.Unlock()
-
-	release := h.hashSlot()
-	var pass *passHash
-	passOK := false
-	if ok {
-		passOK = hash == nil && passphrase == "" ||
-			hash != nil && hash.matches(passphrase)
-	} else if passphrase != "" {
-		var err error
-		pass, err = hashPassphrase(passphrase)
-		if err != nil {
-			release()
-			return nil, errRoomUnavailable
-		}
-	}
-	release()
-
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if room, ok = h.rooms[roomID]; ok {
-		if !passOK || room.pass != hash {
-			return nil, errRoomUnavailable
-		}
-	} else {
+	room, ok := h.rooms[roomID]
+	if !ok {
 		if len(h.rooms) >= h.maxRooms {
 			return nil, errRoomUnavailable
 		}
 		room = &Room{
 			id:     roomID,
-			pass:   pass,
 			peers:  make(map[string]*Peer),
 			admins: make(map[string]bool),
 		}
@@ -244,8 +166,8 @@ func (h *Hub) leaveWith(p *Peer) (*Room, string) {
 	}
 	delete(room.admins, p.id)
 	if len(room.peers) == 0 {
-		// The last peer takes the room with it. The passphrase digest dies
-		// here, so a later join starts from nothing.
+		// The last peer takes the room with it, and a later join starts
+		// from nothing.
 		if h.rooms[room.id] == room {
 			delete(h.rooms, room.id)
 		}

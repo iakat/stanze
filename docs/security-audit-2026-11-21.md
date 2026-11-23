@@ -1,5 +1,11 @@
 # Security audit: crypto primitives and the room passphrase
 
+> Point in time: 2026-11-21. Since then, phase 3 of
+> `docs/metadata-2026-11-23.md` removed the server side of the passphrase, so
+> F3 (PBKDF2 as a CPU amplifier), F4 (the hand-written PBKDF2) and F9 (the
+> passphrase as a room property) no longer have a code path and the rest of
+> the findings stand as written.
+
 ## Scope
 
 Repository: the Go/JS WebRTC room server in this tree. Read at commit

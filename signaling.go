@@ -288,9 +288,9 @@ func mustJSON(v any) []byte {
 // handleJoin resolves the room and announces the new peer. It returns false if
 // the connection must be dropped.
 func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
-	room, err := s.hub.join(m.Room, m.Pass, p)
+	room, err := s.hub.join(m.Room, p)
 	if err != nil {
-		// One answer for every failure: unknown room, wrong passphrase, full
+		// One answer for every failure: unknown room, malformed id, full
 		// room. Nothing is distinguishable.
 		p.writeNow(conn, serverMsg{T: "error", Code: "unavailable"})
 		return false
