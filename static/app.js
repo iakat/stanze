@@ -211,7 +211,7 @@ const LOOKS = {
   vivid: 'saturate(1.4) contrast(1.08)',
 };
 /** @type {string[]} */
-const MASKS = ['none', 'big', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
+const MASKS = ['none', 'big', 'wide', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
 // The landmarker is three files of this origin: the module, the wasm and the
 // model. Nothing of a face leaves the tab, and no byte comes from outside.
 const MESH_DIR = '/facemesh/';
@@ -2777,6 +2777,7 @@ function lookDraw(p) {
   const a = p.anchor || { x: 0.5, y: 0.42, w: 0.4, h: 0.42 };
   for (const which of state.masks) {
     if (which === 'big') lookWarp(p, a, filter);
+    else if (which === 'wide') lookWide(p, a, filter);
     else drawMask(p.ctx, p.canvas.width, p.canvas.height, which, a);
   }
 }
@@ -2978,6 +2979,22 @@ function lookWarp(p, a, filter) {
   const rx = Math.max(gap(g.mouthL, g.mouthR) * 0.62, 5);
   const ry = Math.max((g.lipLow[1] - g.lipTop[1]) * 1.1, rx * 0.42);
   warpPatch(p, cx, cy, rx, ry, 1.3, 1.5, filter);
+}
+
+// The wide effect stretches the whole head sideways: one patch over the face,
+// widened and left at its own height, so the eyes, the nose and the mouth all
+// move out together and the head reads as very wide. The patch is measured on
+// the face and not on the frame, so a head that turns or leans keeps it.
+function lookWide(p, a, filter) {
+  const W = p.canvas.width, H = p.canvas.height;
+  const g = maskGeo(a, W, H);
+  // The middle of the face: the middle of the two outer eye corners, and the
+  // middle of the hairline and the chin.
+  const cx = (g.eyeL[0][0] + g.eyeR[1][0]) / 2;
+  const cy = (g.top[1] + g.chin[1]) / 2;
+  const rx = Math.max(g.fw * 0.56, 6);
+  const ry = Math.max(g.fh * 0.6, 6);
+  warpPatch(p, cx, cy, rx, ry, 1.8, 1, filter);
 }
 
 // warpPatch draws one ellipse of the video, widened by kx and heightened by ky
