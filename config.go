@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -14,27 +17,30 @@ import (
 // Config holds everything that can be set from the command line or the
 // environment. Flags win over environment variables.
 type Config struct {
-	Listen        string
-	Debug         bool
-	StunURLs      []string
-	TurnPublicIP  string
-	TurnPort      int
-	TurnTCPPort   int
-	TurnRealm     string
-	TurnSecret    string
-	TurnTTL       time.Duration
-	TurnURLs      []string
-	TurnMinPort   int
-	TurnMaxPort   int
-	MaxPeers      int
-	MaxRooms      int
-	MaxMsgBytes   int64
-	BehindProxy   bool
-	StaticDir     string
-	DocsDir       string
-	VoskDir       string
-	OmniDir       string
-	AllowedOrigin string
+	Listen         string
+	Debug          bool
+	StunURLs       []string
+	Turn           bool
+	TurnPublicIP   string
+	TurnIPAuto     bool
+	TurnPort       int
+	TurnTCPPort    int
+	TurnRealm      string
+	TurnSecret     string
+	TurnSecretAuto bool
+	TurnTTL        time.Duration
+	TurnURLs       []string
+	TurnMinPort    int
+	TurnMaxPort    int
+	MaxPeers       int
+	MaxRooms       int
+	MaxMsgBytes    int64
+	BehindProxy    bool
+	StaticDir      string
+	DocsDir        string
+	VoskDir        string
+	OmniDir        string
+	AllowedOrigin  string
 }
 
 func envStr(key, def string) string {
@@ -96,15 +102,16 @@ func loadConfig(args []string) (*Config, error) {
 	turnURLs := splitList(envStr("TURN_URLS", ""))
 	var stunFlags []string
 
-	fs := flag.NewFlagSet("rooms", flag.ContinueOnError)
+	fs := flag.NewFlagSet("stanze", flag.ContinueOnError)
 	fs.StringVar(&cfg.Listen, "listen", envStr("LISTEN", ":8095"), "address to listen on for HTTP (put a TLS proxy in front for production)")
 	fs.BoolVar(&cfg.Debug, "debug", envStr("DEBUG", "") != "", "verbose logging (never logs room ids)")
 	fs.Var(stringList{&stunFlags}, "stun", "STUN URL handed to browsers (repeatable, comma separated; env STUN_URLS)")
-	fs.StringVar(&cfg.TurnPublicIP, "turn-public-ip", envStr("TURN_PUBLIC_IP", ""), "public IP advertised to clients for the embedded TURN relay; empty disables TURN")
+	fs.BoolVar(&cfg.Turn, "turn", envStr("TURN", "1") != "0", "run the embedded relay and STUN (default on; env TURN=0 disables)")
+	fs.StringVar(&cfg.TurnPublicIP, "turn-public-ip", envStr("TURN_PUBLIC_IP", ""), "public IP advertised to clients for the embedded TURN relay; empty takes the outbound address")
 	fs.IntVar(&cfg.TurnPort, "turn-port", envInt("TURN_PORT", 3478), "UDP port for the embedded TURN server")
 	fs.IntVar(&cfg.TurnTCPPort, "turn-tcp-port", envInt("TURN_TCP_PORT", 0), "optional TCP port for TURN (0 = off)")
-	fs.StringVar(&cfg.TurnRealm, "turn-realm", envStr("TURN_REALM", "rooms"), "TURN realm")
-	fs.StringVar(&cfg.TurnSecret, "turn-secret", envStr("TURN_SECRET", ""), "shared secret for ephemeral TURN credentials (env TURN_SECRET); required to enable TURN")
+	fs.StringVar(&cfg.TurnRealm, "turn-realm", envStr("TURN_REALM", "stanze"), "TURN realm")
+	fs.StringVar(&cfg.TurnSecret, "turn-secret", envStr("TURN_SECRET", ""), "shared secret for ephemeral TURN credentials (env TURN_SECRET); empty makes a random one at each start")
 	fs.DurationVar(&cfg.TurnTTL, "turn-ttl", envDur("TURN_TTL", time.Hour), "lifetime of issued TURN credentials")
 	fs.Var(stringList{&turnURLs}, "turn-url", "extra TURN URL to advertise, e.g. turns:example.com:5349?transport=tcp (repeatable; env TURN_URLS)")
 	fs.IntVar(&cfg.TurnMinPort, "turn-min-port", envInt("TURN_MIN_PORT", 49200), "lowest relay port for TURN allocations")
@@ -129,6 +136,24 @@ func loadConfig(args []string) (*Config, error) {
 	}
 	cfg.StunURLs = stun
 	cfg.TurnURLs = turnURLs
+
+	// The relay and its STUN are on unless asked off. A missing secret is
+	// replaced by a random one per start, and a missing address by the local
+	// address the routing table would use (no packet is sent to find it).
+	if !cfg.Turn {
+		cfg.TurnSecret, cfg.TurnPublicIP = "", ""
+	} else {
+		if cfg.TurnSecret == "" {
+			b := make([]byte, 32)
+			if _, err := rand.Read(b); err != nil {
+				return nil, fmt.Errorf("turn secret: %w", err)
+			}
+			cfg.TurnSecret, cfg.TurnSecretAuto = hex.EncodeToString(b), true
+		}
+		if cfg.TurnPublicIP == "" {
+			cfg.TurnPublicIP, cfg.TurnIPAuto = outboundIP(), true
+		}
+	}
 
 	// With no explicit STUN, use the embedded relay as the STUN endpoint. The
 	// TURN server also answers Binding requests, so no third party is contacted.
@@ -177,4 +202,19 @@ func (c *Config) logLevel() slog.Level {
 		return slog.LevelDebug
 	}
 	return slog.LevelInfo
+}
+
+// outboundIP returns the local address the routing table would use for the
+// default route. A UDP dial only asks the kernel to choose a source address,
+// so no packet leaves the host and no third party is contacted.
+func outboundIP() string {
+	c, err := net.Dial("udp4", "192.0.2.1:9")
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	if ua, ok := c.LocalAddr().(*net.UDPAddr); ok && ua.IP != nil && !ua.IP.IsUnspecified() {
+		return ua.IP.String()
+	}
+	return ""
 }

@@ -23,14 +23,14 @@
             "image": "alpine:3.20",
             "command": ["/bin/sh", "-c"],
             "args": [
-              "install -m 0755 /files/rooms-server /tmp/rooms && exec /tmp/rooms -listen 0.0.0.0:8095 -behind-proxy -allowed-origin https://stanze.ch-test.katia.sh -turn-public-ip 152.53.49.131 -turn-port 3478 -turn-min-port 49200 -turn-max-port 49300 -vosk-dir /files/vosk -omni-dir /files/omni"
+              "install -m 0755 /files/stanze-server /tmp/stanze && exec /tmp/stanze -listen 0.0.0.0:8095 -behind-proxy -allowed-origin https://stanze.ch-test.katia.sh -turn-public-ip 152.53.49.131 -turn-port 3478 -turn-min-port 49200 -turn-max-port 49300 -vosk-dir /files/vosk -omni-dir /files/omni"
             ],
             "env": [
               {"name": "TURN_SECRET", "valueFrom": {"secretKeyRef": {"name": "stanze-env", "key": "TURN_SECRET"}}}
             ],
             "ports": [
               {"name": "http", "containerPort": 8095, "protocol": "TCP"},
-              {"name": "turn", "containerPort": 3478, "protocol": "UDP"}
+              {"name": "stun-turn", "containerPort": 3478, "protocol": "UDP"}
             ],
             "resources": {
               "requests": {"cpu": "50m", "memory": "64Mi"},
@@ -51,7 +51,7 @@
           }
         ],
         "volumes": [
-          {"name": "files", "hostPath": {"path": "/srv/ocbot-files/rooms", "type": "Directory"}},
+          {"name": "files", "hostPath": {"path": "/srv/ocbot-files/stanze", "type": "Directory"}},
           {"name": "tmp", "emptyDir": {"sizeLimit": "16Mi"}}
         ]
       }

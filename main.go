@@ -55,12 +55,19 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.logLevel()}))
 	slog.SetDefault(log)
 
-	if cfg.turnEnabled() && (cfg.TurnSecret == "" || cfg.TurnPublicIP == "") {
-		log.Error("turn needs both public ip and shared secret")
+	switch {
+	case cfg.turnEnabled():
+		if cfg.TurnIPAuto {
+			log.Info("turn: no address given, using the outbound address", "ip", cfg.TurnPublicIP)
+		}
+		if cfg.TurnSecretAuto {
+			log.Info("turn: no secret given, using a random one for this start")
+		}
+	case cfg.Turn && cfg.TurnPublicIP == "":
+		log.Error("turn is on but no usable address was found: set -turn-public-ip or TURN_PUBLIC_IP")
 		os.Exit(2)
-	}
-	if !cfg.turnEnabled() {
-		log.Warn("turn disabled: set TURN_PUBLIC_IP and TURN_SECRET to offer a relay fallback")
+	default:
+		log.Warn("turn disabled: pass -turn or leave TURN unset to offer the relay fallback")
 	}
 
 	hub := newHub(cfg)
