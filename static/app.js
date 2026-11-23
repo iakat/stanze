@@ -211,7 +211,7 @@ const LOOKS = {
   vivid: 'saturate(1.4) contrast(1.08)',
 };
 /** @type {string[]} */
-const MASKS = ['none', 'big', 'wide', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
+const MASKS = ['none', 'big', 'wide', 'small', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
 // The landmarker is three files of this origin: the module, the wasm and the
 // model. Nothing of a face leaves the tab, and no byte comes from outside.
 const MESH_DIR = '/facemesh/';
@@ -2778,6 +2778,7 @@ function lookDraw(p) {
   for (const which of state.masks) {
     if (which === 'big') lookWarp(p, a, filter);
     else if (which === 'wide') lookWide(p, a, filter);
+    else if (which === 'small') lookSmall(p, a, filter);
     else drawMask(p.ctx, p.canvas.width, p.canvas.height, which, a);
   }
 }
@@ -3038,6 +3039,85 @@ function warpWide(p, cx, cy, rx, ry, kx, filter) {
   cc.globalCompositeOperation = 'source-over';
   if (filter && filter !== 'none') p.ctx.filter = filter;
   p.ctx.drawImage(c, 0, 0, iw, ih, cx - dw / 2, cy - dh / 2, dw, dh);
+  if (filter && filter !== 'none') p.ctx.filter = 'none';
+}
+
+// The small effect shrinks the middle of the face and pads it out: the skin
+// above the brows is stretched over a box as a plain pad, and the eyes, the
+// nose and the mouth are drawn small in the middle of it, so the face keeps a
+// wide ring of skin around them. Both layers come from the camera element, the
+// pad is skin and not a colour, and the box fades at its edge onto the cheeks.
+function lookSmall(p, a, filter) {
+  const W = p.canvas.width, H = p.canvas.height;
+  const g = maskGeo(a, W, H);
+  const vw = p.video.videoWidth, vh = p.video.videoHeight;
+  const cx = (g.eyeL[0][0] + g.eyeR[1][0]) / 2;
+  const browY = Math.min(g.browL[1], g.browR[1]);
+  const lipY = g.lipLow[1];
+  const fcy = (browY + lipY) / 2;
+  const frx = Math.max((g.eyeR[1][0] - g.eyeL[0][0]) / 2, g.fw * 0.3);
+  const fry = Math.max((lipY - browY) / 2, g.fh * 0.12);
+  const prx = Math.max(frx * 1.22, 8), pry = Math.max(fry * 1.28, 8);
+  const iw = Math.ceil(2 * prx), ih = Math.ceil(2 * pry);
+  if (iw < 8 || ih < 8 || !vw || !vh) return;
+  const vx = (x) => x * vw / W, vy = (y) => y * vh / H;
+  if (!p.smallCanvas) {
+    p.smallCanvas = document.createElement('canvas');
+    p.smallCtx = p.smallCanvas.getContext('2d');
+    p.smallFeat = document.createElement('canvas');
+    p.smallFeatCtx = p.smallFeat.getContext('2d');
+  }
+  const c = p.smallCanvas, cc = p.smallCtx;
+  if (c.width < iw) c.width = iw;
+  if (c.height < ih) c.height = ih;
+  // A pad of forehead skin, stretched over the box: the only face skin that no
+  // feature sits on. A small blur hides the stretch.
+  const bandY = browY - g.fh * 0.16;
+  const bandH = Math.max(g.fh * 0.12, 4);
+  cc.clearRect(0, 0, iw, ih);
+  cc.globalCompositeOperation = 'source-over';
+  cc.filter = 'blur(4px)';
+  cc.drawImage(p.video, vx(cx - prx), vy(bandY), vx(2 * prx), vy(bandH), 0, 0, iw, ih);
+  cc.filter = 'none';
+  // The middle of the face, small, on the pad.
+  const k = 0.55;
+  const fw = Math.ceil(2 * frx * k), fh = Math.ceil(2 * fry * k);
+  const f = p.smallFeat, fc = p.smallFeatCtx;
+  if (f.width < fw) f.width = fw;
+  if (f.height < fh) f.height = fh;
+  fc.clearRect(0, 0, fw, fh);
+  fc.globalCompositeOperation = 'source-over';
+  fc.drawImage(p.video, vx(cx - frx), vy(fcy - fry), vx(2 * frx), vy(2 * fry), 0, 0, fw, fh);
+  // A soft edge, so the small middle sits on the pad and not as a pasted block.
+  fc.globalCompositeOperation = 'destination-in';
+  fc.save();
+  fc.translate(fw / 2, fh / 2);
+  fc.scale(1, fh / fw);
+  const soft = fc.createRadialGradient(0, 0, 0, 0, 0, fw / 2);
+  soft.addColorStop(0, 'rgba(0,0,0,1)');
+  soft.addColorStop(0.62, 'rgba(0,0,0,1)');
+  soft.addColorStop(1, 'rgba(0,0,0,0)');
+  fc.fillStyle = soft;
+  fc.fillRect(-fw / 2, -fw / 2, fw, fw);
+  fc.restore();
+  fc.globalCompositeOperation = 'source-over';
+  cc.drawImage(f, 0, 0, fw, fh, iw / 2 - fw / 2, ih / 2 - fh / 2, fw, fh);
+  // The box fades at its edge, so the cheeks keep their own look.
+  cc.globalCompositeOperation = 'destination-in';
+  const edge = (x0, y0, x1, y1) => {
+    const grad = cc.createLinearGradient(x0, y0, x1, y1);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(0.1, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.9, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    cc.fillStyle = grad;
+    cc.fillRect(0, 0, iw, ih);
+  };
+  edge(0, 0, iw, 0);
+  edge(0, 0, 0, ih);
+  cc.globalCompositeOperation = 'source-over';
+  if (filter && filter !== 'none') p.ctx.filter = filter;
+  p.ctx.drawImage(c, 0, 0, iw, ih, cx - prx, fcy - pry, 2 * prx, 2 * pry);
   if (filter && filter !== 'none') p.ctx.filter = 'none';
 }
 
