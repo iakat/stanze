@@ -1,0 +1,15 @@
+wig.svg — the teal wig the miku mask draws on a face.
+
+Source: https://commons.wikimedia.org/wiki/File:SvgMiku3.svg
+File:   SvgMiku3.svg
+Author: Granjita (Wikimedia Commons user)
+Licence: CC0 1.0 Universal (public domain dedication)
+         https://creativecommons.org/publicdomain/zero/1.0/
+
+The file is unchanged apart from the root element: the editor layer name is
+dropped and an intrinsic width and height are written, so a canvas can draw it
+without a layout pass. The drawing is a Hatsune Miku wig with the face cut out;
+the mask places the cut-out on the face and lets the camera show through it.
+
+Hatsune Miku is a character of Crypton Future Media, Inc. This file is a fan
+drawing of the character, released by its author under CC0.

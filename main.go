@@ -210,6 +210,11 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/facemesh/", func(w http.ResponseWriter, r *http.Request) {
 		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
 	})
+	// The drawings a mask wears are their own folder as well, so the client
+	// names a file and the server keeps the names.
+	mux.HandleFunc("/miku/", func(w http.ResponseWriter, r *http.Request) {
+		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
+	})
 	// The queue and the done list are plain files on disk, so an update is a
 	// file write and needs no new binary.
 	mux.HandleFunc("/QUEUE.md", docHandler(cfg.DocsDir, "QUEUE.md"))
@@ -347,8 +352,10 @@ func loadAssets(dir string) (map[string][]byte, error) {
 		if err := loadOpenmoji(dir, out); err != nil {
 			return nil, err
 		}
-		if err := loadFacemesh(dir, out); err != nil {
-			return nil, err
+		for _, name := range folderNames() {
+			if err := loadFolder(dir, name, out); err != nil {
+				return nil, err
+			}
 		}
 		return withWorkletBundle(out), nil
 	}
@@ -417,27 +424,33 @@ func loadOpenmoji(dir string, out map[string][]byte) error {
 	return nil
 }
 
-// loadFacemesh reads the landmarker files for a static directory: the module,
-// the wasm loader, the wasm and the model. They are read by name from the one
-// folder, and the folder may be absent: without it the client keeps its colour
-// based face patch, so the landmarker is an extra, not a reason to fail.
-func loadFacemesh(dir string, out map[string][]byte) error {
-	names, err := filepath.Glob(filepath.Join(dir, "facemesh", "*"))
+// loadFolder reads one static subdirectory into the asset map: the landmarker
+// files, or the drawings a mask wears. They are read by name from the one
+// folder, and the folder may be absent: without the landmarker the client keeps
+// its colour based face patch, and without a drawing a mask falls back to its
+// own vector, so an extra is never a reason to fail.
+func loadFolder(dir, name string, out map[string][]byte) error {
+	names, err := filepath.Glob(filepath.Join(dir, name, "*"))
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		info, err := os.Stat(name)
+	for _, file := range names {
+		info, err := os.Stat(file)
 		if err != nil || info.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(name)
+		b, err := os.ReadFile(file)
 		if err != nil {
 			return err
 		}
-		out["facemesh/"+filepath.Base(name)] = b
+		out[name+"/"+filepath.Base(file)] = b
 	}
 	return nil
+}
+
+// folderNames is every static subdirectory the client may load a file from.
+func folderNames() []string {
+	return []string{"facemesh", "miku"}
 }
 
 func assetNames() []string {

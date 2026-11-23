@@ -62,7 +62,7 @@ const state = {
   selfPip: false,     // the own picture is a small preview, not a tile in the grid
   voiceTiles: true,   // a guest without a camera also gets a tile in the large area
   look: 'none',       // the look of the own camera, drawn in this tab
-  mask: 'none',       // a mask drawn on the face of the own camera
+  masks: [],          // masks drawn on the face, any number at once
   lookPipe: null,     // the canvas pipeline while a look or a mask is on
   lookOut: null,      // the canvas video track that peers receive
   noiseWanted: true,
@@ -165,7 +165,7 @@ const state = {
  *   'menu-asr-btn': HTMLButtonElement, 'asr-on': HTMLInputElement,
  *   'asr-lang': HTMLSelectElement,
  *   'asr-note': HTMLElement,
- *   'look-filter': HTMLSelectElement, 'look-mask': HTMLSelectElement,
+ *   'look-filter': HTMLSelectElement,
  * }} Elements
  */
 
@@ -218,9 +218,11 @@ const MESH_DIR = '/facemesh/';
 // Its input is a small copy of the frame, wide enough for a mesh and small
 // enough to run on a laptop without dropping the sent picture.
 const MESH_W = 256;
-// Milliseconds between two detections, about thirteen a second: a mask sits on
-// a face that moves slowly, and the wasm is the cost of the whole feature.
-const MESH_GAP = 75;
+// The mesh runs on every painted frame, so its rate is the camera rate, and
+// the clock below ticks at that rate as well. A machine that cannot hold it
+// drops a frame instead of queueing one.
+const MESH_HZ_MIN = 5;
+const MESH_HZ_MAX = 60;
 // The long side of the canvas. A camera step above this is scaled down before
 // the look runs, so a filter never costs more pixels than it has to.
 const LOOK_MAX = 1280;
@@ -2601,7 +2603,15 @@ function applyMirror() {
 
 // lookOn answers "is any drawn step wanted". The camera itself is not touched.
 function lookOn() {
-  return (state.look && state.look !== 'none') || (state.mask && state.mask !== 'none');
+  return (state.look && state.look !== 'none') || state.masks.length > 0;
+}
+
+// maskSet reads a stored or a remote mask choice into the list the frame draws,
+// in the order the drawings are layered. One name, a plus-joined list and an
+// array all land here; a name this page does not know is dropped.
+function maskSet(value) {
+  const names = Array.isArray(value) ? value : String(value || '').split(/[+,\s]+/);
+  return MASKS.filter((m) => m !== 'none' && names.includes(m));
 }
 
 // lookTrack is the drawn track while it is live and the tab draws, or null.
@@ -2616,8 +2626,19 @@ function lookTrack() {
 // loop: a tab that is not in front is handed no animation frames at all, so a
 // display-driven loop stops dead and the peers keep the last picture for ever.
 // The worker timer lives outside the page's timer budget and ticks at the rate
-// the canvas is captured at, in front or behind.
-const DRAW_CLOCK_URL = URL.createObjectURL(new Blob(['setInterval(() => postMessage(1), 33);'], { type: 'text/javascript' }));
+// of the camera, in front or behind, so one tick is one camera frame and one
+// mesh detection.
+/** @type {Map<number, string>} */
+const drawClockURLs = new Map();
+function drawClockURL(fps) {
+  const hz = Math.max(MESH_HZ_MIN, Math.min(MESH_HZ_MAX, Math.round(fps) || 30));
+  if (!drawClockURLs.has(hz)) {
+    drawClockURLs.set(hz, URL.createObjectURL(new Blob(
+      [`setInterval(() => postMessage(1), ${Math.round(1000 / hz)});`],
+      { type: 'text/javascript' })));
+  }
+  return drawClockURLs.get(hz);
+}
 
 // The mesh points every mask reads, by their canonical FaceMesh numbers. L and
 // R are the sides of the drawn frame, which is the camera frame unmirrored: the
@@ -2648,7 +2669,7 @@ function meshOpen() {
       const vision = await import(MESH_DIR + 'vision_bundle.mjs');
       const files = await vision.FilesetResolver.forVisionTasks(MESH_DIR.slice(0, -1));
       // The cpu delegate: a software renderer and a driver without webgl2 both
-      // refuse the gpu graph, and one face at thirteen a second is small work.
+      // refuse the gpu graph, and one face per frame is small work.
       return await vision.FaceLandmarker.createFromOptions(files, {
         baseOptions: { modelAssetPath: MESH_DIR + 'face_landmarker.task', delegate: 'CPU' },
         runningMode: 'VIDEO',
@@ -2679,13 +2700,16 @@ async function lookStart() {
   document.body.appendChild(video);
   try { await video.play(); } catch { /* the first frame comes later */ }
   const settings = src.getSettings ? src.getSettings() : {};
+  // The picture and the mesh both run at the camera rate: the camera states
+  // its own frame rate, and a step without one is a camera at thirty.
+  const fps = Math.max(MESH_HZ_MIN, Math.min(MESH_HZ_MAX, Math.round(settings.frameRate) || 30));
   const scale = Math.min(1, LOOK_MAX / Math.max(settings.width || 1280, settings.height || 720));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(2, Math.round((settings.width || 1280) * scale));
   canvas.height = Math.max(2, Math.round((settings.height || 720) * scale));
   const ctx = canvas.getContext('2d', { alpha: false });
   if (!ctx) return;
-  const stream = canvas.captureStream(30);
+  const stream = canvas.captureStream(fps);
   const track = stream.getVideoTracks()[0];
   if (!track) return;
   track.contentHint = 'motion';
@@ -2703,9 +2727,9 @@ async function lookStart() {
   meshCanvas.height = Math.min(320, Math.max(128, 2 * Math.round((MESH_W * (settings.height || 720)) / (settings.width || 1280) / 2)));
   const meshCtx = meshCanvas.getContext('2d', { alpha: false });
   const pipe = {
-    src, video, canvas, ctx, sample, sctx, meshCanvas, meshCtx, stream, track,
-    clock: null, anchor: null, frame: 0,
-    mesh: null, meshTried: false, meshBusy: false, meshAt: 0,
+    src, video, canvas, ctx, sample, sctx, meshCanvas, meshCtx, stream, track, fps,
+    clock: null, clockURL: drawClockURL(fps), anchor: null, frame: 0,
+    mesh: null, meshTried: false, meshBusy: false, meshLast: 0,
   };
   state.lookPipe = pipe;
   // A hidden tab can leave the source element paused, and the clock draws from
@@ -2727,7 +2751,7 @@ async function lookStart() {
 // lookClock starts the frame clock of a pipeline. It stops with a parked tab:
 // a background tab draws nothing, so it should not read a camera either.
 function lookClock(p) {
-  const clock = new Worker(DRAW_CLOCK_URL);
+  const clock = new Worker(p.clockURL || drawClockURL(p.fps));
   clock.onmessage = () => {
     if (state.lookPipe === p) lookDraw(p);
   };
@@ -2744,33 +2768,33 @@ function lookDraw(p) {
   if (filter !== 'none') p.ctx.filter = filter;
   p.ctx.drawImage(p.video, 0, 0, p.canvas.width, p.canvas.height);
   if (filter !== 'none') p.ctx.filter = 'none';
-  if (!MASKS.includes(state.mask) || state.mask === 'none' || !p.sctx) return;
+  if (!state.masks.length || !p.sctx) return;
   p.frame++;
   lookMesh(p);
   // The colour test leads only until a mesh anchor exists, and it holds the
   // place for the whole session when the landmarker never arrives.
   if (p.frame % 2 === 1 && !(p.anchor && p.anchor.lm)) lookAnchor(p);
   const a = p.anchor || { x: 0.5, y: 0.42, w: 0.4, h: 0.42 };
-  drawMask(p.ctx, p.canvas.width, p.canvas.height, state.mask, a);
+  for (const which of state.masks) drawMask(p.ctx, p.canvas.width, p.canvas.height, which, a);
 }
 
-// lookMesh runs the landmarker on the small copy of the frame. One detection at
-// a time and no queue: the call is synchronous in this build, so the picture
-// waits for a mesh at most as long as one detect, and a machine too slow for
-// that is caught by the gap between two of them.
+// lookMesh runs the landmarker on the small copy of the frame, once per painted
+// frame: the mesh rate is the camera rate. One detection at a time and no
+// queue, so a slow machine drops frames instead of piling them up.
 function lookMesh(p) {
   if (!p.meshTried) {
     p.meshTried = true;
     meshOpen().then((fm) => { p.mesh = fm; });
   }
   if (!p.mesh || p.meshBusy || !p.meshCtx || document.hidden) return;
-  const now = performance.now();
-  if (now - p.meshAt < MESH_GAP) return;
-  p.meshAt = now;
   p.meshBusy = true;
   try {
     p.meshCtx.drawImage(p.video, 0, 0, p.meshCanvas.width, p.meshCanvas.height);
-    const res = p.mesh.detectForVideo(p.meshCanvas, Math.round(now));
+    // The landmarker refuses two detections with one timestamp, so the stamp of
+    // a frame is the clock and never a repeat of the one before.
+    const now = Math.round(performance.now());
+    p.meshLast = now > p.meshLast ? now : p.meshLast + 1;
+    const res = p.mesh.detectForVideo(p.meshCanvas, p.meshLast);
     const lm = res && res.faceLandmarks && res.faceLandmarks[0];
     if (lm && lm.length) lookMeshAnchor(p, lm);
   } catch {
@@ -2908,7 +2932,7 @@ function maskGeo(a, W, H) {
   const ay = unit(top[0] - chin[0], top[1] - chin[1]);
   const spot = (o, s, t) => [o[0] + ax[0] * s * fw + ay[0] * t * fh, o[1] + ax[1] * s * fw + ay[1] * t * fh];
   return {
-    fw, fh, spot, top, chin,
+    fw, fh, spot, top, chin, ax, ay,
     nose: at(LM.noseTip, 0, 0.1),
     noseBase: at(LM.noseBase, 0, 0.16),
     lipTop: at(LM.lipTop, 0, 0.22),
@@ -3206,8 +3230,77 @@ function drawHalo(ctx, g) {
   ctx.restore();
 }
 
-// drawMiku puts a fringe along the hairline and one long tail behind each ear.
+// The miku mask wears a real drawing: a wig with the face cut out, a CC0 file
+// from Wikimedia Commons (static/miku/NOTICE.txt keeps the source and the
+// licence). The cut-out is placed on the face and the camera shows through it,
+// so the hair is the artist's and the face is the guest's.
+const WIG_URL = '/miku/wig.svg';
+const WIG_FILE_ASPECT = 334.55 / 366.31;
+// The face cut-out inside the drawing, as shares of its width and height, read
+// off the file: the fringe edge at the top, the chin at the bottom.
+const WIG_HOLE = { x0: 0.2951, y0: 0.3632, x1: 0.7122, y1: 0.7409 };
+// The drawing is rastered once at this width and kept as a bitmap, so a frame
+// pays for one drawImage and not for the vector work again.
+const WIG_PX = 640;
+/** @type {HTMLCanvasElement|null} */
+let wigArt = null;
+let wigTried = false;
+
+// wigLoad reads the drawing into a canvas. It is asked for on the first masked
+// frame and never twice; a missing file leaves the vector fringe in place.
+function wigLoad() {
+  if (wigTried) return;
+  wigTried = true;
+  const img = new Image();
+  img.decoding = 'async';
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = WIG_PX;
+    c.height = Math.round(WIG_PX * WIG_FILE_ASPECT);
+    const cc = c.getContext('2d');
+    cc.imageSmoothingQuality = 'high';
+    cc.drawImage(img, 0, 0, c.width, c.height);
+    wigArt = c;
+    // A mask already on screen takes the drawing on the next painted frame.
+    const p = state.lookPipe;
+    if (p && state.masks.includes('miku')) lookDraw(p);
+  };
+  img.src = WIG_URL;
+}
+
+// drawMiku puts the wig on the face, or the vector fringe while the file is on
+// its way. The cut-out is the anchor: it is the width of the face and it runs
+// from a little under the hairline to the chin, so the crown sits on the head
+// and a tail falls past each ear.
 function drawMiku(ctx, g) {
+  wigLoad();
+  if (!wigArt) return drawMikuFringe(ctx, g);
+  const H = WIG_HOLE;
+  const top = g.spot(g.top, 0, -0.05);
+  const holeW = Math.max(g.fw * 0.98, 1);
+  const holeH = Math.max(gap(top, g.chin), g.fh * 0.5);
+  // The drawing is a little wider than the face and taller than the cut-out,
+  // and it is stretched to the face it wears, so one file fits every face.
+  const artW = holeW / (H.x1 - H.x0);
+  const artH = holeH / (H.y1 - H.y0);
+  const cx = ((H.x0 + H.x1) / 2) * artW;
+  const cy = ((H.y0 + H.y1) / 2) * artH;
+  const mid = [(top[0] + g.chin[0]) / 2, (top[1] + g.chin[1]) / 2];
+  // Local pixels go across the frame with the face axis and down the face with
+  // the other, so a head that turns or leans carries the wig with it.
+  const ax = g.ax, ay = g.ay;
+  ctx.save();
+  ctx.imageSmoothingQuality = 'high';
+  ctx.transform(ax[0], ax[1], -ay[0], -ay[1],
+    mid[0] - ax[0] * cx + ay[0] * cy, mid[1] - ax[1] * cx + ay[1] * cy);
+  ctx.drawImage(wigArt, 0, 0, artW, artH);
+  ctx.restore();
+}
+
+// drawMikuFringe is the mask without the drawing: a teal fringe along the
+// hairline and one long tail behind each ear, in the same colours. It is what a
+// missing wig file or a blocked image falls back to.
+function drawMikuFringe(ctx, g) {
   const hair = '#39c5bb';
   const h = g.hair;
   if (h.length > 2) {
@@ -3342,13 +3435,13 @@ async function lookRestart() {
   lookStop();
 }
 
-// lookInit puts the stored choice on the two menu rows and wires them. A
-// change restarts the pipeline at once; the camera is not asked again.
+// lookInit puts the stored choice on the menu rows and wires them. A change
+// restarts the pipeline at once; the camera is not asked again. The masks are
+// boxes, so any number of them is on at one time.
 function lookInit() {
   const saved = load('look');
   state.look = Object.prototype.hasOwnProperty.call(LOOKS, saved) ? saved : 'none';
-  const mask = load('mask');
-  state.mask = MASKS.includes(mask) ? mask : 'none';
+  state.masks = maskSet(load('mask'));
   const lookPick = $('look-filter');
   if (lookPick) {
     lookPick.value = state.look;
@@ -3358,15 +3451,19 @@ function lookInit() {
       lookRestart();
     });
   }
-  const maskPick = $('look-mask');
-  if (maskPick) {
-    maskPick.value = state.mask;
-    maskPick.addEventListener('change', () => {
-      state.mask = MASKS.includes(maskPick.value) ? maskPick.value : 'none';
-      store('mask', state.mask);
+  for (const box of maskBoxes()) {
+    box.checked = state.masks.includes(box.dataset.mask);
+    box.addEventListener('change', () => {
+      state.masks = maskSet([...maskBoxes()].filter((b) => b.checked).map((b) => b.dataset.mask));
+      store('mask', state.masks.join('+'));
       lookRestart();
     });
   }
+}
+
+// maskBoxes is the mask row of the effects menu: one box per drawing.
+function maskBoxes() {
+  return document.querySelectorAll('#menu-effects input[data-mask]');
 }
 
 // lookResize follows a camera step so the canvas keeps the picture's shape.
@@ -8981,7 +9078,8 @@ win().e2eApp = {
   // test can see the swap a hidden tab makes without reading a picture.
   effects: () => ({
     look: state.look,
-    mask: state.mask,
+    masks: state.masks.slice(),
+    mask: state.masks.join('+') || 'none',
     on: lookOn(),
     drawn: !!lookTrack(),
     parked: !!state.lookParked,
@@ -9003,11 +9101,10 @@ win().e2eApp = {
     if (pick) pick.value = state.look;
     return lookRestart();
   },
-  setMask: (name) => {
-    state.mask = MASKS.includes(name) ? name : 'none';
-    store('mask', state.mask);
-    const pick = $('look-mask');
-    if (pick) pick.value = state.mask;
+  setMask: (names) => {
+    state.masks = maskSet(names);
+    store('mask', state.masks.join('+'));
+    for (const box of maskBoxes()) box.checked = state.masks.includes(box.dataset.mask);
     return lookRestart();
   },
 };
