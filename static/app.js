@@ -98,6 +98,7 @@ const state = {
   device: '',          // kept, fresh (a reset record) or session (nothing kept)
   sid: '',             // session id of this call, public, never a secret
   w: '',               // SPAKE2 scalar of the room passphrase, never sent
+  gate: { v: null, n: 0 }, // the room passphrase the members hold now, with a counter
   pins: new Map(),     // local label -> {label, fp, first, last}
   revoked: new Map(),  // fingerprint -> {fp, label, at}, a pin that was replaced
   identityFailures: 0, // a peer that sent no identity or could not prove one
@@ -4480,6 +4481,11 @@ async function enterRoom(room, pass) {
     $('sealed-note').textContent = 'deriving the room key';
     canary(pass);
     state.w = roomW(pass, room);
+    // The value a guest typed is the gate it starts from. A room that changed
+    // its gate later hands the current value down the sealed pair, so the
+    // typed one is only the first word.
+    state.gate = { v: pass, n: 0 };
+    paintGate();
     startSealedWorker();
     const made = JSON.parse(pqModule().gen());
     // The secret halves stay Uint8Arrays, so leave can zero them.
@@ -4561,6 +4567,7 @@ function leave(message) {
   }
   wipeIdentity();
   state.w = '';
+  state.gate = { v: null, n: 0 };
   state.sid = '';
   state.identityFailures = 0;
   state.keyWait.clear();
@@ -8900,6 +8907,9 @@ function sealedPassMaybe(peer) {
 function sealedPassDone(peer) {
   sealedAnnounceName(peer);
   sealedSendState(peer);
+  // Both ends proved the gate, so either may ask which value is current: a
+  // page that reconnected or joined late may hold an older one.
+  if (!peer.waiting) sealedSend(peer, { k: 'gateq' });
   const held = peer.appHeld || [];
   peer.appHeld = [];
   for (const obj of held) sealedDispatchApp(peer, obj);
@@ -9034,9 +9044,60 @@ function sealedDispatchApp(peer, obj) {
   } else if (obj.k === 'lower') {
     // Only an admin may ask, and only the guest that owns the hand lowers it.
     if (isAdmin(peer.id) && state.hand) setHand(false);
+  } else if (obj.k === 'gateq') {
+    // A peer that just proved the gate asks which value the room uses now.
+    // Only a value is sent, and only over a pair that already passed the
+    // proof, so a stranger never sees it.
+    if (state.gate.v !== null) sealedSend(peer, { k: 'gate', v: state.gate.v, n: state.gate.n });
+  } else if (obj.k === 'gate') {
+    sealedOnGate(peer, obj);
   } else if (obj.k === 'file') {
     fileOnMessage(peer, obj);
   }
+}
+
+// sealedOnGate takes a gate value from a pair that already proved the room.
+// The counter orders the changes and a tie goes to the lower peer id, so two
+// admins that change it at the same moment still land on one value everywhere.
+function sealedOnGate(peer, obj) {
+  // The role is checked here as well as in the menu: the server refuses a mod
+  // command from a guest, and a sealed value must follow the same rule.
+  if (!isAdmin(peer.id)) return;
+  const n = Number(obj.n);
+  if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
+  if (typeof obj.v !== 'string' || obj.v.length > 256) return;
+  if (n < state.gate.n) return;
+  if (n === state.gate.n && (state.gate.v === obj.v || String(peer.id) >= String(state.self))) return;
+  adoptGate(obj.v, n);
+}
+
+// adoptGate installs a value and derives its scalar again, so the next pair
+// proves the new word. A pair that is already open keeps its keys: the value
+// gates the door, it is not a key schedule.
+function adoptGate(v, n) {
+  state.gate = { v, n };
+  try {
+    state.w = roomW(v, state.room);
+  } catch {
+    state.w = '';
+  }
+  paintGate();
+}
+
+// paintGate says whether the room has a passphrase now, and never the value.
+function paintGate() {
+  const note = document.getElementById('gate-note');
+  if (note) note.textContent = state.gate.v ? 'set, ' + state.gate.n : 'open room';
+}
+
+// setGate is the admin command: the value goes sealed to every pair and the
+// counter moves up by one. A pair that is open keeps working; a guest that
+// joins later must know the new value or fail the proof.
+function setGate(v) {
+  if (!isAdmin(state.self) || state.waiting) return;
+  const n = state.gate.n + 1;
+  adoptGate(v, n);
+  toSealed({ k: 'gate', v, n });
 }
 
 // padsOn tells the frame worker that this pair may round its frame sizes up.
@@ -10003,6 +10064,18 @@ function init() {
   wireMenuBar();
   wireCornerDrag();
   wireSubmenus();
+  // The room passphrase can be set or changed during the call. The new value
+  // goes sealed to every pair, and a guest that joins later must know it.
+  const gateBtn = document.getElementById('gate-pick');
+  if (gateBtn) {
+    gateBtn.addEventListener('click', () => {
+      if (!isAdmin(state.self) || state.waiting) return;
+      const next = window.prompt('room passphrase (leave empty for an open room)', '');
+      if (next === null) return;
+      setGate(next.trim().slice(0, 256));
+    });
+  }
+  paintGate();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
 
