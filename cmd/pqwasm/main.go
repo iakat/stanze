@@ -20,9 +20,9 @@ func main() {
 		"respond":  js.FuncOf(respond),
 		// One gate for a pair: the peer's identity signature and its key
 		// confirmation tag, both or neither.
-		"proved":   js.FuncOf(proved),
-		"seal":     js.FuncOf(seal),
-		"open":     js.FuncOf(open),
+		"proved": js.FuncOf(proved),
+		"seal":   js.FuncOf(seal),
+		"open":   js.FuncOf(open),
 		// The long-term identity: generated, signed with and verified here, so
 		// the browser needs no second crypto library. A page that can hold a
 		// non-extractable WebCrypto key signs there and only verifies here.
@@ -223,10 +223,10 @@ func respond(_ js.Value, args []js.Value) any {
 // peer signed this transcript and its confirmation tag matches.
 func proved(_ js.Value, args []js.Value) any {
 	var in struct {
-		Key        string `json:"key"`        // the receive media key of this pair
+		Key        string `json:"key"` // the receive media key of this pair
 		Transcript string `json:"transcript"`
 		Tag        string `json:"tag"`
-		ID         string `json:"id"`         // the peer's Ed25519 public key
+		ID         string `json:"id"` // the peer's Ed25519 public key
 		Sig        string `json:"sig"`
 	}
 	if err := json.Unmarshal([]byte(argString(args)), &in); err != nil {

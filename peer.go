@@ -168,7 +168,7 @@ func (p *Peer) close() {
 }
 
 type peerInfo struct {
-	ID    string `json:"id"`
+	ID     string `json:"id"`
 	Mic    bool   `json:"mic"`
 	Cam    bool   `json:"cam"`
 	Deaf   bool   `json:"deaf,omitempty"`
@@ -198,8 +198,8 @@ type clientMsg struct {
 	Candidate json.RawMessage `json:"candidate,omitempty"`
 
 	// mic, cam, deaf and hand are pointers so "not sent" and "false" differ.
-	Mic  *bool `json:"mic,omitempty"`
-	Cam  *bool `json:"cam,omitempty"`
+	Mic    *bool `json:"mic,omitempty"`
+	Cam    *bool `json:"cam,omitempty"`
 	Deaf   *bool `json:"deaf,omitempty"`
 	Screen *bool `json:"screen,omitempty"`
 	Hand   *bool `json:"hand,omitempty"`
