@@ -1,189 +1,128 @@
 # stanze
 
-A tiny self-hosted replacement for a meeting server: one Go binary that serves
-a static browser client and a WebSocket signaling endpoint, plus an embedded
-TURN relay. Media is a full mesh of direct peer to peer WebRTC connections
-between browsers. The server never sees, mixes, forwards, records or transcribes
-audio or video; when two peers cannot reach each other, the embedded TURN
-server relays encrypted packets without being able to read them.
+Self-hosted group calls that run in the browser. One Go binary serves the client
+and the signaling endpoint and carries an embedded TURN relay. Audio and video
+travel directly between the browsers in a full mesh, sealed end to end, so the
+server never sees, mixes, records or stores them.
 
-- One binary, no database, no external services, no third-party JS or fonts.
-- Room ids are 128 bit random ids (26 characters of base32) that live only in
-  memory. The first join creates the room, and the room is forgotten the moment
-  its last participant leaves.
-- Optional per-room passphrase, hashed with PBKDF2-HMAC-SHA256 in memory.
-- No route lists, counts or names rooms. Not even at debug level.
-- Mesh audio is Opus by default (whatever the browsers agree on), video VP8/VP9
-  or H.264 depending on the browsers; nothing is transcoded.
+No database, no external services, no third-party JavaScript, no bundled fonts.
+
+## Features
+
+- **One binary.** The browser client is embedded in the executable. A release
+  build is self contained apart from the TLS terminator in front of it.
+- **Ephemeral rooms.** A room id is 16 random bytes from `crypto/rand` (26
+  characters of base32), held in memory only. The first join creates the room,
+  the last leave deletes it. No id ever reaches a URL path, a query string or
+  the disk.
+- **Nothing to enumerate.** There is no route that lists, counts or names a
+  room, at any log level. Unknown room, wrong passphrase and full room return
+  the same error.
+- **Sealed by default.** Names, chat, files and every media frame are encrypted
+  in the browser. The server forwards opaque `enc` blobs and has no clear path
+  to fall back to.
+- **Pinned identities.** Each browser holds a long-term Ed25519 identity and a
+  per-origin pin list. A changed key closes the pair until someone confirms a
+  device reset.
+- **Optional waiting room.** An admin can hold new guests outside until a
+  member lets them in; the server enforces who may admit whom.
+- **Optional transcription.** Vosk (per-language models) or a single
+  multilingual Omnilingual ASR model, both running in the guest's tab. Off
+  unless the server is given the model directory.
+
+## Architecture
+
+```
+browser A ──────── DTLS/SRTP media (sealed, mesh) ──────── browser B
+    │                                                        │
+    │  WebSocket: SDP, ICE, opaque enc blobs                 │
+    └─────────────────► stanze (Go) ◄────────────────────────┘
+                     signaling + TURN/STUN
+```
+
+The server is a signaling relay and a relay of last resort: when two peers
+cannot connect directly, the embedded TURN server forwards encrypted packets
+without the keys. SDP and ICE are relayed verbatim inside one room and never
+stored. Mesh topology means upload bandwidth grows with the number of peers,
+which is why the default cap is eight.
+
+## Requirements
+
+- Go 1.24 or newer to build.
+- A modern browser with `RTCRtpScriptTransform` for a sealed room (Chromium,
+  Firefox and Safari current at the time of writing).
+- A TLS terminator for anything but `http://localhost`, because
+  `getUserMedia` requires a secure context.
 
 ## Build
 
-Requires Go 1.24 or newer.
-
 ```sh
-./build.sh              # -> bin/rooms, bin/selftest
+./build.sh          # -> bin/stanze, bin/selftest
 # or
 make build
 ```
 
-The client is embedded with `go:embed`, so the binary is self contained
-(~15 MB with `-trimpath -ldflags "-s -w"`, because the post-quantum Wasm module is embedded too).
+The client is packed and embedded as one gzip compressed tar, with sorted names
+and no timestamps, so two builds of one commit produce the same archive.
 
 ## Run
 
-Minimal, loopback, no relay:
+Loopback, no relay:
 
 ```sh
-./bin/rooms -listen 127.0.0.1:8095
+./bin/stanze -listen 127.0.0.1:8095
 ```
 
-With the embedded relay on a public address (this is what you want in
-production, behind a TLS proxy):
+Production shape: relay on a public address, TLS and WebSocket upgrade handled
+by the proxy in front.
 
 ```sh
 TURN_SECRET=$(head -c 32 /dev/urandom | base64) \
 TURN_PUBLIC_IP=203.0.113.10 \
-./bin/rooms -listen 127.0.0.1:8095 -turn-port 3478
+./bin/stanze -listen 127.0.0.1:8095 -turn-port 3478
 ```
 
-Then open `https://rooms.example.com/` (or `http://localhost:8095/` for local
-testing), type a name, and press **enter**. A pasted room id joins that room, and
-the first join creates it if it does not exist yet. An empty room field makes a
-new room: the id is built in the browser and the join creates it. The passphrase
-typed in the same form becomes the room passphrase when the room is created. The
-room id is placed in the URL fragment (`#r=...`), so it never travels in an HTTP
-request, a proxy log or a `Referer` header.
+Open the page, type a name, press enter. An empty room field creates a new room
+and its id lands in the URL fragment (`#r=...`); a pasted id joins that room. A
+passphrase typed in the same form becomes the room passphrase when the room is
+created.
 
-A room that nobody is in does not exist. The last peer to leave takes the room
-with it, so the same id joined later is a new room: the guest types the
-passphrase again and starts a fresh call with nothing carried over. A link from
-the lobby is just an id, and the first join makes the room, so there is no
-create route and no room can ever wait with nobody in it.
+## Configuration
 
-Pressing enter asks for the camera and the microphone and starts the call with
-both on. A refusal or a missing device still joins, with the devices that did not
-open off, and a short status line says which ones. The browser remembers the
-microphone and camera choice, the media path and the denoise switch, and a stored
-camera off joins without asking for the camera again. The noise filter is GTCRN:
-an MIT streaming model of 192 KiB in WebAssembly, with the model, the STFT and
-the inverse inside the one file, run from an `AudioWorkletNode` at the 48 kHz
-rate the microphone graph asks for. Every remote tile carries a
-volume slider from 0 to 200 percent (100 is normal, above 100 is a real boost),
-kept per participant name, and the stats button shows per participant audio and
-video bitrates, the round trip time and whether the path is direct or relayed.
+Every flag has an environment variable of the same name; flags win.
 
-The client keeps the camera and the microphone open and reconnects on its own
-with a capped backoff if the signaling socket drops in the middle of a call.
-
-## End-to-end encryption
-
-Every room is sealed. The name, the chat and every media frame are encrypted in
-the browser, and the server sees only `enc` blobs: it never receives a name,
-never sends a `chat` message and keeps no room history. Names and chat lines
-travel as sealed `app` payloads, media frames are sealed by
-`RTCRtpScriptTransform` with a worker (`e2e-transform.js`), and the key exchange
-runs in a WebAssembly module (`pq.wasm`) built from `internal/pq`. Both sides
-show the same 13 character short code and six emoji on each tile, for comparison
-over the call.
-
-A file offer uses the same two paths. The name, the size and the type travel as
-a sealed `app` payload on the chat key of the pair, and the bytes go over one
-ordered data channel per pair, one sealed chunk at a time. The receiving browser
-keeps the file in memory and shows a save link, so the server never sees a byte
-and nothing is written to the disk of a guest until that guest clicks save. A
-cancel, a refusal or a guest who leaves ends the transfer and drops the buffers.
-
-### Identity and pins
-
-Each browser makes a long-term Ed25519 identity the first time it runs here and
-keeps it: as a non-extractable WebCrypto key where the browser has Ed25519, and
-otherwise as a seed sealed under a non-extractable AES-GCM key in IndexedDB. The
-private half is never exported, never written to `localStorage`, and never sent.
-Only the public key travels, and only inside the sealed `pub` bundle.
-
-The handshake is mutual. Both sides put the two identity keys, the two session
-ids and the two key exchange halves into one transcript, both sign it, and each
-side checks the other's signature and key confirmation tag in a single gate
-(`Proved` in `internal/pq`, mirrored as `proved` in the module) before it opens
-one frame of the pair. An `ok` without a valid signature closes the pair: a
-missing signature is not a downgrade. The gate is also where the pin state is
-read, so a peer is never treated as established before both checks pass.
-
-A peer's fingerprint (`xxxx-xxxx-xxxx-xxxx-xxxx`) is pinned per origin with a
-local label, the first and the last time it was seen. A key that is already
-pinned reads `verified`; a new one stays `unverified` even after it signs
-correctly, because a signature proves this call, not the person. A label that
-now holds a different key reads `changed` and the pair is closed until someone
-taps "this device was reset", which re-pins and starts a new handshake; a
-revoked fingerprint that comes back is refused without that prompt. The badge
-counts `verified N of M`, and no display name is ever bound to an identity: the
-name arrives sealed and can change at any time.
-
-The session keys stay ephemeral. A fresh X25519 key and a fresh ML-KEM-768
-encapsulation are made per call, held in memory only, mixed by HKDF, and wiped
-when the peer leaves or the call ends. Nothing session-related is written to
-IndexedDB, `localStorage`, `sessionStorage`, a cookie or the server. The pin
-answers who the peer is; the ephemeral keys keep the media secret now and
-unreadable later, even with a stolen identity key.
-
-`static/pq.wasm` is a build of `internal/pq` and `cmd/pqwasm`; a change there
-needs a rebuild:
-
-```sh
-GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
-```
-
-There is no fallback to a clear room. The link is `#r=<room>`, and a browser
-that cannot install a media transform joins without a microphone and a camera
-and says why instead of sending clear frames. The post-quantum module is
-fetched when the lobby opens, so the join itself is only a device prompt.
-
-The relay needs no flag for this: it forwards `enc` frames without reading
-them, and there is no other chat or name path to switch off.
-
-`getUserMedia` requires a secure context: use `http://localhost` for local
-tests or TLS in front of the server. WebSocket upgrades also need a proxy that
-supports them; see below.
-
-## Flags
-
-Every flag has an environment variable equivalent. Flags win.
-
-| flag | env | default | meaning |
+| Flag | Env | Default | Meaning |
 | --- | --- | --- | --- |
-| `-listen` | `LISTEN` | `:8095` | HTTP listen address (put TLS in front) |
-| `-stun` | `STUN_URLS` | empty (embedded TURN address) | STUN URLs handed to browsers, repeatable or comma separated |
-| `-turn-public-ip` | `TURN_PUBLIC_IP` | empty | public IP advertised for relay candidates; empty disables TURN |
-| `-turn-port` | `TURN_PORT` | `3478` | UDP port of the embedded TURN server |
-| `-turn-tcp-port` | `TURN_TCP_PORT` | `0` | optional TCP listener for TURN (useful when UDP is blocked) |
-| `-turn-secret` | `TURN_SECRET` | empty | shared secret for ephemeral TURN credentials |
+| `-listen` | `LISTEN` | `:8095` | HTTP listen address, plain HTTP/1.1 |
+| `-stun` | `STUN_URLS` | empty | extra STUN URLs for the browsers |
+| `-turn` | `TURN` | `on` | run the embedded TURN and STUN server |
+| `-turn-public-ip` | `TURN_PUBLIC_IP` | outbound address | address advertised for relay candidates |
+| `-turn-port` | `TURN_PORT` | `3478` | UDP port of the embedded relay |
+| `-turn-tcp-port` | `TURN_TCP_PORT` | `0` | optional TCP listener for the relay |
+| `-turn-secret` | `TURN_SECRET` | random per start | shared secret for ephemeral credentials |
 | `-turn-ttl` | `TURN_TTL` | `1h` | lifetime of issued relay credentials |
-| `-turn-realm` | `TURN_REALM` | `rooms` | TURN realm |
-| `-turn-url` | `TURN_URLS` | empty | extra advertised TURN URL, e.g. `turns:rooms.example.com:5349?transport=tcp` |
-| `-turn-min-port` / `-turn-max-port` | `TURN_MIN_PORT` / `TURN_MAX_PORT` | `49200` / `49300` | relay port range to open in the firewall |
+| `-turn-realm` | `TURN_REALM` | `stanze` | TURN realm |
+| `-turn-url` | `TURN_URLS` | empty | extra advertised TURN URL |
+| `-turn-min-port` / `-turn-max-port` | `TURN_MIN_PORT` / `TURN_MAX_PORT` | `49200` / `49300` | relay port range to open |
 | `-max-peers` | `MAX_PEERS` | `8` | peers per room (2..32) |
 | `-max-rooms` | `MAX_ROOMS` | `200` | rooms alive at the same time |
-| `-max-msg-bytes` | `MAX_MSG_BYTES` | `262144` | largest accepted WebSocket message (SDP + ICE) |
+| `-max-msg-bytes` | `MAX_MSG_BYTES` | `262144` | largest accepted WebSocket message |
 | `-behind-proxy` | `BEHIND_PROXY` | off | trust `X-Forwarded-For` for per-IP limits |
-| `-allowed-origin` | `ALLOWED_ORIGIN` | empty | extra allowed WebSocket `Origin` (default: same host) |
+| `-allowed-origin` | `ALLOWED_ORIGIN` | same host | extra allowed WebSocket `Origin` |
 | `-static-dir` | `STATIC_DIR` | empty | serve the client from disk while developing |
-| `-vosk-dir` | `VOSK_DIR` | empty | directory with `vosk.js` and `model-<lang>.tar.gz` for the optional in-browser transcription; empty means the feature is not offered (see `tools/fetch-vosk.sh`) |
-| `-omni-dir` | `OMNI_DIR` | empty | directory with the sherpa-onnx wasm bundle and the Omnilingual ASR model for the optional multilingual transcription; empty means the engine is not offered (no model ships with this repository) |
-| `-debug` | `DEBUG` | off | verbose logs (room ids are still only logged as a 8 hex character hash) |
+| `-vosk-dir` | `VOSK_DIR` | empty | Vosk files and `model-<lang>.tar.gz` models |
+| `-omni-dir` | `OMNI_DIR` | empty | sherpa-onnx bundle and the multilingual model |
+| `-debug` | `DEBUG` | off | verbose logs, room ids still hashed |
 
-Room creation and join attempts are limited per client IP. Behind a reverse
-proxy set `-behind-proxy` so limits apply to the real client address; only do
-that when the proxy is the only way in, otherwise the header is spoofable.
+## Deployment
 
-## TLS offload
-
-The server speaks plain HTTP/1.1 and expects a TLS terminator in front, e.g.:
+The server speaks plain HTTP/1.1 and expects a TLS terminator:
 
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name rooms.example.com;
-    # certificate config omitted
+    server_name stanze.example.com;
+
     location / {
         proxy_pass http://127.0.0.1:8095;
         proxy_http_version 1.1;
@@ -196,238 +135,125 @@ server {
 }
 ```
 
-Set `-behind-proxy` when you add `X-Forwarded-For`. Keep the access log
-without query strings: no room id is ever in a URL path or query, so a default
-`$request` log line is already safe.
+Add `-behind-proxy` only when the proxy is the sole way in, otherwise the header
+is spoofable and the per-IP limits are meaningless.
 
-Firewall: TCP `8095` (only from the proxy) and, when TURN is enabled, UDP
-`3478` plus the relay range `49200-49300` (and TCP `-turn-tcp-port` if used).
-If you advertise `turns:` URLs, terminate TLS on the TURN port in the proxy as
-well.
+Firewall: TCP `8095` from the proxy only, plus UDP `3478` and the relay range
+`49200-49300` when TURN is enabled (and the TCP relay port if set). One UDP port
+answers both STUN and TURN. Default access logs are already safe: no room id
+appears in a path or a query.
 
-## Rooms and privacy
+## Security model
 
-- A room id is 16 random bytes from `crypto/rand`, rendered as lowercase
-  base32 (26 characters). Guessing one is not feasible.
-- Rooms exist only in memory. A room is dropped in the same step that removes
-  its last peer, and the passphrase digest goes with it: a later join of the
-  same id starts a new room with nothing carried over. A room that nobody joined
-  never exists, so nothing waits and nothing expires. Nothing is ever written to
-  disk.
-- There is no route that lists, counts or describes rooms. The only endpoints
-  are `GET /`, the client files, `GET /ws`, `GET /QUEUE.md` and `GET /DONE.md`.
-  Anything else returns `404`.
-- A join to a missing room, with a wrong passphrase, or into a full room is
-  answered with the same `{"t":"error","code":"unavailable"}` and the
-  connection is closed. The passphrase check runs PBKDF2 against a dummy salt
-  when the room does not exist, so the timing matches too.
-- SDP and ICE are relayed verbatim inside one room and are never stored. A peer
-  id from another room is simply unknown, so cross-room relaying is impossible.
-- Logs: info level has listen addresses and counts only. Room ids appear at
-  debug level as a truncated SHA-256 fingerprint, never in clear.
+- **Sealed rooms.** The key exchange runs in the browser in a WebAssembly module
+  (`internal/pq`, built to `static/pq.wasm`): X25519 plus ML-KEM-768 per call,
+  mixed with HKDF, held in memory, wiped when the peer leaves. Media frames go
+  through `RTCRtpScriptTransform` in a worker. A browser that cannot install the
+  transform joins without microphone and camera instead of sending clear frames.
+- **Names are content.** A peer has no name on the wire; the name arrives as a
+  sealed payload after the pair keys exist, and can change at any time.
+- **Short code.** Both sides show the same 13-character code and six emoji per
+  tile, for comparison over the call, next to a fingerprint badge that reads
+  `verified N of M`.
+- **Files.** A file offer travels as a sealed payload; the bytes go over one
+  sealed data channel per pair. Nothing is written until the receiver clicks
+  save.
+- **Logs.** Info level holds listen addresses and counts. Room ids appear at
+  debug level as a truncated hash, never in clear.
 
-## Waiting room, transcription and other client switches
+Changing the post-quantum module requires rebuilding the Wasm file:
 
-- **Waiting room.** An admin switches it on for the room. A guest who joins
-  while it is on, and while somebody is inside, waits until any guest inside
-  presses *let in*. The first guest of a room is never held, and when the last
-  member leaves the guest who waited longest is let in, so the room never
-  holds guests out for a host who is gone. The server keeps the flag and the
-  rules (only an admin sets the switch, only a guest inside admits, a waiting
-  guest never holds the admin role). Everything inside the sealed channel is
-  kept by the clients: members send no media and no chat to a waiting guest
-  and ignore chat and files from one. The waiting guest sends its own camera
-  and microphone to the room, as the notice on its screen says. A member whose
-  link dropped comes back as a new guest and waits, unless the admin's tab saw
-  the same proven identity key inside earlier in this call, in which case it
-  lets that guest in by itself (a name never counts, a removed guest is
-  forgotten, and the list ends with the call).
-- **Transcription.** Off by default. The server offers it only with
-  `-vosk-dir`; `tools/fetch-vosk.sh` fills that directory with the pinned
-  vosk-browser library and one model. The official image can carry both:
-  build it with `--build-arg VOSK_MODEL_URL=... --build-arg VOSK_MODEL_SHA256=...`
-  and it runs with `-vosk-dir /vosk` (the default `VOSK_DIR` in that image);
-  without those arguments the directory is empty and the image is the same one
-  binary as before. A model file is always named `model-<lang>.tar.gz` and the
-  part after `model-` is the label in the picker; `LANG=it` on
-  `tools/fetch-vosk.sh` writes the Italian one, and a second run adds a second
-  language, so the picker next to *transcribe* lists it. English
-  is the label en, with no file name of its own. A guest who presses
-  *transcribe* sees the size, downloads that one model (kept in the browser
-  cache) and runs one recognizer per incoming voice in the tab. The text goes out as sealed chat
-  labelled *transcript by NAME*, and every other guest is told that NAME
-  transcribes. A guest's own voice is not transcribed. A failed download leaves
-  the call alone. The CSP allows `blob:` for workers and fetches, which the
-  engine needs; nothing loads before the guest asks.
-- **Multilingual transcription.** A second engine is offered when
-  `-omni-dir` holds the five files it needs: `model.int8.onnx`, `tokens.txt`,
-  `sherpa-onnx-asr.js`, `sherpa-onnx-wasm-main-vad-asr.js` and
-  `sherpa-onnx-wasm-main-vad-asr.wasm`. That is one Omnilingual ASR CTC 300M
-  model for every language, so it has no picker and no per language file; the
-  server lists the five with their sizes and sha256 under `/omni/models` and
-  serves them under `/omni/`. The model is 348 MB, the tab downloads it once,
-  keeps it in the browser cache in 32 MB parts, checks it against the listed
-  sha256 before the wasm reads a byte, and says the size before the download
-  starts. The wasm is a pthread build: the page is cross-origin isolated (COOP
-  `same-origin`, COEP `require-corp`, and CORP `same-origin` on our own
-  answers), which costs nothing here because every resource is same origin or a
-  blob of it, and the recognizer runs in a worker of its own, since one decode
-  costs most of a second of CPU. The published glue carries the machinery of a
-  demo model preload (this build only defines it and never calls it); the server
-  removes the call when a file has one, as it serves the file, so the copy on
-  disk stays pristine. One picker offers every transcription choice: one entry
-  per vosk language and, when the server lists it, the multilingual model, each
-  entry carrying the size of the download it needs. A single entry hides the
-  picker, and only one engine runs at a time.
-- **Performance slider**, **volume curve**, **sound switch**, clickable
-  `http(s)` links in the chat and a movable lobby window are client only and
-  stored in the browser.
+```sh
+GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+```
 
 ## Signaling protocol
 
 One JSON object per WebSocket text frame. Client to server:
 
-| message | fields |
+| Message | Fields |
 | --- | --- |
 | `join` | `room`, `pass` |
-| `offer` / `answer` | `to`, `sdp` |
+| `offer`, `answer` | `to`, `sdp` |
 | `ice` | `to`, `candidate` |
-| `enc` | `to` (empty or `*` for the room), `b` (base64 sealed blob) |
+| `enc` | `to` (empty or `*` for the room), `b` |
 | `state` | `mic`, `cam` |
-| `mod` | `to`, `action` (`kick`, `mute`, `admin`), or `action` `waitingroom` with `on` (admin only, no `to`) |
-| `admit` | `to` (a guest inside lets a waiting guest in) |
-| `leave` | – |
-| `ping` | – |
+| `mod` | `to`, `action` (`kick`, `mute`, `admin`) or `waitingroom` with `on` |
+| `admit` | `to` |
+| `leave`, `ping` | – |
 
 Server to client:
 
-| message | fields |
+| Message | Fields |
 | --- | --- |
-| `joined` | `self`, `peers[{id,mic,cam,admin,waiting}]`, `admins`, `waitingRoom`, `waiting`, `ice[{urls,username,credential}]` |
-| `peer-joined` | `peer{id,mic,cam,admin,waiting}` |
-| `waiting-room` | `waitingRoom` (the switch changed) |
-| `admitted` | `from`, `peer{id}` (a waiting guest is inside now) |
-| `peer-left` | `from` |
-| `offer` / `answer` | `from`, `sdp` |
-| `ice` | `from`, `candidate` |
-| `enc` | `from`, `b` (forwarded verbatim, never decoded) |
-| `state` | `from`, `mic`, `cam` |
-| `admin` | `admins` |
-| `mod` | `from`, `action` |
-| `kicked` | `from` |
-| `error` | `code` (`unavailable`, `bad-message`) |
-| `pong` | – |
+| `joined` | `self`, `peers[]`, `admins`, `waitingRoom`, `waiting`, `ice[]` |
+| `peer-joined`, `peer-left` | `peer`, `from` |
+| `offer`, `answer`, `ice` | `from`, `sdp` / `candidate` |
+| `enc` | `from`, `b` (forwarded verbatim) |
+| `state`, `admin`, `mod`, `kicked` | as above |
+| `waiting-room`, `admitted` | `waitingRoom` / `from`, `peer` |
+| `error`, `pong` | `code` / – |
 
-A peer has no name field on the wire. The name is sealed with the chat and
-arrives as an `enc` payload once the pair keys exist.
+The guest receives one item in `ice[]` per connection: a fresh, time-limited
+TURN credential in the TURN REST form (`timestamp:tag` username, HMAC-SHA1 with
+the shared secret). Nothing else is handed out.
 
-The `ice` list is per connection and carries a fresh, time limited TURN
-credential (TURN REST style: `timestamp:tag` username, HMAC-SHA1 with the
-shared secret). Nothing else is handed out.
+## Testing
 
-Client behavior: on `joined` the new peer creates an offer towards every peer
-already in the room; existing peers answer. Renegotiation uses the "perfect
-negotiation" pattern (polite/impolite by peer id), so the two sides can also
-start at the same time without glare. Mute and camera toggles only flip
-`MediaStreamTrack.enabled`, they never renegotiate.
-
-## Tests
-
-`cmd/selftest` is an end to end test against a running server. It uses real
+`cmd/selftest` is an end-to-end suite against a running server with real
 `pion/webrtc` peers, so it proves the relay and the media path, not just JSON.
 
 ```sh
-./bin/rooms -listen 127.0.0.1:8095 -turn-public-ip 127.0.0.1 -turn-secret test -turn-port 3478 &
+./bin/stanze -listen 127.0.0.1:8095 -turn-public-ip 127.0.0.1 -turn-secret test &
 ./bin/selftest -addr http://127.0.0.1:8095
 ```
 
-It checks: the embedded client is served, every obvious room-listing path
-(`/rooms`, `/api/rooms`, `/metrics`, `/debug`, ...) is a 404, a room id never
-appears in any GET response, unknown rooms and wrong passphrases get byte
-identical errors, offer/answer/ICE are relayed verbatim, `peer-left` works, a
-room id is joinable again as a new room the moment its last peer leaves, the
-room cap is enforced, cross-room relaying is dropped, oversized messages close
-the connection, and two pion peers establish a data channel plus an Opus audio
-track both directly and forced through the embedded TURN relay with the
-ephemeral credentials handed out by the server.
+It covers: the embedded client is served, every plausible room-listing path is
+a 404, a room id never appears in a response, unknown rooms and wrong
+passphrases produce byte-identical errors, offer/answer/ICE relay verbatim,
+`peer-left` arrives, a freed id is a new room, the room cap holds, cross-room
+relaying is dropped, oversized messages close the connection, and two peers
+connect directly and through the embedded relay with the issued credentials.
 
-`tools/wsjoin.py` is a dependency-free WebSocket client for a one-shot
-handshake check:
+Browser suites in `tools/` (each needs a server and a `playwright-core`):
 
-```sh
-python3 tools/wsjoin.py http://127.0.0.1:8095 <room-id>
-```
-
-`tools/browser-e2e.js` is the full browser test. It opens two Chromium contexts
-(separate users, fake camera and microphone), has one create a room and the
-other join it through the shared link, and then asserts what a user would see:
-two tiles on both sides, both joined with camera and microphone on, the sealed
-name on the remote tile, `connected`, a remote video with decoded frames whose
-playhead keeps advancing, audio and video RTP packets arriving on both peer
-connections, working mute and camera toggles, a 0 and 175 percent volume on the
-remote gain, a 1 Hz stats panel with milliseconds, path, bitrates and the sealed
-counters, a seamless lost connection loop, a camera off reload that asks for the
-microphone only, a relay only join, no console or CSP errors, and that `/rooms`,
-`/api/rooms`, `/metrics` and friends answer 404 from inside the page without
-ever containing the room id. It writes one screenshot per user.
+| Script | What it proves |
+| --- | --- |
+| `smoke.js` | a fresh page joins, chats, toggles devices; fails on the first uncaught error |
+| `browser-e2e.js` | two users, one room: tiles, media frames, mute, volume, stats, reconnect |
+| `pq-browser-e2e.js` | sealed handshake, matching codes, sealed chat, replay refused |
+| `pq-mesh-e2e.js` | third guest, unsigned peer, unpinned key, stripped identity are refused |
+| `pq-file-e2e.js` | file offers, chunked transfer, cancel, refuse, SHA-256 match |
+| `join-race-e2e.js` | a lost handshake step is retried instead of never completing |
 
 ```sh
-npm install --prefix /tmp/pw playwright-core@1.47.0   # or use a Playwright image
-PW=/tmp/pw/node_modules/playwright-core \
-ROOMSBASE=http://127.0.0.1:8095 OUTDIR=/tmp/shots \
+PW=/tmp/pw/node_modules/playwright-core ROOMSBASE=http://127.0.0.1:8095 \
   node tools/browser-e2e.js
 ```
 
-Launch Chromium with `--use-fake-device-for-media-stream
---use-fake-ui-for-media-stream` (already set in the script) so it runs headless
-without a camera. Note that a strict `script-src 'self'` CSP blocks Playwright's
-`page.waitForFunction`, which evaluates inside the page; the script polls with
-`page.evaluate` instead.
+`make` targets: `build`, `selftest`, `run`, `test` (selftest against `ADDR`),
+`typecheck` (`tsc --checkJs` over the client), `smoke`, `sealed`, `check`
+(typecheck then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
+for a one-shot join. With gcc present, `go test -race ./...` also runs.
 
-`tools/pq-browser-e2e.js` is the sealed suite. It joins two contexts on the one
-join form and asserts the handshake, matching short codes, media through the
-frame transform, sealed chat both ways, that no name or chat text appears in a
-signaling frame, that a replayed sealed chat frame is dropped rather than shown
-twice, and that a wrong key decodes nothing. Run it the same way:
+## Repository layout
 
-```sh
-PW=/tmp/pw/node_modules/playwright-core \
-ROOMSBASE=http://127.0.0.1:8095 OUTDIR=/tmp/shots \
-  node tools/pq-browser-e2e.js
+```
+main.go, hub.go, peer.go    HTTP surface, room registry, peer sockets
+signaling.go                message handling and per-IP limits
+ice.go                      embedded TURN/STUN and credential issuing
+config.go                   flags and their environment variables
+internal/pq                 post-quantum handshake, built to static/pq.wasm
+cmd/selftest                end-to-end suite against a live server
+cmd/pack                    client packer (embedded archive)
+static/                     browser client: app.js, workers, styles
+tools/                      browser suites and helper scripts
+deploy/                     deployment manifest
 ```
 
-`tools/pq-mesh-e2e.js` adds the parts a two browser test cannot reach: a third
-guest, a fake peer that runs the module and answers without signing, another
-that signs but is not pinned, and a bundle with the identity fields stripped.
-Each one has to be refused or shown as unverified.
+## Limits
 
-`tools/pq-file-e2e.js` is the file transfer suite. Three contexts join one
-sealed room, and the test drops a file of a few KB, a file over the chunk path,
-an empty file, a refused offer, a cancelled offer and an offer whose guest
-leaves before accepting. It saves each accepted file through the link and
-compares the SHA-256 with the bytes that went in. It also sums every signaling
-frame and asserts that no file name appeared there and that the data channel
-carried the bytes.
-
-`tools/smoke.js` is the quick client check. It is small on purpose: a fresh
-page joins a new room with fake devices, and the test fails on the first
-uncaught exception or console error, with the stack. That catches the faults a
-missing element check never sees, where the join throws and the page just sits
-there. It also sends one chat line, toggles the microphone and the camera, opens
-the stats panel, joins a second peer and moves one volume slider, then leaves.
-`jsconfig.json` type checks the client with `tsc --checkJs`; a new error fails
-the check.
-
-```sh
-make typecheck     # tsc -p . over static/app.js, no emit
-make smoke         # needs a server on ROOMSBASE and PW=playwright-core
-make check         # typecheck, then smoke
-```
-
-## Limits and deliberate omissions
-
-- Mesh topology: upload bandwidth grows with the number of peers, which is why
-  the default room cap is 8. There is no SFU by design.
-- No recording, transcription, server side mixing or moderation beyond the room
-  password. Screen share and a text chat live in the client.
-- No TLS in the binary; terminate it in a proxy.
+- Mesh topology, no SFU: upload cost grows with the number of peers.
+- No server-side recording, mixing, moderation or history.
+- No TLS in the binary; terminate it in the proxy.
+- Transcription is a client feature and needs the model files on disk.
