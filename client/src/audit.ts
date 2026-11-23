@@ -3,8 +3,6 @@
 */
 
 import { state } from './state.js';
-import { leave } from './room.js';
-import { fingerprint } from './identity.js';
 
 // ------------------------------------------------------------- wire audit
 // The audit watches every signaling frame in both directions for the strings

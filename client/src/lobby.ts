@@ -2,9 +2,7 @@
  The lobby window on a desktop.
 */
 
-import { $ } from './dom.js';
 import { load, store } from './prefs.js';
-import { win } from './sealed.js';
 
 // ------------------------------------------------------------- lobby window
 // The lobby is a desktop window: the guest drags it by the title bar with a
@@ -29,7 +27,7 @@ export function lobbyPlace(win, x, y) {
 
 export function initLobbyWindow() {
   const win = document.getElementById('lobby');
-  const bar = (win && win.querySelector('.titlebar') as HTMLElement | null);
+  const bar = win && (win.querySelector('.titlebar') as HTMLElement | null);
   // The jitsi skin has no title bar and so no drag.
   if (!win || !bar || getComputedStyle(bar).display === 'none') return;
 
@@ -43,7 +41,9 @@ export function initLobbyWindow() {
   try {
     const kept = JSON.parse(load('lobbypos') || 'null');
     if (kept && Number.isFinite(kept.x) && Number.isFinite(kept.y)) lobbyPlace(win, kept.x, kept.y);
-  } catch { /* no kept place */ }
+  } catch {
+    /* no kept place */
+  }
 
   let grab = null;
   bar.addEventListener('pointerdown', (event: PointerEvent) => {
@@ -72,7 +72,9 @@ export function initLobbyWindow() {
   bar.tabIndex = 0;
   bar.setAttribute('aria-label', 'stanze window, move it with the arrow keys');
   bar.addEventListener('keydown', (event: KeyboardEvent) => {
-    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[
+      event.key
+    ];
     if (!d) return;
     event.preventDefault();
     const here = at();

@@ -3,15 +3,13 @@
 */
 
 import { $ } from './dom.js';
-import { handle } from './signaling.js';
-import { leave } from './room.js';
 
 // ---------------------------------------------------------------- chat
 // The room log carries the sealed chat lines of this call. They never leave the
 // browser in the clear, so there is no server history to replay.
 export const CHAT_MAX = 200;
 
-export function chatTime(ts) {
+export function chatTime(ts = null) {
   const d = ts ? new Date(ts) : new Date();
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
@@ -64,7 +62,7 @@ export function linkify(text) {
   const out = document.createDocumentFragment();
   let at = 0;
   for (const m of text.matchAll(LINK_RE)) {
-    const { url, tail } = splitLink(m[0]);
+    const { url } = splitLink(m[0]);
     const u = safeLink(url);
     if (!u) continue;
     if (m.index > at) out.appendChild(document.createTextNode(text.slice(at, m.index)));

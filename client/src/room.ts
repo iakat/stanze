@@ -10,8 +10,14 @@ import { menuSet, setHash, suggestRoom } from './menu.js';
 import { setLocalTile } from './tiles.js';
 import { startCallClock, stopCallClock } from './clock.js';
 import { paintWaiting } from './host.js';
-import { prepareLocal, preparePeer, requestLocal } from './devices.js';
-import { ensurePlayback, paintHandQueue, startSpeaking, stopSpeaking, updateButtons } from './audio.js';
+import { prepareLocal, requestLocal } from './devices.js';
+import {
+  ensurePlayback,
+  paintHandQueue,
+  startSpeaking,
+  stopSpeaking,
+  updateButtons,
+} from './audio.js';
 import { cancelReconnect, connectWS, dropPeers } from './signaling.js';
 import { fileClearAll } from './files.js';
 import { ensureSfx, preloadSfx, sfxCache, stopLost } from './sfx.js';
@@ -135,11 +141,19 @@ export function leave(message) {
     const ws = state.ws;
     state.ws = null;
     ws.onclose = null;
-    try { ws.close(); } catch { /* already gone */ }
+    try {
+      ws.close();
+    } catch {
+      /* already gone */
+    }
   }
   if (state.screen) {
     for (const track of state.screen.getTracks()) {
-      try { track.stop(); } catch { /* already stopped */ }
+      try {
+        track.stop();
+      } catch {
+        /* already stopped */
+      }
     }
     state.screen = null;
     if (state.screenTile) {
@@ -195,10 +209,18 @@ export function leave(message) {
   updatePinCount();
   $('chat-note').hidden = true;
   if (state.micTrack) {
-    try { state.micTrack.stop(); } catch { /* already stopped */ }
+    try {
+      state.micTrack.stop();
+    } catch {
+      /* already stopped */
+    }
   }
   if (state.camTrack) {
-    try { state.camTrack.stop(); } catch { /* already stopped */ }
+    try {
+      state.camTrack.stop();
+    } catch {
+      /* already stopped */
+    }
   }
   if (state.audioCtx) {
     state.audioCtx.close().catch(() => {});

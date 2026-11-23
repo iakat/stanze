@@ -7,12 +7,11 @@ import { $ } from './dom.js';
 import { state } from './state.js';
 import { isAdmin, joinWords, say } from './util.js';
 import { store } from './prefs.js';
-import { send } from './menu.js';
 import { layoutStage, makeTile, ownTile, paintRowDeaf, setLocalTile } from './tiles.js';
 import { applyFlags, paintVolume } from './volume.js';
 import { paintWaiting } from './host.js';
 import { MIC_AUDIO, applyQuality, ask, camVideo, capVideoSender } from './media.js';
-import { applyMirror, resumeAudio, sendState, setNoise, speakTick, updateButtons } from './audio.js';
+import { applyMirror, resumeAudio, sendState, setNoise, updateButtons } from './audio.js';
 import { lookRestart, lookStop, lookTrack } from './look.js';
 import { stopShare } from './screen.js';
 import { playSfx } from './sfx.js';
@@ -97,7 +96,9 @@ export function paintDevices() {
     for (const select of devicePickers(kind)) kept = paintDeviceSelect(select, kind, list, wanted);
     if (wanted && kept !== wanted) {
       setChosenDevice(kind, '');
-      say(`the ${DEVICE_NOUN[kind]} you chose is gone; the system ${DEVICE_NOUN[kind]} will be used`);
+      say(
+        `the ${DEVICE_NOUN[kind]} you chose is gone; the system ${DEVICE_NOUN[kind]} will be used`,
+      );
     }
   }
   paintDeviceMenu();
@@ -213,14 +214,23 @@ export function constraintsFor(kind, pick) {
 // (unplugged, or a profile without it) falls back to the plain request once, so
 // a stale choice never blocks a join or a switch.
 export async function askKind(kind, pick) {
-  const want = (id) => (kind === 'video' ? { video: constraintsFor('video', id) } : { audio: constraintsFor('audio', id) });
+  const want = (id) =>
+    kind === 'video'
+      ? { video: constraintsFor('video', id) }
+      : { audio: constraintsFor('audio', id) };
   const first = await ask(want(pick));
   if (first.stream || !pick) return first;
-  if (!first.err || (first.err.name !== 'OverconstrainedError' && first.err.name !== 'NotFoundError')) return first;
+  if (
+    !first.err ||
+    (first.err.name !== 'OverconstrainedError' && first.err.name !== 'NotFoundError')
+  )
+    return first;
   if (pick === chosenDevice(kind)) {
     setChosenDevice(kind, '');
     paintDevices();
-    say(`the ${DEVICE_NOUN[kind]} you chose was not available; the system ${DEVICE_NOUN[kind]} will be used`);
+    say(
+      `the ${DEVICE_NOUN[kind]} you chose was not available; the system ${DEVICE_NOUN[kind]} will be used`,
+    );
   }
   return ask(want(''));
 }
@@ -237,11 +247,17 @@ export async function switchDevice(kind, id) {
   }
   const got = await askKind(kind, id);
   const track = got.stream
-    ? (kind === 'video' ? got.stream.getVideoTracks()[0] : got.stream.getAudioTracks()[0])
+    ? kind === 'video'
+      ? got.stream.getVideoTracks()[0]
+      : got.stream.getAudioTracks()[0]
     : null;
   if (!track) {
     const refused = got.err && got.err.name === 'NotAllowedError';
-    say(refused ? `the ${DEVICE_NOUN[kind]} was refused` : `that ${DEVICE_NOUN[kind]} is not available`);
+    say(
+      refused
+        ? `the ${DEVICE_NOUN[kind]} was refused`
+        : `that ${DEVICE_NOUN[kind]} is not available`,
+    );
     paintDevices();
     return;
   }
@@ -297,7 +313,10 @@ export function onDeviceChange() {
   }
   // Chrome fires several events for one plug, so the list is read once.
   if (devTimer) clearTimeout(devTimer);
-  devTimer = setTimeout(() => { devTimer = null; refreshDevices(); }, 250);
+  devTimer = setTimeout(() => {
+    devTimer = null;
+    refreshDevices();
+  }, 250);
 }
 
 // requestLocal asks for the camera and the microphone when the join button is
@@ -334,14 +353,20 @@ export async function requestLocal() {
     if (both.stream) {
       await adoptMic(both.stream.getAudioTracks()[0]);
       await adoptCam(both.stream.getVideoTracks()[0]);
-    } else if (both.err && (both.err.name === 'NotAllowedError' || both.err.name === 'SecurityError')) {
+    } else if (
+      both.err &&
+      (both.err.name === 'NotAllowedError' || both.err.name === 'SecurityError')
+    ) {
       // The visitor answered the prompt with no. Asking twice would not prompt.
       refused.push('camera and microphone');
     } else {
       // One of the two may be missing or busy: ask for each of them alone, so
       // the other one still starts. A stored device that is gone falls back to
       // the system device here.
-      const parts = await Promise.all([askKind('audio', state.micId), askKind('video', state.camId)]);
+      const parts = await Promise.all([
+        askKind('audio', state.micId),
+        askKind('video', state.camId),
+      ]);
       const mic = parts[0].stream ? parts[0].stream.getAudioTracks()[0] : null;
       const cam = parts[1].stream ? parts[1].stream.getVideoTracks()[0] : null;
       await adoptMic(mic);
@@ -364,7 +389,9 @@ export async function requestLocal() {
   state.mic = !!state.micTrack;
   state.cam = !!state.camTrack;
   if (refused.length) {
-    say(`the ${joinWords(refused)} ${refused.length > 1 ? 'were' : 'was'} refused; you joined without ${refused.length > 1 ? 'them' : 'it'}`);
+    say(
+      `the ${joinWords(refused)} ${refused.length > 1 ? 'were' : 'was'} refused; you joined without ${refused.length > 1 ? 'them' : 'it'}`,
+    );
   } else if (missing.length) {
     say(`no ${joinWords(missing)}; you joined without ${missing.length > 1 ? 'them' : 'it'}`);
   }
@@ -434,7 +461,10 @@ export function sealOne(peer, side, dir, kind) {
       // `from` is the sender of the frames this transform sees: this page on a
       // sender, the peer on a receiver. The associated data names it, so both
       // ends build the same bytes and a frame can not be moved or reflected.
-      pair: pairLabel(peer.id), peer: peer.id, dir, kind,
+      pair: pairLabel(peer.id),
+      peer: peer.id,
+      dir,
+      kind,
       from: dir === 'send' ? state.self : peer.id,
     });
   } catch (err) {
@@ -458,7 +488,9 @@ export function preparePeer(peer) {
   const used = new Set();
   for (const kind of ['audio', 'video', 'screen']) {
     const media = kind === 'screen' ? 'video' : kind;
-    let tr = peer.pc.getTransceivers().find((t) => !t.stopped && !used.has(t) && t.receiver.track.kind === media);
+    let tr = peer.pc
+      .getTransceivers()
+      .find((t) => !t.stopped && !used.has(t) && t.receiver.track.kind === media);
     if (!tr) tr = peer.pc.addTransceiver(media, { direction: 'sendrecv' });
     used.add(tr);
     // A transceiver from the remote offer is recvonly until this side says so.
@@ -471,9 +503,10 @@ export function preparePeer(peer) {
       peer.sealed = false;
       continue;
     }
-    const track = kind === 'screen'
-      ? state.screen && state.screen.getVideoTracks()[0]
-      : state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
+    const track =
+      kind === 'screen'
+        ? state.screen && state.screen.getVideoTracks()[0]
+        : state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
     if (!track) continue;
     // A guest that waits outside gets none of our media until it is let in.
     if (peer.waiting) continue;
@@ -527,9 +560,17 @@ export async function adoptMic(track) {
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
       await setNoise(state.noiseWanted);
     } else if (prev && prev !== track) {
-      try { state.micSource.disconnect(); } catch { /* not connected */ }
+      try {
+        state.micSource.disconnect();
+      } catch {
+        /* not connected */
+      }
       if (state.micAnalyser) {
-        try { state.micAnalyser.disconnect(); } catch { /* not connected */ }
+        try {
+          state.micAnalyser.disconnect();
+        } catch {
+          /* not connected */
+        }
         state.micAnalyser = null;
       }
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
@@ -543,7 +584,11 @@ export async function adoptMic(track) {
   }
   publishTrack(out);
   if (prev && prev !== track) {
-    try { prev.stop(); } catch { /* already stopped */ }
+    try {
+      prev.stop();
+    } catch {
+      /* already stopped */
+    }
   }
 }
 
@@ -551,7 +596,11 @@ export async function adoptMic(track) {
 // repaint does not restart the element.
 export function setVideoTrack(video, track) {
   const stream = video.srcObject;
-  if (!stream || typeof stream.getVideoTracks !== 'function' || stream.getVideoTracks()[0] !== track) {
+  if (
+    !stream ||
+    typeof stream.getVideoTracks !== 'function' ||
+    stream.getVideoTracks()[0] !== track
+  ) {
     video.srcObject = new MediaStream([track]);
   }
 }
@@ -559,7 +608,8 @@ export function setVideoTrack(video, track) {
 // camSource is the picture the own preview shows: the frozen still while the
 // freeze is on, else the drawn track, else the camera.
 export function camSource() {
-  if (state.freeze && state.freezeTrack && state.freezeTrack.readyState === 'live') return state.freezeTrack;
+  if (state.freeze && state.freezeTrack && state.freezeTrack.readyState === 'live')
+    return state.freezeTrack;
   return lookTrack() || state.camTrack;
 }
 
@@ -577,7 +627,11 @@ export function paintSelfCam(on) {
     video.play().catch(() => {});
   } else {
     self.classList.remove('playing');
-    try { video.pause(); } catch { /* not playing */ }
+    try {
+      video.pause();
+    } catch {
+      /* not playing */
+    }
     video.srcObject = null;
   }
   layoutStage();
@@ -611,7 +665,11 @@ export function dropPeerCamera(peer) {
   const video = peer.tile && peer.tile.querySelector('video');
   if (!video) return;
   peer.tile.classList.remove('playing');
-  try { video.pause(); } catch { /* not playing */ }
+  try {
+    video.pause();
+  } catch {
+    /* not playing */
+  }
   video.srcObject = null;
 }
 
@@ -655,7 +713,11 @@ export function paintPeerScreen(peer) {
   } else if (peer.screenTile) {
     const video = peer.screenTile.querySelector('video');
     peer.screenTile.classList.remove('playing');
-    try { video.pause(); } catch { /* not playing */ }
+    try {
+      video.pause();
+    } catch {
+      /* not playing */
+    }
     video.srcObject = null;
   }
   layoutStage();
@@ -668,7 +730,11 @@ export function dropPeerScreen(peer) {
   if (!peer.screenTile) return;
   const video = peer.screenTile.querySelector('video');
   peer.screenTile.classList.remove('playing');
-  try { video.pause(); } catch { /* not playing */ }
+  try {
+    video.pause();
+  } catch {
+    /* not playing */
+  }
   video.srcObject = null;
   peer.screenTile.remove();
   peer.screenTile = null;
@@ -686,7 +752,11 @@ export async function adoptCam(track) {
   // A new camera hands the live picture back: the still was of the old one.
   if (state.freeze) {
     if (state.freezeTrack) {
-      try { state.freezeTrack.stop(); } catch { /* already stopped */ }
+      try {
+        state.freezeTrack.stop();
+      } catch {
+        /* already stopped */
+      }
     }
     state.freeze = false;
     state.freezeTrack = null;
@@ -707,7 +777,11 @@ export async function adoptCam(track) {
     await lookRestart();
   }
   if (prev && prev !== track) {
-    try { prev.stop(); } catch { /* already stopped */ }
+    try {
+      prev.stop();
+    } catch {
+      /* already stopped */
+    }
   }
   applyMirror();
 }
@@ -722,9 +796,11 @@ export async function enableMic() {
     const mic = await askKind('audio', state.micId);
     const track = mic.stream ? mic.stream.getAudioTracks()[0] : null;
     if (!track) {
-      say(mic.err && mic.err.name === 'NotAllowedError'
-        ? 'the microphone was refused'
-        : 'the microphone is not available');
+      say(
+        mic.err && mic.err.name === 'NotAllowedError'
+          ? 'the microphone was refused'
+          : 'the microphone is not available',
+      );
       return;
     }
     await adoptMic(track);
@@ -760,9 +836,11 @@ export async function enableCam() {
     const cam = await askKind('video', state.camId);
     const track = cam.stream ? cam.stream.getVideoTracks()[0] : null;
     if (!track) {
-      say(cam.err && cam.err.name === 'NotAllowedError'
-        ? 'the camera was refused'
-        : 'the camera is not available');
+      say(
+        cam.err && cam.err.name === 'NotAllowedError'
+          ? 'the camera was refused'
+          : 'the camera is not available',
+      );
       return;
     }
     await adoptCam(track);
@@ -787,7 +865,11 @@ export function disableCam(persist = true) {
   // A frozen still has no camera behind it any more, so the freeze goes too.
   if (state.freeze) {
     if (state.freezeTrack) {
-      try { state.freezeTrack.stop(); } catch { /* already stopped */ }
+      try {
+        state.freezeTrack.stop();
+      } catch {
+        /* already stopped */
+      }
     }
     state.freeze = false;
     state.freezeTrack = null;
@@ -798,7 +880,11 @@ export function disableCam(persist = true) {
   // The drawn track reads from the camera, so it goes with it.
   lookStop();
   if (track) {
-    try { track.stop(); } catch { /* already stopped */ }
+    try {
+      track.stop();
+    } catch {
+      /* already stopped */
+    }
   }
   paintSelfCam(false);
   updateButtons();
@@ -810,7 +896,6 @@ export function disableCam(persist = true) {
 // audio can be added later without touching the peer connections.
 export async function buildAudio() {
   // Safari still exposes the prefixed constructor, which the DOM lib omits.
-  // @ts-expect-error -- vendor prefixed fallback
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   try {

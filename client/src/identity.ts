@@ -4,10 +4,17 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say } from './util.js';
-import { load, store } from './prefs.js';
 import { rowOf } from './tiles.js';
-import { b64d, b64e, pqCall, pqModule, sealUtf8, sealedFailedPairs, sealedPairNames, shortPeer } from './sealed.js';
+import {
+  b64d,
+  b64e,
+  pqCall,
+  pqModule,
+  sealUtf8,
+  sealedFailedPairs,
+  sealedPairNames,
+  shortPeer,
+} from './sealed.js';
 import { sealedRestart } from './handshake.js';
 import { paintState, refreshCodeCard } from './gate.js';
 
@@ -50,25 +57,38 @@ export function idStore() {
     req.onerror = () => reject(req.error || new Error('indexeddb refused'));
   });
   // A failed open is not remembered, so a later attempt can still work.
-  idDb.catch(() => { idDb = null; });
+  idDb.catch(() => {
+    idDb = null;
+  });
   return idDb;
 }
 
 export function idbRequest(store, mode, fn) {
-  return idStore().then((db) => new Promise((resolve, reject) => {
-    const req = fn(db.transaction(store, mode).objectStore(store));
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  }));
+  return idStore().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const req = fn(db.transaction(store, mode).objectStore(store));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      }),
+  );
 }
 
-export function idbGet(store, key) { return idbRequest(store, 'readonly', (s) => s.get(key)); }
+export function idbGet(store, key) {
+  return idbRequest(store, 'readonly', (s) => s.get(key));
+}
 
-export function idbAll(store) { return idbRequest(store, 'readonly', (s) => s.getAll()); }
+export function idbAll(store) {
+  return idbRequest(store, 'readonly', (s) => s.getAll());
+}
 
-export function idbPut(store, key, value) { return idbRequest(store, 'readwrite', (s) => s.put(value, key)); }
+export function idbPut(store, key, value) {
+  return idbRequest(store, 'readwrite', (s) => s.put(value, key));
+}
 
-export function idbDelete(store, key) { return idbRequest(store, 'readwrite', (s) => s.delete(key)); }
+export function idbDelete(store, key) {
+  return idbRequest(store, 'readwrite', (s) => s.delete(key));
+}
 
 export function fingerprint(pub) {
   const out = pqCall((json) => pqModule().idfp(json), { id: pub });
@@ -82,7 +102,11 @@ export async function provesKey(pub, sign) {
   if (!pub || typeof sign !== 'function') return false;
   const msg = b64e(sealUtf8.encode(ID_CHALLENGE));
   let sig = '';
-  try { sig = await sign(msg); } catch { /* an unusable key */ }
+  try {
+    sig = await sign(msg);
+  } catch {
+    /* an unusable key */
+  }
   const res = pqCall((json) => pqModule().idverify(json), { id: pub, msg, sig });
   return !!(res && res.ok);
 }
@@ -91,7 +115,9 @@ export async function provesKey(pub, sign) {
 // Ed25519 key and no script can export it, not even this origin.
 export function subtleIdentity(key, pub) {
   return {
-    kind: 'webcrypto', pub, fp: fingerprint(pub),
+    kind: 'webcrypto',
+    pub,
+    fp: fingerprint(pub),
     sign: (msg) => crypto.subtle.sign({ name: 'Ed25519' }, key, b64d(msg)).then(b64e),
     store: () => ({ kind: 'webcrypto', key, pub }),
   };
@@ -102,13 +128,19 @@ export function subtleIdentity(key, pub) {
 // so an offline copy of the database is useless without this profile.
 export function seedIdentity(seed, pub, kind) {
   return {
-    kind, pub, fp: fingerprint(pub), seed,
+    kind,
+    pub,
+    fp: fingerprint(pub),
+    seed,
     sign: async (msg) => {
       const out = pqCall((json) => pqModule().idsign(json), { seed: b64e(seed), msg });
       return out && out.sig ? out.sig : '';
     },
     store: async () => {
-      const wrap = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      const wrap = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt',
+        'decrypt',
+      ]);
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrap, seed));
       return { kind: 'sealed', wrap, iv, ct, pub };
@@ -119,12 +151,19 @@ export function seedIdentity(seed, pub, kind) {
 export function createIdentity() {
   return Promise.resolve()
     .then(() => crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']))
-    .then(async (pair) => subtleIdentity(pair.privateKey, b64e(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)))))
+    .then(async (pair) =>
+      subtleIdentity(
+        pair.privateKey,
+        b64e(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))),
+      ),
+    )
     .catch(() => {
       // No WebCrypto Ed25519 (Chromium before 137, older Safari): the module
       // draws the identity and keeps the seed for as long as this page lives.
       const made = pqCall((json) => pqModule().idgen(json), {});
-      return made && made.pub && made.seed ? seedIdentity(b64d(made.seed), made.pub, 'sealed') : null;
+      return made && made.pub && made.seed
+        ? seedIdentity(b64d(made.seed), made.pub, 'sealed')
+        : null;
     });
 }
 
@@ -135,13 +174,15 @@ export async function reopenIdentity(rec) {
     if (rec.kind === 'webcrypto' && rec.key) {
       key = subtleIdentity(rec.key, rec.pub);
     } else if (rec.kind === 'sealed' && rec.wrap && rec.iv && rec.ct) {
-      const seed = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv }, rec.wrap, rec.ct));
+      const seed = new Uint8Array(
+        await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv }, rec.wrap, rec.ct),
+      );
       key = seedIdentity(seed, rec.pub, 'sealed');
     }
   } catch {
     return null;
   }
-  return key && await provesKey(rec.pub, key.sign) ? key : null;
+  return key && (await provesKey(rec.pub, key.sign)) ? key : null;
 }
 
 export function loadPins() {
@@ -150,7 +191,9 @@ export function loadPins() {
       for (const rec of pins || []) if (rec && rec.label && rec.fp) state.pins.set(rec.label, rec);
       for (const rec of revoked || []) if (rec && rec.fp) state.revoked.set(rec.fp, rec);
     })
-    .catch(() => { /* no local database: the pins live in this page only */ });
+    .catch(() => {
+      /* no local database: the pins live in this page only */
+    });
 }
 
 export let identityLoad = null;
@@ -161,7 +204,11 @@ export function ensureIdentity() {
   identityLoad = (async () => {
     await loadPins();
     let rec = null;
-    try { rec = await idbGet('id', 'self'); } catch { /* no local database */ }
+    try {
+      rec = await idbGet('id', 'self');
+    } catch {
+      /* no local database */
+    }
     let key = await reopenIdentity(rec);
     if (key) {
       state.device = 'kept';
@@ -245,7 +292,9 @@ export function pinPeer(peer, label) {
 export function renamePin(peer, label) {
   if (!peer || pinState(peer) !== 'known') return 'new';
   const old = pinLabelOf(peer);
-  const name = String(label || '').trim().slice(0, 32);
+  const name = String(label || '')
+    .trim()
+    .slice(0, 32);
   if (!name || name === old) return 'known';
   const held = state.pins.get(name);
   if (held && held.fp !== peer.fp) return pinPeer(peer, name);
@@ -309,7 +358,8 @@ export function updatePinCount() {
   if (total === 0) {
     el.removeAttribute('title');
   } else if (failed.length > 0) {
-    el.title = 'the keys do not match with ' + sealedPairNames(failed) + ', so do not trust this call';
+    el.title =
+      'the keys do not match with ' + sealedPairNames(failed) + ', so do not trust this call';
   } else {
     el.title = `${known} of ${total} guests present an identity this browser pinned; each pair has its own code on its tile`;
   }
@@ -324,10 +374,14 @@ export function paintPin(peer) {
   const what = pinState(peer);
   chip.hidden = !peer.fp;
   chip.dataset.pin = what === 'rollback' ? 'changed' : what;
-  chip.textContent = what === 'known' ? pinLabelOf(peer)
-    : what === 'changed' ? 'identity changed'
-      : what === 'rollback' ? 'old key came back'
-        : 'unverified';
+  chip.textContent =
+    what === 'known'
+      ? pinLabelOf(peer)
+      : what === 'changed'
+        ? 'identity changed'
+        : what === 'rollback'
+          ? 'old key came back'
+          : 'unverified';
   chip.title = peer.fp ? 'identity ' + peer.fp : '';
   // A named device keeps its pin, so the name can change later without asking
   // for the fingerprint again. The click is the whole interface.
@@ -335,7 +389,8 @@ export function paintPin(peer) {
   chip.dataset.action = named ? 'rename' : '';
   if (named) {
     chip.title = (chip.title ? chip.title + ' | ' : '') + 'click to rename';
-    chip.onclick = () => renamePin(peer, prompt('new name for this device', pinLabelOf(peer)) || '');
+    chip.onclick = () =>
+      renamePin(peer, prompt('new name for this device', pinLabelOf(peer)) || '');
   } else {
     chip.onclick = null;
   }
@@ -353,7 +408,7 @@ export async function storageAudit() {
         const shape = {};
         for (const [k, v] of Object.entries(row || {})) {
           if (v instanceof Uint8Array) shape[k] = 'bytes:' + v.length;
-          else if (v && v.type) shape[k] = 'key:' + v.type;
+          else if (v && (v as CryptoKey).type) shape[k] = 'key:' + (v as CryptoKey).type;
           else if (typeof v === 'string') shape[k] = v.length > 40 ? 'string:' + v.length : v;
           else shape[k] = typeof v;
         }

@@ -88,6 +88,8 @@ export interface Elements {
   freeze: HTMLInputElement;
 }
 
-export function $<K extends keyof Elements>(id: K): Elements[K] {
-  return document.getElementById(id) as Elements[K];
+export function $<K extends keyof Elements>(id: K): Elements[K];
+export function $(id: string): any;
+export function $(id: string): any {
+  return document.getElementById(id);
 }

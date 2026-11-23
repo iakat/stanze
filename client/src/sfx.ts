@@ -2,9 +2,7 @@
  The page's own sound effects.
 */
 
-import { $ } from './dom.js';
 import { state } from './state.js';
-import { gap } from './look.js';
 
 // ---------------------------------------------------------------- sound effects
 // The four cartoon cues come from the Hanna-Barbera sound effects library that
@@ -55,7 +53,6 @@ export function pickSfxExt() {
 export function ensureSfx() {
   if (state.sfxCtx) return;
   // Safari still exposes the prefixed constructor, which the DOM lib omits.
-  // @ts-expect-error -- vendor prefixed fallback
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   try {
@@ -99,7 +96,11 @@ export function playSfx(name) {
     return;
   }
   if (state.sfxSource) {
-    try { state.sfxSource.stop(); } catch { /* already finished */ }
+    try {
+      state.sfxSource.stop();
+    } catch {
+      /* already finished */
+    }
     state.sfxSource = null;
   }
   try {
@@ -161,11 +162,15 @@ export function startLost() {
 export function setSounds(on) {
   state.sounds = on;
   document.body.dataset.sounds = on ? 'on' : 'off';
-  const box = (document.getElementById('sounds') as HTMLInputElement | null);
+  const box = document.getElementById('sounds') as HTMLInputElement | null;
   if (box) box.checked = on;
   if (!on) {
     if (state.sfxSource) {
-      try { state.sfxSource.stop(); } catch { /* already finished */ }
+      try {
+        state.sfxSource.stop();
+      } catch {
+        /* already finished */
+      }
       state.sfxSource = null;
     }
     // Cut the pad but keep the wish for it.
@@ -183,10 +188,22 @@ export function stopLost() {
   const src = state.lostSource;
   state.lostSource = null;
   if (state.lostGain) {
-    try { state.lostGain.disconnect(); } catch { /* already gone */ }
+    try {
+      state.lostGain.disconnect();
+    } catch {
+      /* already gone */
+    }
     state.lostGain = null;
   }
   if (!src) return;
-  try { src.stop(); } catch { /* already finished */ }
-  try { src.disconnect(); } catch { /* already gone */ }
+  try {
+    src.stop();
+  } catch {
+    /* already finished */
+  }
+  try {
+    src.disconnect();
+  } catch {
+    /* already gone */
+  }
 }

@@ -5,11 +5,9 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say } from './util.js';
 import { load, store } from './prefs.js';
 import { wireAdmit, wireDots } from './host.js';
 import { updateButtons } from './audio.js';
-import { fingerprint } from './identity.js';
 
 // ---------------------------------------------------------------- tiles
 // rowOf maps a tile to its row in the list of members. Both nodes live for as
@@ -82,11 +80,15 @@ export function makeTile(id, name, local = false, screen = false) {
     <video autoplay playsinline${local ? ' muted' : ''}></video>
     <div class="avatar"></div>
     <span class="ring" aria-hidden="true"></span>
-    ${plain ? '' : `<div class="vol">
+    ${
+      plain
+        ? ''
+        : `<div class="vol">
       <img class="vol-ico" src="/openmoji/1F50A.svg" alt="" width="16" height="16">
       <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
       <span class="vol-num">100%</span>
-    </div>`}
+    </div>`
+    }
     <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
     <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${plain ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
     ${plain ? '' : '<button class="admit" type="button" title="let this guest into the room">let in</button><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
@@ -120,11 +122,15 @@ export function makeRow(id, name, local = false) {
   row.dataset.mic = 'on';
   row.tabIndex = 0;
   row.setAttribute('role', 'group');
-  row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span><span class="row-hand" hidden>hand</span>${local ? '<span class="row-you">you</span>' : `
+  row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span><span class="row-hand" hidden>hand</span>${
+    local
+      ? '<span class="row-you">you</span>'
+      : `
     <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
     <span class="vol-num">100%</span>
     <button class="admit" type="button" title="let this guest into the room">let in</button>
-    <button class="dots" type="button" aria-label="member actions">&#8943;</button>`}`;
+    <button class="dots" type="button" aria-label="member actions">&#8943;</button>`
+  }`;
   paintRowName(row, name, local);
   if (!local) {
     wireDots(row);
@@ -144,7 +150,9 @@ export function makeRow(id, name, local = false) {
 export let localTile = null; // the own preview tile, made once per room
 // The tile is made in one place and dropped in another, so the two write it
 // through this setter; a plain imported binding cannot be assigned.
-export function setLocalTile(tile) { localTile = tile; }
+export function setLocalTile(tile) {
+  localTile = tile;
+}
 
 export function ownTile() {
   return localTile && localTile.isConnected ? localTile : null;
@@ -204,9 +212,9 @@ export const CORNERS = ['tl', 'tr', 'bl', 'br'];
 
 export const OPPOSITE_CORNER = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
 
-export const cornerCall = new Map();   // peer id -> corner, this call only
+export const cornerCall = new Map(); // peer id -> corner, this call only
 
-export let cornerDropAt = 0;           // when a drag ended, so its click is not a zoom
+export let cornerDropAt = 0; // when a drag ended, so its click is not a zoom
 
 // peerOfTile is the peer record of one tile, or null for the own tile.
 export function peerOfTile(tile) {
@@ -219,7 +227,8 @@ export function peerOfTile(tile) {
 // guest without a key keeps it for this call only. The default is the bottom
 // right corner, where the own preview also sits.
 export function storedCorner(peer) {
-  const raw = peer && peer.fp ? load(`corner.fp.${peer.fp}`) : (peer ? cornerCall.get(peer.id) || '' : '');
+  const raw =
+    peer && peer.fp ? load(`corner.fp.${peer.fp}`) : peer ? cornerCall.get(peer.id) || '' : '';
   return CORNERS.includes(raw) ? raw : 'br';
 }
 
@@ -262,7 +271,7 @@ export function layoutStage() {
     // A screen tile without a picture has nothing to show: it leaves the stage
     // instead of standing there as a name.
     const voice = state.voiceTiles && !tile.dataset.waiting && !tile.dataset.screen;
-    const big = !inPip && (spot ? tile === spot : (tileHasPicture(tile) || voice));
+    const big = !inPip && (spot ? tile === spot : tileHasPicture(tile) || voice);
     if (big) bigs.push(tile);
     tile.hidden = inPip ? false : !big;
     const on = big && !!spot;
@@ -307,12 +316,13 @@ export function wireCornerDrag() {
   const box = $('guest-pip');
   const grid = $('grid');
   if (!box || !grid) return;
-  let drag = (null as any);
+  let drag = null as any;
   box.addEventListener('pointerdown', (event) => {
     if (!event.isPrimary) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
-    const target = (event.target as Element);
-    if (target.closest('.vol, .vol-range, .vol-num, .dots, .menu, .sas, .pin, .admit, .zoom')) return;
+    const target = event.target as Element;
+    if (target.closest('.vol, .vol-range, .vol-num, .dots, .menu, .sas, .pin, .admit, .zoom'))
+      return;
     const rect = box.getBoundingClientRect();
     const frame = grid.getBoundingClientRect();
     if (!frame.width || !frame.height) return;
@@ -327,12 +337,17 @@ export function wireCornerDrag() {
       frame,
       moved: false,
     };
-    try { box.setPointerCapture(event.pointerId); } catch { /* no capture */ }
+    try {
+      box.setPointerCapture(event.pointerId);
+    } catch {
+      /* no capture */
+    }
   });
   box.addEventListener('pointermove', (event) => {
     if (!drag || event.pointerId !== drag.id) return;
     if (!drag.moved) {
-      if (Math.abs(event.clientX - drag.startX) < 4 && Math.abs(event.clientY - drag.startY) < 4) return;
+      if (Math.abs(event.clientX - drag.startX) < 4 && Math.abs(event.clientY - drag.startY) < 4)
+        return;
       drag.moved = true;
       box.classList.add('dragging');
       box.style.width = `${drag.w}px`;
@@ -341,8 +356,14 @@ export function wireCornerDrag() {
       box.style.bottom = 'auto';
     }
     const frame = drag.frame;
-    const x = Math.min(Math.max(event.clientX - drag.grabX - frame.left, 0), Math.max(0, frame.width - drag.w));
-    const y = Math.min(Math.max(event.clientY - drag.grabY - frame.top, 0), Math.max(0, frame.height - drag.h));
+    const x = Math.min(
+      Math.max(event.clientX - drag.grabX - frame.left, 0),
+      Math.max(0, frame.width - drag.w),
+    );
+    const y = Math.min(
+      Math.max(event.clientY - drag.grabY - frame.top, 0),
+      Math.max(0, frame.height - drag.h),
+    );
     box.style.left = `${x}px`;
     box.style.top = `${y}px`;
   });
@@ -352,7 +373,11 @@ export function wireCornerDrag() {
     const frame = drag.frame;
     const rect = box.getBoundingClientRect();
     drag = null;
-    try { box.releasePointerCapture(event.pointerId); } catch { /* already gone */ }
+    try {
+      box.releasePointerCapture(event.pointerId);
+    } catch {
+      /* already gone */
+    }
     box.classList.remove('dragging');
     box.style.width = '';
     box.style.height = '';

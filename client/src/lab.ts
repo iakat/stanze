@@ -2,9 +2,6 @@
  The lab page's proof of the cipher.
 */
 
-import { send } from './menu.js';
-import { ask } from './media.js';
-import { iceServers } from './peers.js';
 import { b64e } from './sealed.js';
 
 // ---------------------------------------------------------------- lab proof
@@ -44,7 +41,10 @@ export async function runLab() {
   const dest = audioCtx.createMediaStreamDestination();
   osc.connect(dest);
   osc.start();
-  const stream = new MediaStream([...videoStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+  const stream = new MediaStream([
+    ...videoStream.getVideoTracks(),
+    ...dest.stream.getAudioTracks(),
+  ]);
 
   const pc1 = new RTCPeerConnection({ iceServers: [] });
   const pc2 = new RTCPeerConnection({ iceServers: [] });
@@ -60,25 +60,30 @@ export async function runLab() {
   document.body.appendChild(labVideo);
   labVideo.play().catch(() => {});
 
-  const gathered = (pc) => new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') {
-      resolve(null);
-      return;
-    }
-    const done = () => {
+  const gathered = (pc) =>
+    new Promise((resolve) => {
       if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', done);
         resolve(null);
+        return;
       }
-    };
-    pc.addEventListener('icegatheringstatechange', done);
-    setTimeout(() => resolve(null), 4000);
-  });
+      const done = () => {
+        if (pc.iceGatheringState === 'complete') {
+          pc.removeEventListener('icegatheringstatechange', done);
+          resolve(null);
+        }
+      };
+      pc.addEventListener('icegatheringstatechange', done);
+      setTimeout(() => resolve(null), 4000);
+    });
 
   for (const track of stream.getTracks()) {
     const sender = pc1.addTrack(track, stream);
     sender.transform = new RTCRtpScriptTransform(worker, {
-      pair: 'lab', peer: 'lab', dir: 'send', kind: track.kind, from: 'lab',
+      pair: 'lab',
+      peer: 'lab',
+      dir: 'send',
+      kind: track.kind,
+      from: 'lab',
     });
   }
 
@@ -87,7 +92,11 @@ export async function runLab() {
   await pc2.setRemoteDescription(pc1.localDescription);
   for (const receiver of pc2.getReceivers()) {
     receiver.transform = new RTCRtpScriptTransform(worker, {
-      pair: 'lab', peer: 'lab', dir: 'recv', kind: receiver.track.kind, from: 'lab',
+      pair: 'lab',
+      peer: 'lab',
+      dir: 'recv',
+      kind: receiver.track.kind,
+      from: 'lab',
     });
   }
   await pc2.setLocalDescription();
@@ -113,7 +122,7 @@ export async function runLab() {
 
   worker.postMessage({ type: 'keys', pair: 'lab', peer: 'lab', dec: key });
   for (const receiver of pc2.getReceivers()) {
-    const ask = (receiver as any);
+    const ask = receiver as any;
     if (ask.requestKeyFrame) ask.requestKeyFrame();
   }
   await new Promise((resolve) => setTimeout(resolve, 4000));

@@ -9,10 +9,18 @@
 // each peer by name. An unreadable storage (private mode) simply keeps nothing.
 export function store(key, value) {
   if (!window.localStorage) return;
-  try { localStorage.setItem('rooms.' + key, String(value)); } catch { /* private mode */ }
+  try {
+    localStorage.setItem('rooms.' + key, String(value));
+  } catch {
+    /* private mode */
+  }
 }
 
 export function load(key) {
   if (!window.localStorage) return '';
-  try { return localStorage.getItem('rooms.' + key) || ''; } catch { return ''; }
+  try {
+    return localStorage.getItem('rooms.' + key) || '';
+  } catch {
+    return '';
+  }
 }

@@ -3,9 +3,6 @@
  names, the face mesh rate and the room id alphabet.
 */
 
-import { $ } from './dom.js';
-import { bitrate } from './stats.js';
-
 export const ROOM_RE = /^[a-z0-9._-]{1,64}$/;
 
 export const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -47,7 +44,21 @@ export const LOOKS = {
 };
 /** @type {string[]} */
 
-export const MASKS = ['none', 'big', 'wide', 'small', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku', 'potion', 'custom'];
+export const MASKS = [
+  'none',
+  'big',
+  'wide',
+  'small',
+  'glasses',
+  'moustache',
+  'cat',
+  'dog',
+  'halo',
+  'shades',
+  'miku',
+  'potion',
+  'custom',
+];
 
 // The landmarker is three files of this origin: the module, the wasm and the
 // model. Nothing of a face leaves the tab, and no byte comes from outside.

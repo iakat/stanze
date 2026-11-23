@@ -2,12 +2,8 @@
  Local transcription, one language and many.
 */
 
-import { $ } from './dom.js';
 import { state } from './state.js';
-import { say } from './util.js';
 import { load, store } from './prefs.js';
-import { ask } from './media.js';
-import { handle } from './signaling.js';
 import { addChatLine } from './chat.js';
 import { shortPeer } from './sealed.js';
 import { sealedSend, toSealed } from './gate.js';
@@ -51,10 +47,10 @@ export const OMNI_GLUE = 'sherpa-onnx-wasm-main-vad-asr.js';
 
 export const asr = {
   probed: false,
-  models: [],      // [{ lang, file, size, modified }] as the server lists them
-  lang: '',        // the label the guest picked, en by default
-  engine: '',      // 'vosk' or 'omni', the kept choice, see asrEngine
-  busy: false,     // a download or a start is under way
+  models: [], // [{ lang, file, size, modified }] as the server lists them
+  lang: '', // the label the guest picked, en by default
+  engine: '', // 'vosk' or 'omni', the kept choice, see asrEngine
+  busy: false, // a download or a start is under way
   on: false,
   abort: null,
   model: null,
@@ -66,15 +62,15 @@ export const asr = {
 
 export const omni = {
   probed: false,
-  files: [],       // [{ name, size, modified, sha256 }] as the server lists them
-  model: null,     // the one model entry, null when the engine is not offered
+  files: [], // [{ name, size, modified, sha256 }] as the server lists them
+  model: null, // the one model entry, null when the engine is not offered
   size: 0,
   sha: '',
-  stamp: '',       // size, time and hash of the model, used as the cache key
-  busy: false,     // a download or a start is under way
+  stamp: '', // size, time and hash of the model, used as the cache key
+  busy: false, // a download or a start is under way
   on: false,
   worker: null,
-  url: '',         // the worker blob, kept while the engine runs
+  url: '', // the worker blob, kept while the engine runs
   timer: 0,
   recs: new Map(), // peer id -> { proc, src, sink }
 };
@@ -82,7 +78,15 @@ export const omni = {
 // asrStats is what the engine last said about itself: the start, the tail of
 // the phrases it decoded with the time each one took, and what the tap saw. A
 // browser test reads it through window.e2eApp; the page itself never does.
-export const asrStats = { engine: '', ready: false, initMs: null, segments: [], blocks: 0, peak: 0, decoded: 0 };
+export const asrStats = {
+  engine: '',
+  ready: false,
+  initMs: null,
+  segments: [],
+  blocks: 0,
+  peak: 0,
+  decoded: 0,
+};
 
 export const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB`;
 
@@ -97,13 +101,19 @@ export function asrNote(text) {
 // chosen engine costs before it runs.
 export function asrPaintOthers() {
   if (asr.busy || asr.on || omni.busy || omni.on) return;
-  const names = [...state.peers.values()].filter((p) => p.asr).map((p) => p.name || shortPeer(p.id));
+  const names = [...state.peers.values()]
+    .filter((p) => p.asr)
+    .map((p) => p.name || shortPeer(p.id));
   if (names.length) {
-    asrNote(`${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} transcribing this meeting. The text appears in the chat.`);
+    asrNote(
+      `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} transcribing this meeting. The text appears in the chat.`,
+    );
     return;
   }
   if (asrEngine() === 'omni' && omni.size) {
-    asrNote(`multilingual transcription: one model for every language, ${mb(omni.size)} on the first use.`);
+    asrNote(
+      `multilingual transcription: one model for every language, ${mb(omni.size)} on the first use.`,
+    );
     return;
   }
   asrNote('');
@@ -120,9 +130,11 @@ export async function asrProbe() {
     const res = await fetch(ASR_MODELS, { cache: 'no-store' });
     if (res.ok) {
       const body = await res.json();
-      list = (body && Array.isArray(body.langs)) ? body.langs : [];
+      list = body && Array.isArray(body.langs) ? body.langs : [];
     }
-  } catch { /* offline or blocked: not offered */ }
+  } catch {
+    /* offline or blocked: not offered */
+  }
   asr.models = list.filter((m) => m && typeof m.file === 'string' && m.file);
   if (asr.models.length) asrPick(asrDefaultLang());
   asrOffers();
@@ -140,9 +152,11 @@ export async function omniProbe() {
     const res = await fetch(OMNI_MODELS, { cache: 'no-store' });
     if (res.ok) {
       const body = await res.json();
-      list = (body && Array.isArray(body.files)) ? body.files : [];
+      list = body && Array.isArray(body.files) ? body.files : [];
     }
-  } catch { /* offline or blocked: not offered */ }
+  } catch {
+    /* offline or blocked: not offered */
+  }
   omni.files = list.filter((f) => f && typeof f.name === 'string' && f.name);
   const find = (name) => omni.files.find((f) => f.name === name) || null;
   omni.model = find(OMNI_MODEL);
@@ -184,9 +198,13 @@ export function asrEngine() {
 }
 
 // asrSetEngine keeps the choice and paints the picker and the menu entry.
-export function asrSetEngine(name, keep) {
-  const engine = (name === 'omni' && omni.model) ? 'omni'
-    : (name === 'vosk' && asr.models.length) ? 'vosk' : asrEngine();
+export function asrSetEngine(name, keep?) {
+  const engine =
+    name === 'omni' && omni.model
+      ? 'omni'
+      : name === 'vosk' && asr.models.length
+        ? 'vosk'
+        : asrEngine();
   if (keep !== false) {
     asr.engine = engine;
     store('asr.engine', engine);
@@ -239,17 +257,19 @@ export function asrChoose(value) {
 // menu. The row and the select go together, so the picker is never drawn inside
 // a row the page declares hidden.
 export function asrPaintLangRow() {
-  const select = (document.getElementById('asr-lang') as HTMLSelectElement | null);
+  const select = document.getElementById('asr-lang') as HTMLSelectElement | null;
   if (!select) return;
   const choices = asrChoices();
   const value = asrChoice();
-  select.replaceChildren(...choices.map((choice) => {
-    const o = document.createElement('option');
-    o.value = choice.value;
-    o.textContent = choice.text;
-    o.selected = choice.value === value;
-    return o;
-  }));
+  select.replaceChildren(
+    ...choices.map((choice) => {
+      const o = document.createElement('option');
+      o.value = choice.value;
+      o.textContent = choice.text;
+      o.selected = choice.value === value;
+      return o;
+    }),
+  );
   select.value = value;
   select.hidden = choices.length < 2;
   const row = select.closest('.menu-item');
@@ -275,7 +295,9 @@ export function asrDefaultLang() {
   const have = asr.models.map((m) => m.lang);
   const kept = load('asr.lang');
   if (kept && have.includes(kept)) return kept;
-  const want = String(navigator.language || '').toLowerCase().slice(0, 2);
+  const want = String(navigator.language || '')
+    .toLowerCase()
+    .slice(0, 2);
   if (want && have.includes(want)) return want;
   return have[0];
 }
@@ -312,7 +334,9 @@ export async function asrCached() {
     const cache = await caches.open(ASR_CACHE);
     const hit = await cache.match(asrCacheKey());
     return hit ? await hit.blob() : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // asrFetchModel downloads the model with a progress line. It reads the body to
@@ -331,9 +355,11 @@ export async function asrFetchModel(signal) {
     if (done) break;
     parts.push(value);
     got += value.length;
-    asrNote(total
-      ? `downloading the transcription model: ${mb(got)} of ${mb(total)} (${Math.floor((got * 100) / total)}%)`
-      : `downloading the transcription model: ${mb(got)}`);
+    asrNote(
+      total
+        ? `downloading the transcription model: ${mb(got)} of ${mb(total)} (${Math.floor((got * 100) / total)}%)`
+        : `downloading the transcription model: ${mb(got)}`,
+    );
   }
   const blob = new Blob(parts, { type: 'application/gzip' });
   try {
@@ -341,9 +367,14 @@ export async function asrFetchModel(signal) {
       // Older entries go, so the cache holds one model only.
       await caches.delete(ASR_CACHE);
       const cache = await caches.open(ASR_CACHE);
-      await cache.put(asrCacheKey(), new Response(blob, { headers: { 'content-type': 'application/gzip' } }));
+      await cache.put(
+        asrCacheKey(),
+        new Response(blob, { headers: { 'content-type': 'application/gzip' } }),
+      );
     }
-  } catch { /* no cache: the model is used now and fetched again next time */ }
+  } catch {
+    /* no cache: the model is used now and fetched again next time */
+  }
   return blob;
 }
 
@@ -401,7 +432,14 @@ export function asrTap(peer) {
   const proc = ctx.createScriptProcessor(4096, 1, 1);
   proc.onaudioprocess = (event) => {
     // A copy, because the engine takes the buffer to its worker.
-    try { rec.acceptWaveformFloat(new Float32Array(event.inputBuffer.getChannelData(0)), ctx.sampleRate); } catch { /* recognizer gone */ }
+    try {
+      rec.acceptWaveformFloat(
+        new Float32Array(event.inputBuffer.getChannelData(0)),
+        ctx.sampleRate,
+      );
+    } catch {
+      /* recognizer gone */
+    }
   };
   // The processor only runs when it is wired to an output; the gain of zero
   // keeps it silent.
@@ -417,11 +455,30 @@ export function asrUntap(id) {
   const h = asr.recs.get(id);
   if (!h) return;
   asr.recs.delete(id);
-  try { h.src.disconnect(h.proc); } catch { /* source already gone */ }
-  try { h.proc.disconnect(); h.sink.disconnect(); } catch { /* already gone */ }
+  try {
+    h.src.disconnect(h.proc);
+  } catch {
+    /* source already gone */
+  }
+  try {
+    h.proc.disconnect();
+    h.sink.disconnect();
+  } catch {
+    /* already gone */
+  }
   h.proc.onaudioprocess = null;
-  try { h.rec.retrieveFinalResult(); } catch { /* recognizer gone */ }
-  setTimeout(() => { try { h.rec.remove(); } catch { /* recognizer gone */ } }, 1500);
+  try {
+    h.rec.retrieveFinalResult();
+  } catch {
+    /* recognizer gone */
+  }
+  setTimeout(() => {
+    try {
+      h.rec.remove();
+    } catch {
+      /* recognizer gone */
+    }
+  }, 1500);
 }
 
 // asrSync follows the room: a recognizer for each guest inside who has a voice,
@@ -448,7 +505,13 @@ export function asrStop() {
   if (asr.model) {
     const model = asr.model;
     // After the recognizers are gone, the worker and its memory go too.
-    setTimeout(() => { try { model.terminate(); } catch { /* already gone */ } }, 2000);
+    setTimeout(() => {
+      try {
+        model.terminate();
+      } catch {
+        /* already gone */
+      }
+    }, 2000);
     asr.model = null;
   }
   asr.busy = false;
@@ -469,7 +532,11 @@ export async function asrStart() {
       const model = asrModel();
       const size = model && model.size ? mb(model.size) : 'a large file';
       // The guest asked for transcription; this is the size, before any byte.
-      if (!window.confirm(`Transcription runs in this tab and needs a one-time download of ${size}. The model is kept in the browser cache. Download it now?`)) {
+      if (
+        !window.confirm(
+          `Transcription runs in this tab and needs a one-time download of ${size}. The model is kept in the browser cache. Download it now?`,
+        )
+      ) {
         asrStop();
         return;
       }
@@ -494,14 +561,18 @@ export async function asrStart() {
     asr.busy = false;
     asr.abort = null;
     paintAsr();
-    asrNote('You transcribe this meeting. The text goes to the chat under your name, and your own voice is not transcribed.');
+    asrNote(
+      'You transcribe this meeting. The text goes to the chat under your name, and your own voice is not transcribed.',
+    );
     asrSay({ s: 'on' });
     asrSync();
     asr.timer = setInterval(asrSync, 2000);
   } catch (err) {
     if (signal.aborted) return;
     asrStop();
-    asrNote(`Transcription could not start: ${err && err.message ? err.message : 'the download failed'}. The call is not affected.`);
+    asrNote(
+      `Transcription could not start: ${err && err.message ? err.message : 'the download failed'}. The call is not affected.`,
+    );
   }
 }
 
@@ -510,7 +581,7 @@ export async function asrStart() {
 // row stays a way to cancel a download that has started. A start in progress
 // therefore does not lock the row.
 export function paintAsr() {
-  const box = (document.getElementById('asr-on') as HTMLInputElement | null);
+  const box = document.getElementById('asr-on') as HTMLInputElement | null;
   if (!box) return;
   const engine = asrEngine();
   const busy = engine === 'omni' ? omni.busy : asr.busy;
@@ -519,7 +590,7 @@ export function paintAsr() {
 }
 
 export function initAsr() {
-  const box = (document.getElementById('asr-on') as HTMLInputElement | null);
+  const box = document.getElementById('asr-on') as HTMLInputElement | null;
   if (!box) return;
   box.addEventListener('change', () => {
     if (!box.checked) {
@@ -531,7 +602,7 @@ export function initAsr() {
       asrStart();
     }
   });
-  const select = (document.getElementById('asr-lang') as HTMLSelectElement | null);
+  const select = document.getElementById('asr-lang') as HTMLSelectElement | null;
   if (select) {
     select.addEventListener('change', () => {
       // One engine runs at a time and a pick may be a 348 MB download, so a
@@ -576,7 +647,9 @@ export function asrOnMessage(peer, obj) {
 export async function omniStart() {
   if (omni.busy || omni.on || !omni.model) return;
   if (!window.crossOriginIsolated) {
-    asrNote('The multilingual engine needs a cross-origin isolated page. The call is not affected.');
+    asrNote(
+      'The multilingual engine needs a cross-origin isolated page. The call is not affected.',
+    );
     paintAsr();
     return;
   }
@@ -588,15 +661,21 @@ export async function omniStart() {
     if (navigator.storage && navigator.storage.persist) {
       Promise.resolve(navigator.storage.persist()).catch(() => {});
     }
-    const est = navigator.storage && navigator.storage.estimate
-      ? await navigator.storage.estimate() : null;
+    const est =
+      navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
     tight = !!(est && est.quota && est.quota - est.usage < omni.size);
-  } catch { /* no estimate */ }
+  } catch {
+    /* no estimate */
+  }
   const keep = tight
     ? 'The browser has less free storage than that, so the model cannot be kept and the next visit downloads it again.'
     : 'The model is kept in the browser cache, so this is the only download.';
   // The guest asked for transcription; this is the size, before any byte.
-  if (!window.confirm(`Multilingual transcription runs in this tab and needs a one-time download of ${size}. ${keep} Download it now?`)) {
+  if (
+    !window.confirm(
+      `Multilingual transcription runs in this tab and needs a one-time download of ${size}. ${keep} Download it now?`,
+    )
+  ) {
     paintAsr();
     return;
   }
@@ -606,7 +685,9 @@ export async function omniStart() {
   try {
     omni.worker = omniSpawn();
   } catch (err) {
-    omniFail(`the engine could not start: ${err && err.message ? err.message : 'the worker was refused'}`);
+    omniFail(
+      `the engine could not start: ${err && err.message ? err.message : 'the worker was refused'}`,
+    );
   }
 }
 
@@ -654,7 +735,9 @@ export function omniOnWorker(msg) {
       asrStats.ready = true;
       asrStats.initMs = Number(msg.ms) || null;
       paintAsr();
-      asrNote('You transcribe this meeting. The text goes to the chat under your name, and your own voice is not transcribed.');
+      asrNote(
+        'You transcribe this meeting. The text goes to the chat under your name, and your own voice is not transcribed.',
+      );
       asrSay({ s: 'on' });
       omniSync();
       omni.timer = setInterval(omniSync, 2000);
@@ -687,9 +770,11 @@ export function omniProgress(msg) {
   const where = msg.cached
     ? 'reading the transcription model from the browser cache'
     : 'downloading the transcription model';
-  asrNote(total
-    ? `${where}: ${mb(got)} of ${mb(total)} (${Math.floor((got * 100) / total)}%)`
-    : `${where}: ${mb(got)}`);
+  asrNote(
+    total
+      ? `${where}: ${mb(got)} of ${mb(total)} (${Math.floor((got * 100) / total)}%)`
+      : `${where}: ${mb(got)}`,
+  );
 }
 
 // omniFail fails the engine and nothing else: the note says so and the call
@@ -697,9 +782,11 @@ export function omniProgress(msg) {
 export function omniFail(text) {
   const was = omni.on;
   omniStop();
-  asrNote(was
-    ? `Transcription stopped: ${text}. The call is not affected.`
-    : `Transcription could not start: ${text}. The call is not affected.`);
+  asrNote(
+    was
+      ? `Transcription stopped: ${text}. The call is not affected.`
+      : `Transcription could not start: ${text}. The call is not affected.`,
+  );
 }
 
 export function omniStop() {
@@ -712,11 +799,19 @@ export function omniStop() {
   omni.timer = 0;
   for (const id of [...omni.recs.keys()]) omniUntap(id);
   if (omni.worker) {
-    try { omni.worker.terminate(); } catch { /* already gone */ }
+    try {
+      omni.worker.terminate();
+    } catch {
+      /* already gone */
+    }
     omni.worker = null;
   }
   if (omni.url) {
-    try { URL.revokeObjectURL(omni.url); } catch { /* already gone */ }
+    try {
+      URL.revokeObjectURL(omni.url);
+    } catch {
+      /* already gone */
+    }
     omni.url = '';
   }
   if (was) asrSay({ s: 'off' });
@@ -750,7 +845,11 @@ export function omniTap(peer) {
     if (top > asrStats.peak) asrStats.peak = top;
     const samples = omniDown(block, ctx.sampleRate);
     if (!samples.length) return;
-    try { worker.postMessage({ cmd: 'audio', id, samples }, [samples.buffer]); } catch { /* engine gone */ }
+    try {
+      worker.postMessage({ cmd: 'audio', id, samples }, [samples.buffer]);
+    } catch {
+      /* engine gone */
+    }
   };
   // The processor only runs when it is wired to an output; the gain of zero
   // keeps it silent.
@@ -766,8 +865,17 @@ export function omniUntap(id) {
   const h = omni.recs.get(id);
   if (!h) return;
   omni.recs.delete(id);
-  try { h.src.disconnect(h.proc); } catch { /* source already gone */ }
-  try { h.proc.disconnect(); h.sink.disconnect(); } catch { /* already gone */ }
+  try {
+    h.src.disconnect(h.proc);
+  } catch {
+    /* source already gone */
+  }
+  try {
+    h.proc.disconnect();
+    h.sink.disconnect();
+  } catch {
+    /* already gone */
+  }
   h.proc.onaudioprocess = null;
 }
 
@@ -808,7 +916,7 @@ export function omniLine(id, text) {
   const line = text.slice(0, ASR_LINE_MAX);
   if (!line) return;
   const peer = state.peers.get(id);
-  const who = peer ? (peer.name || shortPeer(id)) : shortPeer(id);
+  const who = peer ? peer.name || shortPeer(id) : shortPeer(id);
   addChatLine(`transcript by ${state.name || 'you'}`, `${who}: ${line}`, Date.now());
   asrSay({ w: who.slice(0, 64), x: line, ts: Date.now() });
 }
@@ -827,13 +935,17 @@ export function omniWorkerSource(cfg) {
 // and three frames before the first loud one are kept, so the first word is not
 // lost.
 export function omniWorker(cfg) {
-  const G = (self as any);
+  const G = self as any;
   G.Module = {
     // The wasm and its worker threads live under /omni/. The base is absolute,
     // because a blob worker has no useful directory of its own.
     locateFile: (path) => cfg.base + path,
-    print: (text) => { if (text) console.log('[omni] ' + text); },
-    printErr: (text) => { if (text) console.warn('[omni] ' + text); },
+    print: (text) => {
+      if (text) console.log('[omni] ' + text);
+    },
+    printErr: (text) => {
+      if (text) console.warn('[omni] ' + text);
+    },
     onAbort: (why) => G.postMessage({ ev: 'error', text: String(why || 'the engine stopped') }),
   };
   // The API layer first, then the emscripten glue that starts the wasm.
@@ -843,18 +955,18 @@ export function omniWorker(cfg) {
   if (/^em-pthread/.test(G.name || '')) return;
 
   const RATE = 16000;
-  const FRAME = 1600;        // 100 ms, the step of the level gate
-  const THRESHOLD = 0.012;   // root mean square that counts as speech
-  const TAIL = 4;            // quiet frames that end a phrase
-  const PRE = 3;             // frames kept before the first loud one
-  const MAXLEN = RATE * 30;  // a longer phrase is cut and decoded
+  const FRAME = 1600; // 100 ms, the step of the level gate
+  const THRESHOLD = 0.012; // root mean square that counts as speech
+  const TAIL = 4; // quiet frames that end a phrase
+  const PRE = 3; // frames kept before the first loud one
+  const MAXLEN = RATE * 30; // a longer phrase is cut and decoded
   const PART = 32 * 1048576; // one browser cache entry per 32 MB
 
-  const post = (msg, transfer) => G.postMessage(msg, transfer || []);
+  const post = (msg, transfer = []) => G.postMessage(msg, transfer);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const segs = new Map();    // peer id -> gate and phrase state
-  const queue = [];          // phrases waiting for the recognizer
+  const segs = new Map(); // peer id -> gate and phrase state
+  const queue = []; // phrases waiting for the recognizer
   let rec = null;
   let decoding = false;
   let lastProgress = 0;
@@ -894,7 +1006,9 @@ export function omniWorker(cfg) {
     try {
       cache = await G.caches.open(cfg.cache);
       first = await cache.match(partKey(0));
-    } catch { return null; }
+    } catch {
+      return null;
+    }
     if (!first) return null;
     post({ ev: 'progress', got: 0, total: cfg.size, cached: true });
     const bytes = new Uint8Array(cfg.size);
@@ -907,11 +1021,17 @@ export function omniWorker(cfg) {
         if (body.length !== Math.min(PART, cfg.size - at)) return null;
         bytes.set(body, at);
       }
-    } catch { return null; }
+    } catch {
+      return null;
+    }
     if (cfg.sha) {
       const sum = await hash(bytes);
       if (sum && sum !== cfg.sha) {
-        try { await G.caches.delete(cfg.cache); } catch { /* not ours */ }
+        try {
+          await G.caches.delete(cfg.cache);
+        } catch {
+          /* not ours */
+        }
         return null;
       }
     }
@@ -927,14 +1047,19 @@ export function omniWorker(cfg) {
     if (!res.ok || !res.body) throw new Error(`the server answered ${res.status}`);
     const bytes = new Uint8Array(cfg.size);
     let cache = null;
-    try { if (G.caches) cache = await G.caches.open(cfg.cache); } catch { cache = null; }
+    try {
+      if (G.caches) cache = await G.caches.open(cfg.cache);
+    } catch {
+      cache = null;
+    }
     const reader = res.body.getReader();
     let got = 0;
     let part = 0;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (got + value.length > cfg.size) throw new Error('the server sent more than the model size');
+      if (got + value.length > cfg.size)
+        throw new Error('the server sent more than the model size');
       bytes.set(value, got);
       got += value.length;
       if (got - lastProgress >= 2097152) {
@@ -944,22 +1069,36 @@ export function omniWorker(cfg) {
       // Finished parts go at once, so a stopped tab keeps what it paid for.
       while (cache && got - part * PART >= PART) {
         const at = part * PART;
-        try { await cache.put(partKey(part), new Response(bytes.subarray(at, at + PART))); } catch { cache = null; }
+        try {
+          await cache.put(partKey(part), new Response(bytes.subarray(at, at + PART)));
+        } catch {
+          cache = null;
+        }
         part++;
       }
     }
     if (got !== cfg.size) {
-      throw new Error(`the download stopped at ${Math.round(got / 1048576)} of ${Math.round(cfg.size / 1048576)} MB`);
+      throw new Error(
+        `the download stopped at ${Math.round(got / 1048576)} of ${Math.round(cfg.size / 1048576)} MB`,
+      );
     }
     if (cache && part * PART < cfg.size) {
       const at = part * PART;
-      try { await cache.put(partKey(part), new Response(bytes.subarray(at, cfg.size))); } catch { /* no cache */ }
+      try {
+        await cache.put(partKey(part), new Response(bytes.subarray(at, cfg.size)));
+      } catch {
+        /* no cache */
+      }
     }
     post({ ev: 'progress', got: cfg.size, total: cfg.size, cached: false });
     if (cfg.sha) {
       const sum = await hash(bytes);
       if (sum && sum !== cfg.sha) {
-        try { await G.caches.delete(cfg.cache); } catch { /* not ours */ }
+        try {
+          await G.caches.delete(cfg.cache);
+        } catch {
+          /* not ours */
+        }
         throw new Error('the model did not match its hash');
       }
     }
@@ -967,7 +1106,11 @@ export function omniWorker(cfg) {
   }
 
   function mount(name, bytes) {
-    try { G.Module.FS_unlink('/' + name); } catch { /* not mounted before */ }
+    try {
+      G.Module.FS_unlink('/' + name);
+    } catch {
+      /* not mounted before */
+    }
     G.Module.FS_createDataFile('/', name, bytes, true, true, true);
   }
 
@@ -1008,7 +1151,7 @@ export function omniWorker(cfg) {
       decodingMethod: 'greedy_search',
     };
     // The API layer declares this class in the worker's global scope.
-    // @ts-ignore
+    // @ts-expect-error the worker declares this class in its own scope
     rec = new OfflineRecognizer(config, G.Module);
     if (!rec || !rec.handle) throw new Error('the recognizer did not start');
     post({ ev: 'ready', ms: Math.round(performance.now() - t0) });
@@ -1037,7 +1180,10 @@ export function omniWorker(cfg) {
     if (len < RATE / 2) return;
     const all = new Float32Array(len);
     let at = 0;
-    for (const part of parts) { all.set(part, at); at += part.length; }
+    for (const part of parts) {
+      all.set(part, at);
+      at += part.length;
+    }
     // The queue is short on purpose: a slow tab drops the oldest phrase rather
     // than grow without end.
     queue.push({ id, samples: all });
@@ -1108,8 +1254,20 @@ export function omniWorker(cfg) {
     decoding = false;
     // Every phrase decoded goes to the page, empty or not, so its counters show
     // a deaf engine apart from a silent room.
-    post({ ev: 'decoded', ms: Math.round(performance.now() - t0), sec: job.samples.length / RATE, len: text.length });
-    if (text) post({ ev: 'line', id: job.id, text, ms: Math.round(performance.now() - t0), sec: job.samples.length / RATE });
+    post({
+      ev: 'decoded',
+      ms: Math.round(performance.now() - t0),
+      sec: job.samples.length / RATE,
+      len: text.length,
+    });
+    if (text)
+      post({
+        ev: 'line',
+        id: job.id,
+        text,
+        ms: Math.round(performance.now() - t0),
+        sec: job.samples.length / RATE,
+      });
     // One phrase per turn of the event loop, so queued audio is read first.
     setTimeout(pump, 0);
   }

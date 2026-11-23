@@ -6,7 +6,6 @@ import { state } from './state.js';
 import { say, setAdmins } from './util.js';
 import { send, wsURL } from './menu.js';
 import { markAdmins, paintWaiting, updateCount } from './host.js';
-import { ask } from './media.js';
 import { paintHandQueue, sendState } from './audio.js';
 import { dropPeer, ensurePeer } from './peers.js';
 import { leave } from './room.js';
@@ -46,7 +45,11 @@ export function connectWS() {
     const old = state.ws;
     state.ws = null;
     old.onclose = null;
-    try { old.close(); } catch { /* already gone */ }
+    try {
+      old.close();
+    } catch {
+      /* already gone */
+    }
   }
 
   let ws;

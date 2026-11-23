@@ -2,20 +2,17 @@
  Per peer volume, remembered by identity when one is pinned.
 */
 
-import { $ } from './dom.js';
 import { state } from './state.js';
 import { load, store } from './prefs.js';
 import { layoutStage, paintRowHand, rowOf } from './tiles.js';
 import { handPlace } from './audio.js';
-import { leave } from './room.js';
-import { fingerprint } from './identity.js';
 
 // ---------------------------------------------------------------- volume
 // The volume of one participant is a percent from 0 (silent) to 200. It is
 // kept under the key fingerprint of a peer that proved its key, never under a
 // name, so a machine that several people use keeps no list of who was called.
 // A peer without a proven key keeps its setting in memory for this call only.
-export const volCall = new Map();   // peer id -> percent, this call only
+export const volCall = new Map(); // peer id -> percent, this call only
 
 // purgeNamedVolume deletes the keys of older builds, which held the guest name
 // in the key itself. A machine that ran one of them loses that list now.
@@ -23,9 +20,12 @@ export function purgeNamedVolume() {
   if (!window.localStorage) return;
   try {
     for (const key of Object.keys(localStorage)) {
-      if (key.startsWith('rooms.vol.') && !key.startsWith('rooms.vol.fp.')) localStorage.removeItem(key);
+      if (key.startsWith('rooms.vol.') && !key.startsWith('rooms.vol.fp.'))
+        localStorage.removeItem(key);
     }
-  } catch { /* private mode */ }
+  } catch {
+    /* private mode */
+  }
 }
 
 // The slider is a position, not an amplitude. Loudness is heard on a log scale,
@@ -36,7 +36,7 @@ export function purgeNamedVolume() {
 // What is stored is the position, the same percent as before.
 export const VOL_MAX = 200;
 
-export const VOL_EXP = 5 / 3;   // 2^(5/3) is 3.17, +10 dB
+export const VOL_EXP = 5 / 3; // 2^(5/3) is 3.17, +10 dB
 
 // volGain turns a slider position (0 to 200) into the gain of the node.
 export function volGain(pos) {

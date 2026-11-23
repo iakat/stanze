@@ -2,24 +2,50 @@
  The post-quantum handshake of a pair.
 */
 
-import { $ } from './dom.js';
 import { state } from './state.js';
 import { isAdmin, say } from './util.js';
-import { load } from './prefs.js';
 import { send } from './menu.js';
 import { paintVolume, storedVolume } from './volume.js';
-import { ask } from './media.js';
 import { disableMic } from './devices.js';
 import { sealedSendState, setHand } from './audio.js';
-import { gap } from './look.js';
 import { connectPeer, ensurePeer, onCandidate, onDescription } from './peers.js';
 import { leave } from './room.js';
 import { addChatLine } from './chat.js';
 import { fileDropPeer, fileOnMessage } from './files.js';
-import { b64d, b64e, chatAAD, decOpaque, encOpaque, pairLabel, pqCall, pqModule, sealUtf8, sealedOnOffer, sealedSendOpaque, shortPeer } from './sealed.js';
+import {
+  b64d,
+  b64e,
+  chatAAD,
+  decOpaque,
+  encOpaque,
+  pairLabel,
+  pqCall,
+  pqModule,
+  sealUtf8,
+  sealedOnOffer,
+  sealedSendOpaque,
+  shortPeer,
+} from './sealed.js';
 import { fingerprint, paintPin, pinState, updatePinCount } from './identity.js';
-import { asr, asrAnnounce, asrOnMessage } from './asr.js';
-import { maybeAdmitHeld, roomW, sealedAnnounceName, sealedKick, sealedOnAdmit, sealedOnClaim, sealedOnHeld, sealedOnIn, sealedOnKick, sealedOnState, sealedOnWait, sealedSend, sealedSendClaim, sealedSetE2E, sealedSetName, toSealed } from './gate.js';
+import { asrAnnounce, asrOnMessage } from './asr.js';
+import {
+  maybeAdmitHeld,
+  roomW,
+  sealedAnnounceName,
+  sealedKick,
+  sealedOnAdmit,
+  sealedOnClaim,
+  sealedOnHeld,
+  sealedOnIn,
+  sealedOnKick,
+  sealedOnState,
+  sealedOnWait,
+  sealedSend,
+  sealedSendClaim,
+  sealedSetE2E,
+  sealedSetName,
+  toSealed,
+} from './gate.js';
 
 // ------------------------------------------------------------- handshake
 //
@@ -35,7 +61,11 @@ import { maybeAdmitHeld, roomW, sealedAnnounceName, sealedKick, sealedOnAdmit, s
 export function sealedSendPub(peer) {
   if (!state.identity || !state.idKey) return;
   const bundle = {
-    k: 'pub', x: state.identity.xpub, m: state.identity.ek, id: state.idKey.pub, sid: state.sid,
+    k: 'pub',
+    x: state.identity.xpub,
+    m: state.identity.ek,
+    id: state.idKey.pub,
+    sid: state.sid,
   };
   if (peer) sealedSendOpaque(peer.id, bundle);
   else send({ t: 'enc', b: encOpaque(bundle) });
@@ -217,8 +247,12 @@ export function sealedInstallKeys(peer) {
     }
     state.keyWait.set(pair, { gen, resolve });
     state.worker.postMessage({
-      type: 'keys', pair, peer: peer.id, gen,
-      enc: b64e(peer.keys.sendMedia), dec: b64e(peer.keys.recvMedia),
+      type: 'keys',
+      pair,
+      peer: peer.id,
+      gen,
+      enc: b64e(peer.keys.sendMedia),
+      dec: b64e(peer.keys.recvMedia),
     });
   });
 }
@@ -262,13 +296,22 @@ export async function sealedInitiate(peer) {
   sealedHoldKeys(peer, out);
   peer.mySig = sig;
   sealedSendOpaque(peer.id, {
-    k: 'hello', epk: out.epk, ct: out.ct, id: state.idKey.pub, sid: state.sid, sig,
+    k: 'hello',
+    epk: out.epk,
+    ct: out.ct,
+    id: state.idKey.pub,
+    sid: state.sid,
+    sig,
   });
   // Our own confirmation and signature go out at once, so the responder can
   // check us as soon as it has its keys. The same transcript covers both sides.
   peer.sentConfirm = true;
   sealedSendOpaque(peer.id, {
-    k: 'ok', c: out.confirm, id: state.idKey.pub, sid: state.sid, sig,
+    k: 'ok',
+    c: out.confirm,
+    id: state.idKey.pub,
+    sid: state.sid,
+    sig,
   });
 }
 
@@ -311,7 +354,11 @@ export async function sealedRespond(peer, msg) {
   peer.mySig = sig;
   peer.sentConfirm = true;
   sealedSendOpaque(peer.id, {
-    k: 'ok', c: out.confirm, id: state.idKey.pub, sid: state.sid, sig,
+    k: 'ok',
+    c: out.confirm,
+    id: state.idKey.pub,
+    sid: state.sid,
+    sig,
   });
   // The pair is not ready yet: the initiator's own ok still has to prove it,
   // which is the half that used to be missing. That ok may have arrived while
@@ -353,9 +400,12 @@ export async function sealedOnProof(peer, msg) {
   // the guest can say that the device was reset.
   const pin = pinState(peer);
   if (pin === 'rollback' || pin === 'changed') {
-    sealedRefuse(peer, pin === 'rollback'
-      ? 'came back with an identity this browser revoked'
-      : 'proved an identity another label here holds');
+    sealedRefuse(
+      peer,
+      pin === 'rollback'
+        ? 'came back with an identity this browser revoked'
+        : 'proved an identity another label here holds',
+    );
     return;
   }
   // A member removed this identity from the room earlier in the call. The
@@ -399,7 +449,10 @@ export function sealedStartPass(peer) {
   const a = b64e(sealUtf8.encode(first ? state.self : peer.id));
   const b = b64e(sealUtf8.encode(first ? peer.id : state.self));
   const out = pqCall((json) => pqModule().spakestart(json), {
-    w: state.w, role: first ? 'A' : 'B', a, b,
+    w: state.w,
+    role: first ? 'A' : 'B',
+    a,
+    b,
   });
   if (!out || !out.id) {
     sealedRefuse(peer, 'the room key could not be used');
@@ -557,7 +610,9 @@ export function sealedHandleOpaque(from, b) {
 
 export function sealedOnApp(peer, b, seq) {
   const out = pqCall((json) => pqModule().open(json), {
-    key: b64e(peer.keys.recvChat), aad: b64e(chatAAD(peer.id, seq)), b,
+    key: b64e(peer.keys.recvChat),
+    aad: b64e(chatAAD(peer.id, seq)),
+    b,
   });
   if (!out || out.error) return;
   let obj;
@@ -572,7 +627,12 @@ export function sealedOnApp(peer, b, seq) {
   // kick as well: a page a member removed must go even if its own proof never
   // finished. Anything else waits here: a peer that can run a handshake can
   // still be a stranger, and an offer applied early would build a link to it.
-  if (obj.k !== 'spake' && obj.k !== 'spakeok' && obj.k !== 'kick' && !(peer.pass && peer.pass.done)) {
+  if (
+    obj.k !== 'spake' &&
+    obj.k !== 'spakeok' &&
+    obj.k !== 'kick' &&
+    !(peer.pass && peer.pass.done)
+  ) {
     if ((peer.appHeld = peer.appHeld || []).length < 256) peer.appHeld.push(obj);
     return;
   }
@@ -583,7 +643,8 @@ export function sealedDispatchApp(peer, obj) {
   if (obj.k === 'sdp') {
     // A sealed description is the only kind this client sends. It arrives after
     // the keys, so no clear offer is ever made or accepted from here.
-    if (obj.d === 'offer') sealedOnOffer(peer, obj.s).catch(() => sealedRefuse(peer, 'the offer could not be applied'));
+    if (obj.d === 'offer')
+      sealedOnOffer(peer, obj.s).catch(() => sealedRefuse(peer, 'the offer could not be applied'));
     else if (obj.d === 'answer' && peer.pc) onDescription(peer, 'answer', obj.s);
     return;
   }
@@ -661,7 +722,8 @@ export function sealedOnGate(peer, obj) {
   if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
   if (typeof obj.v !== 'string' || obj.v.length > 256) return;
   if (n < state.gate.n) return;
-  if (n === state.gate.n && (state.gate.v === obj.v || String(peer.id) >= String(state.self))) return;
+  if (n === state.gate.n && (state.gate.v === obj.v || String(peer.id) >= String(state.self)))
+    return;
   adoptGate(obj.v, n);
 }
 

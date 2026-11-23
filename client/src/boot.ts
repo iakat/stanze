@@ -7,22 +7,56 @@ import { $ } from './dom.js';
 import { state } from './state.js';
 import { isAdmin, newRoomID, say } from './util.js';
 import { load, store } from './prefs.js';
-import { menuClose, normalizeRoom, roomFromHash, suggestRoom, wireMenuBar, wireSubmenus } from './menu.js';
+import {
+  menuClose,
+  normalizeRoom,
+  roomFromHash,
+  suggestRoom,
+  wireMenuBar,
+  wireSubmenus,
+} from './menu.js';
 import { cornerDropAt, layoutStage, setSpotlight, tileId, wireCornerDrag } from './tiles.js';
 import { purgeNamedVolume } from './volume.js';
 import { closeMenus } from './host.js';
 import { applyQuality, paintPerf } from './media.js';
-import { devicePickers, disableCam, disableMic, enableCam, enableMic, onDeviceChange, onDevicePicked, paintDeviceMenu, refreshDevices, setDeaf } from './devices.js';
+import {
+  devicePickers,
+  disableCam,
+  disableMic,
+  enableCam,
+  enableMic,
+  onDeviceChange,
+  onDevicePicked,
+  paintDeviceMenu,
+  refreshDevices,
+  setDeaf,
+} from './devices.js';
 import { applyMirror, ensurePlayback, setHand, setNoise, updateButtons } from './audio.js';
-import { lookInit, lookOn, lookPark, lookRestart, lookTrack, maskBoxes, maskSet, setFreeze } from './look.js';
+import {
+  lookInit,
+  lookOn,
+  lookPark,
+  lookRestart,
+  lookTrack,
+  maskBoxes,
+  maskSet,
+  setFreeze,
+} from './look.js';
 import { startShare, stopShare } from './screen.js';
-import { handle } from './signaling.js';
 import { enterRoom, leave } from './room.js';
 import { fileOffer } from './files.js';
 import { setSounds, startLost, stopLost } from './sfx.js';
 import { setStatsOpen, startStats, statsOpen, stopStats, updateStats } from './stats.js';
 import { win } from './sealed.js';
-import { deviceNote, pinPeer, pinState, renamePin, resetDevice, storageAudit, verifiedPeers } from './identity.js';
+import {
+  deviceNote,
+  pinPeer,
+  pinState,
+  renamePin,
+  resetDevice,
+  storageAudit,
+  verifiedPeers,
+} from './identity.js';
 import { paintGate, setGate } from './handshake.js';
 import { pqSelfTest, preloadSealed } from './wasm.js';
 import { asrStats, initAsr } from './asr.js';
@@ -46,24 +80,32 @@ win().e2eApp = {
       segments: asrStats.segments.slice(),
     };
   },
-  peers: () => [...state.peers.values()].map((p) => ({
-    id: p.id,
-    name: p.name,
-    sas: p.sas || '',
-    fp: p.fp || '',
-    pin: pinState(p),
-    proven: !!p.proven,
-    confirmed: !!p.confirmed,
-    ready: p.tile ? (p.tile.dataset.e2e || p.ready) : p.ready,
-    pc: p.pc ? p.pc.connectionState : 'none',
-    dc: p.dc ? p.dc.readyState : 'none',
-    videoW: p.video ? p.video.videoWidth : 0,
-    videoT: p.video ? p.video.currentTime : 0,
-    video: p.video,
-  })),
-  identity: () => (state.idKey
-    ? { kind: state.idKey.kind, fp: state.idKey.fp, device: state.device, note: deviceNote(), sid: state.sid }
-    : null),
+  peers: () =>
+    [...state.peers.values()].map((p) => ({
+      id: p.id,
+      name: p.name,
+      sas: p.sas || '',
+      fp: p.fp || '',
+      pin: pinState(p),
+      proven: !!p.proven,
+      confirmed: !!p.confirmed,
+      ready: p.tile ? p.tile.dataset.e2e || p.ready : p.ready,
+      pc: p.pc ? p.pc.connectionState : 'none',
+      dc: p.dc ? p.dc.readyState : 'none',
+      videoW: p.video ? p.video.videoWidth : 0,
+      videoT: p.video ? p.video.currentTime : 0,
+      video: p.video,
+    })),
+  identity: () =>
+    state.idKey
+      ? {
+          kind: state.idKey.kind,
+          fp: state.idKey.fp,
+          device: state.device,
+          note: deviceNote(),
+          sid: state.sid,
+        }
+      : null,
   pins: () => [...state.pins.values()].map((r) => ({ label: r.label, fp: r.fp })),
   revoked: () => [...state.revoked.values()].map((r) => ({ label: r.label, fp: r.fp })),
   pin: (peerId, label) => {
@@ -260,7 +302,7 @@ export function init() {
   $('chat-panel').addEventListener('drop', (event) => {
     event.preventDefault();
     $('chat-panel').classList.remove('drop');
-    const drop = (event as DragEvent);
+    const drop = event as DragEvent;
     const files = drop.dataTransfer ? drop.dataTransfer.files : null;
     for (let i = 0; files && i < files.length; i++) fileOffer(files[i]);
   });
@@ -354,7 +396,7 @@ export function init() {
   // The stats setting reads its rates in bytes. One stored choice for the
   // guest, and an open panel redraws at once instead of waiting for a tick.
   state.statsBytes = load('statsbytes') === '1';
-  const bytesBox = (document.getElementById('stats-bytes') as HTMLInputElement | null);
+  const bytesBox = document.getElementById('stats-bytes') as HTMLInputElement | null;
   if (bytesBox) {
     bytesBox.checked = state.statsBytes;
     bytesBox.addEventListener('change', () => {
@@ -403,7 +445,7 @@ export function init() {
   $('grid').addEventListener('click', (event) => {
     // The click that ends a drag of the small tile is not a zoom.
     if (Date.now() - cornerDropAt < 300) return;
-    const target = (event.target as Element);
+    const target = event.target as Element;
     // A click on the small preview puts the own picture back in the grid.
     if (target.closest('#self-pip')) {
       state.selfPip = false;
@@ -418,10 +460,15 @@ export function init() {
       return;
     }
     if (target.closest('.vol, .dots, .menu, .sas, .pin, .admit')) return;
-    const el = (tile as HTMLElement);
+    const el = tile as HTMLElement;
     const id = tileId(el);
     if (!id) return;
-    if (touch.matches && !target.closest('.zoom') && el.parentElement === $('stage-main') && !el.classList.contains('ctl')) {
+    if (
+      touch.matches &&
+      !target.closest('.zoom') &&
+      el.parentElement === $('stage-main') &&
+      !el.classList.contains('ctl')
+    ) {
       for (const open of document.querySelectorAll('.tile.ctl')) open.classList.remove('ctl');
       el.classList.add('ctl');
       clearTimeout((el as any).ctlTimer);
@@ -437,7 +484,7 @@ export function init() {
   $('stage').addEventListener('click', (event) => {
     if (Date.now() - cornerDropAt < 300) return;
     if (!$('stage').classList.contains('immersive')) return;
-    const target = (event.target as Element);
+    const target = event.target as Element;
     if (target.closest('.titlebar, .menubar, .statusline, .side, .stats, .chrome-handle')) return;
     setChrome(!$('stage').classList.contains('chrome'));
   });
@@ -449,11 +496,11 @@ export function init() {
   const railEl = $('stage-rail');
   if (railEl) {
     railEl.addEventListener('click', (event) => {
-      const target = (event.target as Element);
+      const target = event.target as Element;
       if (target.closest('.vol-range, .vol-num, .dots, .menu, .sas, .admit')) return;
       const row = target.closest('.plist-row');
       if (!row) return;
-      const id = tileId((row as HTMLElement));
+      const id = tileId(row as HTMLElement);
       if (id) setSpotlight(id);
     });
   }
@@ -504,7 +551,9 @@ export function init() {
     try {
       await navigator.clipboard.writeText(link);
       $('copy-btn').textContent = 'copied';
-      setTimeout(() => { $('copy-btn').textContent = 'copy link'; }, 1500);
+      setTimeout(() => {
+        $('copy-btn').textContent = 'copy link';
+      }, 1500);
     } catch {
       window.prompt('copy this link', link);
     }

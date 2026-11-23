@@ -4,7 +4,6 @@
 */
 
 import { PERF, QUALITY } from './config.js';
-import { $ } from './dom.js';
 import { state } from './state.js';
 import { say } from './util.js';
 import { lookResize, lookTrack } from './look.js';
@@ -71,7 +70,7 @@ export function perfText() {
 // the toolbar, so the two can never disagree.
 export function paintPerf() {
   for (const id of ['perf', 'perf-live']) {
-    const el = (document.getElementById(id) as HTMLInputElement | null);
+    const el = document.getElementById(id) as HTMLInputElement | null;
     // The slider runs from the minimum on the left to the full quality on the
     // right, so the stored step is turned round for it.
     if (el) el.value = String(PERF.length - 1 - state.perf);

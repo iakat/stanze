@@ -8,8 +8,6 @@ import { state } from './state.js';
 import { say } from './util.js';
 import { load, store } from './prefs.js';
 import { paintSelfCam } from './devices.js';
-import { handle } from './signaling.js';
-import { leave } from './room.js';
 
 // ---------------------------------------------------------------- camera look
 // lookOn answers "is any drawn step wanted". The camera itself is not touched.
@@ -46,9 +44,14 @@ export const drawClockURLs = new Map();
 export function drawClockURL(fps) {
   const hz = Math.max(MESH_HZ_MIN, Math.min(MESH_HZ_MAX, Math.round(fps) || 30));
   if (!drawClockURLs.has(hz)) {
-    drawClockURLs.set(hz, URL.createObjectURL(new Blob(
-      [`setInterval(() => postMessage(1), ${Math.round(1000 / hz)});`],
-      { type: 'text/javascript' })));
+    drawClockURLs.set(
+      hz,
+      URL.createObjectURL(
+        new Blob([`setInterval(() => postMessage(1), ${Math.round(1000 / hz)});`], {
+          type: 'text/javascript',
+        }),
+      ),
+    );
   }
   return drawClockURLs.get(hz);
 }
@@ -58,10 +61,27 @@ export function drawClockURL(fps) {
 // mirror the guest sees is a css flip of the preview, so a landmark x is a
 // plain fraction here and needs no turn.
 export const LM = {
-  noseTip: 1, noseBase: 2, lipTop: 0, lip: 13, lipLow: 14, mouthL: 61, mouthR: 291,
-  eyeOuterL: 33, eyeInnerL: 133, eyeOuterR: 263, eyeInnerR: 362,
-  browL: 105, browR: 334, hairline: 10, chin: 152,
-  cheekL: 234, cheekR: 454, templeL: 127, templeR: 356, earL: 93, earR: 323,
+  noseTip: 1,
+  noseBase: 2,
+  lipTop: 0,
+  lip: 13,
+  lipLow: 14,
+  mouthL: 61,
+  mouthR: 291,
+  eyeOuterL: 33,
+  eyeInnerL: 133,
+  eyeOuterR: 263,
+  eyeInnerR: 362,
+  browL: 105,
+  browR: 334,
+  hairline: 10,
+  chin: 152,
+  cheekL: 234,
+  cheekR: 454,
+  templeL: 127,
+  templeR: 356,
+  earL: 93,
+  earR: 323,
 };
 
 // The hairline from the temple on the image left to the temple on the right, so
@@ -111,9 +131,14 @@ export async function lookStart() {
   video.srcObject = new MediaStream([src]);
   // A video element that the page never shows can be treated as unrendered and
   // left undecoded, so it lives off screen instead of outside the document.
-  video.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+  video.style.cssText =
+    'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
   document.body.appendChild(video);
-  try { await video.play(); } catch { /* the first frame comes later */ }
+  try {
+    await video.play();
+  } catch {
+    /* the first frame comes later */
+  }
   const settings = src.getSettings ? src.getSettings() : {};
   // The picture and the mesh both run at the camera rate: the camera states
   // its own frame rate, and a step without one is a camera at thirty.
@@ -139,12 +164,36 @@ export async function lookStart() {
   // and it is only read here.
   const meshCanvas = document.createElement('canvas');
   meshCanvas.width = MESH_W;
-  meshCanvas.height = Math.min(320, Math.max(128, 2 * Math.round((MESH_W * (settings.height || 720)) / (settings.width || 1280) / 2)));
+  meshCanvas.height = Math.min(
+    320,
+    Math.max(
+      128,
+      2 * Math.round((MESH_W * (settings.height || 720)) / (settings.width || 1280) / 2),
+    ),
+  );
   const meshCtx = meshCanvas.getContext('2d', { alpha: false });
   const pipe = {
-    src, video, canvas, ctx, sample, sctx, meshCanvas, meshCtx, stream, track, fps,
-    clock: null, clockURL: drawClockURL(fps), anchor: null, frame: 0,
-    mesh: null, meshTried: false, meshBusy: false, meshLast: 0,
+    src,
+    video,
+    canvas,
+    ctx,
+    sample,
+    sctx,
+    meshCanvas,
+    meshCtx,
+    stream,
+    track,
+    fps,
+    clock: null,
+    clockURL: drawClockURL(fps),
+    anchor: null,
+    frame: 0,
+    mesh: null,
+    meshTried: false,
+    meshBusy: false,
+    meshLast: 0,
+    wake: null as (() => void) | null,
+    armApply: false,
   };
   state.lookPipe = pipe;
   state.lookSrc = src;
@@ -154,7 +203,7 @@ export async function lookStart() {
     const playing = video.play();
     if (playing && playing.catch) playing.catch(() => {});
   };
-  document.addEventListener('visibilitychange', pipe.wake);
+  document.addEventListener('visibilitychange', () => pipe.wake && pipe.wake());
   state.lookOut = track;
   // A hidden tab paints nothing, so a pipeline that starts while the tab is
   // away keeps the camera on the senders and the drawn track comes back with
@@ -241,12 +290,13 @@ export function frameMark(p) {
   if (v.requestVideoFrameCallback) {
     if (!p.meshRVFC) {
       p.meshRVFC = true;
-      const wait = () => v.requestVideoFrameCallback(() => {
-        p.meshFrames = (p.meshFrames || 0) + 1;
-        p.meshFrameAt = performance.now();
-        if (p.meshRVFC && state.lookPipe === p) wait();
-        else p.meshRVFC = false;
-      });
+      const wait = () =>
+        v.requestVideoFrameCallback(() => {
+          p.meshFrames = (p.meshFrames || 0) + 1;
+          p.meshFrameAt = performance.now();
+          if (p.meshRVFC && state.lookPipe === p) wait();
+          else p.meshRVFC = false;
+        });
       wait();
     }
     if (!p.meshFrameAt || performance.now() - p.meshFrameAt > FRAME_MARK_FRESH_MS) return undefined;
@@ -262,7 +312,9 @@ export function frameMark(p) {
 export function lookMesh(p) {
   if (!p.meshTried) {
     p.meshTried = true;
-    meshOpen().then((fm) => { p.mesh = fm; });
+    meshOpen().then((fm) => {
+      p.mesh = fm;
+    });
   }
   if (!p.mesh || p.meshBusy || !p.meshCtx || document.hidden) return;
   // A clock that runs faster than the camera repeats the frame it already has.
@@ -279,7 +331,7 @@ export function lookMesh(p) {
   // third new frame, so the detector cannot eat the clock of the picture. A
   // quiet mask skips nothing until a detect lands.
   const period = 1000 / (p.fps || 30);
-  const stride = quiet ? 1 : (p.meshStride || 1);
+  const stride = quiet ? 1 : p.meshStride || 1;
   p.meshTick = (p.meshTick || 0) + 1;
   if ((p.meshTick - 1) % stride !== 0) return;
   meshSize(p);
@@ -311,8 +363,8 @@ export function lookMesh(p) {
 // its longest side at MESH_W, so a portrait phone frame is not squashed and a
 // landmark x stays a fraction of the frame the mask is drawn on.
 export function meshSize(p) {
-  const vw = p.video.videoWidth || settings.width || 1280;
-  const vh = p.video.videoHeight || settings.height || 720;
+  const vw = p.video.videoWidth || 1280;
+  const vh = p.video.videoHeight || 720;
   const k = MESH_W / Math.max(vw, vh);
   const w = Math.max(64, Math.round(vw * k));
   const h = Math.max(64, Math.round(vh * k));
@@ -378,9 +430,13 @@ export function oneEuroRun(s, src, t) {
 // frame finds the last anchor still there, so a mask does not flick to a corner.
 export function lookMeshAnchor(p, lm) {
   const pts = new Float32Array(lm.length * 2);
-  let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+  let x0 = 1,
+    y0 = 1,
+    x1 = 0,
+    y1 = 0;
   for (let i = 0; i < lm.length; i++) {
-    const x = lm[i].x, y = lm[i].y;
+    const x = lm[i].x,
+      y = lm[i].y;
     pts[i * 2] = x;
     pts[i * 2 + 1] = y;
     if (x < x0) x0 = x;
@@ -388,12 +444,23 @@ export function lookMeshAnchor(p, lm) {
     if (y < y0) y0 = y;
     if (y > y1) y1 = y;
   }
-  const next = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, lm: pts };
+  const next = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, lm: pts, tongue: 0 };
   // How far the lips are apart, as a share of the mouth width: the dog tongue
   // reads it, and it falls off over about a second when the mouth closes.
-  const faceH = Math.hypot(pts[LM.chin * 2] - pts[LM.hairline * 2], pts[LM.chin * 2 + 1] - pts[LM.hairline * 2 + 1]) || 1;
-  const lipGap = Math.hypot(pts[LM.lipLow * 2] - pts[LM.lip * 2], pts[LM.lipLow * 2 + 1] - pts[LM.lip * 2 + 1]);
-  const mouthW = Math.hypot(pts[LM.mouthR * 2] - pts[LM.mouthL * 2], pts[LM.mouthR * 2 + 1] - pts[LM.mouthL * 2 + 1]) || faceH * 0.35;
+  const faceH =
+    Math.hypot(
+      pts[LM.chin * 2] - pts[LM.hairline * 2],
+      pts[LM.chin * 2 + 1] - pts[LM.hairline * 2 + 1],
+    ) || 1;
+  const lipGap = Math.hypot(
+    pts[LM.lipLow * 2] - pts[LM.lip * 2],
+    pts[LM.lipLow * 2 + 1] - pts[LM.lip * 2 + 1],
+  );
+  const mouthW =
+    Math.hypot(
+      pts[LM.mouthR * 2] - pts[LM.mouthL * 2],
+      pts[LM.mouthR * 2 + 1] - pts[LM.mouthL * 2 + 1],
+    ) || faceH * 0.35;
   // A closed mouth is a gap of nearly nothing, a wide one can pass the mouth
   // width. A share of the mouth width does not change with the distance to the
   // camera, so the tongue grows with the mouth instead of snapping out at a
@@ -402,7 +469,11 @@ export function lookMeshAnchor(p, lm) {
   const a = p.anchor;
   const t = performance.now();
   const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
-  const box = oneEuroRun(p.meshBox || (p.meshBox = oneEuroState()), [next.x, next.y, next.w, next.h], t);
+  const box = oneEuroRun(
+    p.meshBox || (p.meshBox = oneEuroState()),
+    [next.x, next.y, next.w, next.h],
+    t,
+  );
   // A first face, or one from the colour test, is taken whole: the points carry
   // the shape, and a blend with a box would only blur the first mask.
   if (!a || !a.lm || a.lm.length !== pts.length) {
@@ -421,16 +492,34 @@ export function lookMeshAnchor(p, lm) {
 // lookAnchor finds the face patch with the classic skin tone test on the small
 // sample, and moves the last place towards it, so a mask does not jump.
 export function lookAnchor(p) {
-  try { p.sctx.drawImage(p.video, 0, 0, 64, 48); } catch { return; }
+  try {
+    p.sctx.drawImage(p.video, 0, 0, 64, 48);
+  } catch {
+    return;
+  }
   let data;
-  try { data = p.sctx.getImageData(0, 0, 64, 48).data; } catch { return; }
-  let n = 0, sx = 0, sy = 0, x0 = 64, y0 = 48, x1 = 0, y1 = 0;
+  try {
+    data = p.sctx.getImageData(0, 0, 64, 48).data;
+  } catch {
+    return;
+  }
+  let n = 0,
+    sx = 0,
+    sy = 0,
+    x0 = 64,
+    y0 = 48,
+    x1 = 0,
+    y1 = 0;
   for (let y = 0; y < 48; y++) {
     for (let x = 0; x < 64; x++) {
       const i = (y * 64 + x) * 4;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const r = data[i],
+        g = data[i + 1],
+        b = data[i + 2];
       if (r > 95 && g > 40 && b > 20 && r > b + 15 && r > g && g > b && Math.abs(r - g) > 15) {
-        n++; sx += x; sy += y;
+        n++;
+        sx += x;
+        sy += y;
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
         if (y < y0) y0 = y;
@@ -441,7 +530,10 @@ export function lookAnchor(p) {
   // Too few skin pixels: no face in this frame, so the last place stays.
   if (n < 50) return;
   const next = { x: sx / n / 64, y: sy / n / 48, w: (x1 - x0 + 1) / 64, h: (y1 - y0 + 1) / 48 };
-  if (!p.anchor) { p.anchor = next; return; }
+  if (!p.anchor) {
+    p.anchor = next;
+    return;
+  }
   const k = 0.25;
   p.anchor = {
     x: p.anchor.x + (next.x - p.anchor.x) * k,
@@ -489,7 +581,8 @@ export function maskGeo(a, W, H) {
   const bh = Math.max(a.h * H, H * 0.26);
   const lm = a.lm && a.lm.length >= 468 * 2 ? a.lm : null;
   // A face point, or the same place in the box when there is no mesh.
-  const at = (i, fx, fy) => (lm ? [lm[i * 2] * W, lm[i * 2 + 1] * H] : [cx + bw * fx, cy + bh * fy]);
+  const at = (i, fx, fy) =>
+    lm ? [lm[i * 2] * W, lm[i * 2 + 1] * H] : [cx + bw * fx, cy + bh * fy];
   const outerL = at(LM.eyeOuterL, -0.34, -0.12);
   const innerL = at(LM.eyeInnerL, -0.16, -0.12);
   const innerR = at(LM.eyeInnerR, 0.16, -0.12);
@@ -506,9 +599,18 @@ export function maskGeo(a, W, H) {
   // carries every mask with it.
   const ax = unit(sideR[0] - sideL[0], sideR[1] - sideL[1]);
   const ay = unit(top[0] - chin[0], top[1] - chin[1]);
-  const spot = (o, s, t) => [o[0] + ax[0] * s * fw + ay[0] * t * fh, o[1] + ax[1] * s * fw + ay[1] * t * fh];
+  const spot = (o, s, t) => [
+    o[0] + ax[0] * s * fw + ay[0] * t * fh,
+    o[1] + ax[1] * s * fw + ay[1] * t * fh,
+  ];
   return {
-    fw, fh, spot, top, chin, ax, ay,
+    fw,
+    fh,
+    spot,
+    top,
+    chin,
+    ax,
+    ay,
     nose: at(LM.noseTip, 0, 0.1),
     noseBase: at(LM.noseBase, 0, 0.16),
     lipTop: at(LM.lipTop, 0, 0.22),
@@ -526,8 +628,13 @@ export function maskGeo(a, W, H) {
     earR: at(LM.earR, 0.48, 0.02),
     // The hairline from the temple on the left of the frame over the head to
     // the right one, so a fringe follows a head that turns.
-    hair: HAIRLINE.map((i, k) => at(i, -0.44 + (0.88 * k) / (HAIRLINE.length - 1),
-      -0.4 - 0.1 * Math.cos((k / (HAIRLINE.length - 1) - 0.5) * Math.PI))),
+    hair: HAIRLINE.map((i, k) =>
+      at(
+        i,
+        -0.44 + (0.88 * k) / (HAIRLINE.length - 1),
+        -0.4 - 0.1 * Math.cos((k / (HAIRLINE.length - 1) - 0.5) * Math.PI),
+      ),
+    ),
     tongue: a.tongue || 0,
   };
 }
@@ -537,7 +644,8 @@ export function maskGeo(a, W, H) {
 // the way a phone filter does it. Every patch is read from the video element,
 // so a frame is never read back, and its own edge is feathered so no seam shows.
 export function lookWarp(p, a, filter) {
-  const W = p.canvas.width, H = p.canvas.height;
+  const W = p.canvas.width,
+    H = p.canvas.height;
   const g = maskGeo(a, W, H);
   for (const eye of [g.eyeL, g.eyeR]) {
     const cx = (eye[0][0] + eye[1][0]) / 2;
@@ -559,7 +667,8 @@ export function lookWarp(p, a, filter) {
 // face height, and a stretch of the face alone would leave a narrow forehead.
 // The patch is measured on the face, so a head that turns or leans keeps it.
 export function lookWide(p, a, filter) {
-  const W = p.canvas.width, H = p.canvas.height;
+  const W = p.canvas.width,
+    H = p.canvas.height;
   const g = maskGeo(a, W, H);
   // The middle of the face from the two outer eye corners, and the box from
   // above the crown to below the chin.
@@ -582,26 +691,38 @@ export function lookWide(p, a, filter) {
 // and the box stays solid inside, so the forehead and the hair widen with the
 // rest of the head instead of fading back to their own width.
 export function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
-  const W = p.canvas.width, H = p.canvas.height;
-  const vw = p.video.videoWidth, vh = p.video.videoHeight;
-  const dw = 2 * rx * kx, dh = 2 * ry;
-  const iw = Math.ceil(dw), ih = Math.ceil(dh);
+  const W = p.canvas.width,
+    H = p.canvas.height;
+  const vw = p.video.videoWidth,
+    vh = p.video.videoHeight;
+  const dw = 2 * rx * kx,
+    dh = 2 * ry;
+  const iw = Math.ceil(dw),
+    ih = Math.ceil(dh);
   if (iw < 8 || ih < 8 || !vw || !vh) return;
   if (!p.wideCanvas) {
     p.wideCanvas = document.createElement('canvas');
     p.wideCtx = p.wideCanvas.getContext('2d');
   }
-  const c = p.wideCanvas, cc = p.wideCtx;
+  const c = p.wideCanvas,
+    cc = p.wideCtx;
   if (c.width < iw) c.width = iw;
   if (c.height < ih) c.height = ih;
   // The box turns with the head: the canvas is laid along the face axes, and
   // the video goes in through one transform. Only the turning bounding box of
   // the box is read, so a lean does not read the whole frame.
-  const cos = Math.abs(Math.cos(rollAngle)), sin = Math.abs(Math.sin(rollAngle));
-  const ex = rx * cos + ry * sin, ey = rx * sin + ry * cos;
-  const x0 = Math.max(0, (cx - ex) * vw / W), x1 = Math.min(vw, (cx + ex) * vw / W);
-  const y0 = Math.max(0, (cy - ey) * vh / H), y1 = Math.min(vh, (cy + ey) * vh / H);
-  const bx = x0, by = y0, bw = x1 - x0, bh = y1 - y0;
+  const cos = Math.abs(Math.cos(rollAngle)),
+    sin = Math.abs(Math.sin(rollAngle));
+  const ex = rx * cos + ry * sin,
+    ey = rx * sin + ry * cos;
+  const x0 = Math.max(0, ((cx - ex) * vw) / W),
+    x1 = Math.min(vw, ((cx + ex) * vw) / W);
+  const y0 = Math.max(0, ((cy - ey) * vh) / H),
+    y1 = Math.min(vh, ((cy + ey) * vh) / H);
+  const bx = x0,
+    by = y0,
+    bw = x1 - x0,
+    bh = y1 - y0;
   cc.clearRect(0, 0, iw, ih);
   cc.globalCompositeOperation = 'source-over';
   if (bw > 2 && bh > 2) {
@@ -646,9 +767,11 @@ export function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
 // wide ring of skin around them. Both layers come from the camera element, the
 // pad is skin and not a colour, and the box fades at its edge onto the cheeks.
 export function lookSmall(p, a, filter) {
-  const W = p.canvas.width, H = p.canvas.height;
+  const W = p.canvas.width,
+    H = p.canvas.height;
   const g = maskGeo(a, W, H);
-  const vw = p.video.videoWidth, vh = p.video.videoHeight;
+  const vw = p.video.videoWidth,
+    vh = p.video.videoHeight;
   const cx = (g.eyeL[0][0] + g.eyeR[1][0]) / 2;
   const browY = Math.min(g.browL[1], g.browR[1]);
   const lipY = g.lipLow[1];
@@ -663,17 +786,21 @@ export function lookSmall(p, a, filter) {
   // sits well inside it and the edge of the pad is the edge of the face.
   const pcx = cx;
   const pcy = (g.top[1] + g.chin[1]) / 2;
-  const prx = Math.max(g.fw * 0.52, 8), pry = Math.max(g.fh * 0.54, 8);
-  const iw = Math.ceil(2 * prx), ih = Math.ceil(2 * pry);
+  const prx = Math.max(g.fw * 0.52, 8),
+    pry = Math.max(g.fh * 0.54, 8);
+  const iw = Math.ceil(2 * prx),
+    ih = Math.ceil(2 * pry);
   if (iw < 8 || ih < 8 || !vw || !vh) return;
-  const vx = (x) => x * vw / W, vy = (y) => y * vh / H;
+  const vx = (x) => (x * vw) / W,
+    vy = (y) => (y * vh) / H;
   if (!p.smallCanvas) {
     p.smallCanvas = document.createElement('canvas');
     p.smallCtx = p.smallCanvas.getContext('2d');
     p.smallFeat = document.createElement('canvas');
     p.smallFeatCtx = p.smallFeat.getContext('2d');
   }
-  const c = p.smallCanvas, cc = p.smallCtx;
+  const c = p.smallCanvas,
+    cc = p.smallCtx;
   if (c.width < iw) c.width = iw;
   if (c.height < ih) c.height = ih;
   // A pad of forehead skin, stretched over the box: the only face skin that no
@@ -687,8 +814,10 @@ export function lookSmall(p, a, filter) {
   cc.filter = 'none';
   // The middle of the face, small, on the pad.
   const k = 0.55;
-  const fw = Math.ceil(2 * frx * k), fh = Math.ceil(2 * fry * k);
-  const f = p.smallFeat, fc = p.smallFeatCtx;
+  const fw = Math.ceil(2 * frx * k),
+    fh = Math.ceil(2 * fry * k);
+  const f = p.smallFeat,
+    fc = p.smallFeatCtx;
   if (f.width < fw) f.width = fw;
   if (f.height < fh) f.height = fh;
   fc.clearRect(0, 0, fw, fh);
@@ -707,7 +836,17 @@ export function lookSmall(p, a, filter) {
   fc.fillRect(-fw / 2, -fw / 2, fw, fw);
   fc.restore();
   fc.globalCompositeOperation = 'source-over';
-  cc.drawImage(f, 0, 0, fw, fh, iw / 2 - fw / 2, ih / 2 + (fcy - pcy) / (2 * pry) * ih - fh / 2, fw, fh);
+  cc.drawImage(
+    f,
+    0,
+    0,
+    fw,
+    fh,
+    iw / 2 - fw / 2,
+    ih / 2 + ((fcy - pcy) / (2 * pry)) * ih - fh / 2,
+    fw,
+    fh,
+  );
   // The pad keeps the shape of a face and not of a box: the edge is an ellipse
   // that fades over the last part of the cheek, so no corner and no straight
   // line shows.
@@ -735,7 +874,8 @@ export function lookSmall(p, a, filter) {
 // the same at its top and bottom edge, so no seam can show: the picture beside
 // the head moves with it, and the effect reads as one glass, not a patch.
 export function lookPotion(p, a) {
-  const W = p.canvas.width, H = p.canvas.height;
+  const W = p.canvas.width,
+    H = p.canvas.height;
   // The band of the head: above the hairline and below the chin.
   const y0 = Math.max(0, Math.round((a.y - a.h * 1.15) * H));
   const y1 = Math.min(H, Math.round((a.y + a.h * 1.2) * H));
@@ -745,7 +885,8 @@ export function lookPotion(p, a) {
     p.potionCanvas = document.createElement('canvas');
     p.potionCtx = p.potionCanvas.getContext('2d');
   }
-  const c = p.potionCanvas, cc = p.potionCtx;
+  const c = p.potionCanvas,
+    cc = p.potionCtx;
   if (c.width !== W || c.height !== ih) {
     c.width = W;
     c.height = ih;
@@ -757,12 +898,16 @@ export function lookPotion(p, a) {
   // The sine moves the top half of the band up and the bottom half down, so the
   // forehead grows and the chin shrinks; it is the same at both ends, so the
   // rows at the edge of the band do not move at all.
-  const N = 28, STRETCH = 0.095;
+  const N = 28,
+    STRETCH = 0.095;
   const put = (s) => s + STRETCH * Math.sin(2 * Math.PI * s);
   for (let i = 0; i < N; i++) {
-    const s0 = i / N, s1 = (i + 1) / N;
-    const sy = s0 * ih, sh = (s1 - s0) * ih;
-    const dy = put(s0) * ih, dh = (put(s1) - put(s0)) * ih;
+    const s0 = i / N,
+      s1 = (i + 1) / N;
+    const sy = s0 * ih,
+      sh = (s1 - s0) * ih;
+    const dy = put(s0) * ih,
+      dh = (put(s1) - put(s0)) * ih;
     if (dh <= 0) continue;
     // One extra pixel of height hides the seam between two strips.
     p.ctx.drawImage(c, 0, sy, W, sh, 0, y0 + dy, W, dh + 1);
@@ -798,15 +943,18 @@ export function bandSpan(a, H) {
 // up and down, so the picture beside the head travels with it and no seam can
 // show.
 export function headBand(p, a, k) {
-  const W = p.canvas.width, H = p.canvas.height;
+  const W = p.canvas.width,
+    H = p.canvas.height;
   const span = bandSpan(a, H);
-  const y0 = span.y0, ih = span.ih;
+  const y0 = span.y0,
+    ih = span.ih;
   if (ih < 32 || W < 32) return null;
   if (!p.bandCanvas) {
     p.bandCanvas = document.createElement('canvas');
     p.bandCtx = p.bandCanvas.getContext('2d');
   }
-  const c = p.bandCanvas, cc = p.bandCtx;
+  const c = p.bandCanvas,
+    cc = p.bandCtx;
   if (c.width !== W || c.height !== ih) {
     c.width = W;
     c.height = ih;
@@ -815,9 +963,12 @@ export function headBand(p, a, k) {
   cc.drawImage(p.canvas, 0, y0, W, ih, 0, 0, W, ih);
   const N = 28;
   for (let i = 0; i < N; i++) {
-    const s0 = i / N, s1 = (i + 1) / N;
-    const sy = s0 * ih, sh = (s1 - s0) * ih;
-    const dy = bandPut(s0, k) * ih, dh = (bandPut(s1, k) - bandPut(s0, k)) * ih;
+    const s0 = i / N,
+      s1 = (i + 1) / N;
+    const sy = s0 * ih,
+      sh = (s1 - s0) * ih;
+    const dy = bandPut(s0, k) * ih,
+      dh = (bandPut(s1, k) - bandPut(s0, k)) * ih;
     if (dh <= 0) continue;
     // One extra pixel of height hides the seam between two strips.
     p.ctx.drawImage(c, 0, sy, W, sh, 0, y0 + dy, W, dh + 1);
@@ -830,9 +981,12 @@ export function headBand(p, a, k) {
 // painted. The edge is a soft oval: a moved eye or mouth then sits on the skin
 // and not on it as a pasted block.
 export function featureCopy(p, slot, src) {
-  const W = p.canvas.width, H = p.canvas.height;
-  const sx = Math.max(0, Math.round(src.x)), sy = Math.max(0, Math.round(src.y));
-  const sw = Math.min(W - sx, Math.round(src.w)), sh = Math.min(H - sy, Math.round(src.h));
+  const W = p.canvas.width,
+    H = p.canvas.height;
+  const sx = Math.max(0, Math.round(src.x)),
+    sy = Math.max(0, Math.round(src.y));
+  const sw = Math.min(W - sx, Math.round(src.w)),
+    sh = Math.min(H - sy, Math.round(src.h));
   if (sw < 6 || sh < 6) return null;
   const key = 'feat' + slot;
   let c = p[key];
@@ -866,7 +1020,8 @@ export function featurePaste(p, slot, size, dst) {
   if (!size) return;
   const c = p['feat' + slot];
   if (!c) return;
-  const dw = Math.max(6, Math.round(dst.w)), dh = Math.max(6, Math.round(dst.h));
+  const dw = Math.max(6, Math.round(dst.w)),
+    dh = Math.max(6, Math.round(dst.h));
   p.ctx.drawImage(c, 0, 0, size.w, size.h, Math.round(dst.x), Math.round(dst.y), dw, dh);
 }
 
@@ -894,8 +1049,9 @@ export function featureShift(p, slot, src, dst, side) {
 // mouth is one patch; the swap holds both before it paints either, so the mouth
 // content cannot be lost under the eyes.
 export function lookCustom(p, a) {
-  const cfg = state.cust || {};
-  const W = p.canvas.width, H = p.canvas.height;
+  const cfg = state.cust;
+  const W = p.canvas.width,
+    H = p.canvas.height;
   const k = (cfg.head || 100) / 100;
   const band = Math.abs(k - 1) > 0.02 ? headBand(p, a, k) : null;
   // The mesh read the frame before the band moved it, so a feature is looked
@@ -904,17 +1060,22 @@ export function lookCustom(p, a) {
   const at = (y) => {
     if (!band) return { y, h: 1 };
     const s = Math.min(1, Math.max(0, (y - band.y0) / band.ih));
-    const lo = Math.max(0, s - 0.02), hi = Math.min(1, s + 0.02);
+    const lo = Math.max(0, s - 0.02),
+      hi = Math.min(1, s + 0.02);
     const h = (bandPut(hi, k) - bandPut(lo, k)) / (hi - lo);
     return { y: band.y0 + bandPut(s, k) * band.ih, h: Math.max(0.35, Math.min(2.8, h)) };
   };
   const g = maskGeo(a, W, H);
-  const fL = eyeFrame(g.eyeL), fR = eyeFrame(g.eyeR);
-  const pL = at(fL.y), pR = at(fR.y);
-  const cxe = (fL.x + fR.x) / 2, cye = (pL.y + pR.y) / 2;
+  const fL = eyeFrame(g.eyeL),
+    fR = eyeFrame(g.eyeR);
+  const pL = at(fL.y),
+    pR = at(fR.y);
+  const cxe = (fL.x + fR.x) / 2,
+    cye = (pL.y + pR.y) / 2;
   const gapE = Math.max(8, Math.hypot(fR.x - fL.x, pR.y - pL.y));
   const eyeW = Math.max(g.fw * 0.2, gapE * 0.34);
-  const ew = eyeW * 2.0, eh = eyeW * 1.15;
+  const ew = eyeW * 2.0,
+    eh = eyeW * 1.15;
   const pm = at((g.mouthL[1] + g.mouthR[1]) / 2);
   const mw = Math.max(g.fw * 0.34, gap(g.mouthL, g.mouthR) * 1.7);
   const mh = Math.max(mw * 0.62, g.fh * 0.16);
@@ -933,17 +1094,36 @@ export function lookCustom(p, a) {
     const mouthBox = box(mcx, mcy, mw, mh * pm.h);
     const eyes = featureCopy(p, 'A', eyesBox);
     const mouth = featureCopy(p, 'B', mouthBox);
-    const skinEyes = featureCopy(p, 'Askin', { x: eyesBox.x, y: eyesBox.y + eyesBox.h * 0.7, w: eyesBox.w, h: eyesBox.h });
-    const skinMouth = featureCopy(p, 'Bskin', { x: mouthBox.x, y: mouthBox.y + mouthBox.h * 0.7, w: mouthBox.w, h: mouthBox.h });
+    const skinEyes = featureCopy(p, 'Askin', {
+      x: eyesBox.x,
+      y: eyesBox.y + eyesBox.h * 0.7,
+      w: eyesBox.w,
+      h: eyesBox.h,
+    });
+    const skinMouth = featureCopy(p, 'Bskin', {
+      x: mouthBox.x,
+      y: mouthBox.y + mouthBox.h * 0.7,
+      w: mouthBox.w,
+      h: mouthBox.h,
+    });
     featurePaste(p, 'Askin', skinEyes, eyesBox);
     featurePaste(p, 'Bskin', skinMouth, mouthBox);
-    featurePaste(p, 'A', eyes, box(mcx, mcy + mdy, mw * 1.05, (mw * 1.05) * (eyesBox.h / eyesBox.w)));
-    featurePaste(p, 'B', mouth, box(cxe, cye, gapE * 1.15, (gapE * 1.15) * (mouthBox.h / mouthBox.w)));
+    featurePaste(p, 'A', eyes, box(mcx, mcy + mdy, mw * 1.05, mw * 1.05 * (eyesBox.h / eyesBox.w)));
+    featurePaste(
+      p,
+      'B',
+      mouth,
+      box(cxe, cye, gapE * 1.15, gapE * 1.15 * (mouthBox.h / mouthBox.w)),
+    );
     return;
   }
   const sideL = fL.x < cxe ? -1 : 1;
   const sideR = fR.x > cxe ? 1 : -1;
-  for (const [fx, py, side] of [[fL.x, pL, sideL], [fR.x, pR, sideR]]) {
+  const eyeRows: [number, { y: number; h: number }, number][] = [
+    [fL.x, pL, sideL],
+    [fR.x, pR, sideR],
+  ];
+  for (const [fx, py, side] of eyeRows) {
     const cx = cxe + (fx - cxe) * sp;
     const src = box(fx, py.y, ew, eh * py.h);
     featureShift(p, 'A', src, box(cx, py.y, ew * es, eh * py.h * es), side);
@@ -957,23 +1137,29 @@ export function lookCustom(p, a) {
 // pays three of them, and the colour step of the look is applied again so the
 // patch matches the picture around it.
 export function warpPatch(p, cx, cy, rx, ry, kx, ky, filter) {
-  const W = p.canvas.width, H = p.canvas.height;
-  const dw = 2 * rx * kx, dh = 2 * ry * ky;
-  const iw = Math.ceil(dw), ih = Math.ceil(dh);
-  const vw = p.video.videoWidth, vh = p.video.videoHeight;
+  const W = p.canvas.width,
+    H = p.canvas.height;
+  const dw = 2 * rx * kx,
+    dh = 2 * ry * ky;
+  const iw = Math.ceil(dw),
+    ih = Math.ceil(dh);
+  const vw = p.video.videoWidth,
+    vh = p.video.videoHeight;
   if (iw < 8 || ih < 8 || !vw || !vh) return;
   if (!p.warpCanvas) {
     p.warpCanvas = document.createElement('canvas');
     p.warpCtx = p.warpCanvas.getContext('2d');
   }
-  const c = p.warpCanvas, cc = p.warpCtx;
+  const c = p.warpCanvas,
+    cc = p.warpCtx;
   if (c.width < iw) c.width = iw;
   if (c.height < ih) c.height = ih;
   // The same ellipse in the frame, in video pixels, as the source.
-  const sx = (cx - rx) * vw / W, sy = (cy - ry) * vh / H;
+  const sx = ((cx - rx) * vw) / W,
+    sy = ((cy - ry) * vh) / H;
   cc.clearRect(0, 0, iw, ih);
   cc.globalCompositeOperation = 'source-over';
-  cc.drawImage(p.video, sx, sy, 2 * rx * vw / W, 2 * ry * vh / H, 0, 0, iw, ih);
+  cc.drawImage(p.video, sx, sy, (2 * rx * vw) / W, (2 * ry * vh) / H, 0, 0, iw, ih);
   // The edge fades out, so the enlarged patch sits on the face and not on it
   // as a pasted oval. The gradient is stretched to the patch shape.
   cc.globalCompositeOperation = 'destination-in';
@@ -1130,11 +1316,32 @@ export function drawMoustache(ctx, g) {
   ctx.beginPath();
   ctx.moveTo(l[0], l[1]);
   // Over the lip: up at the nose wings, a dip in the middle.
-  ctx.bezierCurveTo(l[0] + half * 0.5, ty - room * 0.2, mx - half * 0.5, ty - room * 0.3, mx, ty + room * 0.12);
-  ctx.bezierCurveTo(mx + half * 0.5, ty - room * 0.3, r[0] - half * 0.5, ty - room * 0.2, r[0], r[1]);
+  ctx.bezierCurveTo(
+    l[0] + half * 0.5,
+    ty - room * 0.2,
+    mx - half * 0.5,
+    ty - room * 0.3,
+    mx,
+    ty + room * 0.12,
+  );
+  ctx.bezierCurveTo(
+    mx + half * 0.5,
+    ty - room * 0.3,
+    r[0] - half * 0.5,
+    ty - room * 0.2,
+    r[0],
+    r[1],
+  );
   // Back under the lip, with a droop at each corner.
   ctx.bezierCurveTo(r[0] - half * 0.3, by + room * 0.35, mx + half * 0.4, by + room * 0.4, mx, by);
-  ctx.bezierCurveTo(mx - half * 0.4, by + room * 0.4, l[0] + half * 0.3, by + room * 0.35, l[0], l[1]);
+  ctx.bezierCurveTo(
+    mx - half * 0.4,
+    by + room * 0.4,
+    l[0] + half * 0.3,
+    by + room * 0.35,
+    l[0],
+    l[1],
+  );
   ctx.closePath();
   ctx.fill();
 }
@@ -1223,7 +1430,7 @@ export function drawDog(ctx, g) {
   if (open > 0.02) {
     const mx = (g.mouthL[0] + g.mouthR[0]) / 2;
     const my = (g.lip[1] + g.lipLow[1]) / 2;
-    const half = (gap(g.mouthL, g.mouthR) * 0.42) || g.fw * 0.08;
+    const half = gap(g.mouthL, g.mouthR) * 0.42 || g.fw * 0.08;
     const tip = g.spot(g.lip, 0, -(0.02 + 0.17 * open));
     ctx.fillStyle = '#e2707f';
     ctx.beginPath();
@@ -1331,11 +1538,18 @@ export function drawMiku(ctx, g) {
   const mid = [(top[0] + g.chin[0]) / 2, (top[1] + g.chin[1]) / 2];
   // Local pixels go across the frame with the face axis and down the face with
   // the other, so a head that turns or leans carries the wig with it.
-  const ax = g.ax, ay = g.ay;
+  const ax = g.ax,
+    ay = g.ay;
   ctx.save();
   ctx.imageSmoothingQuality = 'high';
-  ctx.transform(ax[0], ax[1], -ay[0], -ay[1],
-    mid[0] - ax[0] * cx + ay[0] * cy, mid[1] - ax[1] * cx + ay[1] * cy);
+  ctx.transform(
+    ax[0],
+    ax[1],
+    -ay[0],
+    -ay[1],
+    mid[0] - ax[0] * cx + ay[0] * cy,
+    mid[1] - ax[1] * cx + ay[1] * cy,
+  );
   ctx.drawImage(wigArt, 0, 0, artW, artH);
   ctx.restore();
 }
@@ -1409,9 +1623,11 @@ export async function lookPublish(track) {
     if (old !== track) state.outStream.removeTrack(old);
   }
   if (track && !state.outStream.getVideoTracks().includes(track)) state.outStream.addTrack(track);
-  await Promise.all(senders.map(async (peer) => {
-    await peer.tx.video.sender.replaceTrack(track).catch(() => {});
-  }));
+  await Promise.all(
+    senders.map(async (peer) => {
+      await peer.tx.video.sender.replaceTrack(track).catch(() => {});
+    }),
+  );
   paintSelfCam(true);
 }
 
@@ -1428,14 +1644,19 @@ export async function freezeShot() {
       const v = document.createElement('video');
       v.muted = true;
       v.playsInline = true;
-      v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      v.style.cssText =
+        'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
       document.body.appendChild(v);
       state.freezeVideo = v;
     }
     const v = state.freezeVideo;
     const now = v.srcObject && v.srcObject.getVideoTracks()[0];
     if (now !== state.camTrack) v.srcObject = new MediaStream([state.camTrack]);
-    try { await v.play(); } catch { /* the element still holds frames */ }
+    try {
+      await v.play();
+    } catch {
+      /* the element still holds frames */
+    }
     for (let i = 0; i < 20 && !v.videoWidth; i += 1) await new Promise((r) => setTimeout(r, 25));
     src = v;
   }
@@ -1452,7 +1673,7 @@ export async function freezeShot() {
   const track = stream.getVideoTracks()[0];
   if (!track) return null;
   track.contentHint = 'detail';
-  if (track.requestFrame) track.requestFrame();
+  if ((track as any).requestFrame) (track as any).requestFrame();
   state.freezeCanvas = canvas;
   return track;
 }
@@ -1484,7 +1705,11 @@ export async function setFreeze(on) {
   state.freezeCanvas = null;
   await lookPublish(lookTrack() || state.camTrack);
   if (old) {
-    try { old.stop(); } catch { /* already stopped */ }
+    try {
+      old.stop();
+    } catch {
+      /* already stopped */
+    }
   }
   return true;
 }
@@ -1509,7 +1734,11 @@ export async function lookPark(hidden) {
   }
   // A paused element may be held by the browser while the tab is away, so one
   // play() and one draw put a fresh frame on the canvas before the swap back.
-  try { await p.video.play(); } catch { /* it plays already */ }
+  try {
+    await p.video.play();
+  } catch {
+    /* it plays already */
+  }
   lookDraw(p);
   p.clock = lookClock(p);
   await lookPublish(p.track);
@@ -1531,11 +1760,19 @@ export function lookStop(restore = true) {
   if (p) {
     if (p.wake) document.removeEventListener('visibilitychange', p.wake);
     if (p.clock) p.clock.terminate();
-    try { p.video.pause(); } catch { /* already paused */ }
+    try {
+      p.video.pause();
+    } catch {
+      /* already paused */
+    }
     p.video.srcObject = null;
     if (p.video.parentNode) p.video.parentNode.removeChild(p.video);
     for (const t of p.stream.getTracks()) {
-      try { t.stop(); } catch { /* already stopped */ }
+      try {
+        t.stop();
+      } catch {
+        /* already stopped */
+      }
     }
   }
   if (!restore) return;
@@ -1616,7 +1853,9 @@ export function lookInit() {
   if (lookPick) {
     lookPick.value = state.look;
     lookPick.addEventListener('change', () => {
-      state.look = Object.prototype.hasOwnProperty.call(LOOKS, lookPick.value) ? lookPick.value : 'none';
+      state.look = Object.prototype.hasOwnProperty.call(LOOKS, lookPick.value)
+        ? lookPick.value
+        : 'none';
       store('look', state.look);
       lookRestart();
     });
@@ -1657,8 +1896,8 @@ export function customInit() {
     ['cx-mouth', 'mouth', 'cx-mouth-v'],
     ['cx-mshift', 'mshift', 'cx-mshift-v'],
   ];
-  for (const [id, key, out] of rows) {
-    const el = (document.getElementById(id) as HTMLInputElement | null);
+  for (const [id, key] of rows) {
+    const el = document.getElementById(id) as HTMLInputElement | null;
     if (!el) continue;
     el.addEventListener('input', () => {
       const n = Number(el.value);
@@ -1667,7 +1906,7 @@ export function customInit() {
       store('cust', JSON.stringify(state.cust));
     });
   }
-  const swap = (document.getElementById('cx-swap') as HTMLInputElement | null);
+  const swap = document.getElementById('cx-swap') as HTMLInputElement | null;
   if (swap) {
     swap.addEventListener('change', () => {
       state.cust.swap = swap.checked;
@@ -1698,7 +1937,7 @@ export const CUSTOM_ROWS = [
 export function paintCustomValue(key) {
   for (const [id, name, out] of CUSTOM_ROWS) {
     if (name !== key) continue;
-    const el = (document.getElementById(id) as HTMLInputElement | null);
+    const el = document.getElementById(id) as HTMLInputElement | null;
     const tag = document.getElementById(out);
     if (el) el.value = String(state.cust[key]);
     if (tag) tag.textContent = String(state.cust[key]);
@@ -1708,7 +1947,7 @@ export function paintCustomValue(key) {
 // paintCustomValues puts every knob and the swap box back from the state.
 export function paintCustomValues() {
   for (const [, key] of CUSTOM_ROWS) paintCustomValue(key);
-  const swap = (document.getElementById('cx-swap') as HTMLInputElement | null);
+  const swap = document.getElementById('cx-swap') as HTMLInputElement | null;
   if (swap) swap.checked = !!state.cust.swap;
 }
 
@@ -1720,7 +1959,9 @@ export function paintCustomPanel() {
 
 // maskBoxes is the mask row of the effects menu: one box per drawing.
 export function maskBoxes() {
-  return (document.querySelectorAll('#menu-effects input[data-mask]') as NodeListOf<HTMLInputElement>);
+  return document.querySelectorAll(
+    '#menu-effects input[data-mask]',
+  ) as NodeListOf<HTMLInputElement>;
 }
 
 // lookResize follows a camera step so the canvas keeps the picture's shape.

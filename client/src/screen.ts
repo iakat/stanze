@@ -74,10 +74,18 @@ export async function startShare() {
 export async function stopShare() {
   if (!state.screen) return;
   for (const track of state.screen.getTracks()) {
-    try { track.stop(); } catch { /* already stopped */ }
+    try {
+      track.stop();
+    } catch {
+      /* already stopped */
+    }
   }
   if (state.screenSource) {
-    try { state.screenSource.disconnect(); } catch { /* not connected */ }
+    try {
+      state.screenSource.disconnect();
+    } catch {
+      /* not connected */
+    }
     state.screenSource = null;
   }
   state.screen = null;

@@ -7,13 +7,12 @@ import { isAdmin, say } from './util.js';
 import { layoutStage, makeTile, paintRowDeaf, rowOf } from './tiles.js';
 import { applyFlags, storedVolume, wireVolume } from './volume.js';
 import { updateCount } from './host.js';
-import { ask, capCameraSenders } from './media.js';
+import { capCameraSenders } from './media.js';
 import { paintPeerScreen, paintPeerVideo, preparePeer } from './devices.js';
 import { dropAudio, paintHandQueue, routeAudio } from './audio.js';
-import { leave } from './room.js';
 import { FILE_LABEL, fileBindChannel, fileDropPeer } from './files.js';
 import { sealedSendOpaque, shortPeer } from './sealed.js';
-import { fingerprint, updatePinCount } from './identity.js';
+import { updatePinCount } from './identity.js';
 import { wipeKeys } from './handshake.js';
 import { sealedSendCand, sealedSendSdp } from './gate.js';
 import { paintRelay } from './badge.js';
@@ -32,10 +31,10 @@ export function iceServers() {
  * @returns {RTCConfiguration}
  */
 
-export function rtcConfig() {
+export function rtcConfig(): RTCConfiguration {
   return {
     iceServers: iceServers(),
-    iceTransportPolicy: state.path === 'relay' ? 'relay' : 'all',
+    iceTransportPolicy: (state.path === 'relay' ? 'relay' : 'all') as RTCIceTransportPolicy,
     bundlePolicy: 'max-bundle',
   };
 }
@@ -56,7 +55,7 @@ export function ensurePeer(id) {
     cam: true,
     deaf: false,
     waiting: !!state.waitingRoom && !state.waiting, // held outside, see the waiting room
-    hand: false,      // a raised hand, with its time as its place in the queue
+    hand: false, // a raised hand, with its time as its place in the queue
     handTs: 0,
     screenShared: false, // a live share, until this guest's sealed state says so
     vol: 100,
@@ -68,11 +67,11 @@ export function ensurePeer(id) {
     gain: null,
     audioSrc: null,
     audioEl: null,
-    meter: null,     // tap on the incoming audio, for the talking light
-    meterPeak: 0,    // decaying peak of that tap, so one stats tick sees a word
+    meter: null, // tap on the incoming audio, for the talking light
+    meterPeak: 0, // decaying peak of that tap, so one stats tick sees a word
     inDenoise: null, // local noise cancel of this incoming stream
-    inNoise: false,  // that noise cancel is asked for
-    spoke: null,     // last time this peer was heard, for the hold
+    inNoise: false, // that noise cancel is asked for
+    spoke: null, // last time this peer was heard, for the hold
 
     statLast: new Map(),
     polite: String(state.self) > String(id),
@@ -93,19 +92,19 @@ export function ensurePeer(id) {
     sentConfirm: false,
     keyPromise: null,
     keysInstalled: false,
-    gen: 0,           // bumps on every new key agreement on this pair
-    ctlPending: [],   // hello/ok held until the pub and the keys are here
+    gen: 0, // bumps on every new key agreement on this pair
+    ctlPending: [], // hello/ok held until the pub and the keys are here
     seqOut: 0, // sealed chat/name frames sent on this pair
-    seqIn: 0,  // the last one opened, inbound only grows
-    dc: null,          // the file data channel of this pair
-    dcPromise: null,   // resolves with that channel, or null when it never comes
+    seqIn: 0, // the last one opened, inbound only grows
+    dc: null, // the file data channel of this pair
+    dcPromise: null, // resolves with that channel, or null when it never comes
     dcResolve: null,
     mySig: '',
-    fp: '',            // fingerprint once the peer proved its identity
-    pin: '',           // 'changed' when a label here holds another key
-    pinLabel: '',      // the local label this guest is pinned under
+    fp: '', // fingerprint once the peer proved its identity
+    pin: '', // 'changed' when a label here holds another key
+    pinLabel: '', // the local label this guest is pinned under
     proven: false,
-    desc: null,        // the description chain of this pair
+    desc: null, // the description chain of this pair
     announcedName: '',
   };
   peer.vol = storedVolume(peer);
@@ -139,7 +138,9 @@ export function connectPeer(id, initiator) {
   // opens it and the answerer takes the channel that the offer brings, so both
   // sides hold the same one. The channel is peer to peer: no server sees it.
   peer.dc = null;
-  peer.dcPromise = new Promise((resolve) => { peer.dcResolve = resolve; });
+  peer.dcPromise = new Promise((resolve) => {
+    peer.dcResolve = resolve;
+  });
   pc.ondatachannel = (event) => {
     if (event.channel && event.channel.label === FILE_LABEL) fileBindChannel(peer, event.channel);
   };
@@ -175,8 +176,13 @@ export function connectPeer(id, initiator) {
     // track that arrives before preparePeer runs is named by the second video
     // transceiver, which is the same object that preparePeer seals.
     const named = peer.tx && peer.tx.screen;
-    const screen = named || peer.pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video')[1];
-    if (screen && (event.transceiver === screen || (named && named.mid !== null && event.transceiver.mid === named.mid))) {
+    const screen =
+      named || peer.pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video')[1];
+    if (
+      screen &&
+      (event.transceiver === screen ||
+        (named && named.mid !== null && event.transceiver.mid === named.mid))
+    ) {
       peer.screenTrack = track;
       paintPeerScreen(peer);
       // A share that stops or starts again mutes and unmutes the same track.

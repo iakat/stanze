@@ -4,7 +4,6 @@
 
 import { $ } from './dom.js';
 import { menuClose } from './menu.js';
-import { leave } from './room.js';
 import { setStatsOpen, statsOpen } from './stats.js';
 
 // ---------------------------------------------------------------- phone frame
@@ -12,7 +11,9 @@ import { setStatsOpen, statsOpen } from './stats.js';
 // away in the stylesheet, and a tap on the picture brings it back over it. The
 // query is the one the stylesheet uses, so a desktop never gets the class and
 // keeps its frame in place.
-export const phoneQuery = window.matchMedia ? window.matchMedia('(max-width: 620px), (max-height: 520px) and (hover: none)') : null;
+export const phoneQuery = window.matchMedia
+  ? window.matchMedia('(max-width: 620px), (max-height: 520px) and (hover: none)')
+  : null;
 
 // applyImmersive turns the folded call view on or off for the window that is
 // here now, and every window that comes after a rotation. It only ever folds a

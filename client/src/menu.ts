@@ -6,8 +6,6 @@ import { ROOM_RE } from './config.js';
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { newRoomID } from './util.js';
-import { leave } from './room.js';
-import { asr } from './asr.js';
 import { auditWire } from './audit.js';
 
 export const MENUS = [
@@ -36,7 +34,7 @@ export function fitMenu(list) {
 // menuSet opens one panel, closes the others, and moves the focus to its first
 // row when it opens. A panel keeps its own DOM, so a switch keeps its listener
 // and its tick while the panel is closed.
-export function menuSet(open, which) {
+export function menuSet(open, which = null) {
   for (const [btnId, listId] of MENUS) {
     const btn = $(btnId);
     const list = $(listId);
@@ -49,7 +47,9 @@ export function menuSet(open, which) {
     btn.setAttribute('aria-expanded', String(on));
     if (on && !was) {
       fitMenu(list);
-      const first = (list.querySelector('input[type="checkbox"], select, .menu-choice, .menu-sub') as HTMLElement | null);
+      const first = list.querySelector(
+        'input[type="checkbox"], select, .menu-choice, .menu-sub',
+      ) as HTMLElement | null;
       if (first) first.focus();
     }
   }
@@ -73,7 +73,8 @@ export function closeSubmenus(panel) {
   for (const sub of Array.from(panel.querySelectorAll('.menu-sub-list'))) {
     if (sub instanceof HTMLElement) sub.hidden = true;
   }
-  for (const btn of Array.from(panel.querySelectorAll('.menu-sub'))) btn.setAttribute('aria-expanded', 'false');
+  for (const btn of Array.from(panel.querySelectorAll('.menu-sub')))
+    (btn as HTMLElement).setAttribute('aria-expanded', 'false');
 }
 
 // wireSubmenus gives every nested row its list: a hover opens it and closes
@@ -81,8 +82,8 @@ export function closeSubmenus(panel) {
 // arrow walks back out, the way a Windows menu of the era behaved.
 export function wireSubmenus() {
   for (const wrap of Array.from(document.querySelectorAll('.menu-subwrap'))) {
-    const btn = (wrap.querySelector('.menu-sub') as HTMLElement | null);
-    const list = (wrap.querySelector('.menu-sub-list') as HTMLElement | null);
+    const btn = wrap.querySelector('.menu-sub') as HTMLElement | null;
+    const list = wrap.querySelector('.menu-sub-list') as HTMLElement | null;
     if (!btn || !list) continue;
     /** @type {(on: boolean) => void} */
     const openSub = (on) => {
@@ -91,7 +92,7 @@ export function wireSubmenus() {
       if (!on) return;
       for (const other of Array.from(document.querySelectorAll('.menu-subwrap'))) {
         if (other === wrap) continue;
-        const otherList = (other.querySelector('.menu-sub-list') as HTMLElement | null);
+        const otherList = other.querySelector('.menu-sub-list') as HTMLElement | null;
         const otherBtn = other.querySelector('.menu-sub');
         if (otherList) otherList.hidden = true;
         if (otherBtn) otherBtn.setAttribute('aria-expanded', 'false');
@@ -106,7 +107,7 @@ export function wireSubmenus() {
       if (event.key !== 'ArrowRight' && event.key !== 'Enter' && event.key !== ' ') return;
       event.preventDefault();
       openSub(true);
-      const first = (list.querySelector('.menu-choice') as HTMLElement | null);
+      const first = list.querySelector('.menu-choice') as HTMLElement | null;
       if (first) first.focus();
     });
     list.addEventListener('keydown', (event: KeyboardEvent) => {
@@ -134,9 +135,10 @@ export function wireMenuBar() {
     });
     list.addEventListener('click', (event) => event.stopPropagation());
     list.addEventListener('keydown', (event: KeyboardEvent) => {
-      const rows = Array.from(list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub'))
-        .filter((el) => !((el as HTMLElement)).hidden);
-      const at = rows.indexOf((document.activeElement as HTMLElement));
+      const rows = Array.from(
+        list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub'),
+      ).filter((el) => !(el as HTMLElement).hidden);
+      const at = rows.indexOf(document.activeElement as HTMLElement);
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -151,12 +153,12 @@ export function wireMenuBar() {
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
       event.preventDefault();
       const step = event.key === 'ArrowDown' ? 1 : -1;
-      const next = (rows[(at + step + rows.length) % rows.length] as HTMLElement | undefined);
+      const next = rows[(at + step + rows.length) % rows.length] as HTMLElement | undefined;
       if (next) next.focus();
     });
   }
   document.addEventListener('click', (event) => {
-    const target = (event.target as Element);
+    const target = event.target as Element;
     if (target.closest('#menubar')) return;
     menuSet(false);
   });
@@ -174,7 +176,9 @@ export function normalizeRoom(raw) {
   if (hash) text = hash[1];
   try {
     text = decodeURIComponent(text);
-  } catch { /* keep the raw text */ }
+  } catch {
+    /* keep the raw text */
+  }
   return text.trim().toLowerCase();
 }
 

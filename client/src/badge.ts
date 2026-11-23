@@ -2,8 +2,6 @@
  The relay badge and the sealed badge.
 */
 
-import { state } from './state.js';
-
 // ---------------------------------------------------------------- relay badge
 // selectedPair is the candidate pair that carries the media. The standard way
 // to find it is the transport report; the `selected` flag on the pair is a
@@ -17,7 +15,12 @@ export function selectedPair(stats) {
   });
   if (pair) return pair;
   stats.forEach((r) => {
-    if (!pair && r.type === 'candidate-pair' && (r.selected || (r.nominated && r.state === 'succeeded'))) pair = r;
+    if (
+      !pair &&
+      r.type === 'candidate-pair' &&
+      (r.selected || (r.nominated && r.state === 'succeeded'))
+    )
+      pair = r;
   });
   return pair;
 }
@@ -31,7 +34,10 @@ export async function paintRelay(peer) {
     const pair = selectedPair(stats);
     const local = pair ? stats.get(pair.localCandidateId) : null;
     const remote = pair ? stats.get(pair.remoteCandidateId) : null;
-    const relayed = !!((local && local.candidateType === 'relay') || (remote && remote.candidateType === 'relay'));
+    const relayed = !!(
+      (local && local.candidateType === 'relay') ||
+      (remote && remote.candidateType === 'relay')
+    );
     if (peer.tile) peer.tile.dataset.relay = relayed ? 'yes' : 'no';
   } catch {
     /* stats are best effort */

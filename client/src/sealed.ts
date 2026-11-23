@@ -20,7 +20,8 @@ import { sealedSetE2E } from './gate.js';
 // The wasm and its shim must be the build this page is. app.js carries the
 // build query, so both fetches inherit it and a cached old pair can never meet
 // a newer page, which would fail every handshake without a word.
-export const BUILD_Q = '?' + (((document.currentScript as HTMLScriptElement) || { src: '' }).src.split('?')[1] || 'v=1');
+export const BUILD_Q =
+  '?' + (((document.currentScript as HTMLScriptElement) || { src: '' }).src.split('?')[1] || 'v=1');
 
 // The short code is 13 base32 characters, which is fine to compare on a screen
 // but clumsy to read aloud. The same bits are shown as six OpenMoji drawings
@@ -28,14 +29,38 @@ export const BUILD_Q = '?' + (((document.currentScript as HTMLScriptElement) || 
 // call can compare them without spelling anything and without confusing two of
 // them. The third field is the file name of the drawing in static/openmoji.
 export const VERIFY_EMOJI = [
-  ['⚓', 'anchor', '2693'], ['🔔', 'bell', '1F514'], ['🚲', 'bicycle', '1F6B2'], ['🌵', 'cactus', '1F335'],
-  ['📷', 'camera', '1F4F7'], ['🕯', 'candle', '1F56F'], ['🥕', 'carrot', '1F955'], ['🕐', 'clock', '1F550'],
-  ['☁️', 'cloud', '2601'], ['👑', 'crown', '1F451'], ['🐬', 'dolphin', '1F42C'], ['🐉', 'dragon', '1F409'],
-  ['🥁', 'drum', '1F941'], ['🦅', 'eagle', '1F985'], ['🐟', 'fish', '1F41F'], ['👻', 'ghost', '1F47B'],
-  ['🎸', 'guitar', '1F3B8'], ['🔨', 'hammer', '1F528'], ['🚁', 'helicopter', '1F681'], ['🔑', 'key', '1F511'],
-  ['🧲', 'magnet', '1F9F2'], ['🍄', 'mushroom', '1F344'], ['🦉', 'owl', '1F989'], ['✏️', 'pencil', '270F'],
-  ['🚀', 'rocket', '1F680'], ['✂️', 'scissors', '2702'], ['🚢', 'ship', '1F6A2'], ['☀️', 'sun', '2600'],
-  ['☂️', 'umbrella', '2602'], ['🎻', 'violin', '1F3BB'], ['🐝', 'bee', '1F41D'], ['🐌', 'snail', '1F40C'],
+  ['⚓', 'anchor', '2693'],
+  ['🔔', 'bell', '1F514'],
+  ['🚲', 'bicycle', '1F6B2'],
+  ['🌵', 'cactus', '1F335'],
+  ['📷', 'camera', '1F4F7'],
+  ['🕯', 'candle', '1F56F'],
+  ['🥕', 'carrot', '1F955'],
+  ['🕐', 'clock', '1F550'],
+  ['☁️', 'cloud', '2601'],
+  ['👑', 'crown', '1F451'],
+  ['🐬', 'dolphin', '1F42C'],
+  ['🐉', 'dragon', '1F409'],
+  ['🥁', 'drum', '1F941'],
+  ['🦅', 'eagle', '1F985'],
+  ['🐟', 'fish', '1F41F'],
+  ['👻', 'ghost', '1F47B'],
+  ['🎸', 'guitar', '1F3B8'],
+  ['🔨', 'hammer', '1F528'],
+  ['🚁', 'helicopter', '1F681'],
+  ['🔑', 'key', '1F511'],
+  ['🧲', 'magnet', '1F9F2'],
+  ['🍄', 'mushroom', '1F344'],
+  ['🦉', 'owl', '1F989'],
+  ['✏️', 'pencil', '270F'],
+  ['🚀', 'rocket', '1F680'],
+  ['✂️', 'scissors', '2702'],
+  ['🚢', 'ship', '1F6A2'],
+  ['☀️', 'sun', '2600'],
+  ['☂️', 'umbrella', '2602'],
+  ['🎻', 'violin', '1F3BB'],
+  ['🐝', 'bee', '1F41D'],
+  ['🐌', 'snail', '1F40C'],
 ];
 
 export const sealUtf8 = new TextEncoder();
@@ -43,7 +68,7 @@ export const sealUtf8 = new TextEncoder();
 /** @returns {any} */
 
 export function win() {
-  return (window as any);
+  return window as any;
 }
 
 /** @returns {any} */
@@ -56,7 +81,8 @@ export function b64e(bytes) {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if ('toBase64' in view) return (view as any).toBase64();
   let raw = '';
-  for (let i = 0; i < view.length; i += 0x8000) raw += String.fromCharCode.apply(null, view.subarray(i, i + 0x8000));
+  for (let i = 0; i < view.length; i += 0x8000)
+    raw += String.fromCharCode.apply(null, view.subarray(i, i + 0x8000));
   return btoa(raw);
 }
 
@@ -78,7 +104,11 @@ export function decOpaque(s) {
 // A sealed name never reaches the server, but it does reach a tile and a chat
 // line, so control characters are dropped exactly like a plain name.
 export function cleanSealedName(raw) {
-  return String(raw || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 32);
+  // Control characters are what this removes, so the expression carries them.
+  return String(raw || '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, 32);
 }
 
 export function shortPeer(id) {
@@ -101,7 +131,9 @@ export function verifyEmojis(code) {
 }
 
 export function verifyText(code) {
-  return verifyEmojis(code).map((pair) => pair[0]).join(' ');
+  return verifyEmojis(code)
+    .map((pair) => pair[0])
+    .join(' ');
 }
 
 // The associated data names the protocol version, the pair and the sequence
@@ -117,7 +149,9 @@ export function chatAAD(peerId, seq) {
 // not be moved to another pair or another transfer, and the chunk number must
 // rise by one in the order the data channel delivers it.
 export function fileAAD(peerId, fromId, xfer, seq) {
-  return sealUtf8.encode('pq-e2e v2 file ' + pairLabel(peerId) + ' from ' + String(fromId) + ' ' + xfer + ' ' + seq);
+  return sealUtf8.encode(
+    'pq-e2e v2 file ' + pairLabel(peerId) + ' from ' + String(fromId) + ' ' + xfer + ' ' + seq,
+  );
 }
 
 // sealingAvailable answers the only question that matters for the media: can
@@ -125,9 +159,13 @@ export function fileAAD(peerId, fromId, xfer, seq) {
 // browser without the transform would send the microphone and the camera in the
 // clear, so the answer gates the media, not just a badge.
 export function sealingAvailable() {
-  return typeof RTCRtpScriptTransform === 'function' &&
-    typeof RTCRtpSender !== 'undefined' && 'transform' in RTCRtpSender.prototype &&
-    typeof RTCRtpReceiver !== 'undefined' && 'transform' in RTCRtpReceiver.prototype;
+  return (
+    typeof RTCRtpScriptTransform === 'function' &&
+    typeof RTCRtpSender !== 'undefined' &&
+    'transform' in RTCRtpSender.prototype &&
+    typeof RTCRtpReceiver !== 'undefined' &&
+    'transform' in RTCRtpReceiver.prototype
+  );
 }
 
 // ------------------------------------------------------------- opaque payloads

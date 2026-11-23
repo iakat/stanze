@@ -4,21 +4,36 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, say, setAdmins } from './util.js';
-import { send } from './menu.js';
+import { isAdmin, setAdmins } from './util.js';
 import { paintName, paintRowDeaf, rowOf } from './tiles.js';
 import { applyFlags } from './volume.js';
 import { admitPeer, hostMenu, markAdmins, paintWaiting } from './host.js';
-import { ask } from './media.js';
 import { dropPeerCamera, dropPeerScreen, paintPeerScreen, paintPeerVideo } from './devices.js';
 import { paintHandQueue } from './audio.js';
 import { dropPeer } from './peers.js';
 import { leave } from './room.js';
 import { addChatLine } from './chat.js';
 import { playSfx } from './sfx.js';
-import { b64e, chatAAD, cleanSealedName, pairLabel, pqCall, pqModule, sealUtf8, sealedSendOpaque, verifyEmojis } from './sealed.js';
-import { fingerprint, paintPin, pinLabelOf, pinPeer, pinState, renamePin, resetDevice, updatePinCount } from './identity.js';
-import { asr } from './asr.js';
+import {
+  b64e,
+  chatAAD,
+  cleanSealedName,
+  pairLabel,
+  pqCall,
+  pqModule,
+  sealUtf8,
+  sealedSendOpaque,
+  verifyEmojis,
+} from './sealed.js';
+import {
+  paintPin,
+  pinLabelOf,
+  pinPeer,
+  pinState,
+  renamePin,
+  resetDevice,
+  updatePinCount,
+} from './identity.js';
 import { canary } from './audit.js';
 import { setChrome } from './phone.js';
 
@@ -85,7 +100,9 @@ export function sealedOnClaim(peer, obj) {
   if (obj.admins.some((id) => typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id))) return;
   if (!obj.admins.includes(peer.id) || typeof obj.sig !== 'string') return;
   const res = pqCall((json) => pqModule().idverify(json), {
-    id: peer.pub.id, msg: claimText(n, obj.admins), sig: obj.sig,
+    id: peer.pub.id,
+    msg: claimText(n, obj.admins),
+    sig: obj.sig,
   });
   if (!res || !res.ok) return;
   if (n < state.auth.n) return;
@@ -355,7 +372,7 @@ export const PAD_BUCKETS = [512, 2048, 8192];
 export const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
 
 export function padPayload(obj) {
-  const withPad = (Object.assign({}, obj, { z: '' }) as any);
+  const withPad = Object.assign({}, obj, { z: '' }) as any;
   const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
   let target = PAD_BUCKETS.find((n) => n >= bytes);
   if (!target) target = Math.ceil(bytes / PAD_LAST) * PAD_LAST;
@@ -477,7 +494,8 @@ export function sealedSetE2E(peer, status) {
 export function refreshCodeCard(host, peer) {
   const menu = hostMenu(host);
   if (!menu || menu.hidden) return;
-  if (menu.classList.contains('row-menu') && menu.dataset.peer !== (host.dataset.peer || '')) return;
+  if (menu.classList.contains('row-menu') && menu.dataset.peer !== (host.dataset.peer || ''))
+    return;
   let card = menu.querySelector('.sas');
   if (!peer.sas) {
     if (card) card.remove();
@@ -502,13 +520,19 @@ export function paintState(peer) {
   if (!badge) return;
   const known = peer.ready === 'ready' && pinState(peer) === 'known';
   badge.hidden = known;
-  badge.dataset.e2e = known ? 'known'
-    : peer.ready === 'ready' ? 'unverified'
-      : peer.ready === 'failed' ? 'failed'
+  badge.dataset.e2e = known
+    ? 'known'
+    : peer.ready === 'ready'
+      ? 'unverified'
+      : peer.ready === 'failed'
+        ? 'failed'
         : '';
-  badge.textContent = known ? ''
-    : peer.ready === 'ready' ? 'e2e unverified'
-      : peer.ready === 'failed' ? 'e2e FAILED'
+  badge.textContent = known
+    ? ''
+    : peer.ready === 'ready'
+      ? 'e2e unverified'
+      : peer.ready === 'failed'
+        ? 'e2e FAILED'
         : peer.ready || '';
 }
 
@@ -556,19 +580,26 @@ export function sealedIdentityRow(peer) {
   const state = document.createElement('span');
   state.className = 'id-state';
   state.dataset.pin = what;
-  state.textContent = what === 'changed' ? 'changed'
-    : what === 'rollback' ? 'old key back' : 'unverified';
+  state.textContent =
+    what === 'changed' ? 'changed' : what === 'rollback' ? 'old key back' : 'unverified';
   const which = document.createElement('span');
   which.className = 'id-fp';
   which.textContent = peer.fp || 'no fingerprint yet';
   // a pinned pair shows its label as the button: one click renames it
   if (what === 'known') {
-    row.append(pinButton(pinLabelOf(peer) || 'pinned',
-      () => renamePin(peer, prompt('new name for this device', pinLabelOf(peer)) || '')));
+    row.append(
+      pinButton(pinLabelOf(peer) || 'pinned', () =>
+        renamePin(peer, prompt('new name for this device', pinLabelOf(peer)) || ''),
+      ),
+    );
   } else row.append(state);
   row.append(which);
   if (what === 'new' && peer.fp) {
-    row.append(pinButton('pin this device', () => pinPeer(peer, prompt('label for this device', peer.name) || '')));
+    row.append(
+      pinButton('pin this device', () =>
+        pinPeer(peer, prompt('label for this device', peer.name) || ''),
+      ),
+    );
   } else if (what === 'changed' || what === 'rollback') {
     row.append(pinButton('this device was reset', () => resetDevice(peer, peer.pinLabel)));
   }

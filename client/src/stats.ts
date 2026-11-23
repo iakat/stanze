@@ -4,13 +4,16 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say } from './util.js';
-import { send } from './menu.js';
 import { micLevelCells } from './audio.js';
-import { gap, unit } from './look.js';
-import { pairLabel, sealedFailedPairs, sealedRoomCodes, sealingAvailable, shortPeer, verifyText } from './sealed.js';
-import { fingerprint, pinState } from './identity.js';
-import { canary } from './audit.js';
+import {
+  pairLabel,
+  sealedFailedPairs,
+  sealedRoomCodes,
+  sealingAvailable,
+  shortPeer,
+  verifyText,
+} from './sealed.js';
+import { pinState } from './identity.js';
 
 // ---------------------------------------------------------------- telemetry
 // The stats panel is read at 1 Hz from getStats deltas: two byte counters give
@@ -19,7 +22,7 @@ import { canary } from './audit.js';
 // path. Polling stops when the panel is closed or the tab is hidden.
 export const STATS_MS = 1000;
 
-export const STATS_HISTORY = 60;   // one sample a second, so a minute of the call
+export const STATS_HISTORY = 60; // one sample a second, so a minute of the call
 
 export function statsOpen() {
   const panel = $('stats-panel');
@@ -104,12 +107,17 @@ export async function peerStats(peer) {
   if (!(peer.statLast instanceof Map)) peer.statLast = new Map();
 
   const out = {
-    up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 },
-    rtt: null, path: '', jitter: null, loss: null, shot: '',
+    up: { audio: 0, video: 0 },
+    down: { audio: 0, video: 0 },
+    rtt: null,
+    path: '',
+    jitter: null,
+    loss: null,
+    shot: '',
   };
-  let jitterMax = null;   // seconds, the worse of the two inbound streams
-  let lost = 0;           // packets lost in this tick, both streams
-  let got = 0;            // packets received in this tick, both streams
+  let jitterMax = null; // seconds, the worse of the two inbound streams
+  let lost = 0; // packets lost in this tick, both streams
+  let got = 0; // packets received in this tick, both streams
   let pairId = null;
   const pairs = new Map();
   const cands = new Map();
@@ -151,12 +159,18 @@ export async function peerStats(peer) {
   let pair = pairId ? pairs.get(pairId) : null;
   if (!pair) {
     for (const p of pairs.values()) {
-      if (p.selected || p.nominated) { pair = p; break; }
+      if (p.selected || p.nominated) {
+        pair = p;
+        break;
+      }
     }
   }
   if (!pair) {
     for (const p of pairs.values()) {
-      if (p.state === 'succeeded') { pair = p; break; }
+      if (p.state === 'succeeded') {
+        pair = p;
+        break;
+      }
     }
   }
   if (pair) {
@@ -314,8 +328,14 @@ export function callPairs(live, total) {
   if (rtt !== null || jitter !== null || loss !== null) {
     out.push(['link ', tripCells(rtt, jitter, loss), undefined, 'metrics']);
   }
-  out.push([VIDEO_ICON, [['', '', ''], rateCell('up', total.up.video), rateCell('down', total.down.video)]]);
-  out.push([AUDIO_ICON, [['', '', ''], rateCell('up', total.up.audio), rateCell('down', total.down.audio)]]);
+  out.push([
+    VIDEO_ICON,
+    [['', '', ''], rateCell('up', total.up.video), rateCell('down', total.down.video)],
+  ]);
+  out.push([
+    AUDIO_ICON,
+    [['', '', ''], rateCell('up', total.up.audio), rateCell('down', total.down.audio)],
+  ]);
   return out;
 }
 
@@ -352,25 +372,40 @@ export function ownPairs(total) {
   // name of the card, because where the key lives is the panel's noise.
   if (state.idKey) out.push(['key ', state.idKey.fp, undefined, 'mono']);
   const live = !!(state.mic && state.micTrack && state.micTrack.readyState === 'live');
-  const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
+  const mic =
+    live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
   const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
   const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : 'off';
-  out.push([VIDEO_ICON, [
-    [...PICTURE_ICON, shot],
-    rateCell('up', total ? total.up.video : 0),
-    rateCell('down', total ? total.down.video : 0),
-  ]]);
-  const sample = mic && mic.sampleRate ? `${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch` : '';
-  out.push([AUDIO_ICON, [
-    ['', '', live ? (sample || 'on') : 'off'],
-    rateCell('up', total ? total.up.audio : 0),
-    rateCell('down', total ? total.down.audio : 0),
-  ]]);
+  out.push([
+    VIDEO_ICON,
+    [
+      [...PICTURE_ICON, shot],
+      rateCell('up', total ? total.up.video : 0),
+      rateCell('down', total ? total.down.video : 0),
+    ],
+  ]);
+  const sample =
+    mic && mic.sampleRate
+      ? `${Math.round(mic.sampleRate / 1000)} kHz ${mic.channelCount || 1}ch`
+      : '';
+  out.push([
+    AUDIO_ICON,
+    [
+      ['', '', live ? sample || 'on' : 'off'],
+      rateCell('up', total ? total.up.audio : 0),
+      rateCell('down', total ? total.down.audio : 0),
+    ],
+  ]);
   // The microphone has a meter of its own: a bar that fills with the level,
   // so a speaker sees at once that the voice is going out.
   const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
-  out.push(['mic ', [['', '', level ? (level.state === 'silent' ? 'silent' : level.db) : 'off']],
-    undefined, false, level ? levelFraction(state.meterPeak) : 0]);
+  out.push([
+    'mic ',
+    [['', '', level ? (level.state === 'silent' ? 'silent' : level.db) : 'off']],
+    undefined,
+    false,
+    level ? levelFraction(state.meterPeak) : 0,
+  ]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
   if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);
@@ -400,22 +435,22 @@ export function peerPairs(peer, s) {
   } else {
     out.push(['route ', [routeCell(s.path)]]);
     out.push(['link ', tripCells(s.rtt, s.jitter, s.loss), undefined, 'metrics']);
-    out.push([VIDEO_ICON, [
-      [...PICTURE_ICON, s.shot || ''],
-      rateCell('up', s.up.video),
-      rateCell('down', s.down.video),
-    ]]);
-    out.push([AUDIO_ICON, [
-      ['', '', peerLevel(peer)],
-      rateCell('up', s.up.audio),
-      rateCell('down', s.down.audio),
-    ]]);
+    out.push([
+      VIDEO_ICON,
+      [[...PICTURE_ICON, s.shot || ''], rateCell('up', s.up.video), rateCell('down', s.down.video)],
+    ]);
+    out.push([
+      AUDIO_ICON,
+      [['', '', peerLevel(peer)], rateCell('up', s.up.audio), rateCell('down', s.down.audio)],
+    ]);
   }
   // With one code in the room the code card below names it once, and a line
   // on every guest would say the same thing again.
-  if (peer.sas && sealedRoomCodes().size > 1) out.push(['code ', verifyText(peer.sas), undefined, true]);
+  if (peer.sas && sealedRoomCodes().size > 1)
+    out.push(['code ', verifyText(peer.sas), undefined, true]);
   if (!peer.keys) out.push(['keys ', 'none', false, true]);
-  else if (peer.ready === 'ready' && !peer.confirmed) out.push(['keys ', 'not confirmed', false, true]);
+  else if (peer.ready === 'ready' && !peer.confirmed)
+    out.push(['keys ', 'not confirmed', false, true]);
   const c = sealedPairCount(peer.id);
   if (c.refused) out.push(['frames ', `${c.refused} refused`, false, true]);
   return out;
@@ -472,7 +507,9 @@ export function statCells(value, metrics) {
 export function statLine(key, value, mark, sub, meter) {
   const line = document.createElement('div');
   const parts = Array.isArray(value) ? value : [value];
-  line.className = 'sline' + (sub === 'mono' ? ' mono' : sub === 'metrics' ? ' metrics' : sub ? ' sub' : '') +
+  line.className =
+    'sline' +
+    (sub === 'mono' ? ' mono' : sub === 'metrics' ? ' metrics' : sub ? ' sub' : '') +
     (typeof meter === 'number' ? ' meterline' : '') +
     (mark === true ? ' good' : mark === false ? ' bad' : '');
   line.dataset.n = String(parts.length);
@@ -484,7 +521,7 @@ export function statLine(key, value, mark, sub, meter) {
   if (Array.isArray(key) && key[0]) {
     k.appendChild(statIcon(key[0], key[1]));
     k.appendChild(document.createTextNode(String(key[1]).split(',')[0]));
-  } else k.textContent = Array.isArray(key) ? (key[1] || '') : key;
+  } else k.textContent = Array.isArray(key) ? key[1] || '' : key;
   line.appendChild(k);
   if (typeof meter === 'number') {
     const bar = document.createElement('span');
@@ -500,7 +537,7 @@ export function statLine(key, value, mark, sub, meter) {
   return line;
 }
 
-export function statsRow(title, pairs, mark, badge) {
+export function statsRow(title, pairs, mark = null, badge = null) {
   const row = document.createElement('div');
   row.className = 'srow';
   const head = document.createElement('div');
@@ -520,7 +557,9 @@ export function statsRow(title, pairs, mark, badge) {
   }
   row.appendChild(head);
   for (const p of pairs) {
-    row.appendChild(statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false, p[4]));
+    row.appendChild(
+      statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false, p[4]),
+    );
   }
   return row;
 }
@@ -533,7 +572,12 @@ export function linkLevel(s) {
   const { rtt, loss, jitter } = s;
   if (rtt === null && loss === null) return '';
   if ((loss !== null && loss >= 5) || (rtt !== null && rtt >= 400)) return 'poor';
-  if ((loss !== null && loss >= 2) || (rtt !== null && rtt >= 200) || (jitter !== null && jitter >= 40)) return 'fair';
+  if (
+    (loss !== null && loss >= 2) ||
+    (rtt !== null && rtt >= 200) ||
+    (jitter !== null && jitter >= 40)
+  )
+    return 'fair';
   return 'good';
 }
 
@@ -585,7 +629,11 @@ export function recordStatsHistory(total, live) {
     const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
     return nums.length ? Math.max(...nums) : null;
   };
-  state.statHist.push({ down: total.down.video + total.down.audio, rtt: worst('rtt'), loss: worst('loss') });
+  state.statHist.push({
+    down: total.down.video + total.down.audio,
+    rtt: worst('rtt'),
+    loss: worst('loss'),
+  });
   if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
 }
 
@@ -653,9 +701,15 @@ export function statsPlot(canvas, values, peak, fill, color) {
   let drawing = false;
   for (let i = 0; i < n; i++) {
     const v = values[i];
-    if (v === null) { drawing = false; continue; }
+    if (v === null) {
+      drawing = false;
+      continue;
+    }
     if (drawing) ctx.lineTo(px(i), py(v));
-    else { ctx.moveTo(px(i), py(v)); drawing = true; }
+    else {
+      ctx.moveTo(px(i), py(v));
+      drawing = true;
+    }
   }
   ctx.stroke();
 }
@@ -704,23 +758,32 @@ export function drawStatsGraphs() {
   const down = series('down');
   statsPlot($('stats-graph-down'), down, peak(down, 100), true, '#00e000');
   const downMax = Math.max(0, ...values(down));
-  statsNote('stats-note-down', `down ${rateWords(now(down))} now, peak ${rateWords(downMax)}, ${secs}`);
+  statsNote(
+    'stats-note-down',
+    `down ${rateWords(now(down))} now, peak ${rateWords(downMax)}, ${secs}`,
+  );
 
   // Round trip: a line, broken where a sample has no value, so a gap is a gap.
   const rtt = series('rtt');
   statsPlot($('stats-graph-rtt'), rtt, peak(rtt, 100), false, '#f0e000');
-  statsNote('stats-note-rtt', values(rtt).length
-    ? `round trip ${msText(now(rtt))} now, peak ${msText(Math.max(...values(rtt)))}, ${secs}`
-    : `round trip not measured, ${secs}`);
+  statsNote(
+    'stats-note-rtt',
+    values(rtt).length
+      ? `round trip ${msText(now(rtt))} now, peak ${msText(Math.max(...values(rtt)))}, ${secs}`
+      : `round trip not measured, ${secs}`,
+  );
 
   // Loss: a line on a scale that starts at one percent, so a clean call is a
   // flat floor and any loss at all leaves the floor.
   const loss = series('loss');
   statsPlot($('stats-graph-loss'), loss, peak(loss, 1), false, '#ff5050');
   const lossMax = Math.max(0, ...values(loss));
-  statsNote('stats-note-loss', lossMax > 0
-    ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}`
-    : `loss none, ${secs}`);
+  statsNote(
+    'stats-note-loss',
+    lossMax > 0
+      ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}`
+      : `loss none, ${secs}`,
+  );
 }
 
 // updateStats draws one round: the faults and the verdict of the call, the
@@ -756,11 +819,19 @@ export async function updateStats() {
     for (const { peer, s } of guests) {
       // The route can change in a call, so the tile mark follows what the
       // report says now and not only what it said when the link came up.
-      if (s && s.path && peer.tile) peer.tile.dataset.relay = s.path.startsWith('relay') ? 'yes' : 'no';
+      if (s && s.path && peer.tile)
+        peer.tile.dataset.relay = s.path.startsWith('relay') ? 'yes' : 'no';
       const level = linkLevel(s);
       const pairs = peerPairs(peer, s);
       if (pairs.length) {
-        rows.push(statsRow(peer.name || shortPeer(peer.id), pairs, undefined, level ? { level, text: level } : null));
+        rows.push(
+          statsRow(
+            peer.name || shortPeer(peer.id),
+            pairs,
+            undefined,
+            level ? { level, text: level } : null,
+          ),
+        );
       }
     }
     rows.push(statsRow('you', ownPairs(total)));
@@ -804,17 +875,31 @@ export function sealedAlarms() {
   if (state.sealFault) out.push(statsRow('sealing fault', [['', state.sealFault, false]]));
   const failed = sealedFailedPairs();
   if (failed.length) {
-    const tags = failed.map((peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || 'no code'}`);
-    out.push(statsRow('room code', [
-      ['', 'KEY MISMATCH ' + tags.join(', '), false],
-      ['', 'do not trust this call', false],
-    ]));
+    const tags = failed.map(
+      (peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || 'no code'}`,
+    );
+    out.push(
+      statsRow('room code', [
+        ['', 'KEY MISMATCH ' + tags.join(', '), false],
+        ['', 'do not trust this call', false],
+      ]),
+    );
   }
   if (state.wireLeaks.length) {
-    out.push(statsRow('leak', state.wireLeaks.map((w) => ['', `${w.where}: ${w.canary}`, false])));
+    out.push(
+      statsRow(
+        'leak',
+        state.wireLeaks.map((w) => ['', `${w.where}: ${w.canary}`, false]),
+      ),
+    );
   }
   if (state.workerErrors.length) {
-    out.push(statsRow('worker', state.workerErrors.slice(0, 5).map((e) => ['', e, false])));
+    out.push(
+      statsRow(
+        'worker',
+        state.workerErrors.slice(0, 5).map((e) => ['', e, false]),
+      ),
+    );
   }
   const wt = state.wasmTest;
   if (wt && !wasmTestOk(wt)) out.push(statsRow('self test', wasmTestFaults(wt)));
@@ -822,8 +907,18 @@ export function sealedAlarms() {
 }
 
 export function wasmTestOk(wt) {
-  return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused &&
-    wt.idSign && wt.idUnsigned && wt.idFp && wt.pad && wt.passGood && wt.passBad);
+  return !!(
+    wt.sasMatch &&
+    wt.confirm &&
+    wt.open &&
+    wt.wrongKeyRefused &&
+    wt.idSign &&
+    wt.idUnsigned &&
+    wt.idFp &&
+    wt.pad &&
+    wt.passGood &&
+    wt.passBad
+  );
 }
 
 // wasmTestFaults lists only the checks that failed.
@@ -856,7 +951,9 @@ export function sealedCards() {
   const out = [];
   const available = sealingAvailable();
   const wt = state.wasmTest;
-  const seal = [['media ', available ? 'sealed, every frame' : 'NO SEALING, no media is sent', available]];
+  const seal = [
+    ['media ', available ? 'sealed, every frame' : 'NO SEALING, no media is sent', available],
+  ];
   if (wt) seal.push(['self test ', wasmTestOk(wt) ? 'pass' : 'FAIL', wasmTestOk(wt)]);
   out.push(statsRow('crypto', seal));
 
@@ -866,20 +963,43 @@ export function sealedCards() {
   }
   const clean = state.workerErrors.length === 0;
   const counts = [
-    ['frames ', `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`, refused === 0 && clean],
-    ['wire ', `frames ${state.wireFrames} leaks ${state.wireLeaks.length} clear ${state.clearSignaling}`,
-      state.wireLeaks.length === 0 && state.clearSignaling === 0],
+    [
+      'frames ',
+      `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`,
+      refused === 0 && clean,
+    ],
+    [
+      'wire ',
+      `frames ${state.wireFrames} leaks ${state.wireLeaks.length} clear ${state.clearSignaling}`,
+      state.wireLeaks.length === 0 && state.clearSignaling === 0,
+    ],
   ];
-  const files = state.fileOffers + state.fileRecv + state.fileChunksRecv + state.fileChunksSent +
-    state.fileRefused + state.fileCancelled;
+  const files =
+    state.fileOffers +
+    state.fileRecv +
+    state.fileChunksRecv +
+    state.fileChunksSent +
+    state.fileRefused +
+    state.fileCancelled;
   if (files) {
-    counts.push(['files ', `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`,
-      state.fileRefused === 0 && state.fileCancelled === 0]);
+    counts.push([
+      'files ',
+      `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`,
+      state.fileRefused === 0 && state.fileCancelled === 0,
+    ]);
   }
-  const chat = state.chatSent + state.chatRecv + state.replayDrops + state.confirmFailures + state.identityFailures;
+  const chat =
+    state.chatSent +
+    state.chatRecv +
+    state.replayDrops +
+    state.confirmFailures +
+    state.identityFailures;
   if (chat) {
-    counts.push(['chat ', `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`,
-      state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0]);
+    counts.push([
+      'chat ',
+      `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`,
+      state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0,
+    ]);
   }
   out.push(statsRow('counters', counts));
   return out;

@@ -5,13 +5,8 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { say } from './util.js';
-import { send } from './menu.js';
-import { gap } from './look.js';
-import { dropPeer } from './peers.js';
-import { handle } from './signaling.js';
 import { CHAT_MAX, addChatLine, chatTime } from './chat.js';
 import { b64d, b64e, fileAAD, pqCall, pqModule, shortPeer } from './sealed.js';
-import { sealedRestart } from './handshake.js';
 import { canary } from './audit.js';
 import { sealedSend } from './gate.js';
 
@@ -44,7 +39,12 @@ export const FILE_OPEN_WAIT = 15000;
 // A file name is shown in the chat only, but it comes from another page, so it
 // is cleaned the same way as a sealed guest name.
 export function cleanFileName(raw) {
-  return String(raw || '').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, 64);
+  // Control characters and angle brackets are what this removes, so the
+  // expression is allowed to carry them.
+  return String(raw || '')
+    .replace(/[\u0000-\u001f\u007f<>]/g, '')
+    .trim()
+    .slice(0, 64);
 }
 
 export function fileID() {
@@ -85,7 +85,7 @@ export function fileMarkRate(o, bytes, now) {
     o.rateT = now;
     o.rateB = bytes;
     const secs = (now - (o.rateAt || now)) / 1000;
-    o.rate = secs > .05 ? bytes / 1024 / secs : 0;
+    o.rate = secs > 0.05 ? bytes / 1024 / secs : 0;
     return;
   }
   const dt = now - o.rateT;
@@ -101,7 +101,7 @@ export function fileMarkRate(o, bytes, now) {
 export function fileAverageRate(bytes, start, now) {
   if (!start || !bytes) return '';
   const secs = (now - start) / 1000;
-  if (secs < .2) return '';
+  if (secs < 0.2) return '';
   return fileRateText(bytes / 1024 / secs);
 }
 
@@ -226,9 +226,22 @@ export function fileOnOffer(peer, msg) {
   const key = peer.id + '|' + x;
   if (state.filesIn.has(key)) return;
   const rec = {
-    key, x, peerId: peer.id, name, size, type,
-    status: 'offered', chunks: [], got: 0, expect: 0, el: null, url: '',
-    rateT: 0, rateB: 0, rate: 0, rateAt: 0,
+    key,
+    x,
+    peerId: peer.id,
+    name,
+    size,
+    type,
+    status: 'offered',
+    chunks: [],
+    got: 0,
+    expect: 0,
+    el: null,
+    url: '',
+    rateT: 0,
+    rateB: 0,
+    rate: 0,
+    rateAt: 0,
   };
   state.filesIn.set(key, rec);
   canary(name);
@@ -281,12 +294,14 @@ export async function fileDiskOpen(rec) {
 export function fileDiskWrite(rec, bytes) {
   const writer = rec.writer;
   if (!writer) return;
-  rec.writes = (rec.writes || Promise.resolve()).then(() => writer.write(bytes)).catch(() => {
-    fileDiskAbort(rec);
-    const peer = state.peers.get(rec.peerId);
-    if (peer && peer.keys) sealedSend(peer, { k: 'file', a: 'cancel', x: rec.x });
-    fileFinishIn(rec, 'cancelled');
-  });
+  rec.writes = (rec.writes || Promise.resolve())
+    .then(() => writer.write(bytes))
+    .catch(() => {
+      fileDiskAbort(rec);
+      const peer = state.peers.get(rec.peerId);
+      if (peer && peer.keys) sealedSend(peer, { k: 'file', a: 'cancel', x: rec.x });
+      fileFinishIn(rec, 'cancelled');
+    });
 }
 
 // fileDiskAbort drops a partial file after a cancel. It waits for the writes
@@ -349,7 +364,7 @@ export function fileCancelIn(rec) {
   fileFinishIn(rec, 'cancelled');
 }
 
-export function fileCancelOut(out, why) {
+export function fileCancelOut(out, why = '') {
   if (!out || out.cancelled) return;
   out.cancelled = true;
   state.fileCancelled++;
@@ -408,7 +423,13 @@ export function fileOnCancel(peer, msg) {
   const out = state.files.get(x);
   if (out) {
     const st = out.peers.get(peer.id);
-    if (st && st.status !== 'done' && st.status !== 'refused' && st.status !== 'cancelled' && st.status !== 'gone') {
+    if (
+      st &&
+      st.status !== 'done' &&
+      st.status !== 'refused' &&
+      st.status !== 'cancelled' &&
+      st.status !== 'gone'
+    ) {
       st.status = 'cancelled';
       fileStop(st);
       state.fileCancelled++;
@@ -418,7 +439,8 @@ export function fileOnCancel(peer, msg) {
     return;
   }
   const rec = state.filesIn.get(peer.id + '|' + x);
-  if (!rec || rec.status === 'done' || rec.status === 'refused' || rec.status === 'cancelled') return;
+  if (!rec || rec.status === 'done' || rec.status === 'refused' || rec.status === 'cancelled')
+    return;
   rec.status = 'cancelled';
   fileFinishIn(rec, 'cancelled');
 }
@@ -508,7 +530,9 @@ export async function filePump(out, st) {
     }
     let buf;
     try {
-      buf = new Uint8Array(await out.file.slice(q * FILE_CHUNK, (q + 1) * FILE_CHUNK).arrayBuffer());
+      buf = new Uint8Array(
+        await out.file.slice(q * FILE_CHUNK, (q + 1) * FILE_CHUNK).arrayBuffer(),
+      );
     } catch {
       fileCancelPeer(out, st, 'the file could not be read');
       return;
@@ -546,10 +570,10 @@ export async function filePump(out, st) {
 // fileWaitOpen resolves with the open channel of the pair, or null when it
 // never opens, closes or the transfer stops. The wait is cleared on cancel.
 export function fileWaitOpen(peer, st) {
-  return new Promise((resolve) => {
+  return new Promise<RTCDataChannel | null>((resolve) => {
     let timer = 0;
-    let dc = null;
-    const done = (value) => {
+    let dc: RTCDataChannel | null = null;
+    const done = (value: RTCDataChannel | null) => {
       if (st.wake !== wake) return;
       st.wake = null;
       clearTimeout(timer);
@@ -562,7 +586,7 @@ export function fileWaitOpen(peer, st) {
     const wake = () => done(null);
     const onOpen = () => done(dc);
     const onClose = () => done(null);
-    const attach = (channel) => {
+    const attach = (channel: RTCDataChannel | null) => {
       dc = channel;
       if (!dc) return done(null);
       if (dc.readyState === 'open') return done(dc);
@@ -583,7 +607,7 @@ export function fileWaitOpen(peer, st) {
 
 // fileSpace waits while the channel holds more than FILE_BUFFER. The low mark
 // wakes it, and a timer rechecks, so a lost event can not stall the transfer.
-export function fileSpace(dc, st) {
+export function fileSpace(dc: RTCDataChannel, st) {
   if (dc.readyState !== 'open') return Promise.resolve(false);
   if (dc.bufferedAmount <= FILE_BUFFER) return Promise.resolve(true);
   dc.bufferedAmountLowThreshold = FILE_LOW;
@@ -602,7 +626,10 @@ export function fileSpace(dc, st) {
     };
     st.wake = wake;
     dc.addEventListener('bufferedamountlow', onLow);
-    timer = setTimeout(() => done(dc.readyState === 'open' && dc.bufferedAmount <= FILE_BUFFER), 2000);
+    timer = setTimeout(
+      () => done(dc.readyState === 'open' && dc.bufferedAmount <= FILE_BUFFER),
+      2000,
+    );
   });
 }
 
@@ -620,7 +647,9 @@ export function fileBindChannel(peer, dc) {
     peer.dc = null;
     fileChannelClosed(peer);
   };
-  dc.onerror = () => { /* the close event does the bookkeeping */ };
+  dc.onerror = () => {
+    /* the close event does the bookkeeping */
+  };
   if (peer.dcResolve) {
     const resolve = peer.dcResolve;
     peer.dcResolve = null;
@@ -634,7 +663,14 @@ export function fileBindChannel(peer, dc) {
 export function fileChannelClosed(peer) {
   for (const out of state.files.values()) {
     const st = out.peers.get(peer.id);
-    if (!st || st.status === 'done' || st.status === 'refused' || st.status === 'cancelled' || st.status === 'gone') continue;
+    if (
+      !st ||
+      st.status === 'done' ||
+      st.status === 'refused' ||
+      st.status === 'cancelled' ||
+      st.status === 'gone'
+    )
+      continue;
     st.status = 'gone';
     fileStop(st);
     if (!out.cancelled) filePaintOut(out);
@@ -669,7 +705,12 @@ export function filePeerGone(id) {
   for (const out of state.files.values()) {
     const st = out.peers.get(id);
     if (!st) continue;
-    if (st.status !== 'done' && st.status !== 'refused' && st.status !== 'cancelled' && st.status !== 'gone') {
+    if (
+      st.status !== 'done' &&
+      st.status !== 'refused' &&
+      st.status !== 'cancelled' &&
+      st.status !== 'gone'
+    ) {
       st.status = 'gone';
       fileStop(st);
       if (!out.cancelled) filePaintOut(out);
@@ -678,7 +719,13 @@ export function filePeerGone(id) {
   }
   for (const rec of state.filesIn.values()) {
     if (rec.peerId !== id) continue;
-    if (rec.status === 'done' || rec.status === 'refused' || rec.status === 'cancelled' || rec.status === 'gone') continue;
+    if (
+      rec.status === 'done' ||
+      rec.status === 'refused' ||
+      rec.status === 'cancelled' ||
+      rec.status === 'gone'
+    )
+      continue;
     fileFinishIn(rec, 'gone');
   }
 }
@@ -696,7 +743,8 @@ export function fileInText(rec) {
     return 'receiving ' + pct + ' percent' + (rate ? ', ' + rate : '');
   }
   if (rec.status === 'done') {
-    return rec.disk ? 'saved to disk' + (rec.avg ? ', ' + rec.avg : '')
+    return rec.disk
+      ? 'saved to disk' + (rec.avg ? ', ' + rec.avg : '')
       : 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
   }
   if (rec.status === 'refused') return 'refused';
@@ -721,20 +769,23 @@ export function fileFinishDisk(rec) {
   rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
   if (rec.el) rec.el.status.textContent = 'saving to disk' + (rec.avg ? ', ' + rec.avg : '');
   const pending = rec.writes || Promise.resolve();
-  pending.then(() => writer.close()).then(() => {
-    state.fileRecv++;
-    state.filesIn.delete(rec.key);
-    if (rec.el) {
-      rec.el.acts.replaceChildren();
-      rec.el.status.textContent = fileInText(rec);
-    }
-  }).catch(() => {
-    state.filesIn.delete(rec.key);
-    if (rec.el) {
-      rec.el.acts.replaceChildren();
-      rec.el.status.textContent = 'the disk write failed';
-    }
-  });
+  pending
+    .then(() => writer.close())
+    .then(() => {
+      state.fileRecv++;
+      state.filesIn.delete(rec.key);
+      if (rec.el) {
+        rec.el.acts.replaceChildren();
+        rec.el.status.textContent = fileInText(rec);
+      }
+    })
+    .catch(() => {
+      state.filesIn.delete(rec.key);
+      if (rec.el) {
+        rec.el.acts.replaceChildren();
+        rec.el.status.textContent = 'the disk write failed';
+      }
+    });
 }
 
 export function fileFinishIn(rec, status) {
@@ -800,7 +851,7 @@ export function filePaintOut(out) {
   const bytes = accepted.reduce((n, s) => n + Math.min(out.size, s.sent * FILE_CHUNK), 0);
   const total = accepted.length * Math.max(1, out.size);
   const allDone = accepted.length > 0 && accepted.every((s) => s.status === 'done');
-  const frac = out.size === 0 ? (allDone ? 1 : 0) : (total ? bytes / total : 0);
+  const frac = out.size === 0 ? (allDone ? 1 : 0) : total ? bytes / total : 0;
   fileSetBar(out.el, !out.cancelled && accepted.length > 0 && !allDone, frac);
   if (out.cancelled) {
     out.el.acts.replaceChildren();
@@ -809,14 +860,28 @@ export function filePaintOut(out) {
   }
   const words = ['accepted ' + accepted.length + ' of ' + list.length];
   if (accepted.length) {
-    words.push(accepted.map((s) => {
-      const pct = out.size ? Math.round((Math.min(out.size, s.sent * FILE_CHUNK) / Math.max(1, out.size)) * 100) : (s.status === 'done' ? 100 : 0);
-      const sent = Math.min(out.size, s.sent * FILE_CHUNK);
-      const rate = s.status === 'done'
-        ? fileAverageRate(sent, s.rateAt, performance.now())
-        : fileRateText(s.rate);
-      return s.peer.name + ' ' + (s.status === 'done' ? 'done' : pct + ' percent') + (rate ? ', ' + rate : '');
-    }).join(', '));
+    words.push(
+      accepted
+        .map((s) => {
+          const pct = out.size
+            ? Math.round((Math.min(out.size, s.sent * FILE_CHUNK) / Math.max(1, out.size)) * 100)
+            : s.status === 'done'
+              ? 100
+              : 0;
+          const sent = Math.min(out.size, s.sent * FILE_CHUNK);
+          const rate =
+            s.status === 'done'
+              ? fileAverageRate(sent, s.rateAt, performance.now())
+              : fileRateText(s.rate);
+          return (
+            s.peer.name +
+            ' ' +
+            (s.status === 'done' ? 'done' : pct + ' percent') +
+            (rate ? ', ' + rate : '')
+          );
+        })
+        .join(', '),
+    );
   }
   if (refused.length) words.push('refused ' + refused.map((s) => s.peer.name).join(', '));
   if (stopped.length) words.push('cancelled ' + stopped.map((s) => s.peer.name).join(', '));

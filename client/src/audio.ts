@@ -140,10 +140,7 @@ export function noiseWasm() {
 // every incoming stream that wants it own a node, because the filter state
 // belongs to one stream.
 export async function makeDenoiseNode(ctx) {
-  const [binary] = await Promise.all([
-    noiseWasm(),
-    ctx.audioWorklet.addModule('/gtcrn-node.js'),
-  ]);
+  const [binary] = await Promise.all([noiseWasm(), ctx.audioWorklet.addModule('/gtcrn-node.js')]);
   return new AudioWorkletNode(ctx, 'gtcrn', {
     numberOfInputs: 1,
     numberOfOutputs: 1,
@@ -175,7 +172,11 @@ export async function setNoise(on) {
       return false;
     }
   }
-  try { state.micSource.disconnect(); } catch { /* not connected */ }
+  try {
+    state.micSource.disconnect();
+  } catch {
+    /* not connected */
+  }
   if (on) {
     state.micSource.connect(state.denoise);
     state.denoiseOn = true;
@@ -190,7 +191,13 @@ export function resumeAudio() {
   if (state.audioCtx && state.audioCtx.state === 'suspended') {
     state.audioCtx.resume().catch(() => {
       // Autoplay policy: retry on the next click.
-      document.addEventListener('click', () => state.audioCtx && state.audioCtx.resume().catch(() => {}), { once: true });
+      document.addEventListener(
+        'click',
+        () => state.audioCtx && state.audioCtx.resume().catch(() => {}),
+        {
+          once: true,
+        },
+      );
     });
   }
 }
@@ -206,7 +213,6 @@ export function ensurePlayback() {
     return state.playCtx;
   }
   // Safari still exposes the prefixed constructor, which the DOM lib omits.
-  // @ts-expect-error -- vendor prefixed fallback
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return null;
   try {
@@ -268,7 +274,8 @@ export function routeAudio(peer, track) {
   resumePlayback();
   // A context that is still suspended after a resume attempt plays nothing.
   // Say it, because the video looks correct and only the sound is missing.
-  if (ctx.state === 'suspended') say('the browser holds the audio output; tap the page once to hear the room');
+  if (ctx.state === 'suspended')
+    say('the browser holds the audio output; tap the page once to hear the room');
 }
 
 // dropAudio unhooks one peer from the output, so a closed peer is silent and
@@ -276,27 +283,51 @@ export function routeAudio(peer, track) {
 export function dropAudio(peer) {
   if (!peer) return;
   if (peer.inDenoise) {
-    try { peer.inDenoise.disconnect(); } catch { /* already gone */ }
+    try {
+      peer.inDenoise.disconnect();
+    } catch {
+      /* already gone */
+    }
   }
   if (peer.audioSrc) {
-    try { peer.audioSrc.disconnect(); } catch { /* already gone */ }
+    try {
+      peer.audioSrc.disconnect();
+    } catch {
+      /* already gone */
+    }
     peer.audioSrc = null;
   }
   if (peer.meter) {
-    try { peer.meter.disconnect(); } catch { /* already gone */ }
+    try {
+      peer.meter.disconnect();
+    } catch {
+      /* already gone */
+    }
     peer.meter = null;
   }
   if (peer.gain) {
-    try { peer.gain.disconnect(); } catch { /* already gone */ }
+    try {
+      peer.gain.disconnect();
+    } catch {
+      /* already gone */
+    }
     peer.gain = null;
   }
   if (peer.pump) {
-    try { peer.pump.pause(); } catch { /* already gone */ }
+    try {
+      peer.pump.pause();
+    } catch {
+      /* already gone */
+    }
     peer.pump.srcObject = null;
     peer.pump = null;
   }
   if (peer.audioEl) {
-    try { peer.audioEl.pause(); } catch { /* already gone */ }
+    try {
+      peer.audioEl.pause();
+    } catch {
+      /* already gone */
+    }
     peer.audioEl.srcObject = null;
     peer.audioEl = null;
   }
@@ -307,9 +338,17 @@ export function dropAudio(peer) {
 // directly, so it keeps working on either path.
 export function wirePlayNoise(peer) {
   if (!peer.audioSrc || !peer.gain) return;
-  try { peer.audioSrc.disconnect(); } catch { /* not connected */ }
+  try {
+    peer.audioSrc.disconnect();
+  } catch {
+    /* not connected */
+  }
   if (peer.inDenoise) {
-    try { peer.inDenoise.disconnect(); } catch { /* not connected */ }
+    try {
+      peer.inDenoise.disconnect();
+    } catch {
+      /* not connected */
+    }
   }
   if (peer.inNoise && peer.inDenoise) {
     peer.audioSrc.connect(peer.inDenoise);
@@ -351,8 +390,12 @@ export async function setPeerNoise(peer, on) {
 export function stateFrame() {
   return {
     k: 'state',
-    mic: state.mic, cam: state.cam, deaf: state.deaf,
-    screen: !!state.screen, hand: state.hand, ts: state.handTs,
+    mic: state.mic,
+    cam: state.cam,
+    deaf: state.deaf,
+    screen: !!state.screen,
+    hand: state.hand,
+    ts: state.handTs,
     // This build reads padded frame sizes, so a peer may round its frames up.
     pad: 1,
   };
@@ -394,10 +437,17 @@ export function setHand(on) {
 export function handRows() {
   const rows = [];
   for (const peer of state.peers.values()) {
-    if (peer.hand) rows.push({ id: String(peer.id), ts: peer.handTs || 0, name: peer.name, self: false });
+    if (peer.hand)
+      rows.push({ id: String(peer.id), ts: peer.handTs || 0, name: peer.name, self: false });
   }
-  if (state.hand) rows.push({ id: String(state.self), ts: state.handTs || 0, name: state.name || 'you', self: true });
-  rows.sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (state.hand)
+    rows.push({
+      id: String(state.self),
+      ts: state.handTs || 0,
+      name: state.name || 'you',
+      self: true,
+    });
+  rows.sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return rows;
 }
 

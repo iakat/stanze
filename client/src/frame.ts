@@ -4,7 +4,6 @@
 
 import { state } from './state.js';
 import { say } from './util.js';
-import { send } from './menu.js';
 
 // ------------------------------------------------------------- frame worker
 export function startSealedWorker() {
