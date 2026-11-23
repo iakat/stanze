@@ -12,14 +12,14 @@ ROOMSBASE ?= http://127.0.0.1:8095
 all: build selftest
 
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/rooms .
+	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/stanze .
 
 selftest:
 	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/selftest ./cmd/selftest
 
 # Dev server with the relay enabled on loopback.
 run: build
-	TURN_SECRET=dev-secret TURN_PUBLIC_IP=127.0.0.1 $(BIN)/rooms -listen 127.0.0.1:8095
+	TURN_SECRET=dev-secret TURN_PUBLIC_IP=127.0.0.1 $(BIN)/stanze -listen 127.0.0.1:8095
 
 # Test a server that is already running on ADDR.
 test: selftest

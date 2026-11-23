@@ -19,7 +19,7 @@ env:
 
 jobs:
   binaries:
-    name: rooms ${{ matrix.label }}
+    name: stanze ${{ matrix.label }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -55,7 +55,7 @@ jobs:
           GOAMD64: ${{ matrix.goamd64 }}
         run: |
           mkdir -p out
-          go build -trimpath -buildvcs=false -ldflags "-s -w" -o out/rooms-${{ matrix.label }} .
+          go build -trimpath -buildvcs=false -ldflags "-s -w" -o out/stanze-${{ matrix.label }} .
           go build -trimpath -buildvcs=false -ldflags "-s -w" -o out/selftest-${{ matrix.label }} ./cmd/selftest
           (cd out && sha256sum * > SHA256SUMS-${{ matrix.label }})
 

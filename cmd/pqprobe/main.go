@@ -26,7 +26,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"rooms/internal/pq"
+	"stanze/internal/pq"
 )
 
 var failures int

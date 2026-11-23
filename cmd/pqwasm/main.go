@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"syscall/js"
 
-	"rooms/internal/pq"
+	"stanze/internal/pq"
 )
 
 func main() {

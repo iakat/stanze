@@ -1,4 +1,4 @@
-module rooms
+module stanze
 
 go 1.27.0
 

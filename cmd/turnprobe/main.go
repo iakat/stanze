@@ -16,7 +16,7 @@ func main() {
 	addr := flag.String("turn-addr", "127.0.0.1:3478", "TURN server address")
 	user := flag.String("user", "", "ephemeral TURN username")
 	pass := flag.String("pass", "", "ephemeral TURN password")
-	realm := flag.String("realm", "rooms", "TURN realm")
+	realm := flag.String("realm", "stanze", "TURN realm")
 	flag.Parse()
 
 	if *user == "" || *pass == "" {

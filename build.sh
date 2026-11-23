@@ -29,6 +29,6 @@ export CGO_ENABLED=0
 "$GO" run ./cmd/pack
 
 mkdir -p bin
-"$GO" build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/rooms .
+"$GO" build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/stanze .
 "$GO" build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/selftest ./cmd/selftest
 ls -l bin

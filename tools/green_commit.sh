@@ -19,10 +19,10 @@ msg=${1:-"call: green build"}
 
 port=18095
 TURN_SECRET=dev-secret TURN_PUBLIC_IP=127.0.0.1 \
-	./bin/rooms -listen "127.0.0.1:$port" -turn-port 18478 \
-	>/tmp/green_rooms.log 2>&1 &
-rooms_pid=$!
-trap 'kill "$rooms_pid" 2>/dev/null || true' EXIT INT TERM
+	./bin/stanze -listen "127.0.0.1:$port" -turn-port 18478 \
+	>/tmp/green_stanze.log 2>&1 &
+stanze_pid=$!
+trap 'kill "$stanze_pid" 2>/dev/null || true' EXIT INT TERM
 sleep 2
 
 if ! ./bin/selftest -addr "http://127.0.0.1:$port" >/tmp/green_selftest.log 2>&1; then

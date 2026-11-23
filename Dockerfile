@@ -54,7 +54,7 @@ COPY . .
 # The embedded client is the packed archive, never the loose files.
 COPY --from=client /src/packed/static.tgz packed/static.tgz
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOAMD64=${GOAMD64} \
-    go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/rooms .
+    go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/stanze .
 
 # Optional in-browser transcription files. Left at their empty default the
 # stage makes an empty /vosk and the image is still the one binary above. Given
@@ -85,7 +85,7 @@ RUN mkdir -p /omni
 
 FROM scratch
 # Only the binary: the client, the queue and the done list are embedded.
-COPY --from=server /out/rooms /rooms
+COPY --from=server /out/stanze /stanze
 # The transcription directory is empty unless the build asked for a model; the
 # server offers the feature only when the library and a model are there.
 COPY --from=vosk /vosk /vosk
@@ -101,4 +101,4 @@ USER 65534:65534
 # run time (-turn-port, -turn-min-port, -turn-max-port); EXPOSE cannot describe
 # a UDP range, and publishing is a run time decision anyway.
 EXPOSE 8095
-ENTRYPOINT ["/rooms"]
+ENTRYPOINT ["/stanze"]
