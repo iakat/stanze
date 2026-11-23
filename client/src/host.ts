@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, say } from './util.js';
+import { isAdmin } from './util.js';
 import { ownTile } from './tiles.js';
 import { applyFlags } from './volume.js';
 import { attachScreen, attachTrack } from './devices.js';
@@ -12,7 +12,15 @@ import { paintHandQueue, sendState, setPeerNoise } from './audio.js';
 import { playSfx } from './sfx.js';
 import { updatePinCount } from './identity.js';
 import { asrAnnounce } from './asr.js';
-import { issueClaim, sealedAdmit, sealedCodePanel, sealedKick, sealedMute } from './gate.js';
+import {
+  admitAllHeld,
+  issueClaim,
+  sealedAdmit,
+  sealedCodePanel,
+  sealedKick,
+  sealedMute,
+  toSealed,
+} from './gate.js';
 
 // ---------------------------------------------------------------- host control
 // hostMenu returns the menu element of one member, a tile or a rail row. A
@@ -43,7 +51,7 @@ export function wireDots(host) {
   if (!dots || !menu) return;
   dots.addEventListener('click', (event) => {
     event.stopPropagation();
-    const open = (document.querySelectorAll('.menu:not([hidden])') as NodeListOf<HTMLElement>);
+    const open = document.querySelectorAll('.menu:not([hidden])') as NodeListOf<HTMLElement>;
     for (const other of open) {
       if (other !== menu) other.hidden = true;
     }
@@ -77,7 +85,9 @@ export function wireDots(host) {
       add('remove from room', () => sealedKick(host.dataset.peer));
     }
     const noiseOn = !!(peer && peer.inNoise);
-    add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => { void setPeerNoise(peer, !noiseOn); });
+    add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => {
+      void setPeerNoise(peer, !noiseOn);
+    });
     // The sealed code lives here, not as a banner over the picture: one card,
     // built by the same function that feeds the stats panel.
     if (peer && peer.sas) {
@@ -91,12 +101,14 @@ export function wireDots(host) {
       // there is no room below, so every entry stays on the screen.
       const r = dots.getBoundingClientRect();
       const width = Math.min(300, window.innerWidth - 16);
-      menu.style.left = Math.round(Math.max(4, Math.min(r.left, window.innerWidth - width - 4))) + 'px';
+      menu.style.left =
+        Math.round(Math.max(4, Math.min(r.left, window.innerWidth - width - 4))) + 'px';
       const below = r.bottom + 2;
       const height = menu.offsetHeight;
-      const top = below + height > window.innerHeight - 4
-        ? Math.max(4, window.innerHeight - 4 - height)
-        : below;
+      const top =
+        below + height > window.innerHeight - 4
+          ? Math.max(4, window.innerHeight - 4 - height)
+          : below;
       menu.style.top = Math.round(top) + 'px';
     }
     menu.hidden = false;
@@ -138,7 +150,7 @@ export function paintWaiting() {
     banner.hidden = !state.waiting;
     if (state.waiting) banner.textContent = waitingText();
   }
-  const sw = (document.getElementById('waiting-room') as HTMLInputElement | null);
+  const sw = document.getElementById('waiting-room') as HTMLInputElement | null;
   if (sw) sw.checked = state.waitingRoom;
   // A waiting guest has no chat and offers no files: the room is not theirs yet.
   $('chat-text').disabled = state.waiting;
@@ -158,7 +170,15 @@ export function paintWaiting() {
 // goes to that guest from this moment on; before it, nothing of it did.
 export function admitPeer(id) {
   if (id === state.self) {
+    const wasWaiting = state.waiting;
     state.waiting = false;
+    // A pair may have heard a held note before this page was inside. The news
+    // that the page is in now goes to every pair that already exists, so no
+    // member keeps its picture and its voice back from a page it let in.
+    if (wasWaiting) toSealed({ k: 'in' });
+    // With the switch off nobody is held. A pair that still has the flag set
+    // is let in here, so one lost note never costs a call its media.
+    if (!state.waitingRoom) admitAllHeld();
     // The waiting room held every outgoing track back. Now the guest is
     // inside, so the tracks go to every connection that is already built.
     // Without this the room hears nothing of a guest it has just let in.
@@ -212,7 +232,8 @@ export function updateCount() {
   const total = state.peers.size + 1;
   const live = [...state.peers.values()].filter((p) => p.state === 'connected').length + 1;
   const held = [...state.peers.values()].filter((p) => p.waiting).length;
-  $('peer-count').textContent = (total === 1 ? '1 peer' : `${live}/${total} peers`) +
+  $('peer-count').textContent =
+    (total === 1 ? '1 peer' : `${live}/${total} peers`) +
     (held && !state.waiting ? `, ${held} waiting` : '');
   updatePinCount();
 }
