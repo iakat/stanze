@@ -49,6 +49,10 @@ fi
 # The client is embedded as one gzip compressed tar, so it is packed first.
 # The packer writes sorted names and no timestamps, so the archive is the same
 # for the same files and two builds of one commit match.
+if [ ! -s "$here/static/app.js" ]; then
+	echo "static/app.js is missing; build the client first (drop SKIP_CLIENT)" >&2
+	exit 1
+fi
 "$GO" run ./cmd/pack
 
 mkdir -p bin

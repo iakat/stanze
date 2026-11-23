@@ -1,3 +1,7 @@
 packed/
 bin/
 shots/
+client/node_modules/
+
+# built from client/src by `make client` or build.sh
+static/app.js
