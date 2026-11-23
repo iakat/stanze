@@ -22,6 +22,10 @@ const state = {
   peers: new Map(),
   admins: new Set(),  // the role list of the sealed claim; empty until one arrives
   camTrack: null,
+  freeze: false,       // the outgoing camera picture is locked to one frame
+  freezeTrack: null,   // the still that carries that frame
+  freezeCanvas: null,  // the canvas behind the still, kept so it stays live
+  freezeVideo: null,   // one frame of the camera, when no look draws it
   micTrack: null,
   outStream: null,    // what is sent to peers
   lookParked: false,  // true while a hidden tab sends the raw camera
@@ -176,7 +180,7 @@ const state = {
  *   'menu-asr-btn': HTMLButtonElement, 'asr-on': HTMLInputElement,
  *   'asr-lang': HTMLSelectElement,
  *   'asr-note': HTMLElement,
- *   'look-filter': HTMLSelectElement,
+ *   'look-filter': HTMLSelectElement, freeze: HTMLInputElement,
  * }} Elements
  */
 
@@ -1947,6 +1951,13 @@ function setVideoTrack(video, track) {
   }
 }
 
+// camSource is the picture the own preview shows: the frozen still while the
+// freeze is on, else the drawn track, else the camera.
+function camSource() {
+  if (state.freeze && state.freezeTrack && state.freezeTrack.readyState === 'live') return state.freezeTrack;
+  return lookTrack() || state.camTrack;
+}
+
 // paintSelfCam paints the local preview from the camera state. A disabled
 // track gives black frames, so the element is emptied and the tile leaves the
 // playing state: the centre name is back until the camera works again.
@@ -1954,7 +1965,7 @@ function paintSelfCam(on) {
   const self = ownTile();
   if (!self) return;
   const video = self.querySelector('video');
-  const track = lookTrack() || state.camTrack;
+  const track = camSource();
   if (on && track) {
     setVideoTrack(video, track);
     self.classList.add('playing');
@@ -2067,6 +2078,17 @@ async function adoptCam(track) {
   if (!track) return;
   const prev = state.camTrack;
   state.camTrack = track;
+  // A new camera hands the live picture back: the still was of the old one.
+  if (state.freeze) {
+    if (state.freezeTrack) {
+      try { state.freezeTrack.stop(); } catch { /* already stopped */ }
+    }
+    state.freeze = false;
+    state.freezeTrack = null;
+    state.freezeCanvas = null;
+    const box = $('freeze');
+    if (box) box.checked = false;
+  }
   track.contentHint = 'motion';
   track.enabled = true;
   paintSelfCam(true);
@@ -2157,6 +2179,17 @@ function disableCam(persist = true) {
   // sender that still holds the old track gets the new one in adoptCam.
   const track = state.camTrack;
   state.camTrack = null;
+  // A frozen still has no camera behind it any more, so the freeze goes too.
+  if (state.freeze) {
+    if (state.freezeTrack) {
+      try { state.freezeTrack.stop(); } catch { /* already stopped */ }
+    }
+    state.freeze = false;
+    state.freezeTrack = null;
+    state.freezeCanvas = null;
+    const box = $('freeze');
+    if (box) box.checked = false;
+  }
   // The drawn track reads from the camera, so it goes with it.
   lookStop();
   if (track) {
@@ -3804,6 +3837,8 @@ function drawMikuFringe(ctx, g) {
 // share.
 async function lookPublish(track) {
   if (!state.outStream) return;
+  // A frozen picture stays on the senders: only the freeze itself swaps it.
+  if (state.freeze && track !== state.freezeTrack) return;
   const senders = Array.from(state.peers.values()).filter((peer) => {
     const tr = peer.tx && peer.tx.video;
     return tr && !peer.waiting && tr.sender.track !== track;
@@ -3817,6 +3852,80 @@ async function lookPublish(track) {
     await peer.tx.video.sender.replaceTrack(track).catch(() => {});
   }));
   paintSelfCam(true);
+}
+
+// freezeShot takes one picture of what the peers see now and returns a track
+// that carries only that frame: the drawn canvas while a look or a mask draws,
+// else one frame of the camera itself, which needs a throwaway element.
+async function freezeShot() {
+  let src = null;
+  const p = state.lookPipe;
+  if (lookOn() && p && p.canvas && p.canvas.width > 1) {
+    src = p.canvas;
+  } else {
+    if (!state.freezeVideo) {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.playsInline = true;
+      v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      document.body.appendChild(v);
+      state.freezeVideo = v;
+    }
+    const v = state.freezeVideo;
+    const now = v.srcObject && v.srcObject.getVideoTracks()[0];
+    if (now !== state.camTrack) v.srcObject = new MediaStream([state.camTrack]);
+    try { await v.play(); } catch { /* the element still holds frames */ }
+    for (let i = 0; i < 20 && !v.videoWidth; i += 1) await new Promise((r) => setTimeout(r, 25));
+    src = v;
+  }
+  const w = src.width || src.videoWidth || 0;
+  const h = src.height || src.videoHeight || 0;
+  if (!w || !h) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(src, 0, 0, w, h);
+  const stream = canvas.captureStream(0);
+  const track = stream.getVideoTracks()[0];
+  if (!track) return null;
+  track.contentHint = 'detail';
+  if (track.requestFrame) track.requestFrame();
+  state.freezeCanvas = canvas;
+  return track;
+}
+
+// setFreeze locks the outgoing camera picture to one frame, and puts the live
+// picture back when it goes off. The camera keeps running, so its light stays
+// on and the preview comes back at once; only the senders carry the still.
+async function setFreeze(on) {
+  on = !!on;
+  if (on === !!state.freeze) return true;
+  if (on) {
+    if (!state.camTrack) {
+      say('the camera is off, so there is nothing to freeze');
+      return false;
+    }
+    const track = await freezeShot();
+    if (!track) {
+      say('the camera gave no frame to freeze');
+      return false;
+    }
+    state.freeze = true;
+    state.freezeTrack = track;
+    await lookPublish(track);
+    return true;
+  }
+  state.freeze = false;
+  const old = state.freezeTrack;
+  state.freezeTrack = null;
+  state.freezeCanvas = null;
+  await lookPublish(lookTrack() || state.camTrack);
+  if (old) {
+    try { old.stop(); } catch { /* already stopped */ }
+  }
+  return true;
 }
 
 // lookPark answers a hidden tab. The clock that paints the canvas also runs in
@@ -10412,6 +10521,13 @@ function init() {
   $('mirror').addEventListener('change', () => {
     state.mirror = $('mirror').checked;
     applyMirror();
+  });
+
+  // A frozen camera keeps sending the frame it held, so the freeze frame
+  // behaviour is still there for anyone who wants it.
+  $('freeze').addEventListener('change', async () => {
+    const ok = await setFreeze($('freeze').checked);
+    if (!ok) $('freeze').checked = !!state.freeze;
   });
 
   // The own picture leaves the large area and becomes a small preview in the
