@@ -2890,6 +2890,55 @@ function lookMesh(p) {
   }
 }
 
+// The landmark smoothing is the One Euro filter of Casiez, Roussel and Vogel
+// (CHI 2012), one state for the whole set of coordinates, so a slow move is
+// smoothed hard and a fast one is let through. A fixed 0.35 blend cost about
+// 55 ms of lag on top of the detector at 30 Hz; a 1 Hz minimum cutoff with
+// beta 30 brings that to about 10 ms and keeps the mask as steady as before.
+const ONEEURO_MIN_HZ = 1.0;
+const ONEEURO_BETA = 30.0;
+const ONEEURO_D_HZ = 1.0;
+
+// oneEuroState holds the last filtered value and the last filtered rate of a
+// list of coordinates, and the time of the last frame.
+function oneEuroState() {
+  return { x: new Float64Array(0), dx: new Float64Array(0), t: 0, on: false };
+}
+
+// oneEuroAlpha is the share of the way to the sample that one step takes at a
+// cutoff, for a frame that is dt seconds after the last one.
+function oneEuroAlpha(hz, dt) {
+  const tau = 1 / (2 * Math.PI * hz);
+  return 1 / (1 + tau / dt);
+}
+
+// oneEuroRun filters one frame and returns the filtered list. A gap longer
+// than half a second, as a paused tab leaves, is clamped, so a face does not
+// sweep in from where it was before the pause.
+function oneEuroRun(s, src, t) {
+  const n = src.length;
+  if (!s.on || s.x.length !== n) {
+    s.x = Float64Array.from(src);
+    s.dx = new Float64Array(n);
+    s.t = t;
+    s.on = true;
+    return s.x;
+  }
+  let dt = (t - s.t) / 1000;
+  if (!(dt > 0)) dt = 1 / 30;
+  if (dt > 0.5) dt = 0.5;
+  s.t = t;
+  const aD = oneEuroAlpha(ONEEURO_D_HZ, dt);
+  for (let i = 0; i < n; i++) {
+    const v = src[i];
+    const d = (v - s.x[i]) / dt;
+    s.dx[i] += aD * (d - s.dx[i]);
+    const a = oneEuroAlpha(ONEEURO_MIN_HZ + ONEEURO_BETA * Math.abs(s.dx[i]), dt);
+    s.x[i] += a * (v - s.x[i]);
+  }
+  return s.x;
+}
+
 // lookMeshAnchor turns the first face into the same anchor the colour test
 // makes, plus every point of the mesh, and smooths both. A face that leaves the
 // frame finds the last anchor still there, so a mask does not flick to a corner.
@@ -2912,19 +2961,22 @@ function lookMeshAnchor(p, lm) {
   const lipGap = Math.hypot(pts[LM.lipLow * 2] - pts[LM.lip * 2], pts[LM.lipLow * 2 + 1] - pts[LM.lip * 2 + 1]);
   next.tongue = lipGap / faceH > 0.03 ? 1 : 0;
   const a = p.anchor;
+  const t = performance.now();
+  const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
+  const box = oneEuroRun(p.meshBox || (p.meshBox = oneEuroState()), [next.x, next.y, next.w, next.h], t);
   // A first face, or one from the colour test, is taken whole: the points carry
   // the shape, and a blend with a box would only blur the first mask.
   if (!a || !a.lm || a.lm.length !== pts.length) {
+    next.lm = Float32Array.from(sl);
     p.anchor = next;
     return;
   }
-  const k = 0.35;
-  a.x += (next.x - a.x) * k;
-  a.y += (next.y - a.y) * k;
-  a.w += (next.w - a.w) * k;
-  a.h += (next.h - a.h) * k;
+  a.x = box[0];
+  a.y = box[1];
+  a.w = box[2];
+  a.h = box[3];
   a.tongue = Math.max(next.tongue, (a.tongue || 0) * 0.9);
-  for (let i = 0; i < pts.length; i++) a.lm[i] += (pts[i] - a.lm[i]) * k;
+  for (let i = 0; i < pts.length; i++) a.lm[i] = sl[i];
 }
 
 // lookAnchor finds the face patch with the classic skin tone test on the small
