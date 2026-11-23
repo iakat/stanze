@@ -299,6 +299,61 @@ async function stats(page) {
       info('peer connection stats unavailable from page state', JSON.stringify({ stA, stB }));
     }
 
+    // ---- a drawn camera look, and what a hidden tab sends instead
+    // The pipeline paints the camera on a canvas and sends that canvas. A
+    // hidden tab paints none, so the senders must fall back to the camera.
+    const lookOff = await pageA.evaluate(() => window.e2eApp.effects());
+    check('no look is drawn until one is chosen', lookOff.on === false && lookOff.drawn === false &&
+      lookOff.senders.length === 1 && lookOff.senders[0] === 'camera', JSON.stringify(lookOff));
+    await pageA.evaluate(() => window.e2eApp.setLook('soft'));
+    await until(pageA, () => {
+      const e = window.e2eApp.effects();
+      return e.drawn && e.senders.length === 1 && e.senders[0] === 'drawn';
+    }, null, 10000, 'A sends the drawn track');
+    const drawnA = await pageA.evaluate(() => window.e2eApp.effects());
+    check('a chosen look replaces the camera on the sender', drawnA.look === 'soft' && drawnA.loop === true, JSON.stringify(drawnA));
+    await sleep(1500);
+    const lookSnapB = await pageB.evaluate(snapshot);
+    const lookB = (lookSnapB.remotes[0] || {}).t || 0;
+    check('B decodes the drawn picture', lookB > (b2.t || 0), (b2.t || 0).toFixed(2) + ' -> ' + lookB.toFixed(2));
+
+    // A hidden tab paints no frame, so the camera itself goes back on the
+    // senders and the peer keeps a moving picture.
+    await pageA.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await until(pageA, () => {
+      const e = window.e2eApp.effects();
+      return e.parked && !e.drawn && e.loop === false && e.senders.length === 1 && e.senders[0] === 'camera';
+    }, null, 10000, 'A sends the camera while hidden');
+    const parkedA = await pageA.evaluate(() => window.e2eApp.effects());
+    check('a hidden tab sends the raw camera and keeps it live', parkedA.cam === 'live', JSON.stringify(parkedA));
+    await sleep(2500);
+    const parkedSnapB = await pageB.evaluate(snapshot);
+    const parkedB = await stats(pageB);
+    const parkedT = (parkedSnapB.remotes[0] || {}).t || 0;
+    check('B keeps a moving picture from the hidden tab', parkedT > lookB + 0.3 && !(parkedSnapB.remotes[0] || {}).paused,
+      lookB.toFixed(2) + ' -> ' + parkedT.toFixed(2) + ' paused=' + (parkedSnapB.remotes[0] || {}).paused);
+    check('B video packets keep arriving from the hidden tab', parkedB.videoIn > stB.videoIn, stB.videoIn + ' -> ' + parkedB.videoIn);
+
+    // Back in front, the drawn track returns.
+    await pageA.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await until(pageA, () => {
+      const e = window.e2eApp.effects();
+      return !e.parked && e.drawn && e.loop === true && e.senders.length === 1 && e.senders[0] === 'drawn';
+    }, null, 10000, 'A draws again');
+    check('the drawn track comes back with the tab', true);
+    await pageA.evaluate(() => window.e2eApp.setLook('none'));
+    await until(pageA, () => {
+      const e = window.e2eApp.effects();
+      return !e.drawn && !e.on && e.senders.length === 1 && e.senders[0] === 'camera';
+    }, null, 10000, 'A drops the look');
+    check('dropping the look puts the camera back', true);
+
     // ---- signaling must ride the page's own origin (wss behind TLS, ws on
     // a plain http test server)
     const wsA = await pageA.evaluate(() => ({ url: state.ws ? state.ws.url : '', open: !!(state.ws && state.ws.readyState === 1) }));

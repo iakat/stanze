@@ -25,6 +25,7 @@ const state = {
   camTrack: null,
   micTrack: null,
   outStream: null,    // what is sent to peers
+  lookParked: false,  // true while a hidden tab sends the raw camera
   audioCtx: null,     // the microphone graph
   mixer: null,
   micGain: null,
@@ -2603,8 +2604,11 @@ function lookOn() {
   return (state.look && state.look !== 'none') || (state.mask && state.mask !== 'none');
 }
 
-// lookTrack is the drawn track while it is live, or null.
+// lookTrack is the drawn track while it is live and the tab draws, or null.
+// A parked pipeline hands the camera back to the senders, so the drawn track is
+// not the live picture then.
 function lookTrack() {
+  if (state.lookParked) return null;
   return state.lookOut && state.lookOut.readyState === 'live' ? state.lookOut : null;
 }
 
@@ -2700,13 +2704,10 @@ async function lookStart() {
   const meshCtx = meshCanvas.getContext('2d', { alpha: false });
   const pipe = {
     src, video, canvas, ctx, sample, sctx, meshCanvas, meshCtx, stream, track,
-    clock: new Worker(DRAW_CLOCK_URL), anchor: null, frame: 0,
+    clock: null, anchor: null, frame: 0,
     mesh: null, meshTried: false, meshBusy: false, meshAt: 0,
   };
   state.lookPipe = pipe;
-  pipe.clock.onmessage = () => {
-    if (state.lookPipe === pipe) lookDraw(pipe);
-  };
   // A hidden tab can leave the source element paused, and the clock draws from
   // it, so it is asked to play on every move of the tab.
   pipe.wake = () => {
@@ -2715,13 +2716,29 @@ async function lookStart() {
   };
   document.addEventListener('visibilitychange', pipe.wake);
   state.lookOut = track;
-  await lookPublish(track);
+  // A hidden tab paints nothing, so a pipeline that starts while the tab is
+  // away keeps the camera on the senders and the drawn track comes back with
+  // the first frame after the tab returns.
+  state.lookParked = !!document.hidden;
+  if (!state.lookParked) pipe.clock = lookClock(pipe);
+  await lookPublish(state.lookParked ? src : track);
+}
+
+// lookClock starts the frame clock of a pipeline. It stops with a parked tab:
+// a background tab draws nothing, so it should not read a camera either.
+function lookClock(p) {
+  const clock = new Worker(DRAW_CLOCK_URL);
+  clock.onmessage = () => {
+    if (state.lookPipe === p) lookDraw(p);
+  };
+  return clock;
 }
 
 // lookDraw paints one frame: the colour step, then the mask on the face patch.
 // The camera goes in unmirrored, which is what the peers get and what the
 // landmarks are measured on.
 function lookDraw(p) {
+  if (state.lookParked) return;
   if (p.video.readyState < 2 || !p.video.videoWidth) return;
   const filter = LOOKS[state.look] || 'none';
   if (filter !== 'none') p.ctx.filter = filter;
@@ -3240,13 +3257,15 @@ function drawMiku(ctx, g) {
 }
 
 // lookPublish swaps the drawn track into every camera sender and the own
-// preview. The screen sender is left alone: it carries the share.
+// preview. The screen sender is left alone: it carries the share. It is the
+// only path that touches the camera senders, so a look never reaches the screen
+// share.
 async function lookPublish(track) {
   if (!state.outStream) return;
   for (const old of state.outStream.getVideoTracks()) {
     if (old !== track) state.outStream.removeTrack(old);
   }
-  if (!state.outStream.getVideoTracks().includes(track)) state.outStream.addTrack(track);
+  if (track && !state.outStream.getVideoTracks().includes(track)) state.outStream.addTrack(track);
   await Promise.all(Array.from(state.peers.values()).map(async (peer) => {
     const tr = peer.tx && peer.tx.video;
     if (!tr || peer.waiting) return;
@@ -3255,12 +3274,39 @@ async function lookPublish(track) {
   paintSelfCam(true);
 }
 
+// lookPark answers a hidden tab. The clock that paints the canvas also runs in
+// the background, but a browser may hold the camera element still there, and
+// then the canvas would carry one picture for as long as the tab is away. The
+// camera track keeps running, so the senders take it while the tab is hidden,
+// and the drawn track comes back with the next frame. The camera is not
+// stopped, so its light stays on.
+async function lookPark(hidden) {
+  const p = state.lookPipe;
+  if (!p || !state.camTrack || state.lookParked === hidden) return;
+  state.lookParked = hidden;
+  if (hidden) {
+    if (p.clock) {
+      p.clock.terminate();
+      p.clock = null;
+    }
+    await lookPublish(state.camTrack);
+    return;
+  }
+  // A paused element may be held by the browser while the tab is away, so one
+  // play() and one draw put a fresh frame on the canvas before the swap back.
+  try { await p.video.play(); } catch { /* it plays already */ }
+  lookDraw(p);
+  p.clock = lookClock(p);
+  await lookPublish(p.track);
+}
+
 // lookStop drops the pipeline. With restore it puts the camera track back on the
 // camera senders and the preview.
 function lookStop(restore = true) {
   const p = state.lookPipe;
   state.lookPipe = null;
   state.lookOut = null;
+  state.lookParked = false;
   if (p) {
     if (p.wake) document.removeEventListener('visibilitychange', p.wake);
     if (p.clock) p.clock.terminate();
@@ -3286,11 +3332,14 @@ function lookStop(restore = true) {
 
 // lookRestart starts or stops the pipeline to match the current choice and the
 // live camera. It is the one path the menu uses, and the camera path calls it
-// when the track changes.
+// when the track changes. A choice that draws nothing puts the camera back on
+// the senders: a stopped canvas track would leave every peer with one still
+// picture.
 async function lookRestart() {
   if (state.lookPipe) lookStop(false);
   if (lookOn() && state.camTrack) await lookStart();
-  else paintSelfCam(state.cam && !!state.camTrack);
+  if (state.lookPipe) return;
+  lookStop();
 }
 
 // lookInit puts the stored choice on the two menu rows and wires them. A
@@ -8928,6 +8977,39 @@ win().e2eApp = {
   }),
   selfTest: pqSelfTest,
   lab: runLab,
+  // The drawn camera is reported by the track each camera sender carries, so a
+  // test can see the swap a hidden tab makes without reading a picture.
+  effects: () => ({
+    look: state.look,
+    mask: state.mask,
+    on: lookOn(),
+    drawn: !!lookTrack(),
+    parked: !!state.lookParked,
+    loop: !!(state.lookPipe && state.lookPipe.clock),
+    cam: state.camTrack ? state.camTrack.readyState : 'none',
+    senders: [...state.peers.values()].map((peer) => {
+      const tr = peer.tx && peer.tx.video;
+      const track = tr && tr.sender ? tr.sender.track : null;
+      if (!track) return 'none';
+      if (track === state.camTrack) return 'camera';
+      if (track === state.lookOut) return 'drawn';
+      return 'other';
+    }),
+  }),
+  setLook: (name) => {
+    state.look = Object.prototype.hasOwnProperty.call(LOOKS, name) ? name : 'none';
+    store('look', state.look);
+    const pick = $('look-filter');
+    if (pick) pick.value = state.look;
+    return lookRestart();
+  },
+  setMask: (name) => {
+    state.mask = MASKS.includes(name) ? name : 'none';
+    store('mask', state.mask);
+    const pick = $('look-mask');
+    if (pick) pick.value = state.mask;
+    return lookRestart();
+  },
 };
 
 // ---------------------------------------------------------------- relay badge
@@ -9286,10 +9368,16 @@ function init() {
   });
 
   // A hidden tab has no one to read the numbers, so the polling sleeps until
-  // it comes back.
+  // it comes back. A drawn camera has the same trouble: no frame is painted
+  // there, so the senders take the raw camera meanwhile.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stopStats();
-    else if (statsOpen()) startStats();
+    if (document.hidden) {
+      stopStats();
+      lookPark(true);
+    } else {
+      if (statsOpen()) startStats();
+      lookPark(false);
+    }
   });
 
   $('share-btn').addEventListener('click', () => {
