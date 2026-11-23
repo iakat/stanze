@@ -2952,19 +2952,25 @@ function lookMesh(p) {
   if (!p.mesh || p.meshBusy || !p.meshCtx || document.hidden) return;
   // A clock that runs faster than the camera repeats the frame it already has.
   // A repeat goes to the detector again as the same face, so it is skipped.
+  // A mask that has stood still for longer than a mark stays fresh gets a
+  // detect anyway: a browser that holds the frame or reports one identity for
+  // all of them must not leave the mask frozen, and a detect costs less than a
+  // mask that never moves.
   const mark = frameMark(p);
-  if (mark !== undefined) {
-    if (mark === p.meshMark) return;
-    p.meshMark = mark;
-  }
+  const quiet = !p.meshAt || performance.now() - p.meshAt > FRAME_MARK_FRESH_MS;
+  if (mark !== undefined && mark === p.meshMark && !quiet) return;
+  p.meshMark = mark;
   // A detection that takes most of a frame period is dropped to every second or
-  // third new frame, so the detector cannot eat the clock of the picture.
+  // third new frame, so the detector cannot eat the clock of the picture. A
+  // quiet mask skips nothing until a detect lands.
   const period = 1000 / (p.fps || 30);
+  const stride = quiet ? 1 : (p.meshStride || 1);
   p.meshTick = (p.meshTick || 0) + 1;
-  if ((p.meshTick - 1) % (p.meshStride || 1) !== 0) return;
+  if ((p.meshTick - 1) % stride !== 0) return;
   meshSize(p);
   p.meshBusy = true;
   const t0 = performance.now();
+  p.meshAt = t0;
   try {
     p.meshCtx.drawImage(p.video, 0, 0, p.meshCanvas.width, p.meshCanvas.height);
     // The landmarker refuses two detections with one timestamp, so the stamp of
