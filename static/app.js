@@ -3083,8 +3083,11 @@ function lookSmall(p, a, filter) {
   const browY = Math.min(g.browL[1], g.browR[1]);
   const lipY = g.lipLow[1];
   const fcy = (browY + lipY) / 2;
-  const frx = Math.max((g.eyeR[1][0] - g.eyeL[0][0]) / 2, g.fw * 0.3);
-  const fry = Math.max((lipY - browY) / 2, g.fh * 0.12);
+  // The block of skin that is drawn small takes a margin around the features
+  // and not the features alone: the soft edge of the block cuts the outer
+  // tenth, and a mouth on that edge would fade away with it.
+  const frx = Math.max((g.eyeR[1][0] - g.eyeL[0][0]) / 2, g.fw * 0.3) * 1.25;
+  const fry = Math.max((lipY - browY) / 2, g.fh * 0.12) * 1.55;
   // The pad takes the whole face and not a box around the middle: the cheeks
   // left and right, the hairline above and the chin below, so every feature
   // sits well inside it and the edge of the pad is the edge of the face.
@@ -3128,7 +3131,7 @@ function lookSmall(p, a, filter) {
   fc.scale(1, fh / fw);
   const soft = fc.createRadialGradient(0, 0, 0, 0, 0, fw / 2);
   soft.addColorStop(0, 'rgba(0,0,0,1)');
-  soft.addColorStop(0.62, 'rgba(0,0,0,1)');
+  soft.addColorStop(0.72, 'rgba(0,0,0,1)');
   soft.addColorStop(1, 'rgba(0,0,0,0)');
   fc.fillStyle = soft;
   fc.fillRect(-fw / 2, -fw / 2, fw, fw);
