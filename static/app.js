@@ -211,7 +211,7 @@ const LOOKS = {
   vivid: 'saturate(1.4) contrast(1.08)',
 };
 /** @type {string[]} */
-const MASKS = ['none', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
+const MASKS = ['none', 'big', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
 // The landmarker is three files of this origin: the module, the wasm and the
 // model. Nothing of a face leaves the tab, and no byte comes from outside.
 const MESH_DIR = '/facemesh/';
@@ -2775,7 +2775,10 @@ function lookDraw(p) {
   // place for the whole session when the landmarker never arrives.
   if (p.frame % 2 === 1 && !(p.anchor && p.anchor.lm)) lookAnchor(p);
   const a = p.anchor || { x: 0.5, y: 0.42, w: 0.4, h: 0.42 };
-  for (const which of state.masks) drawMask(p.ctx, p.canvas.width, p.canvas.height, which, a);
+  for (const which of state.masks) {
+    if (which === 'big') lookWarp(p, a, filter);
+    else drawMask(p.ctx, p.canvas.width, p.canvas.height, which, a);
+  }
 }
 
 // lookMesh runs the landmarker on the small copy of the frame, once per painted
@@ -2793,7 +2796,8 @@ function lookMesh(p) {
     // The landmarker refuses two detections with one timestamp, so the stamp of
     // a frame is the clock and never a repeat of the one before.
     const now = Math.round(performance.now());
-    p.meshLast = now > p.meshLast ? now : p.meshLast + 1;
+    const last = p.meshLast || 0;
+    p.meshLast = now > last ? now : last + 1;
     const res = p.mesh.detectForVideo(p.meshCanvas, p.meshLast);
     const lm = res && res.faceLandmarks && res.faceLandmarks[0];
     if (lm && lm.length) lookMeshAnchor(p, lm);
@@ -2955,6 +2959,68 @@ function maskGeo(a, W, H) {
     tongue: a.tongue || 0,
   };
 }
+
+// The big effect is a warp and not a drawing: a patch of the camera picture is
+// scaled about the middle of an eye or of the mouth and laid back on the face,
+// the way a phone filter does it. Every patch is read from the video element,
+// so a frame is never read back, and its own edge is feathered so no seam shows.
+function lookWarp(p, a, filter) {
+  const W = p.canvas.width, H = p.canvas.height;
+  const g = maskGeo(a, W, H);
+  for (const eye of [g.eyeL, g.eyeR]) {
+    const cx = (eye[0][0] + eye[1][0]) / 2;
+    const cy = (eye[0][1] + eye[1][1]) / 2;
+    const rx = Math.max(gap(eye[0], eye[1]) * 0.64, 5);
+    warpPatch(p, cx, cy, rx, rx * 0.78, 1.5, 1.62, filter);
+  }
+  const cx = (g.mouthL[0] + g.mouthR[0]) / 2;
+  const cy = (g.lipTop[1] + g.lipLow[1]) / 2;
+  const rx = Math.max(gap(g.mouthL, g.mouthR) * 0.62, 5);
+  const ry = Math.max((g.lipLow[1] - g.lipTop[1]) * 1.1, rx * 0.42);
+  warpPatch(p, cx, cy, rx, ry, 1.3, 1.5, filter);
+}
+
+// warpPatch draws one ellipse of the video, widened by kx and heightened by ky
+// about its centre. The patch is prepared on a small reused canvas; a frame
+// pays three of them, and the colour step of the look is applied again so the
+// patch matches the picture around it.
+function warpPatch(p, cx, cy, rx, ry, kx, ky, filter) {
+  const W = p.canvas.width, H = p.canvas.height;
+  const dw = 2 * rx * kx, dh = 2 * ry * ky;
+  const iw = Math.ceil(dw), ih = Math.ceil(dh);
+  const vw = p.video.videoWidth, vh = p.video.videoHeight;
+  if (iw < 8 || ih < 8 || !vw || !vh) return;
+  if (!p.warpCanvas) {
+    p.warpCanvas = document.createElement('canvas');
+    p.warpCtx = p.warpCanvas.getContext('2d');
+  }
+  const c = p.warpCanvas, cc = p.warpCtx;
+  if (c.width < iw) c.width = iw;
+  if (c.height < ih) c.height = ih;
+  // The same ellipse in the frame, in video pixels, as the source.
+  const sx = (cx - rx) * vw / W, sy = (cy - ry) * vh / H;
+  cc.clearRect(0, 0, iw, ih);
+  cc.globalCompositeOperation = 'source-over';
+  cc.drawImage(p.video, sx, sy, 2 * rx * vw / W, 2 * ry * vh / H, 0, 0, iw, ih);
+  // The edge fades out, so the enlarged patch sits on the face and not on it
+  // as a pasted oval. The gradient is stretched to the patch shape.
+  cc.globalCompositeOperation = 'destination-in';
+  cc.save();
+  cc.translate(iw / 2, ih / 2);
+  cc.scale(1, ih / iw);
+  const grad = cc.createRadialGradient(0, 0, 0, 0, 0, iw / 2);
+  grad.addColorStop(0, 'rgba(0,0,0,1)');
+  grad.addColorStop(0.72, 'rgba(0,0,0,1)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  cc.fillStyle = grad;
+  cc.fillRect(-iw / 2, -iw / 2, iw, iw);
+  cc.restore();
+  cc.globalCompositeOperation = 'source-over';
+  if (filter && filter !== 'none') p.ctx.filter = filter;
+  p.ctx.drawImage(c, 0, 0, iw, ih, cx - dw / 2, cy - dh / 2, dw, dh);
+  if (filter && filter !== 'none') p.ctx.filter = 'none';
+}
+
 
 // drawMask puts one mask on a face. Every mask reads the face geometry, so the
 // same points carry a mesh mask and the box the colour test gives.
