@@ -2909,23 +2909,33 @@ function armPublish(p) {
   lookPublish(p.track);
 }
 
-// frameMark is the identity of the newest decoded camera frame: the media time
-// from requestVideoFrameCallback where the browser has it, else the decoded
-// frame count. It is undefined until one of them says, and nothing is skipped
-// then.
+// frameMark is the identity of the newest decoded camera frame: a count of the
+// frames the element really presented, from requestVideoFrameCallback where the
+// browser has it, else the decoded frame count. It is undefined until one of
+// them says, and nothing is skipped then.
+//
+// The count is the callback itself, not its media time: a live camera stream
+// can report the same media time on every frame in one browser, and then a mark
+// on the time would say "no new frame" forever and freeze the mask after the
+// first detect. A callback that stops coming cannot count either, so a count
+// older than a few frames is dropped and every frame is detected again.
+const FRAME_MARK_FRESH_MS = 300;
+
 function frameMark(p) {
   const v = p.video;
   if (v.requestVideoFrameCallback) {
     if (!p.meshRVFC) {
       p.meshRVFC = true;
-      const wait = () => v.requestVideoFrameCallback((_now, meta) => {
-        p.meshMedia = meta.mediaTime;
+      const wait = () => v.requestVideoFrameCallback(() => {
+        p.meshFrames = (p.meshFrames || 0) + 1;
+        p.meshFrameAt = performance.now();
         if (p.meshRVFC && state.lookPipe === p) wait();
         else p.meshRVFC = false;
       });
       wait();
     }
-    return p.meshMedia;
+    if (!p.meshFrameAt || performance.now() - p.meshFrameAt > FRAME_MARK_FRESH_MS) return undefined;
+    return p.meshFrames;
   }
   const q = v.getVideoPlaybackQuality && v.getVideoPlaybackQuality();
   return q ? q.totalVideoFrames : undefined;
