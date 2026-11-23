@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"log/slog"
@@ -50,7 +51,11 @@ func iceServersFor(cfg *Config) ([]iceServer, error) {
 func randomUserTag() string {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 36)
+		// The fallback still has to differ per connection, but it must not read
+		// as a clock: a readable time in the relay username links an allocation
+		// to a join minute.
+		sum := sha256.Sum256([]byte(strconv.FormatInt(time.Now().UnixNano(), 36)))
+		b = sum[:6]
 	}
 	return fmt.Sprintf("%x", b)
 }

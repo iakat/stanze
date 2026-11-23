@@ -241,15 +241,33 @@ func (s *server) sendAdmins(room *Room) {
 // same room, an empty target or "*" sends it to every other peer. Nothing is
 // decoded, counted or kept, so the relay stays blind in both directions.
 func (s *server) handleEnc(p *Peer, m clientMsg) {
-	if s.hub.roomOf(p) == nil || m.B == "" || len(m.B) > 96<<10 {
+	if s.hub.roomOf(p) == nil || len(m.B) < 2 || len(m.B) > 96<<10+2 {
 		return
 	}
-	msg := mustJSON(serverMsg{T: "enc", From: p.id, B: m.B})
+	// The payload is a JSON string, the one type the client sends. Anything
+	// else is not a frame of ours and never goes out.
+	if m.B[0] != '"' || m.B[len(m.B)-1] != '"' {
+		return
+	}
+	msg := encFrame(p.id, m.B)
 	if m.To == "" || m.To == "*" {
 		s.hub.broadcast(p, msg)
 		return
 	}
 	s.hub.relay(p, m.To, msg)
+}
+
+// encFrame builds the relayed frame around a payload that is already JSON, so
+// the blob is never decoded and encoded again on the way through. The sender
+// id is hex, minted inside this process, so it needs no escaping.
+func encFrame(from string, b json.RawMessage) []byte {
+	const head = `{"t":"enc","from":"`
+	out := make([]byte, 0, len(head)+len(from)+len(`","b":`)+len(b)+1)
+	out = append(out, head...)
+	out = append(out, from...)
+	out = append(out, `","b":`...)
+	out = append(out, b...)
+	return append(out, '}')
 }
 
 func mustJSON(v any) []byte {
@@ -313,6 +331,8 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 
 	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
-	s.log.Debug("peer joined", "room", fingerprint(room.id), "peers", len(peers)+1)
+	// No room id and no head count reach the log: the line says that something
+	// joined, and nothing about which room or how large it is.
+	s.log.Debug("peer joined")
 	return true
 }

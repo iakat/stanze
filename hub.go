@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -41,14 +40,27 @@ func newPeerID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// freePeerID mints an id that this room does not already hold. Six bytes make a
+// collision rare, and a retry is cheaper than a longer id.
+func (r *Room) freePeerID() (string, error) {
+	for i := 0; i < 4; i++ {
+		id, err := newPeerID()
+		if err != nil {
+			return "", err
+		}
+		if r.peers[id] == nil {
+			return id, nil
+		}
+	}
+	return "", errRoomUnavailable
+}
+
 // Room lives only in memory and is dropped with its last peer. It holds no
 // room secret: the passphrase stays in the browser and becomes a SPAKE2
 // scalar there, so the server has nothing to compare and nothing to leak.
 type Room struct {
 	id    string
 	peers map[string]*Peer
-	// never set again: the last leave drops the room, so only a room that
-	// was created ahead of the first join waits in the map while empty.
 	// admins are the peers that may mute, remove or promote others. The first
 	// peer in the room gets the role, and a room can have several admins.
 	admins map[string]bool
@@ -90,6 +102,7 @@ func (h *Hub) join(roomID string, p *Peer) (*Room, error) {
 	defer h.mu.Unlock()
 
 	room, ok := h.rooms[roomID]
+	created := false
 	if !ok {
 		if len(h.rooms) >= h.maxRooms {
 			return nil, errRoomUnavailable
@@ -100,14 +113,22 @@ func (h *Hub) join(roomID string, p *Peer) (*Room, error) {
 			admins: make(map[string]bool),
 		}
 		h.rooms[roomID] = room
+		created = true
 	}
 	// Full rooms fail exactly like malformed ids.
 	if len(room.peers) >= h.maxPeers {
+		if created {
+			delete(h.rooms, roomID)
+		}
 		return nil, errRoomUnavailable
 	}
 	if p.id == "" {
-		id, err := newPeerID()
+		id, err := room.freePeerID()
 		if err != nil {
+			// A room made by this call and left empty is not a room.
+			if created {
+				delete(h.rooms, roomID)
+			}
 			return nil, errRoomUnavailable
 		}
 		p.id = id
@@ -348,10 +369,4 @@ func (h *Hub) broadcast(p *Peer, payload []byte) {
 	for _, other := range h.peersOf(room, p.id) {
 		other.enqueue(payload)
 	}
-}
-
-// fingerprint is the only form of a room id that ever reaches a log line.
-func fingerprint(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return hex.EncodeToString(sum[:4])
 }

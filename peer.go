@@ -113,8 +113,9 @@ type clientMsg struct {
 	On *bool `json:"on,omitempty"`
 
 	// b is an opaque, already encrypted payload for another peer or for the
-	// whole room. The server never decodes it.
-	B string `json:"b,omitempty"`
+	// whole room. It stays raw JSON: the relay copies it without unquoting or
+	// quoting it again, and the server never reads it.
+	B json.RawMessage `json:"b,omitempty"`
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
@@ -137,9 +138,6 @@ type serverMsg struct {
 	// has to wait. A pointer for the switch, so "off" is still sent.
 	WaitingRoom *bool `json:"waitingRoom,omitempty"`
 	Waiting     bool  `json:"waiting,omitempty"`
-
-	// b is relayed verbatim from another peer.
-	B string `json:"b,omitempty"`
 }
 
 // tokenBucket is a small per-connection message limiter.
@@ -172,7 +170,7 @@ func (b *tokenBucket) allow() bool {
 }
 
 // windowLimiter counts events per key inside a fixed window. It is used to
-// slow down room creation and passphrase guessing per client address.
+// slow down connection attempts per client address.
 type windowLimiter struct {
 	mu        sync.Mutex
 	window    time.Duration

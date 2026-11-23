@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 )
@@ -53,4 +54,36 @@ func TestHubHelpersSurviveAGoneRoom(t *testing.T) {
 		t.Fatalf("adminsOf(nil) = %v", got)
 	}
 	h.broadcastTo(nil, mustJSON(serverMsg{T: "peer-left"}))
+}
+
+// A relayed blob is spliced into the frame, not marshalled again, so the
+// escaping has to survive the trip: the frame is still one JSON object and the
+// payload still reads as the same string on the other side.
+func TestEncFrameKeepsThePayloadAndItsEscapes(t *testing.T) {
+	for _, blob := range []string{
+		`"AAAA"`,
+		`"a\"b\\c"`,
+		`"tab\there"`,
+		`"\u00e8 na\u00efve"`,
+	} {
+		frame := encFrame("abcdef123456", []byte(blob))
+		var out serverMsg
+		if err := json.Unmarshal(frame, &out); err != nil {
+			t.Fatalf("frame for %s is not one object: %v", blob, err)
+		}
+		if out.T != "enc" || out.From != "abcdef123456" {
+			t.Fatalf("frame for %s lost its header: %+v", blob, out)
+		}
+		var want string
+		if err := json.Unmarshal([]byte(blob), &want); err != nil {
+			t.Fatalf("test blob %s is not a string: %v", blob, err)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(frame, &got); err != nil {
+			t.Fatalf("frame for %s is not a plain object: %v", blob, err)
+		}
+		if got["b"] != want {
+			t.Fatalf("payload changed: got %q want %q", got["b"], want)
+		}
+	}
 }
