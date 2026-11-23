@@ -59,6 +59,7 @@ const state = {
   shareQuality: '1920x1080@30', // the screen has its own quality step
   perf: 0,            // performance step, 0 = full quality (the default)
   sounds: true,       // the four cues and the lost connection chime
+  statsBytes: false,  // the stats panel reads its rates in kibibytes and mebibytes
   waitingRoom: false, // the room switch an admin sets
   waiting: false,     // this guest is held outside until a member lets it in
   hand: false,        // this guest has a raised hand
@@ -6537,6 +6538,13 @@ async function peerStats(peer) {
 // zero returns an empty string, so a cell with nothing to say stays empty.
 function rateText(kbit) {
   if (!(kbit > 0)) return '';
+  // With the byte setting on, the same rate is read in bytes, so a guest can
+  // compare it with the size of a file or a disk.
+  if (state.statsBytes) {
+    const bytes = kbit * 125;
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + 'm';
+    return Math.round(bytes / 1024) + 'k';
+  }
   if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + 'm';
   return Math.round(kbit) + 'k';
 }
@@ -6999,6 +7007,11 @@ function statsNote(id, text) {
 
 // rateWords is a bitrate with its unit spelled out, for the line under a graph.
 function rateWords(kbit) {
+  if (state.statsBytes) {
+    const bytes = Math.max(0, kbit) * 125;
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + ' MiB/s';
+    return Math.round(bytes / 1024) + ' KiB/s';
+  }
   if (!(kbit > 0)) return '0 kbit/s';
   if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + ' Mbit/s';
   return Math.round(kbit) + ' kbit/s';
@@ -7093,7 +7106,9 @@ async function updateStats() {
     $('stats-sum').replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
     const legend = document.createElement('p');
     legend.className = 'slegend';
-    legend.textContent = 'k is kbit/s and m is Mbit/s. The up arrow is what you send, the down arrow what you receive.';
+    legend.textContent = state.statsBytes
+      ? 'k is KiB/s and m is MiB/s, eight bits to the byte. The up arrow is what you send, the down arrow what you receive.'
+      : 'k is kbit/s and m is Mbit/s. The up arrow is what you send, the down arrow what you receive.';
     body.replaceChildren(...rows, ...sealedCards(), legend);
     drawStatsGraphs();
   } finally {
@@ -10946,6 +10961,19 @@ function init() {
       const on = /** @type {HTMLInputElement} */ (soundBox).checked;
       store('sounds', on ? 1 : 0);
       setSounds(on);
+    });
+  }
+
+  // The stats setting reads its rates in bytes. One stored choice for the
+  // guest, and an open panel redraws at once instead of waiting for a tick.
+  state.statsBytes = load('statsbytes') === '1';
+  const bytesBox = /** @type {HTMLInputElement | null} */ (document.getElementById('stats-bytes'));
+  if (bytesBox) {
+    bytesBox.checked = state.statsBytes;
+    bytesBox.addEventListener('change', () => {
+      state.statsBytes = bytesBox.checked;
+      store('statsbytes', state.statsBytes ? 1 : 0);
+      if (statsOpen()) updateStats();
     });
   }
 
