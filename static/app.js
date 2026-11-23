@@ -1969,20 +1969,34 @@ function paintSelfCam(on) {
 
 // paintPeerVideo shows or hides the incoming picture of one guest. A deafened
 // guest draws no picture at all, so only names remain; the same track goes back
-// when the ears open, so no new negotiation is needed.
+// when the ears open, so no new negotiation is needed. A camera that its owner
+// turned off mutes the receiver track and leaves its last frame in the element,
+// so a muted track takes the picture down the same way.
 function paintPeerVideo(peer) {
   const video = peer.tile && peer.tile.querySelector('video');
   if (!video) return;
-  if (!state.deaf && peer.videoTrack) {
-    setVideoTrack(video, peer.videoTrack);
+  const track = peer.videoTrack;
+  const live = track && track.readyState === 'live' && !track.muted && peer.cam !== false;
+  if (!state.deaf && live) {
+    setVideoTrack(video, track);
     peer.tile.classList.add('playing');
     video.play().catch(() => {});
   } else {
-    peer.tile.classList.remove('playing');
-    try { video.pause(); } catch { /* not playing */ }
-    video.srcObject = null;
+    dropPeerCamera(peer);
   }
   layoutStage();
+}
+
+// dropPeerCamera takes the last decoded frame out of the element and lets the
+// tile fall back to its name. The receiver track is kept, so the same track
+// comes back when the camera does, and a sender that only replaces its track
+// with nothing leaves no picture behind.
+function dropPeerCamera(peer) {
+  const video = peer.tile && peer.tile.querySelector('video');
+  if (!video) return;
+  peer.tile.classList.remove('playing');
+  try { video.pause(); } catch { /* not playing */ }
+  video.srcObject = null;
 }
 
 // paintRemoteVideo applies the deaf state to every guest already in the room.
@@ -4221,10 +4235,12 @@ function connectPeer(id, initiator) {
     peer.videoTrack = track;
     paintPeerVideo(peer);
     // A sender that stops its camera mutes the track here instead of ending
-    // it, so both edges of the track move the guest between the zones.
-    track.addEventListener('mute', () => layoutStage());
-    track.addEventListener('unmute', () => layoutStage());
-    track.addEventListener('ended', () => layoutStage());
+    // it, so both edges of the track take the last frame down and put the
+    // picture back. The track is kept either way, so undeafen and a fresh
+    // camera need no new negotiation.
+    track.addEventListener('mute', () => paintPeerVideo(peer));
+    track.addEventListener('unmute', () => paintPeerVideo(peer));
+    track.addEventListener('ended', () => paintPeerVideo(peer));
     layoutStage();
   };
 
@@ -9522,7 +9538,14 @@ function padsOn(peer) {
 function sealedOnState(peer, obj) {
   if (obj.pad) padsOn(peer);
   if (obj.mic !== undefined) peer.mic = !!obj.mic;
-  if (obj.cam !== undefined) peer.cam = !!obj.cam;
+  if (obj.cam !== undefined) {
+    peer.cam = !!obj.cam;
+    // A camera that goes off leaves its last frame in the element when the
+    // sender only stops the track, and the sealed flag is the news that says
+    // so. The receiver track stays, so the picture comes back with the camera.
+    if (peer.cam) paintPeerVideo(peer);
+    else dropPeerCamera(peer);
+  }
   if (obj.deaf !== undefined) peer.deaf = !!obj.deaf;
   if (obj.screen !== undefined) {
     peer.screenShared = !!obj.screen;
