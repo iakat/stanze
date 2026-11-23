@@ -5,7 +5,9 @@ and the signaling endpoint and carries an embedded TURN relay. Audio and video
 travel directly between the browsers in a full mesh, sealed end to end, so the
 server never sees, mixes, records or stores them.
 
-No database, no external services, no third-party JavaScript, no bundled fonts.
+No database, no external services and no request to a third party at runtime:
+the client font, the emoji set, the sounds and the models all ship inside the
+binary.
 
 ## Features
 
