@@ -4,14 +4,26 @@
   "metadata": {
     "name": "stanze",
     "namespace": "ocbot2",
-    "labels": {"app": "stanze"}
+    "labels": {
+      "app": "stanze"
+    }
   },
   "spec": {
     "replicas": 1,
-    "selector": {"matchLabels": {"app": "stanze"}},
-    "strategy": {"type": "Recreate"},
+    "selector": {
+      "matchLabels": {
+        "app": "stanze"
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    },
     "template": {
-      "metadata": {"labels": {"app": "stanze"}},
+      "metadata": {
+        "labels": {
+          "app": "stanze"
+        }
+      },
       "spec": {
         "hostNetwork": true,
         "dnsPolicy": "ClusterFirstWithHostNet",
@@ -21,20 +33,45 @@
           {
             "name": "stanze",
             "image": "alpine:3.20",
-            "command": ["/bin/sh", "-c"],
+            "command": [
+              "/bin/sh",
+              "-c"
+            ],
             "args": [
               "install -m 0755 /files/stanze-server /tmp/stanze && exec /tmp/stanze -listen 0.0.0.0:8095 -behind-proxy -allowed-origin https://stanze.ch-test.katia.sh -turn-public-ip 152.53.49.131 -turn-port 3478 -turn-min-port 49200 -turn-max-port 49300 -vosk-dir /files/vosk -omni-dir /files/omni"
             ],
             "env": [
-              {"name": "TURN_SECRET", "valueFrom": {"secretKeyRef": {"name": "stanze-env", "key": "TURN_SECRET"}}}
+              {
+                "name": "TURN_SECRET",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "name": "stanze-env",
+                    "key": "TURN_SECRET"
+                  }
+                }
+              }
             ],
             "ports": [
-              {"name": "http", "containerPort": 8095, "protocol": "TCP"},
-              {"name": "stun-turn", "containerPort": 3478, "protocol": "UDP"}
+              {
+                "name": "http",
+                "containerPort": 8095,
+                "protocol": "TCP"
+              },
+              {
+                "name": "stun-turn",
+                "containerPort": 3478,
+                "protocol": "UDP"
+              }
             ],
             "resources": {
-              "requests": {"cpu": "50m", "memory": "64Mi"},
-              "limits": {"cpu": "500m", "memory": "256Mi"}
+              "requests": {
+                "cpu": "50m",
+                "memory": "64Mi"
+              },
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              }
             },
             "securityContext": {
               "runAsNonRoot": true,
@@ -42,17 +79,39 @@
               "runAsGroup": 65534,
               "allowPrivilegeEscalation": false,
               "readOnlyRootFilesystem": true,
-              "capabilities": {"drop": ["ALL"]}
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              }
             },
             "volumeMounts": [
-              {"name": "files", "mountPath": "/files", "readOnly": true},
-              {"name": "tmp", "mountPath": "/tmp"}
+              {
+                "name": "files",
+                "mountPath": "/files",
+                "readOnly": true
+              },
+              {
+                "name": "tmp",
+                "mountPath": "/tmp"
+              }
             ]
           }
         ],
         "volumes": [
-          {"name": "files", "hostPath": {"path": "/srv/ocbot-files/stanze", "type": "Directory"}},
-          {"name": "tmp", "emptyDir": {"sizeLimit": "16Mi"}}
+          {
+            "name": "files",
+            "hostPath": {
+              "path": "/srv/ocbot-files/stanze",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "tmp",
+            "emptyDir": {
+              "sizeLimit": "32Mi"
+            }
+          }
         ]
       }
     }
