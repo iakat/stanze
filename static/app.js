@@ -8885,11 +8885,13 @@ function padPayload(obj) {
 // post-quantum self test, so a change that breaks the buckets shows up before a
 // call starts.
 function padRoundTripOk() {
+  // Fixtures only: two words, a two byte character, and a payload over the
+  // biggest bucket, so the bucket choice and the round trip are both covered.
   const cases = [
     { k: 'name', n: 'abc' },
-    { k: 'chat', n: 'katia', x: 'ciao', ts: 1 },
-    { k: 'chat', n: 'x', x: 'é'.repeat(400) },
-    { k: 'asr', n: 'y', x: 'z'.repeat(9000) },
+    { k: 'chat', n: 'a', x: 'hello', ts: 1 },
+    { k: 'chat', n: 'b', x: 'é'.repeat(400) },
+    { k: 'asr', n: 'c', x: 'z'.repeat(9000) },
   ];
   for (const c of cases) {
     const raw = JSON.stringify(c);
