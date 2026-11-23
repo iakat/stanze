@@ -210,7 +210,16 @@ const LOOKS = {
   vivid: 'saturate(1.4) contrast(1.08)',
 };
 /** @type {string[]} */
-const MASKS = ['none', 'glasses', 'moustache', 'cat', 'miku'];
+const MASKS = ['none', 'glasses', 'moustache', 'cat', 'dog', 'halo', 'shades', 'miku'];
+// The landmarker is three files of this origin: the module, the wasm and the
+// model. Nothing of a face leaves the tab, and no byte comes from outside.
+const MESH_DIR = '/facemesh/';
+// Its input is a small copy of the frame, wide enough for a mesh and small
+// enough to run on a laptop without dropping the sent picture.
+const MESH_W = 256;
+// Milliseconds between two detections, about thirteen a second: a mask sits on
+// a face that moves slowly, and the wasm is the cost of the whole feature.
+const MESH_GAP = 75;
 // The long side of the canvas. A camera step above this is scaled down before
 // the look runs, so a filter never costs more pixels than it has to.
 const LOOK_MAX = 1280;
@@ -2606,6 +2615,48 @@ function lookTrack() {
 // the canvas is captured at, in front or behind.
 const DRAW_CLOCK_URL = URL.createObjectURL(new Blob(['setInterval(() => postMessage(1), 33);'], { type: 'text/javascript' }));
 
+// The mesh points every mask reads, by their canonical FaceMesh numbers. L and
+// R are the sides of the drawn frame, which is the camera frame unmirrored: the
+// mirror the guest sees is a css flip of the preview, so a landmark x is a
+// plain fraction here and needs no turn.
+const LM = {
+  noseTip: 1, noseBase: 2, lipTop: 0, lip: 13, lipLow: 14, mouthL: 61, mouthR: 291,
+  eyeOuterL: 33, eyeInnerL: 133, eyeOuterR: 263, eyeInnerR: 362,
+  browL: 105, browR: 334, hairline: 10, chin: 152,
+  cheekL: 234, cheekR: 454, templeL: 127, templeR: 356, earL: 93, earR: 323,
+};
+// The hairline from the temple on the image left to the temple on the right, so
+// a fringe follows a head that turns.
+const HAIRLINE = [127, 162, 21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251, 389, 356];
+
+// meshOpenTask is the one landmarker of the page. It outlives a pipeline, so a
+// mask switch or a camera switch does not load the wasm again; a failure is
+// remembered as null and the skin patch stays in charge for the session.
+/** @type {Promise<any> | null} */
+let meshOpenTask = null;
+
+// meshOpen loads the landmarker in the background. It never throws into a call:
+// a browser without wasm, without the memory or too old gives null and the
+// colour test keeps placing the mask.
+function meshOpen() {
+  if (!meshOpenTask) {
+    meshOpenTask = (async () => {
+      const vision = await import(MESH_DIR + 'vision_bundle.mjs');
+      const files = await vision.FilesetResolver.forVisionTasks(MESH_DIR.slice(0, -1));
+      // The cpu delegate: a software renderer and a driver without webgl2 both
+      // refuse the gpu graph, and one face at thirteen a second is small work.
+      return await vision.FaceLandmarker.createFromOptions(files, {
+        baseOptions: { modelAssetPath: MESH_DIR + 'face_landmarker.task', delegate: 'CPU' },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+        outputFaceBlendshapes: false,
+        outputFacialTransformationMatrixes: false,
+      });
+    })().catch(() => null);
+  }
+  return meshOpenTask;
+}
+
 // lookStart builds the pipeline once: the camera feeds a video element, every
 // frame is drawn on a canvas with the colour step and the mask, and the canvas
 // track becomes what peers receive. Nothing is uploaded. A shared screen has its
@@ -2640,7 +2691,18 @@ async function lookStart() {
   sample.width = 64;
   sample.height = 48;
   const sctx = sample.getContext('2d', { alpha: false, willReadFrequently: true });
-  const pipe = { src, video, canvas, ctx, sample, sctx, stream, track, clock: new Worker(DRAW_CLOCK_URL), anchor: null, frame: 0 };
+  // A second, bigger sample for the landmarker. It keeps the shape of the
+  // camera, so a landmark x is a fraction of the frame the mask is drawn on,
+  // and it is only read here.
+  const meshCanvas = document.createElement('canvas');
+  meshCanvas.width = MESH_W;
+  meshCanvas.height = Math.min(320, Math.max(128, 2 * Math.round((MESH_W * (settings.height || 720)) / (settings.width || 1280) / 2)));
+  const meshCtx = meshCanvas.getContext('2d', { alpha: false });
+  const pipe = {
+    src, video, canvas, ctx, sample, sctx, meshCanvas, meshCtx, stream, track,
+    clock: new Worker(DRAW_CLOCK_URL), anchor: null, frame: 0,
+    mesh: null, meshTried: false, meshBusy: false, meshAt: 0,
+  };
   state.lookPipe = pipe;
   pipe.clock.onmessage = () => {
     if (state.lookPipe === pipe) lookDraw(pipe);
@@ -2657,6 +2719,8 @@ async function lookStart() {
 }
 
 // lookDraw paints one frame: the colour step, then the mask on the face patch.
+// The camera goes in unmirrored, which is what the peers get and what the
+// landmarks are measured on.
 function lookDraw(p) {
   if (p.video.readyState < 2 || !p.video.videoWidth) return;
   const filter = LOOKS[state.look] || 'none';
@@ -2665,9 +2729,76 @@ function lookDraw(p) {
   if (filter !== 'none') p.ctx.filter = 'none';
   if (!MASKS.includes(state.mask) || state.mask === 'none' || !p.sctx) return;
   p.frame++;
-  if (p.frame % 2 === 1) lookAnchor(p);
+  lookMesh(p);
+  // The colour test leads only until a mesh anchor exists, and it holds the
+  // place for the whole session when the landmarker never arrives.
+  if (p.frame % 2 === 1 && !(p.anchor && p.anchor.lm)) lookAnchor(p);
   const a = p.anchor || { x: 0.5, y: 0.42, w: 0.4, h: 0.42 };
   drawMask(p.ctx, p.canvas.width, p.canvas.height, state.mask, a);
+}
+
+// lookMesh runs the landmarker on the small copy of the frame. One detection at
+// a time and no queue: the call is synchronous in this build, so the picture
+// waits for a mesh at most as long as one detect, and a machine too slow for
+// that is caught by the gap between two of them.
+function lookMesh(p) {
+  if (!p.meshTried) {
+    p.meshTried = true;
+    meshOpen().then((fm) => { p.mesh = fm; });
+  }
+  if (!p.mesh || p.meshBusy || !p.meshCtx || document.hidden) return;
+  const now = performance.now();
+  if (now - p.meshAt < MESH_GAP) return;
+  p.meshAt = now;
+  p.meshBusy = true;
+  try {
+    p.meshCtx.drawImage(p.video, 0, 0, p.meshCanvas.width, p.meshCanvas.height);
+    const res = p.mesh.detectForVideo(p.meshCanvas, Math.round(now));
+    const lm = res && res.faceLandmarks && res.faceLandmarks[0];
+    if (lm && lm.length) lookMeshAnchor(p, lm);
+  } catch {
+    // A frame that came in half decoded can fail a detect; the last anchor
+    // keeps the mask in place and the next frame tries again.
+  } finally {
+    p.meshBusy = false;
+  }
+}
+
+// lookMeshAnchor turns the first face into the same anchor the colour test
+// makes, plus every point of the mesh, and smooths both. A face that leaves the
+// frame finds the last anchor still there, so a mask does not flick to a corner.
+function lookMeshAnchor(p, lm) {
+  const pts = new Float32Array(lm.length * 2);
+  let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+  for (let i = 0; i < lm.length; i++) {
+    const x = lm[i].x, y = lm[i].y;
+    pts[i * 2] = x;
+    pts[i * 2 + 1] = y;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  const next = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, lm: pts };
+  // How far the lips are apart, as a share of the face height: the dog tongue
+  // reads it, and a mouth that closes keeps it for about a second.
+  const faceH = Math.hypot(pts[LM.chin * 2] - pts[LM.hairline * 2], pts[LM.chin * 2 + 1] - pts[LM.hairline * 2 + 1]) || 1;
+  const lipGap = Math.hypot(pts[LM.lipLow * 2] - pts[LM.lip * 2], pts[LM.lipLow * 2 + 1] - pts[LM.lip * 2 + 1]);
+  next.tongue = lipGap / faceH > 0.03 ? 1 : 0;
+  const a = p.anchor;
+  // A first face, or one from the colour test, is taken whole: the points carry
+  // the shape, and a blend with a box would only blur the first mask.
+  if (!a || !a.lm || a.lm.length !== pts.length) {
+    p.anchor = next;
+    return;
+  }
+  const k = 0.35;
+  a.x += (next.x - a.x) * k;
+  a.y += (next.y - a.y) * k;
+  a.w += (next.w - a.w) * k;
+  a.h += (next.h - a.h) * k;
+  a.tongue = Math.max(next.tongue, (a.tongue || 0) * 0.9);
+  for (let i = 0; i < pts.length; i++) a.lm[i] += (pts[i] - a.lm[i]) * k;
 }
 
 // lookAnchor finds the face patch with the classic skin tone test on the small
@@ -2715,94 +2846,397 @@ function roundPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// drawMask puts one mask on a face patch given as fractions of the frame: the
-// eyes a little above the middle, the ears on the top edge, the moustache
-// under the nose.
-function drawMask(ctx, W, H, which, a) {
+// gap is the distance between two points in pixels.
+function gap(p, q) {
+  return Math.hypot(p[0] - q[0], p[1] - q[1]);
+}
+
+// unit is a direction of length one, so a face axis can be used as a ruler.
+function unit(x, y) {
+  const m = Math.hypot(x, y) || 1;
+  return [x / m, y / m];
+}
+
+// roll is the angle of the eye line, the tilt a head has when it leans.
+function roll(g) {
+  return Math.atan2(g.eyeR[1][1] - g.eyeL[0][1], g.eyeR[1][0] - g.eyeL[0][0]);
+}
+
+// maskGeo reads an anchor into pixels. A mesh anchor carries every point of the
+// face; a skin anchor carries only a box, so the same points are stood in the
+// box and one drawing serves both, fine on a mesh and sane without one.
+function maskGeo(a, W, H) {
   const cx = a.x * W;
   const cy = a.y * H;
-  const fw = Math.max(a.w * W, W * 0.22);
-  const fh = Math.max(a.h * H, H * 0.26);
-  const eyeY = cy - fh * 0.12;
-  const lensW = fw * 0.34;
-  const lensH = fw * 0.24;
-  const gap = fw * 0.08;
+  const bw = Math.max(a.w * W, W * 0.22);
+  const bh = Math.max(a.h * H, H * 0.26);
+  const lm = a.lm && a.lm.length >= 468 * 2 ? a.lm : null;
+  // A face point, or the same place in the box when there is no mesh.
+  const at = (i, fx, fy) => (lm ? [lm[i * 2] * W, lm[i * 2 + 1] * H] : [cx + bw * fx, cy + bh * fy]);
+  const outerL = at(LM.eyeOuterL, -0.34, -0.12);
+  const innerL = at(LM.eyeInnerL, -0.16, -0.12);
+  const innerR = at(LM.eyeInnerR, 0.16, -0.12);
+  const outerR = at(LM.eyeOuterR, 0.34, -0.12);
+  const top = at(LM.hairline, 0, -0.52);
+  const chin = at(LM.chin, 0, 0.5);
+  const sideL = at(LM.cheekL, -0.5, 0);
+  const sideR = at(LM.cheekR, 0.5, 0);
+  // The face is measured from the chin to the hairline and ear to ear, so a
+  // mask is sized from the face and not from the box the colour test finds.
+  const fw = (lm && gap(sideL, sideR)) || bw;
+  const fh = (lm && gap(top, chin)) || bh;
+  // The face axes: across the frame and up the face. A head that turns or leans
+  // carries every mask with it.
+  const ax = unit(sideR[0] - sideL[0], sideR[1] - sideL[1]);
+  const ay = unit(top[0] - chin[0], top[1] - chin[1]);
+  const spot = (o, s, t) => [o[0] + ax[0] * s * fw + ay[0] * t * fh, o[1] + ax[1] * s * fw + ay[1] * t * fh];
+  return {
+    fw, fh, spot, top, chin,
+    nose: at(LM.noseTip, 0, 0.1),
+    noseBase: at(LM.noseBase, 0, 0.16),
+    lipTop: at(LM.lipTop, 0, 0.22),
+    lip: at(LM.lip, 0, 0.26),
+    lipLow: at(LM.lipLow, 0, 0.3),
+    mouthL: at(LM.mouthL, -0.2, 0.28),
+    mouthR: at(LM.mouthR, 0.2, 0.28),
+    eyeL: [outerL, innerL],
+    eyeR: [innerR, outerR],
+    browL: at(LM.browL, -0.25, -0.24),
+    browR: at(LM.browR, 0.25, -0.24),
+    templeL: at(LM.templeL, -0.46, -0.16),
+    templeR: at(LM.templeR, 0.46, -0.16),
+    earL: at(LM.earL, -0.48, 0.02),
+    earR: at(LM.earR, 0.48, 0.02),
+    // The hairline from the temple on the left of the frame over the head to
+    // the right one, so a fringe follows a head that turns.
+    hair: HAIRLINE.map((i, k) => at(i, -0.44 + (0.88 * k) / (HAIRLINE.length - 1),
+      -0.4 - 0.1 * Math.cos((k / (HAIRLINE.length - 1) - 0.5) * Math.PI))),
+    tongue: a.tongue || 0,
+  };
+}
+
+// drawMask puts one mask on a face. Every mask reads the face geometry, so the
+// same points carry a mesh mask and the box the colour test gives.
+function drawMask(ctx, W, H, which, a) {
+  const g = maskGeo(a, W, H);
   ctx.save();
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-  if (which === 'glasses') {
-    ctx.fillStyle = 'rgba(20, 24, 32, 0.5)';
-    ctx.strokeStyle = '#14181f';
-    ctx.lineWidth = Math.max(2, fw * 0.022);
-    for (const side of [-1, 1]) {
-      const x = side < 0 ? cx - gap - lensW : cx + gap;
-      roundPath(ctx, x, eyeY - lensH / 2, lensW, lensH, lensH * 0.4);
-      ctx.fill();
-      ctx.stroke();
-      // One temple arm towards each ear.
-      ctx.beginPath();
-      ctx.moveTo(side < 0 ? x : x + lensW, eyeY);
-      ctx.lineTo(side < 0 ? x - fw * 0.1 : x + lensW + fw * 0.1, eyeY - fh * 0.03);
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    ctx.moveTo(cx - gap, eyeY);
-    ctx.lineTo(cx + gap, eyeY);
+  if (which === 'glasses') drawGlasses(ctx, g);
+  else if (which === 'shades') drawShades(ctx, g);
+  else if (which === 'moustache') drawMoustache(ctx, g);
+  else if (which === 'cat') drawCat(ctx, g);
+  else if (which === 'dog') drawDog(ctx, g);
+  else if (which === 'halo') drawHalo(ctx, g);
+  else if (which === 'miku') drawMiku(ctx, g);
+  ctx.restore();
+}
+
+// eyeFrame is the middle, width and angle of one eye, from its two corners.
+function eyeFrame(e) {
+  const [o, i] = e;
+  return {
+    x: (o[0] + i[0]) / 2,
+    y: (o[1] + i[1]) / 2,
+    w: gap(o, i),
+    ang: Math.atan2(i[1] - o[1], i[0] - o[0]),
+  };
+}
+
+// drawGlasses puts a lens on each eye, the bridge between the inner corners and
+// one arm to each temple, so the frame follows a face that leans.
+function drawGlasses(ctx, g) {
+  ctx.fillStyle = 'rgba(20, 24, 32, 0.5)';
+  ctx.strokeStyle = '#14181f';
+  ctx.lineWidth = Math.max(2, g.fw * 0.022);
+  const sides = [
+    { e: g.eyeL, brow: g.browL, out: g.templeL },
+    { e: g.eyeR, brow: g.browR, out: g.templeR },
+  ];
+  for (const s of sides) {
+    const f = eyeFrame(s.e);
+    const ew = f.w || g.fw * 0.16;
+    const bw = ew * 1.8;
+    const bh = ew * 1.2;
+    // A lens sits a little towards the brow, which is where glasses sit.
+    const lift = Math.max(0, (f.y - s.brow[1]) * 0.18);
+    ctx.save();
+    ctx.translate(f.x, f.y - lift);
+    ctx.rotate(f.ang);
+    roundPath(ctx, -bw / 2, -bh / 2, bw, bh, bh * 0.42);
+    ctx.fill();
     ctx.stroke();
-  } else if (which === 'moustache') {
-    const my = cy + fh * 0.3;
-    ctx.fillStyle = '#2a1c14';
+    ctx.restore();
+    // The arm leaves the outer half of the lens for the side of the face.
+    const ux = unit(s.e[0][0] - s.e[1][0], s.e[0][1] - s.e[1][1]);
     ctx.beginPath();
-    ctx.moveTo(cx, my - fh * 0.03);
-    ctx.bezierCurveTo(cx - fw * 0.1, my - fh * 0.09, cx - fw * 0.24, my - fh * 0.05, cx - fw * 0.26, my + fh * 0.04);
-    ctx.bezierCurveTo(cx - fw * 0.14, my + fh * 0.02, cx - fw * 0.05, my + fh * 0.06, cx, my + fh * 0.04);
-    ctx.bezierCurveTo(cx + fw * 0.05, my + fh * 0.06, cx + fw * 0.14, my + fh * 0.02, cx + fw * 0.26, my + fh * 0.04);
-    ctx.bezierCurveTo(cx + fw * 0.24, my - fh * 0.05, cx + fw * 0.1, my - fh * 0.09, cx, my - fh * 0.03);
+    ctx.moveTo(f.x + ux[0] * bw * 0.5, f.y - lift + ux[1] * bw * 0.5);
+    ctx.lineTo(s.out[0], s.out[1]);
+    ctx.stroke();
+  }
+  // The bridge sits on the inner corners.
+  ctx.beginPath();
+  ctx.moveTo(g.eyeL[1][0], g.eyeL[1][1]);
+  ctx.lineTo(g.eyeR[1][0], g.eyeR[1][1]);
+  ctx.stroke();
+}
+
+// drawShades puts a tilted teardrop lens over each eye, dark at the top and lit
+// along the upper edge, on the eye line across the whole frame.
+function drawShades(ctx, g) {
+  const ang = roll(g);
+  const sides = [
+    { e: g.eyeL, brow: g.browL, out: g.templeL },
+    { e: g.eyeR, brow: g.browR, out: g.templeR },
+  ];
+  ctx.strokeStyle = '#0d1117';
+  ctx.lineWidth = Math.max(1.5, g.fw * 0.016);
+  for (const s of sides) {
+    const f = eyeFrame(s.e);
+    const ew = f.w || g.fw * 0.16;
+    const w = ew * 2.1;
+    const h = ew * 1.5;
+    // The brow holds the frame down, so a look up does not lift the glasses.
+    const lift = Math.max(0, (f.y - s.brow[1]) * 0.3);
+    ctx.save();
+    ctx.translate(f.x, f.y - lift);
+    ctx.rotate(ang);
+    const grad = ctx.createLinearGradient(0, -h * 0.6, 0, h * 0.6);
+    grad.addColorStop(0, 'rgba(10, 14, 22, 0.85)');
+    grad.addColorStop(1, 'rgba(62, 102, 138, 0.6)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.5, -h * 0.16);
+    ctx.bezierCurveTo(-w * 0.46, -h * 0.62, -w * 0.12, -h * 0.6, 0, -h * 0.56);
+    ctx.bezierCurveTo(w * 0.12, -h * 0.6, w * 0.46, -h * 0.62, w * 0.5, -h * 0.16);
+    ctx.bezierCurveTo(w * 0.44, h * 0.5, w * 0.16, h * 0.56, 0, h * 0.56);
+    ctx.bezierCurveTo(-w * 0.16, h * 0.56, -w * 0.44, h * 0.5, -w * 0.5, -h * 0.16);
     ctx.closePath();
     ctx.fill();
-  } else if (which === 'cat') {    const top = cy - fh * 0.52;
-    ctx.strokeStyle = '#20242c';
-    ctx.lineWidth = Math.max(1.5, fw * 0.012);
-    for (const side of [-1, 1]) {
-      const ex = cx + side * fw * 0.3;
-      ctx.fillStyle = '#3a3f4b';
-      ctx.beginPath();
-      ctx.moveTo(ex - fw * 0.15, top + fh * 0.2);
-      ctx.lineTo(ex, top - fh * 0.1);
-      ctx.lineTo(ex + fw * 0.15, top + fh * 0.2);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#e08aa8';
-      ctx.beginPath();
-      ctx.moveTo(ex - fw * 0.07, top + fh * 0.16);
-      ctx.lineTo(ex, top - fh * 0.02);
-      ctx.lineTo(ex + fw * 0.07, top + fh * 0.16);
-      ctx.closePath();
-      ctx.fill();
-    }
-  } else if (which === 'miku') {
-    // Teal hair over the top of the head, a long twin tail on each side and a
-    // red tie at the base of each tail.
-    const hair = '#39c5bb';
-    ctx.fillStyle = hair;
-    roundPath(ctx, cx - fw * 0.52, cy - fh * 0.66, fw * 1.04, fh * 0.34, fh * 0.15);
-    ctx.fill();
-    for (const side of [-1, 1]) {
-      const baseX = cx + side * fw * 0.34;
-      const baseY = cy - fh * 0.3;
-      ctx.fillStyle = hair;
-      ctx.beginPath();
-      ctx.moveTo(baseX - side * fw * 0.06, baseY);
-      ctx.bezierCurveTo(cx + side * fw * 0.74, cy - fh * 0.16, cx + side * fw * 0.82, cy + fh * 0.5, cx + side * fw * 0.62, cy + fh * 1.02);
-      ctx.bezierCurveTo(cx + side * fw * 0.5, cy + fh * 0.52, baseX - side * fw * 0.02, cy + fh * 0.12, baseX + side * fw * 0.12, baseY + fh * 0.04);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#e8455c';
-      ctx.fillRect(baseX - fw * 0.07, baseY - fh * 0.02, fw * 0.14, fh * 0.09);
-    }
+    ctx.stroke();
+    // The bright top edge, where the sky and the ring catch the glass.
+    ctx.strokeStyle = 'rgba(176, 220, 255, 0.9)';
+    ctx.lineWidth = Math.max(1, g.fw * 0.012);
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.44, -h * 0.2);
+    ctx.bezierCurveTo(-w * 0.4, -h * 0.56, -w * 0.12, -h * 0.54, 0, -h * 0.5);
+    ctx.bezierCurveTo(w * 0.12, -h * 0.54, w * 0.4, -h * 0.56, w * 0.44, -h * 0.2);
+    ctx.stroke();
+    ctx.restore();
+    // The arm leaves the outer edge for the side of the face.
+    ctx.strokeStyle = '#0d1117';
+    ctx.lineWidth = Math.max(1.5, g.fw * 0.016);
+    const ux = unit(s.e[0][0] - s.e[1][0], s.e[0][1] - s.e[1][1]);
+    ctx.beginPath();
+    ctx.moveTo(f.x + ux[0] * w * 0.5, f.y - lift + ux[1] * w * 0.5);
+    ctx.lineTo(s.out[0], s.out[1]);
+    ctx.stroke();
   }
+  ctx.beginPath();
+  ctx.moveTo(g.eyeL[1][0], g.eyeL[1][1]);
+  ctx.lineTo(g.eyeR[1][0], g.eyeR[1][1]);
+  ctx.stroke();
+}
+
+// drawMoustache follows the upper lip from one corner to the other and sits
+// between the nose base and the lip line.
+function drawMoustache(ctx, g) {
+  const l = g.mouthL;
+  const r = g.mouthR;
+  const mx = (l[0] + r[0]) / 2;
+  const half = gap(l, r) / 2 || g.fw * 0.2;
+  const room = Math.max(2, g.lip[1] - g.noseBase[1]);
+  const ty = g.noseBase[1] + room * 0.15;
+  const by = g.lip[1] + room * 0.12;
+  ctx.fillStyle = '#2a1c14';
+  ctx.beginPath();
+  ctx.moveTo(l[0], l[1]);
+  // Over the lip: up at the nose wings, a dip in the middle.
+  ctx.bezierCurveTo(l[0] + half * 0.5, ty - room * 0.2, mx - half * 0.5, ty - room * 0.3, mx, ty + room * 0.12);
+  ctx.bezierCurveTo(mx + half * 0.5, ty - room * 0.3, r[0] - half * 0.5, ty - room * 0.2, r[0], r[1]);
+  // Back under the lip, with a droop at each corner.
+  ctx.bezierCurveTo(r[0] - half * 0.3, by + room * 0.35, mx + half * 0.4, by + room * 0.4, mx, by);
+  ctx.bezierCurveTo(mx - half * 0.4, by + room * 0.4, l[0] + half * 0.3, by + room * 0.35, l[0], l[1]);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// drawCat puts two ears on the hairline, one each side of the head, along the
+// face axes so a leaning head keeps them on.
+function drawCat(ctx, g) {
+  ctx.strokeStyle = '#20242c';
+  ctx.lineWidth = Math.max(1.5, g.fw * 0.012);
+  for (const side of [-1, 1]) {
+    const a = g.spot(g.top, side * 0.42, -0.04);
+    const b = g.spot(g.top, side * 0.18, 0.02);
+    const t = g.spot(g.top, side * 0.38, 0.17);
+    ctx.fillStyle = '#3a3f4b';
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(t[0], t[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // The inner ear, the same triangle pulled a little towards its middle.
+    const mx = (a[0] + b[0] + t[0]) / 3;
+    const my = (a[1] + b[1] + t[1]) / 3;
+    const k = 0.45;
+    ctx.fillStyle = '#e08aa8';
+    ctx.beginPath();
+    ctx.moveTo(a[0] + (mx - a[0]) * k, a[1] + (my - a[1]) * k);
+    ctx.lineTo(t[0] + (mx - t[0]) * k, t[1] + (my - t[1]) * k);
+    ctx.lineTo(b[0] + (mx - b[0]) * k, b[1] + (my - b[1]) * k);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+// drawDog puts two floppy ears on the sides of the head, a nose on the nose tip
+// and a tongue under the lip that hangs out while the mouth is open.
+function drawDog(ctx, g) {
+  ctx.strokeStyle = '#241a15';
+  ctx.lineWidth = Math.max(1.5, g.fw * 0.012);
+  for (const side of [-1, 1]) {
+    const base = side < 0 ? g.templeL : g.templeR;
+    const a = g.spot(base, side * 0.04, 0.02);
+    const b = g.spot(base, -side * 0.04, -0.02);
+    const tip = g.spot(base, side * 0.16, -0.5);
+    const c1 = g.spot(base, side * 0.22, -0.1);
+    const c2 = g.spot(base, side * 0.24, -0.36);
+    const d2 = g.spot(base, side * 0.02, -0.38);
+    const d1 = g.spot(base, -side * 0.04, -0.12);
+    ctx.fillStyle = '#4a352a';
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(c1[0], c1[1], c2[0], c2[1], tip[0], tip[1]);
+    ctx.bezierCurveTo(d2[0], d2[1], d1[0], d1[1], b[0], b[1]);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // A lighter fold inside the ear, so it reads as a flap of skin.
+    const i1 = g.spot(base, side * 0.1, -0.12);
+    const i2 = g.spot(base, side * 0.12, -0.34);
+    const i3 = g.spot(base, side * 0.2, -0.24);
+    ctx.strokeStyle = 'rgba(255, 214, 194, 0.22)';
+    ctx.beginPath();
+    ctx.moveTo(i1[0], i1[1]);
+    ctx.quadraticCurveTo(i3[0], i3[1], i2[0], i2[1]);
+    ctx.stroke();
+    ctx.strokeStyle = '#241a15';
+  }
+  // The nose, on the tip of the nose.
+  ctx.save();
+  ctx.translate(g.nose[0], g.nose[1]);
+  ctx.rotate(roll(g));
+  ctx.fillStyle = '#2a2320';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, g.fw * 0.075, g.fw * 0.055, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+  ctx.beginPath();
+  ctx.ellipse(-g.fw * 0.022, -g.fw * 0.018, g.fw * 0.02, g.fw * 0.013, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
+  // The mouth must be open: the anchor holds the openness for about a second,
+  // so a talking mouth does not make the tongue flicker.
+  const open = Math.max(0, Math.min(1, g.tongue));
+  if (open > 0.06) {
+    const mx = (g.mouthL[0] + g.mouthR[0]) / 2;
+    const my = (g.lip[1] + g.lipLow[1]) / 2;
+    const half = (gap(g.mouthL, g.mouthR) * 0.42) || g.fw * 0.08;
+    const tip = g.spot(g.lip, 0, -(0.05 + 0.14 * open));
+    ctx.fillStyle = '#e2707f';
+    ctx.beginPath();
+    ctx.moveTo(mx - half, my);
+    ctx.quadraticCurveTo(mx - half * 1.15, tip[1], mx, tip[1]);
+    ctx.quadraticCurveTo(mx + half * 1.15, tip[1], mx + half, my);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(150, 54, 74, 0.55)';
+    ctx.lineWidth = Math.max(1, g.fw * 0.008);
+    ctx.beginPath();
+    ctx.moveTo(mx, my + (tip[1] - my) * 0.15);
+    ctx.lineTo(mx, tip[1] - (tip[1] - my) * 0.2);
+    ctx.stroke();
+  }
+}
+
+// drawHalo puts a glowing ring over the head, on the forehead line, turned with
+// the eye line and sized from the face.
+function drawHalo(ctx, g) {
+  const c = g.spot(g.top, 0, 0.26);
+  const rx = g.fw * 0.42;
+  const ry = g.fw * 0.12;
+  ctx.save();
+  ctx.translate(c[0], c[1]);
+  ctx.rotate(roll(g));
+  ctx.shadowColor = 'rgba(255, 214, 102, 0.95)';
+  ctx.shadowBlur = Math.max(4, g.fw * 0.14);
+  ctx.strokeStyle = 'rgba(255, 222, 122, 0.9)';
+  ctx.lineWidth = Math.max(2, g.fw * 0.035);
+  for (let i = 0; i < 2; i++) {
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(255, 250, 224, 0.95)';
+  ctx.lineWidth = Math.max(1, g.fw * 0.014);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// drawMiku puts a fringe along the hairline and one long tail behind each ear.
+function drawMiku(ctx, g) {
+  const hair = '#39c5bb';
+  const h = g.hair;
+  if (h.length > 2) {
+    ctx.fillStyle = hair;
+    ctx.beginPath();
+    ctx.moveTo(h[0][0], h[0][1]);
+    for (let i = 1; i < h.length; i++) ctx.lineTo(h[i][0], h[i][1]);
+    // Back along a deeper line, with the points taking turns, so the edge is a
+    // fringe and not a cap.
+    for (let i = h.length - 1; i >= 0; i--) {
+      const p = g.spot(h[i], 0, i % 2 ? -0.16 : -0.1);
+      ctx.lineTo(p[0], p[1]);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  for (const side of [-1, 1]) {
+    const base = side < 0 ? g.earL : g.earR;
+    const a = g.spot(base, side * 0.05, 0.04);
+    const b = g.spot(base, -side * 0.05, -0.02);
+    const tip = g.spot(base, side * 0.34, -0.95);
+    const c1 = g.spot(base, side * 0.38, -0.22);
+    const c2 = g.spot(base, side * 0.44, -0.66);
+    const d2 = g.spot(base, side * 0.2, -0.68);
+    const d1 = g.spot(base, side * 0.1, -0.26);
+    ctx.fillStyle = hair;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.bezierCurveTo(c1[0], c1[1], c2[0], c2[1], tip[0], tip[1]);
+    ctx.bezierCurveTo(d2[0], d2[1], d1[0], d1[1], b[0], b[1]);
+    ctx.closePath();
+    ctx.fill();
+    // The tie at the base of the tail.
+    ctx.fillStyle = '#e8455c';
+    ctx.beginPath();
+    const t1 = g.spot(base, side * 0.02, -0.02);
+    const t2 = g.spot(base, side * 0.14, -0.06);
+    const t3 = g.spot(base, side * 0.13, -0.11);
+    const t4 = g.spot(base, side * 0.01, -0.07);
+    ctx.moveTo(t1[0], t1[1]);
+    ctx.lineTo(t2[0], t2[1]);
+    ctx.lineTo(t3[0], t3[1]);
+    ctx.lineTo(t4[0], t4[1]);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 
 // lookPublish swaps the drawn track into every camera sender and the own
