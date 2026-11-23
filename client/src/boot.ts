@@ -224,10 +224,10 @@ export function init() {
   // The quality step comes back like the devices, and the picker shows it, so
   // the first camera request is already the chosen size.
   const storedQuality = load('quality');
-  if (QUALITY[storedQuality]) state.quality = storedQuality;
+  if (Object.hasOwn(QUALITY, storedQuality)) state.quality = storedQuality;
   // The screen has its own step, kept the same way.
   const storedShare = load('sharequality');
-  if (QUALITY[storedShare]) state.shareQuality = storedShare;
+  if (Object.hasOwn(QUALITY, storedShare)) state.shareQuality = storedShare;
   paintDeviceMenu();
   // The performance step comes back too. No stored value is full quality.
   const storedPerf = parseInt(load('perf'), 10);

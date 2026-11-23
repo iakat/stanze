@@ -42,9 +42,14 @@ export default tseslint.config(
       'security/detect-buffer-noassert': 'error',
       // A regexp or a computed member with a variable is worth a look, but the
       // client builds both from its own tables and from parsed messages.
-      'security/detect-non-literal-regexp': 'warn',
-      'security/detect-object-injection': 'warn',
-      'security/detect-possible-timing-attacks': 'warn',
+      'security/detect-non-literal-regexp': 'error',
+      'security/detect-possible-timing-attacks': 'error',
+      // object-injection is off: it fires on every computed member, which in
+      // this client is a loop counter over a typed array or a lookup in one of
+      // the page's own constant tables, and it cannot tell those from a key
+      // that came off the wire. The lookups that do read stored or parsed data
+      // guard the key with Object.hasOwn at the site.
+      'security/detect-object-injection': 'off',
     },
   },
   {

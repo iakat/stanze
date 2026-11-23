@@ -1886,7 +1886,9 @@ export function customInit() {
     try {
       const saved = JSON.parse(raw);
       for (const key of Object.keys(state.cust)) {
-        if (saved && typeof saved[key] === typeof state.cust[key]) state.cust[key] = saved[key];
+        if (saved && Object.hasOwn(saved, key) && typeof saved[key] === typeof state.cust[key]) {
+          state.cust[key] = saved[key];
+        }
       }
     } catch {
       // An old or half written value: the defaults stay.
