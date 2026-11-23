@@ -75,30 +75,7 @@ func TestRoomSurvivesOneLeaveOfTwo(t *testing.T) {
 	}
 }
 
-// The oldest remaining peer inherits the role when the last admin leaves, and
-// that path still runs for a room that keeps peers.
-func TestAdminReassignedWhenAdminLeaves(t *testing.T) {
-	h := newTestHub(t)
-
-	a, room := joinPeer(t, h, "abc")
-	b, _ := joinPeer(t, h, "abc")
-	if admins := h.adminsOf(room); len(admins) != 1 || admins[0] != a.id {
-		t.Fatalf("admins after two joins = %v, want [%s]", admins, a.id)
-	}
-
-	h.leave(a)
-
-	admins := h.adminsOf(room)
-	if len(admins) != 1 || admins[0] != b.id {
-		t.Fatalf("admins after the admin left = %v, want [%s]", admins, b.id)
-	}
-	if !h.isAdmin(room, b.id) {
-		t.Fatal("oldest remaining peer did not become admin")
-	}
-}
-
-// Everything the room held dies with it: a later join starts from nothing, so
-// no admin, no waiting room and no order.
+// Everything the room held dies with it: a later join starts from nothing.
 func TestRejoinAfterDropStartsFresh(t *testing.T) {
 	h := newTestHub(t)
 
@@ -113,138 +90,42 @@ func TestRejoinAfterDropStartsFresh(t *testing.T) {
 	if fresh == room {
 		t.Fatal("rejoin reused the dropped room")
 	}
-	if len(fresh.admins) != 1 || !fresh.admins[b.id] {
-		t.Fatalf("the first guest of the new room is not admin: %v", fresh.admins)
+	if len(fresh.peers) != 1 || fresh.peers[b.id] == nil {
+		t.Fatalf("the new room holds %d peers, want only %s", len(fresh.peers), b.id)
+	}
+	if b.id == a.id {
+		t.Fatal("the new room reused the old peer id")
 	}
 	h.leave(b)
 }
 
-// With the switch off nobody waits, whatever the room holds.
-func TestWaitingRoomOffLetsEveryoneIn(t *testing.T) {
+// A peer is only reachable inside its own room, and a leave clears the room it
+// points at, so no later lookup can find it through the old one.
+func TestPeerLookupStaysInsideTheRoom(t *testing.T) {
 	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc")
-	b, _ := joinPeer(t, h, "abc")
-	if h.isWaiting(a) || h.isWaiting(b) {
-		t.Fatal("a guest waited while the waiting room was off")
-	}
-	if h.waitingRoomOn(room) {
-		t.Fatal("a fresh room has the waiting room on")
-	}
-}
 
-// The first guest is never held, a later guest waits while the switch is on,
-// and a waiting guest never gets the admin role.
-func TestWaitingRoomHoldsLaterGuests(t *testing.T) {
-	h := newTestHub(t)
 	a, room := joinPeer(t, h, "abc")
-	h.setWaitingRoom(room, true)
-	b, _ := joinPeer(t, h, "abc")
+	other, otherRoom := joinPeer(t, h, "elsewhere")
 
-	if h.isWaiting(a) {
-		t.Fatal("a member was put in the waiting room by the switch")
+	if got := h.peerOf(room, a.id); got != a {
+		t.Fatalf("peerOf in its own room = %v, want %v", got, a)
 	}
-	if !h.isWaiting(b) {
-		t.Fatal("a guest who joined after the switch did not wait")
+	if got := h.peerOf(room, other.id); got != nil {
+		t.Fatalf("a peer of another room was found: %v", got)
 	}
-	if h.grantAdmin(room, b.id) {
-		t.Fatal("a waiting guest was given the admin role")
+	if h.peerOf(room, "nobody") != nil {
+		t.Fatal("an unknown id was found")
 	}
-	if h.isAdmin(room, b.id) {
-		t.Fatal("a waiting guest holds the admin role")
-	}
-}
 
-// A room switched on before anybody joined still lets the first guest in.
-func TestWaitingRoomFirstGuestIsNeverHeld(t *testing.T) {
-	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc")
-	h.setWaitingRoom(room, true)
 	h.leave(a)
-	c, _ := joinPeer(t, h, "abc")
-	if h.isWaiting(c) {
-		t.Fatal("the first guest of a fresh room waited for nobody")
+	if a.room != nil {
+		t.Fatal("a peer that left still points at its room")
 	}
-}
-
-// Only a guest who is inside lets a waiting guest in, and only one that
-// waits in the same room.
-func TestAdmitRules(t *testing.T) {
-	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc")
-	h.setWaitingRoom(room, true)
-	b, _ := joinPeer(t, h, "abc")
-	c, _ := joinPeer(t, h, "abc")
-
-	if h.admit(b, c.id) {
-		t.Fatal("a waiting guest let another guest in")
+	if h.peerOf(room, a.id) != nil {
+		t.Fatal("a peer that left is still in the room")
 	}
-	if h.admit(a, a.id) {
-		t.Fatal("a guest admitted itself")
-	}
-	if h.admit(a, "nobody") {
-		t.Fatal("an unknown id was admitted")
-	}
-	other, _ := joinPeer(t, h, "elsewhere")
-	if h.admit(other, b.id) {
-		t.Fatal("a guest of another room let a guest in")
-	}
-	if !h.admit(a, b.id) {
-		t.Fatal("a member could not let a waiting guest in")
-	}
-	if h.isWaiting(b) {
-		t.Fatal("the admitted guest still waits")
-	}
-	if !h.isWaiting(c) {
-		t.Fatal("the other waiting guest was let in with it")
-	}
-	if h.admit(a, b.id) {
-		t.Fatal("a guest who is inside was admitted a second time")
-	}
-	// An admitted guest is a member now and may let the next one in.
-	if !h.admit(b, c.id) {
-		t.Fatal("an admitted guest could not let the next one in")
-	}
-}
-
-// When the last member leaves, the guest who has waited longest is let in, so
-// a room never holds guests outside for a host that is gone. The role goes to
-// that guest, not to one who still waits.
-func TestLastMemberLeavesLetsOldestWaiterIn(t *testing.T) {
-	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc")
-	h.setWaitingRoom(room, true)
-	b, _ := joinPeer(t, h, "abc")
-	c, _ := joinPeer(t, h, "abc")
-
-	_, letIn := h.leaveWith(a)
-	if letIn != b.id {
-		t.Fatalf("let in = %q, want the oldest waiter %q", letIn, b.id)
-	}
-	if h.isWaiting(b) {
-		t.Fatal("the oldest waiter still waits")
-	}
-	if !h.isWaiting(c) {
-		t.Fatal("the second waiter was let in too")
-	}
-	admins := h.adminsOf(room)
-	if len(admins) != 1 || admins[0] != b.id {
-		t.Fatalf("admins = %v, want only %s", admins, b.id)
-	}
-}
-
-// A member leaving while another member stays lets nobody in.
-func TestMemberLeaveKeepsWaiterOutside(t *testing.T) {
-	h := newTestHub(t)
-	a, room := joinPeer(t, h, "abc")
-	b, _ := joinPeer(t, h, "abc")
-	h.setWaitingRoom(room, true)
-	c, _ := joinPeer(t, h, "abc")
-
-	_, letIn := h.leaveWith(a)
-	if letIn != "" {
-		t.Fatalf("a waiter was let in while a member stayed: %q", letIn)
-	}
-	if !h.isWaiting(c) || h.isWaiting(b) {
-		t.Fatal("the waiting states changed")
+	h.leave(other)
+	if h.peerOf(otherRoom, other.id) != nil {
+		t.Fatal("the last peer is still in a dropped room")
 	}
 }

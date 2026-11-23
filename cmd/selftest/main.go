@@ -74,8 +74,7 @@ func httpDo(method, path string, body string) (int, []byte, error) {
 }
 
 type peerInfo struct {
-	ID      string `json:"id"`
-	Waiting bool   `json:"waiting"`
+	ID string `json:"id"`
 }
 
 type iceCfg struct {
@@ -100,9 +99,6 @@ type sigMsg struct {
 	B         string          `json:"b"`
 	SDP       string          `json:"sdp,omitempty"`
 	Candidate json.RawMessage `json:"candidate,omitempty"`
-
-	Waiting     bool  `json:"waiting"`
-	WaitingRoom *bool `json:"waitingRoom"`
 }
 
 type sigClient struct {
@@ -631,8 +627,8 @@ func testTogglesBlind() {
 }
 
 // testNoNameInJoin checks that the room protocol never carries a name: the
-// server announces peers by id and flags only, and a name sent by an old client
-// is ignored rather than stored or echoed.
+// server announces a peer by one opaque id, and a name sent by an old client is
+// ignored rather than stored or echoed.
 func testNoNameInJoin() {
 	room, err := randomRoomID()
 	if err != nil {
@@ -651,7 +647,7 @@ func testNoNameInJoin() {
 		report("no name: second join", err)
 		return
 	}
-	report("peer list carries no name and no mode flag", errOr(nil,
+	report("a join carries no name and no mode flag", errOr(nil,
 		strings.Contains(second, `"name"`), "the peer list carries a name",
 		strings.Contains(second, `"sealed"`), "the peer list carries a mode flag"))
 }
@@ -684,55 +680,71 @@ func testRoomIsolation() {
 	report("no room information pushed to peers", errOr(nil, err == nil, "unexpected message "+m.T))
 }
 
-// testWaitingRoom proves the waiting room on the wire: only the admin turns it
-// on, a later guest waits, a waiting guest can not let anyone in, a member can,
-// and everyone is told.
-func testWaitingRoom() {
+// testNoRoomControl proves the clear room control is gone from the server: a
+// join names nobody, the knock carries one opaque id, and a clear role, mute,
+// kick or admit command makes no frame at all. The role list, the waiting room,
+// the kick and the mute are sealed notices between the guests now.
+func testNoRoomControl() {
 	room, _ := randomRoomID()
 	a, err := join(room)
 	if err != nil {
-		report("waiting room: A joins", err)
+		report("room control: A joins", err)
 		return
 	}
 	defer a.c.close()
+
+	first, err := rawJoinMessage(room)
+	if err != nil {
+		report("room control: the first join reply", err)
+		return
+	}
+	report("a join carries no roster, no role and no waiting flag", errOr(nil,
+		strings.Contains(first, `"peers"`), "a roster",
+		strings.Contains(first, `"admins"`), "a role list",
+		strings.Contains(first, `"waiting"`), "a waiting flag",
+		strings.Contains(first, `"waitingRoom"`), "a waiting switch"))
+
+	// The raw joins above are over: their knocks and leaves are not the news
+	// this test looks at.
+	a.c.drain(400 * time.Millisecond)
+
 	b, err := join(room)
 	if err != nil {
-		report("waiting room: B joins", err)
+		report("room control: B joins", err)
 		return
 	}
 	defer b.c.close()
-	a.c.drain(300 * time.Millisecond)
-	b.c.drain(100 * time.Millisecond)
 
-	on := true
-	// B is no admin: the switch must not move.
-	b.c.send(map[string]any{"t": "mod", "action": "waitingroom", "on": on})
-	m, err := a.c.wait("waiting-room", 500*time.Millisecond)
-	report("waiting room: a guest who is no admin can not switch it on", errOr(nil, err == nil, "the switch moved for "+m.T))
+	pm, err := a.c.wait("peer-joined", 2*time.Second)
+	report("a knock names the new peer and nothing else", errOr(err,
+		pm.Peer == nil || pm.Peer.ID != b.self, "the knock carries the wrong id"))
 
-	a.c.send(map[string]any{"t": "mod", "action": "waitingroom", "on": on})
-	m, err = b.c.wait("waiting-room", 2*time.Second)
-	report("waiting room: the admin switches it on and the room is told", errOr(err, m.WaitingRoom == nil || !*m.WaitingRoom, "switch not true"))
+	// Every clear command the server used to obey is dropped without a word.
+	for _, cmd := range []map[string]any{
+		{"t": "mod", "action": "waitingroom", "on": true},
+		{"t": "mod", "to": b.self, "action": "admin"},
+		{"t": "mod", "to": b.self, "action": "mute"},
+		{"t": "mod", "to": b.self, "action": "kick"},
+		{"t": "admit", "to": b.self},
+	} {
+		if err := b.c.send(cmd); err != nil {
+			report("room control: a clear command is sent", err)
+			return
+		}
+		if got := b.c.drain(250 * time.Millisecond); len(got) != 0 {
+			report("a clear command makes no frame", fmt.Errorf("%v produced %q", cmd, got[0].T))
+			return
+		}
+	}
+	report("a clear role, mute, kick or admit command makes no frame", nil)
 
-	c, err := join(room)
-	if err != nil {
-		report("waiting room: C joins", err)
+	// The socket is still a blind relay after those commands.
+	if err := a.c.send(map[string]any{"t": "enc", "to": b.self, "b": `"AAAA"`}); err != nil {
+		report("room control: the relay still carries a payload", err)
 		return
 	}
-	defer c.c.close()
-	pm, err := a.c.wait("peer-joined", 2*time.Second)
-	report("waiting room: a later guest waits", errOr(err, pm.Peer == nil || !pm.Peer.Waiting, "peer-joined has no waiting flag"))
-
-	// C waits, so C can not let anyone in, not even itself.
-	c.c.send(map[string]any{"t": "admit", "to": c.self})
-	_, err = a.c.wait("admitted", 500*time.Millisecond)
-	report("waiting room: a waiting guest can not admit itself", errOr(nil, err == nil, "admitted"))
-
-	b.c.send(map[string]any{"t": "admit", "to": c.self})
-	am, err := a.c.wait("admitted", 2*time.Second)
-	report("waiting room: a member lets the guest in", errOr(err, am.Peer == nil || am.Peer.ID != c.self, "wrong guest admitted"))
-	_, err = c.c.wait("admitted", 2*time.Second)
-	report("waiting room: the guest is told too", err)
+	m, err := b.c.wait("enc", 2*time.Second)
+	report("the relay still carries a payload after a clear command", errOr(err, m.From != a.self, "wrong sender"))
 }
 
 // testRoomLifetime proves a room is gone as soon as its last peer leaves: the
@@ -1193,7 +1205,7 @@ func main() {
 	testRelay()
 	testHardening()
 	testRoomIsolation()
-	testWaitingRoom()
+	testNoRoomControl()
 	testTogglesBlind()
 	testNoNameInJoin()
 	testLimits()

@@ -50,8 +50,8 @@ func TestHubHelpersSurviveAGoneRoom(t *testing.T) {
 	if got := h.peersOf(nil, ""); len(got) != 0 {
 		t.Fatalf("peersOf(nil) = %v", got)
 	}
-	if got := h.adminsOf(nil); len(got) != 0 {
-		t.Fatalf("adminsOf(nil) = %v", got)
+	if got := h.peerOf(nil, "abcdef123456"); got != nil {
+		t.Fatalf("peerOf(nil) = %v", got)
 	}
 	h.broadcastTo(nil, mustJSON(serverMsg{T: "peer-left"}))
 }

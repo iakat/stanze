@@ -20,7 +20,7 @@ const state = {
   name: '',
   ice: [],
   peers: new Map(),
-  admins: new Set(),  // filled by `joined`; empty until then
+  admins: new Set(),  // the role list of the sealed claim; empty until one arrives
   camTrack: null,
   micTrack: null,
   outStream: null,    // what is sent to peers
@@ -99,6 +99,10 @@ const state = {
   sid: '',             // session id of this call, public, never a secret
   w: '',               // SPAKE2 scalar of the room passphrase, never sent
   gate: { v: null, n: 0 }, // the room passphrase the members hold now, with a counter
+  auth: { n: -1, admins: [], by: '', sig: '' }, // the signed role claim this page holds
+  authTimer: null,     // the one timer that gives a room with no member a first admin
+  wait: { on: false, n: 0 }, // the sealed waiting-room switch, with a counter
+  kickedFps: new Set(), // identities this page removed for good in this call
   pins: new Map(),     // local label -> {label, fp, first, last}
   revoked: new Map(),  // fingerprint -> {fp, label, at}, a pin that was replaced
   identityFailures: 0, // a peer that sent no identity or could not prove one
@@ -1031,9 +1035,9 @@ function hostMenu(host) {
 }
 
 // wireDots opens the small menu of one remote member. Every guest sees it; the
-// host commands appear only for the admin, and the server checks the role
-// again on every command. It takes the tile or the row of that member, because
-// both carry the peer id.
+// host commands appear only for the admin, and every page checks the sealed
+// role list again on every notice. It takes the tile or the row of that member,
+// because both carry the peer id.
 function wireDots(host) {
   const dots = host.querySelector('.dots');
   const menu = hostMenu(host);
@@ -1062,15 +1066,16 @@ function wireDots(host) {
       menu.appendChild(b);
     };
     if (isAdmin(state.self)) {
-      add('give admin', () => send({ t: 'mod', to: host.dataset.peer, action: 'admin' }));
-      add('mute', () => send({ t: 'mod', to: host.dataset.peer, action: 'mute' }));
-      add('remove from room', () => {
-        // A guest who was let in keeps that key; a removed guest must wait
-        // again on the next return, so the key goes when the guest is kicked.
-        const gone = state.peers.get(host.dataset.peer);
-        if (gone && gone.fp) state.insideFps.delete(gone.fp);
-        send({ t: 'mod', to: host.dataset.peer, action: 'kick' });
+      add('give admin', () => {
+        const id = host.dataset.peer;
+        if (!id || isAdmin(id)) return;
+        void issueClaim(state.auth.n + 1, [...state.auth.admins, id]);
       });
+      add('mute', () => {
+        const peer = state.peers.get(host.dataset.peer);
+        if (peer) sealedMute(peer);
+      });
+      add('remove from room', () => sealedKick(host.dataset.peer));
     }
     const noiseOn = !!(peer && peer.inNoise);
     add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => { void setPeerNoise(peer, !noiseOn); });
@@ -1100,14 +1105,15 @@ function wireDots(host) {
 }
 
 // wireAdmit connects the let in button of one remote member. Any guest that is
-// inside may press it; the server checks that again and tells the whole room.
+// inside may press it; the news goes sealed to that guest and to the room.
 function wireAdmit(host) {
   const button = host.querySelector('.admit');
   if (!button) return;
   button.addEventListener('click', (event) => {
     event.stopPropagation();
     if (state.waiting || !host.dataset.peer) return;
-    send({ t: 'admit', to: host.dataset.peer });
+    const peer = state.peers.get(host.dataset.peer);
+    if (peer) sealedAdmit(peer);
   });
 }
 
@@ -1149,7 +1155,7 @@ function paintWaiting() {
   paintHandQueue();
 }
 
-// admitPeer runs when the server says that a guest is inside now. Our own media
+// admitPeer runs when the room says that a guest is inside now. Our own media
 // goes to that guest from this moment on; before it, nothing of it did.
 function admitPeer(id) {
   if (id === state.self) {
@@ -3831,7 +3837,7 @@ function lookInit() {
 
 // maskBoxes is the mask row of the effects menu: one box per drawing.
 function maskBoxes() {
-  return document.querySelectorAll('#menu-effects input[data-mask]');
+  return /** @type {NodeListOf<HTMLInputElement>} */ (document.querySelectorAll('#menu-effects input[data-mask]'));
 }
 
 // lookResize follows a camera step so the canvas keeps the picture's shape.
@@ -3968,7 +3974,7 @@ function ensurePeer(id) {
     mic: true,
     cam: true,
     deaf: false,
-    waiting: false,   // held outside the room, see the waiting room
+    waiting: !!state.waitingRoom && !state.waiting, // held outside, see the waiting room
     hand: false,      // a raised hand, with its time as its place in the queue
     handTs: 0,
     screenShared: false, // a live share, until this guest's sealed state says so
@@ -4332,20 +4338,8 @@ function connectWS() {
 }
 
 function handle(msg) {
-  // A host command, a kick and a terminal join error are answered first.
-  if (msg.t === 'mod') {
-    // The host asked for a mute. It is a request to this client; the server
-    // can not mute a track, so this client turns its own gain down.
-    if (msg.action === 'mute') {
-      disableMic(false);
-      say('the host muted your microphone');
-    }
-    return;
-  }
-  if (msg.t === 'kicked') {
-    leave('the host removed you from the room');
-    return;
-  }
+  // A kick, a mute and a role change are sealed notices now, so the only clear
+  // frames with a meaning of their own are a terminal join error and a leave.
   if (msg.t === 'error') {
     if (msg.code === 'unavailable') {
       // The passphrase is not a server question any more, so this code only
@@ -4367,19 +4361,28 @@ function handle(msg) {
       // Only the reconnect notice ends here. A device or sealing notice that
       // the join itself wrote must stay up until the guest has read it.
       if (state.notice === 'connection lost, reconnecting') say('');
-      setAdmins(msg.admins);
-      state.waiting = !!msg.waiting;
-      state.waitingRoom = !!msg.waitingRoom;
+      // Every join is a new socket and a new peer id, so the role and the
+      // switch start from nothing here: both are sealed commits that arrive
+      // over the pairs, and this page begins held outside the room.
+      state.auth = { n: -1, admins: [], by: '', sig: '' };
+      setAdmins([]);
+      state.waiting = true;
       asrProbe();
       omniProbe();
+      let listed = 0;
       for (const info of msg.peers || []) {
-        if (!info) continue;
-        // The toggle fields of an old server, or an old peer, are ignored: the
-        // flags come sealed from the guest itself.
+        if (!info || !info.id) continue;
+        // The toggle fields of an old server, or of the room control it used
+        // to keep, are ignored: the flags come sealed from the guest itself.
         const peer = ensurePeer(info.id);
-        peer.waiting = !!info.waiting;
+        peer.waiting = false;
         sealedSendPub(peer);
+        listed++;
       }
+      // A server with no roster leaves discovery to the room: one broadcast
+      // bundle, and every member that answers is a pair.
+      if (!listed) sealedSendPub(null);
+      startAuthSeed();
       markAdmins();
       paintWaiting();
       // Tell the room the microphone and camera state; only the flags travel.
@@ -4388,12 +4391,10 @@ function handle(msg) {
       break;
     }
     case 'peer-joined': {
-      if (!msg.peer) break;
-      // The toggles of an old server are ignored; the sealed state of the pair
-      // carries the real values.
+      if (!msg.peer || !msg.peer.id) break;
+      // A knock: an opaque id and nothing else. Whether this guest waits is
+      // our own sealed switch, not a server flag.
       const peer = ensurePeer(msg.peer.id);
-      peer.waiting = !!msg.peer.waiting;
-      if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
       paintWaiting();
       paintHandQueue();
@@ -4401,26 +4402,13 @@ function handle(msg) {
       playSfx('pop');
       break;
     }
-    case 'waiting-room': {
-      state.waitingRoom = !!msg.waitingRoom;
-      paintWaiting();
-      break;
-    }
-    case 'admitted': {
-      if (msg.peer && msg.peer.id) admitPeer(msg.peer.id);
-      break;
-    }
     case 'peer-left': {
       dropPeer(msg.from);
       state.admins.delete(msg.from);
+      resealOnLeave(msg.from);
       markAdmins();
       paintWaiting();
       playSfx('bonk');
-      break;
-    }
-    case 'admin': {
-      setAdmins(msg.admins);
-      markAdmins();
       break;
     }
     case 'enc': {
@@ -4428,9 +4416,9 @@ function handle(msg) {
       break;
     }
   }
-  // A clear description, a candidate or a toggle has no case here on purpose.
-  // Everything that carries content or a flag arrives sealed, and an old client
-  // that sends one of these is told to reload, or is dropped without an echo.
+  // A clear description, a candidate, a toggle, a role, a kick and a waiting
+  // flag all have no case here on purpose: every one of them arrives sealed,
+  // so the server can not send one and hope this page acts on it.
 }
 
 // ---------------------------------------------------------------- room flow
@@ -4568,6 +4556,11 @@ function leave(message) {
   wipeIdentity();
   state.w = '';
   state.gate = { v: null, n: 0 };
+  state.auth = { n: -1, admins: [], by: '', sig: '' };
+  if (state.authTimer) clearTimeout(state.authTimer);
+  state.authTimer = null;
+  state.wait = { on: false, n: 0 };
+  state.kickedFps = new Set();
   state.sid = '';
   state.identityFailures = 0;
   state.keyWait.clear();
@@ -8486,11 +8479,16 @@ function paintFrameCounters() {
 // who asked. The keys themselves are still HKDF over the ephemeral secrets
 // alone, and they only reach the worker once that gate has passed.
 
+// sealedSendPub sends the key bundle. One target sends to that peer, and no
+// target broadcasts it: a page that the server gives no roster has no ids to
+// address, so the room learns of it from this bundle alone.
 function sealedSendPub(peer) {
   if (!state.identity || !state.idKey) return;
-  sealedSendOpaque(peer.id, {
+  const bundle = {
     k: 'pub', x: state.identity.xpub, m: state.identity.ek, id: state.idKey.pub, sid: state.sid,
-  });
+  };
+  if (peer) sealedSendOpaque(peer.id, bundle);
+  else send({ t: 'enc', b: encOpaque(bundle) });
 }
 
 // sealedRefuse closes a pair for good. There is no path that continues without
@@ -8510,16 +8508,20 @@ function sealedRefuse(peer, why) {
 }
 
 // sealedRefusePass is sealedRefuse for a guest that failed the room proof. A
-// wrong passphrase costs one failed handshake, and an admin also removes the
-// guest: a seat in the room is not the prize for guessing. A guest with no role
-// only closes the link, because the kick is the server's word and only an admin
-// holds it.
+// wrong passphrase costs one failed handshake. A member also removes the guest
+// from every page: a seat in the room is not the prize for guessing. A guest
+// that was never let in goes back to the lobby with the reason, because no
+// member answers it and the room is not there for it.
 function sealedRefusePass(peer) {
   sealedRefuse(peer, 'does not know the room passphrase');
+  if (state.waiting) {
+    // Out of the message handler: the pair state is being torn down here, and
+    // leaving the room rewrites all of it.
+    setTimeout(() => leave('the room refused the passphrase'), 0);
+    return;
+  }
   if (!isAdmin(state.self) || isAdmin(peer.id)) return;
-  const gone = state.peers.get(peer.id);
-  if (gone && gone.fp) state.insideFps.delete(gone.fp);
-  send({ t: 'mod', to: peer.id, action: 'kick' });
+  sealedKick(peer.id);
 }
 
 // sealedRestart drops a pair's state so a new handshake can run. The deliberate
@@ -8591,24 +8593,18 @@ function sealedProved(peer) {
   // later move of this guest under the same key finds it again.
   peer.vol = storedVolume(peer);
   paintVolume(peer);
-  waitingReturn(peer);
+  rememberInside(peer);
   asrAnnounce(peer);
 }
 
-// waitingReturn keeps the waiting room from locking out a member whose link
+// rememberInside keeps the waiting room from locking out a member whose link
 // dropped. A guest that was inside this call under a proven key is remembered
-// here. When the same key comes back and waits, the admin's client lets it in
-// by itself. Only a key proof counts, never a name, so nobody can pose as a
-// member to skip the room. A guest the admin removed is forgotten, and so is
-// not let back in. The list lives in this tab and ends with the call.
-function waitingReturn(peer) {
-  if (!peer.fp) return;
-  if (!peer.waiting) {
-    state.insideFps.add(peer.fp);
-    return;
-  }
-  if (state.waiting || !isAdmin(state.self)) return;
-  if (state.insideFps.has(peer.fp)) send({ t: 'admit', to: peer.id });
+// here. When the same key comes back and waits, any member lets it in by
+// itself. Only a key proof counts, never a name, so nobody can pose as a member
+// to skip the room. A guest a member removed is put on the refused list, and so
+// is not let back in. The list lives in this tab and ends with the call.
+function rememberInside(peer) {
+  if (peer.fp && !peer.waiting) state.insideFps.add(peer.fp);
 }
 
 // wipeKeys zeroes one pair's secrets. They are the only copies outside the
@@ -8812,6 +8808,12 @@ async function sealedOnProof(peer, msg) {
       : 'proved an identity another label here holds');
     return;
   }
+  // A member removed this identity from the room earlier in the call. The
+  // notice went to every page, so no page answers this key again.
+  if (state.kickedFps.has(peer.fp)) {
+    sealedRefuse(peer, 'was removed from this room');
+    return;
+  }
   // The keys go to the worker now: the passphrase proof itself travels sealed,
   // and a frame that can not be opened would stall the proof. The keys are not
   // permission, though. Every application frame of this pair waits for the
@@ -8908,8 +8910,20 @@ function sealedPassDone(peer) {
   sealedAnnounceName(peer);
   sealedSendState(peer);
   // Both ends proved the gate, so either may ask which value is current: a
-  // page that reconnected or joined late may hold an older one.
+  // page that reconnected or joined late may hold an older one. The role and
+  // the waiting switch travel the same way.
   if (!peer.waiting) sealedSend(peer, { k: 'gateq' });
+  sealedSend(peer, { k: 'wait', on: state.wait.on, n: state.wait.n });
+  sealedSend(peer, { k: 'claimq' });
+  // A held guest says so on the pair: the room can not read the switch from the
+  // server any more, so this is the only way a member learns to let it in. A
+  // guest that is already inside says that instead, because a member may still
+  // hold it from a note that went out before this pair existed.
+  if (state.waiting) sealedSend(peer, { k: 'held' });
+  else sealedSend(peer, { k: 'in' });
+  // A held guest stays held until a member lets it in. With the switch off, or
+  // a proven key this page already saw inside, that happens at once.
+  if (peer.waiting) maybeAdmitHeld(peer);
   const held = peer.appHeld || [];
   peer.appHeld = [];
   for (const obj of held) sealedDispatchApp(peer, obj);
@@ -8930,8 +8944,14 @@ function sealedDrainCtl(peer) {
 }
 
 function sealedHandleOpaque(from, b) {
-  const peer = state.peers.get(from);
-  if (!peer) return;
+  let peer = state.peers.get(from);
+  if (!peer) {
+    // With no roster a member is known only by the frame it sent. The id is
+    // minted by the server, and the payload stays opaque until the handshake
+    // has proved who is behind it.
+    if (from === state.self || !/^[0-9a-f]{12}$/.test(String(from || ''))) return;
+    peer = ensurePeer(from);
+  }
   let msg;
   try {
     msg = decOpaque(b);
@@ -8998,10 +9018,11 @@ function sealedOnApp(peer, b, seq) {
   }
   peer.seqIn = seq;
   if (obj.z !== undefined) delete obj.z; // the padding bucket, never content
-  // The proof is the only kind that may pass before the room is open. Anything
-  // else waits here: a peer that can run a handshake can still be a stranger,
-  // and an offer applied early would build a link to that stranger.
-  if (obj.k !== 'spake' && obj.k !== 'spakeok' && !(peer.pass && peer.pass.done)) {
+  // The proof is the only kind that may pass before the room is open, and a
+  // kick as well: a page a member removed must go even if its own proof never
+  // finished. Anything else waits here: a peer that can run a handshake can
+  // still be a stranger, and an offer applied early would build a link to it.
+  if (obj.k !== 'spake' && obj.k !== 'spakeok' && obj.k !== 'kick' && !(peer.pass && peer.pass.done)) {
     if ((peer.appHeld = peer.appHeld || []).length < 256) peer.appHeld.push(obj);
     return;
   }
@@ -9051,6 +9072,29 @@ function sealedDispatchApp(peer, obj) {
     if (state.gate.v !== null) sealedSend(peer, { k: 'gate', v: state.gate.v, n: state.gate.n });
   } else if (obj.k === 'gate') {
     sealedOnGate(peer, obj);
+  } else if (obj.k === 'claim') {
+    sealedOnClaim(peer, obj);
+  } else if (obj.k === 'claimq') {
+    // A page that just proved the room asks who holds the role. The answer is
+    // the current claim, signed, and nothing else.
+    sealedSendClaim(peer);
+  } else if (obj.k === 'wait') {
+    sealedOnWait(peer, obj);
+  } else if (obj.k === 'admit') {
+    sealedOnAdmit(peer);
+  } else if (obj.k === 'held') {
+    sealedOnHeld(peer);
+  } else if (obj.k === 'in') {
+    sealedOnIn(peer);
+  } else if (obj.k === 'kick') {
+    sealedOnKick(peer, obj);
+  } else if (obj.k === 'mute') {
+    // The host asked for a mute. It is a request to this page; no page can
+    // reach another page's track, so this one turns its own gain down.
+    if (isAdmin(peer.id)) {
+      disableMic(false);
+      say('the host muted your microphone');
+    }
   } else if (obj.k === 'file') {
     fileOnMessage(peer, obj);
   }
@@ -9060,8 +9104,8 @@ function sealedDispatchApp(peer, obj) {
 // The counter orders the changes and a tie goes to the lower peer id, so two
 // admins that change it at the same moment still land on one value everywhere.
 function sealedOnGate(peer, obj) {
-  // The role is checked here as well as in the menu: the server refuses a mod
-  // command from a guest, and a sealed value must follow the same rule.
+  // The role is checked here as well as in the menu: the role is a sealed claim
+  // now, and a sealed value must follow the same list.
   if (!isAdmin(peer.id)) return;
   const n = Number(obj.n);
   if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
@@ -9098,6 +9142,255 @@ function setGate(v) {
   const n = state.gate.n + 1;
   adoptGate(v, n);
   toSealed({ k: 'gate', v, n });
+}
+
+// ------------------------------------------------------ sealed room control
+//
+// The role, the waiting switch, the let in, the kick and the mute are sealed
+// commits now. Each one travels per pair, so the server relays a blob and
+// learns nothing. A role list and a switch carry a counter: the highest
+// counter wins and the lower peer id breaks a tie, so two pages that act at
+// the same moment still land on one answer.
+
+// claimText is the exact byte string a role claim signs. The room id binds the
+// claim to this room, and the counter orders two admins that act at once.
+function claimText(n, admins) {
+  return b64e(sealUtf8.encode(`stanze/claim/1|${state.room}|${n}|${admins.join(',')}`));
+}
+
+// makeClaim signs one role list with the identity this page announced in the
+// handshake, so every page that holds that key can check it.
+async function makeClaim(n, admins) {
+  if (!state.idKey) return null;
+  let sig = '';
+  try {
+    sig = await state.idKey.sign(claimText(n, admins));
+  } catch {
+    return null;
+  }
+  return sig ? { n, admins: admins.slice(), sig } : null;
+}
+
+// adoptClaim installs a checked claim: the role list, its counter and the page
+// that signed it.
+function adoptClaim(claim) {
+  state.auth = { n: claim.n, admins: claim.admins.slice(), by: claim.by, sig: claim.sig };
+  setAdmins(claim.admins);
+  markAdmins();
+  paintWaiting();
+}
+
+// issueClaim makes a claim current here and sends it to every pair.
+async function issueClaim(n, admins) {
+  const unique = [...new Set(admins)].filter((id) => /^[0-9a-f]{12}$/.test(String(id || '')));
+  if (!unique.length) return false;
+  const claim = await makeClaim(n, unique);
+  if (!claim || state.leaving) return false;
+  adoptClaim({ ...claim, by: state.self });
+  toSealed({ k: 'claim', n: claim.n, admins: claim.admins, sig: claim.sig });
+  return true;
+}
+
+// sealedSendClaim answers a page that just proved the room and asked who holds
+// the role. A page with no claim of its own has nothing to say.
+function sealedSendClaim(peer) {
+  if (state.auth.n < 0) return;
+  sealedSend(peer, { k: 'claim', n: state.auth.n, admins: state.auth.admins, sig: state.auth.sig });
+}
+
+// sealedOnClaim checks one claim: the sender signs for its own announced
+// identity, names itself in the list, and the counter decides.
+function sealedOnClaim(peer, obj) {
+  if (!peer.proven || !peer.pub || !peer.pub.id) return;
+  const n = Number(obj.n);
+  if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
+  if (!Array.isArray(obj.admins) || !obj.admins.length || obj.admins.length > 64) return;
+  if (obj.admins.some((id) => typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id))) return;
+  if (!obj.admins.includes(peer.id) || typeof obj.sig !== 'string') return;
+  const res = pqCall((json) => pqModule().idverify(json), {
+    id: peer.pub.id, msg: claimText(n, obj.admins), sig: obj.sig,
+  });
+  if (!res || !res.ok) return;
+  if (n < state.auth.n) return;
+  if (n === state.auth.n) {
+    // Two pages hold the same counter: the lower signer id wins, so both sides
+    // land on one list and a page never flips between two answers.
+    if (obj.admins.join(',') === state.auth.admins.join(',')) return;
+    if (String(peer.id) >= String(state.auth.by)) return;
+  }
+  adoptClaim({ ...obj, by: peer.id });
+}
+
+// startAuthSeed gives a room with no member a first admin. A page that hears a
+// claim first keeps it; pages that seed at the same moment agree through the
+// counter and the peer id, so one list survives.
+function startAuthSeed() {
+  if (state.authTimer) clearTimeout(state.authTimer);
+  state.authTimer = setTimeout(() => {
+    state.authTimer = null;
+    if (state.leaving || !state.self) return;
+    // A room with nobody else in it has no member to let this page in, so the
+    // first guest takes the room itself. It also seeds the first role.
+    if (!state.peers.size && state.waiting) admitPeer(state.self);
+    if (state.auth.n >= 0) return;
+    void issueClaim(0, [state.self]);
+  }, 1200);
+}
+
+// resealOnLeave drops a member that left from the role list. The first admin
+// left in the list signs the new claim, so one page does it and every page
+// lands on the same list. A room with no admin left lets every page offer
+// itself, and the counter and the peer id pick one.
+function resealOnLeave(id) {
+  if (!state.auth.admins.includes(id)) return;
+  const rest = state.auth.admins.filter((other) => other !== id);
+  if (!rest.length) {
+    if (!state.waiting) void issueClaim(state.auth.n + 1, [state.self]);
+    return;
+  }
+  if (rest[0] !== state.self) return;
+  void issueClaim(state.auth.n + 1, rest);
+}
+
+// sealedOnWait takes the room switch from an admin's pair. The counter orders
+// two changes, and the peer id breaks a tie, the same rule as the gate value.
+function sealedOnWait(peer, obj) {
+  if (!isAdmin(peer.id)) return;
+  const n = Number(obj.n);
+  if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
+  const on = !!obj.on;
+  if (n < state.wait.n) return;
+  if (n === state.wait.n && (on === state.wait.on || String(peer.id) >= String(state.self))) return;
+  state.wait = { on, n };
+  state.waitingRoom = on;
+  paintWaiting();
+}
+
+// setWaitingRoom is the admin switch: one sealed commit to every pair. A page
+// with no role can not move it, and no page obeys a sender that holds none.
+function setWaitingRoom(on) {
+  if (!isAdmin(state.self) || state.waiting) return;
+  const n = state.wait.n + 1;
+  state.wait = { on: !!on, n };
+  state.waitingRoom = !!on;
+  toSealed({ k: 'wait', on: !!on, n });
+  paintWaiting();
+}
+
+// sealedAdmit lets one held guest in. Any member may do it: the gate proof
+// already showed that both pages hold the room, so no server has a say.
+function sealedAdmit(peer) {
+  if (!peer || state.waiting) return;
+  sealedSend(peer, { k: 'admit' });
+}
+
+// maybeAdmitHeld runs when a held guest says so. A member with the switch off
+// lets it in, and with no member inside at all the lower id keeps the room and
+// lets the other in, so a room can never stay shut with nobody inside.
+function maybeAdmitHeld(peer) {
+  if (!peer || !peer.waiting) return;
+  if (!state.waiting) {
+    if (!state.waitingRoom || (peer.fp && state.insideFps.has(peer.fp))) {
+      // The member decides, and its own view follows at once: a page that keeps
+      // holding a guest it has just let in holds its media back as well, and the
+      // let in notice alone never clears it here.
+      sealedAdmit(peer);
+      admitPeer(peer.id);
+    }
+    return;
+  }
+  if (String(state.self) < String(peer.id)) {
+    admitPeer(state.self);
+    sealedAdmit(peer);
+    return;
+  }
+  // The lower id keeps the room and lets the other in, so this page waits for
+  // that news. Ask again a few times, because the one note can go out before
+  // the pair that carries it exists.
+  askHeldAgain(peer);
+}
+
+// askHeldAgain repeats the held note on one pair. It is idempotent on the far
+// side and it stops with the room, so a lost note costs two seconds and not a
+// call. The count is capped so a room that never answers stays quiet.
+function askHeldAgain(peer) {
+  if (!peer || !state.waiting) return;
+  if ((peer.heldAsks || 0) >= 6) return;
+  peer.heldAsks = (peer.heldAsks || 0) + 1;
+  const timer = setTimeout(() => {
+    peer.heldTimers = (peer.heldTimers || []).filter((t) => t !== timer);
+    if (state.leaving || !state.peers.has(peer.id) || !state.waiting) return;
+    sealedSend(peer, { k: 'held' });
+  }, 2000);
+  (peer.heldTimers = peer.heldTimers || []).push(timer);
+}
+
+// sealedOnHeld is a guest telling its pair that the room still holds it out.
+function sealedOnHeld(peer) {
+  if (!peer) return;
+  if (!peer.waiting) {
+    peer.waiting = true;
+    paintWaiting();
+    paintHandQueue();
+  }
+  maybeAdmitHeld(peer);
+}
+
+// sealedOnAdmit is the news that a member let this page in.
+function sealedOnAdmit(peer) {
+  if (!state.waiting || !peer) return;
+  admitPeer(state.self);
+  toSealed({ k: 'in' });
+}
+
+// sealedOnIn is a guest whose pair is new telling this page that it is inside.
+// The claim is a hint and not a permission: the room applies its own rule, the
+// same one the held note runs, so a guest that says it is in does not skip a
+// waiting room that is switched on.
+function sealedOnIn(peer) {
+  if (state.waiting || !peer || !peer.waiting) return;
+  maybeAdmitHeld(peer);
+}
+
+// sealedKick removes one peer from every page. Each page drops it and stops
+// answering, so a page that ignores the notice talks to nobody. The identity
+// goes on the list this page refuses, so the same key can not come back.
+function sealedKick(id) {
+  if (!isAdmin(state.self) || !id || id === state.self) return;
+  const gone = state.peers.get(id);
+  if (gone && gone.fp) state.kickedFps.add(gone.fp);
+  toSealed({ k: 'kick', of: id });
+  dropPeer(id);
+  state.admins.delete(id);
+  resealOnLeave(id);
+  markAdmins();
+  paintWaiting();
+}
+
+// sealedMute asks one page to turn its own microphone down. Only a page can
+// reach its own track, so this is a request over its proven pair and not a
+// command the relay could carry.
+function sealedMute(id) {
+  if (!isAdmin(state.self) || !id || id === state.self) return;
+  toSealed({ k: 'mute', of: id });
+}
+
+// sealedOnKick honours an admin's notice. Only a proven pair of an admin
+// counts, and the page named in it is dropped here too.
+function sealedOnKick(peer, obj) {
+  if (!isAdmin(peer.id) || typeof obj.of !== 'string') return;
+  if (obj.of === state.self) {
+    leave('the host removed you from the room');
+    return;
+  }
+  const gone = state.peers.get(obj.of);
+  if (!gone) return;
+  if (gone.fp) state.kickedFps.add(gone.fp);
+  dropPeer(obj.of);
+  state.admins.delete(obj.of);
+  resealOnLeave(obj.of);
+  markAdmins();
+  paintWaiting();
 }
 
 // padsOn tells the frame worker that this pair may round its frame sizes up.
@@ -10050,14 +10343,13 @@ function init() {
     });
   }
 
-  // The waiting room switch is for the admin; the server ignores anyone else.
-  // The box follows the room, so it is put back if the server did not take it.
+  // The waiting room switch is for the admin; the commit is sealed, so no page
+  // obeys a sender that holds no role and the server sees nothing. The box
+  // follows the room, so it goes back if another admin changed it first.
   const waitBox = document.getElementById('waiting-room');
   if (waitBox) {
     waitBox.addEventListener('change', () => {
-      const on = /** @type {HTMLInputElement} */ (waitBox).checked;
-      send({ t: 'mod', action: 'waitingroom', on });
-      paintWaiting();
+      setWaitingRoom(/** @type {HTMLInputElement} */ (waitBox).checked);
     });
   }
 

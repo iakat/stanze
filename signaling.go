@@ -102,16 +102,10 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	p.onClose = func() {
 		close(done)
 		conn.Close()
-		// The peer is out of the room, so both messages reach the rest of it
-		// and an empty room, already gone, gets no admin list.
-		if room, letIn := s.hub.leaveWith(p); room != nil {
+		// The peer is out of the room, so the notice reaches the rest of it.
+		// An empty room is already gone and hears nothing.
+		if room := s.hub.leave(p); room != nil {
 			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "peer-left", From: p.id}))
-			if letIn != "" {
-				// The last member left and the guest that waited longest
-				// takes the room; everyone is told, the guest too.
-				s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admitted", From: letIn, Peer: &peerInfo{ID: letIn}}))
-			}
-			s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admin", Admins: s.hub.adminsOf(room)}))
 			s.log.Debug("peer left")
 		}
 	}
@@ -170,71 +164,17 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		case "enc":
 			// Opaque end-to-end payload: forwarded verbatim, never stored.
 			s.handleEnc(p, m)
-		case "mod":
-			s.handleMod(p, m)
-		case "admit":
-			// Any guest inside may let a waiting guest in; the hub checks
-			// both sides, and the answer goes to the whole room.
-			if s.hub.admit(p, m.To) {
-				s.hub.broadcastTo(s.hub.roomOf(p), mustJSON(serverMsg{T: "admitted", From: p.id, Peer: &peerInfo{ID: m.To}}))
-			}
+		case "mod", "admit":
+			// The role, the waiting room, the kick and the mute are sealed
+			// notices between the guests now. A clear command is dropped: this
+			// server has no way to check a role and no role to check.
+			break
 		case "leave":
 			return
 		case "ping":
 			p.enqueueJSON(serverMsg{T: "pong"})
 		}
 	}
-}
-
-// handleMod runs one admin command. The server is the authority: a peer that
-// is not an admin is ignored, and the target must be in the same room.
-func (s *server) handleMod(p *Peer, m clientMsg) {
-	room := s.hub.roomOf(p)
-	if room == nil {
-		return
-	}
-	if !s.hub.isAdmin(room, p.id) || s.hub.isWaiting(p) {
-		return
-	}
-	if m.Action == "waitingroom" {
-		// A room switch, not a command on a guest, so it has no target.
-		if m.On == nil {
-			return
-		}
-		on := *m.On
-		s.hub.setWaitingRoom(room, on)
-		s.hub.broadcastTo(room, mustJSON(serverMsg{T: "waiting-room", WaitingRoom: &on}))
-		return
-	}
-	if m.To == "" || m.To == p.id {
-		return
-	}
-	switch m.Action {
-	case "admin":
-		if s.hub.grantAdmin(room, m.To) {
-			s.sendAdmins(room)
-		}
-	case "mute":
-		if target := s.hub.peerOf(room, m.To); target != nil {
-			target.enqueueJSON(serverMsg{T: "mod", From: p.id, Action: "mute"})
-		}
-	case "kick":
-		target := s.hub.peerOf(room, m.To)
-		if target == nil {
-			return
-		}
-		target.enqueueJSON(serverMsg{T: "kicked", From: p.id})
-		// Give the notice a moment to leave the queue, then close the socket.
-		go func() {
-			time.Sleep(200 * time.Millisecond)
-			target.close()
-		}()
-	}
-}
-
-// sendAdmins tells the whole room who holds the role now.
-func (s *server) sendAdmins(room *Room) {
-	s.hub.broadcastTo(room, mustJSON(serverMsg{T: "admin", Admins: s.hub.adminsOf(room)}))
 }
 
 // handleEnc forwards one opaque blob. A target id sends it to one peer in the
@@ -290,17 +230,6 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 
 	existing := s.hub.peersOf(room, p.id)
-	admins := s.hub.adminsOf(room)
-	isAdmin := make(map[string]bool, len(admins))
-	for _, id := range admins {
-		isAdmin[id] = true
-	}
-	peers := make([]peerInfo, 0, len(existing))
-	for _, other := range existing {
-		peers = append(peers, peerInfo{
-			ID: other.id, Admin: isAdmin[other.id], Waiting: s.hub.isWaiting(other),
-		})
-	}
 
 	// Fresh, time limited relay credentials for this connection only.
 	ice, err := iceServersFor(s.cfg)
@@ -308,26 +237,14 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		s.log.Error("could not mint relay credentials", "err", err)
 	}
 
-	waitingRoom := s.hub.waitingRoomOn(room)
-	selfWaiting := s.hub.isWaiting(p)
-	p.enqueueJSON(serverMsg{
-		T:           "joined",
-		Self:        p.id,
-		Peers:       peers,
-		Ice:         ice,
-		Admins:      admins,
-		WaitingRoom: &waitingRoom,
-		Waiting:     selfWaiting,
-	})
+	// The join names nobody: no roster, no role, no waiting flag. A guest that
+	// holds the room id learns nothing here, and the members learn of it from
+	// the one opaque id in the knock below.
+	p.enqueueJSON(serverMsg{T: "joined", Self: p.id, Ice: ice})
 
-	ownJoined := mustJSON(serverMsg{
-		T: "peer-joined",
-		Peer: &peerInfo{
-			ID: p.id, Admin: isAdmin[p.id], Waiting: selfWaiting,
-		},
-	})
+	knock := mustJSON(serverMsg{T: "peer-joined", Peer: &peerInfo{ID: p.id}})
 	for _, other := range existing {
-		other.enqueue(ownJoined)
+		other.enqueue(knock)
 	}
 
 	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))

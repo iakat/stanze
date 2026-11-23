@@ -13,10 +13,6 @@ type Peer struct {
 	id   string
 	room *Room
 
-	// waiting is set while the room holds this guest outside. It is read and
-	// written under the hub lock, like the room itself.
-	waiting bool
-
 	// wmu serialises writes to the websocket. gorilla allows one concurrent
 	// writer, and both the write loop and the read loop (terminal errors)
 	// write on the same connection.
@@ -84,10 +80,7 @@ func (p *Peer) close() {
 }
 
 type peerInfo struct {
-	ID    string `json:"id"`
-	Admin bool   `json:"admin,omitempty"`
-	// Waiting is true for a guest that the room has not let in yet.
-	Waiting bool `json:"waiting,omitempty"`
+	ID string `json:"id"`
 }
 
 type iceServer struct {
@@ -96,21 +89,16 @@ type iceServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
-// clientMsg is the whole client to server vocabulary: join, enc, state, mod,
-// admit, leave, ping. A description and a candidate are not part of it; they
-// travel inside enc. A `state` frame is an old client's clear toggle: it is
-// accepted and dropped, because the toggles travel sealed now.
+// clientMsg is the whole client to server vocabulary: join, enc, state, leave,
+// ping. A description and a candidate are not part of it; they travel inside
+// enc. A `state` frame is an old client's clear toggle: it is accepted and
+// dropped, because the toggles travel sealed now. There is no admin command
+// either: the role, the waiting room, the kick and the mute are sealed notices
+// between the guests, and the server can neither check nor forge one.
 type clientMsg struct {
 	T    string `json:"t"`
 	Room string `json:"room,omitempty"`
 	To   string `json:"to,omitempty"`
-
-	// action is the admin command: kick, mute, admin or waitingroom.
-	Action string `json:"action,omitempty"`
-
-	// on is the value of the waitingroom command. A pointer, so "not sent"
-	// and "off" differ.
-	On *bool `json:"on,omitempty"`
 
 	// b is an opaque, already encrypted payload for another peer or for the
 	// whole room. It stays raw JSON: the relay copies it without unquoting or
@@ -119,25 +107,17 @@ type clientMsg struct {
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
-// peer-left, admin, mod, kicked, enc, waiting-room, admitted, error, pong.
-// There is no description field, so the server cannot send one, and no toggle
-// field, so it cannot echo a flag either.
+// peer-left, enc, error, pong. There is no description field, so the server
+// cannot send one, no toggle field, so it cannot echo a flag, and no role or
+// waiting field, so it cannot name a host or hold a guest at the door.
 type serverMsg struct {
-	T      string      `json:"t"`
-	Self   string      `json:"self,omitempty"`
-	Peers  []peerInfo  `json:"peers,omitempty"`
-	Peer   *peerInfo   `json:"peer,omitempty"`
-	From   string      `json:"from,omitempty"`
-	Admins []string    `json:"admins,omitempty"`
-	Action string      `json:"action,omitempty"`
-	Code   string      `json:"code,omitempty"`
-	Ice    []iceServer `json:"ice,omitempty"`
-
-	// WaitingRoom is the room switch, sent with `joined` and with a
-	// `waiting-room` change. Waiting is true in `joined` for a guest that
-	// has to wait. A pointer for the switch, so "off" is still sent.
-	WaitingRoom *bool `json:"waitingRoom,omitempty"`
-	Waiting     bool  `json:"waiting,omitempty"`
+	T     string      `json:"t"`
+	Self  string      `json:"self,omitempty"`
+	Peers []peerInfo  `json:"peers,omitempty"`
+	Peer  *peerInfo   `json:"peer,omitempty"`
+	From  string      `json:"from,omitempty"`
+	Code  string      `json:"code,omitempty"`
+	Ice   []iceServer `json:"ice,omitempty"`
 }
 
 // tokenBucket is a small per-connection message limiter.
