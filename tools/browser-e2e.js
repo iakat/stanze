@@ -347,12 +347,34 @@ async function stats(page) {
       return !e.parked && e.drawn && e.loop === true && e.senders.length === 1 && e.senders[0] === 'drawn';
     }, null, 10000, 'A draws again');
     check('the drawn track comes back with the tab', true);
+
+    // Toggling an effect on a live pipeline must not swap the sender track:
+    // a swap costs a keyframe and the picture blinks (katia, 2026-11-23).
+    const swapsBefore = await pageA.evaluate(() => window.e2eApp.effects().swaps);
+    await pageA.evaluate(() => window.e2eApp.setLook('mono'));
+    await sleep(300);
+    await pageA.evaluate(() => window.e2eApp.setMask(['cat']));
+    await sleep(300);
+    await pageA.evaluate(() => window.e2eApp.setMask([]));
+    await pageA.evaluate(() => window.e2eApp.setLook('soft'));
+    await sleep(300);
+    const swapState = await pageA.evaluate(() => window.e2eApp.effects());
+    check('toggling effects does not swap the sender track',
+      swapState.swaps === swapsBefore && swapState.senders[0] === 'drawn',
+      'swaps ' + swapsBefore + ' -> ' + swapState.swaps);
+
+    // The pipeline is kept for a grace after the last effect goes off, then the
+    // camera comes back on its own. The test shortens the grace.
+    await pageA.evaluate(() => window.e2eApp.setLookGrace(600));
     await pageA.evaluate(() => window.e2eApp.setLook('none'));
+    const heldA = await pageA.evaluate(() => window.e2eApp.effects());
+    check('the pipeline is held for a moment after the effects go off',
+      heldA.drawn && heldA.senders[0] === 'drawn', JSON.stringify(heldA.senders));
     await until(pageA, () => {
       const e = window.e2eApp.effects();
       return !e.drawn && !e.on && e.senders.length === 1 && e.senders[0] === 'camera';
-    }, null, 10000, 'A drops the look');
-    check('dropping the look puts the camera back', true);
+    }, null, 10000, 'A drops the look after the grace');
+    check('the camera comes back when the grace ends', true);
 
     // ---- signaling must ride the page's own origin (wss behind TLS, ws on
     // a plain http test server)

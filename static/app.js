@@ -65,6 +65,11 @@ const state = {
   masks: [],          // masks drawn on the face, any number at once
   lookPipe: null,     // the canvas pipeline while a look or a mask is on
   lookOut: null,      // the canvas video track that peers receive
+  lookSrc: null,      // the camera track the running pipeline was built from
+  lookGrace: 0,       // ms deadline: a pipeline kept after the last effect went off
+  lookGraceMs: 120000, // how long that pipeline is kept, for a test to shorten
+  lookSwaps: 0,       // sender track swaps made by lookPublish, for a test
+  lookTimer: null,    // the timer that ends that grace
   noiseWanted: true,
   leaving: false,
   reconnectTimer: null,
@@ -2732,6 +2737,7 @@ async function lookStart() {
     mesh: null, meshTried: false, meshBusy: false, meshLast: 0,
   };
   state.lookPipe = pipe;
+  state.lookSrc = src;
   // A hidden tab can leave the source element paused, and the clock draws from
   // it, so it is asked to play on every move of the tab.
   pipe.wake = () => {
@@ -3599,14 +3605,17 @@ function drawMikuFringe(ctx, g) {
 // share.
 async function lookPublish(track) {
   if (!state.outStream) return;
+  const senders = Array.from(state.peers.values()).filter((peer) => {
+    const tr = peer.tx && peer.tx.video;
+    return tr && !peer.waiting && tr.sender.track !== track;
+  });
+  if (senders.length) state.lookSwaps++;
   for (const old of state.outStream.getVideoTracks()) {
     if (old !== track) state.outStream.removeTrack(old);
   }
   if (track && !state.outStream.getVideoTracks().includes(track)) state.outStream.addTrack(track);
-  await Promise.all(Array.from(state.peers.values()).map(async (peer) => {
-    const tr = peer.tx && peer.tx.video;
-    if (!tr || peer.waiting) return;
-    await tr.sender.replaceTrack(track).catch(() => {});
+  await Promise.all(senders.map(async (peer) => {
+    await peer.tx.video.sender.replaceTrack(track).catch(() => {});
   }));
   paintSelfCam(true);
 }
@@ -3644,6 +3653,12 @@ function lookStop(restore = true) {
   state.lookPipe = null;
   state.lookOut = null;
   state.lookParked = false;
+  state.lookSrc = null;
+  state.lookGrace = 0;
+  if (state.lookTimer) {
+    clearTimeout(state.lookTimer);
+    state.lookTimer = null;
+  }
   if (p) {
     if (p.wake) document.removeEventListener('visibilitychange', p.wake);
     if (p.clock) p.clock.terminate();
@@ -3669,13 +3684,55 @@ function lookStop(restore = true) {
 
 // lookRestart starts or stops the pipeline to match the current choice and the
 // live camera. It is the one path the menu uses, and the camera path calls it
-// when the track changes. A choice that draws nothing puts the camera back on
-// the senders: a stopped canvas track would leave every peer with one still
-// picture.
+// when the track changes.
+//
+// A running pipeline is kept while the choice still draws something, and for a
+// short grace after the last effect goes off. Every swap of a sender track
+// costs a fresh keyframe and the picture blinks, so a menu click that only
+// changes what is drawn must not rebuild the pipeline. Only a new camera track,
+// or the end of the grace, does that.
+function armLookTearDown() {
+  if (state.lookTimer) {
+    clearTimeout(state.lookTimer);
+    state.lookTimer = null;
+  }
+  if (lookOn()) return;
+  if (!state.lookGrace) return;
+  const left = Math.max(0, state.lookGrace - Date.now());
+  state.lookTimer = setTimeout(() => {
+    state.lookTimer = null;
+    lookRestart();
+  }, left + 250);
+}
+
 async function lookRestart() {
-  if (state.lookPipe) lookStop(false);
-  if (lookOn() && state.camTrack) await lookStart();
-  if (state.lookPipe) return;
+  // The camera changed under a running pipeline: the old one is stale.
+  if (state.lookPipe && state.lookSrc !== state.camTrack) lookStop(false);
+  if (state.lookPipe) {
+    if (lookOn()) {
+      // An effect is back, so no tear-down is owed. The grace starts again
+      // from the next moment every effect is off.
+      state.lookGrace = 0;
+      armLookTearDown();
+      return;
+    }
+    // Plain passthrough frames keep the track alive, so turning an effect off
+    // and on again does not touch the senders.
+    if (!state.lookGrace) state.lookGrace = Date.now() + state.lookGraceMs;
+    if (Date.now() < state.lookGrace) {
+      armLookTearDown();
+      return;
+    }
+    lookStop();
+    return;
+  }
+  if (!lookOn() || !state.camTrack) return;
+  await lookStart();
+  if (state.lookPipe) {
+    state.lookGrace = 0;
+    armLookTearDown();
+    return;
+  }
   lookStop();
 }
 
@@ -9328,6 +9385,7 @@ win().e2eApp = {
     drawn: !!lookTrack(),
     parked: !!state.lookParked,
     loop: !!(state.lookPipe && state.lookPipe.clock),
+    swaps: state.lookSwaps,
     cam: state.camTrack ? state.camTrack.readyState : 'none',
     senders: [...state.peers.values()].map((peer) => {
       const tr = peer.tx && peer.tx.video;
@@ -9344,6 +9402,11 @@ win().e2eApp = {
     const pick = $('look-filter');
     if (pick) pick.value = state.look;
     return lookRestart();
+  },
+  setLookGrace: (ms) => {
+    state.lookGraceMs = Math.max(0, Number(ms) || 0);
+    state.lookGrace = 0;
+    if (!lookOn()) return lookRestart();
   },
   setMask: (names) => {
     state.masks = maskSet(names);
