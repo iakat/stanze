@@ -96,9 +96,12 @@ type sigMsg struct {
 	Ice   []iceCfg   `json:"ice"`
 
 	// B is another peer's opaque payload. In the browser it holds ciphertext;
-	// here it carries a description or a candidate, base64 encoded, so the
-	// suite exercises the same path a browser takes.
-	B string `json:"b"`
+	// here it carries this same struct, base64 encoded, so the suite drives its
+	// peers over the path a browser takes. SDP and Candidate are only ever set
+	// inside B, never on a frame of their own.
+	B         string          `json:"b"`
+	SDP       string          `json:"sdp,omitempty"`
+	Candidate json.RawMessage `json:"candidate,omitempty"`
 
 	Waiting     bool  `json:"waiting"`
 	WaitingRoom *bool `json:"waitingRoom"`
@@ -523,11 +526,8 @@ func testRelay() {
 	}
 
 	// The same description inside an enc frame does reach the peer, untouched.
-	body, err := json.Marshal(sigBody{T: "offer", SDP: "v=0\r\ns=probe-offer\r\n"})
-	if err == nil {
-		err = b.c.send(map[string]any{"t": "enc", "to": a.self, "b": base64.StdEncoding.EncodeToString(body)})
-	}
-	if err != nil {
+	sdp := "v=0\r\ns=probe-offer\r\n"
+	if err := sendSealed(b.c, a.self, sigMsg{T: "offer", SDP: sdp}); err != nil {
 		report("sealed offer relayed to A", err)
 		return
 	}
@@ -536,7 +536,7 @@ func testRelay() {
 	report("sealed offer relayed to A", errOr(err,
 		got.From != b.self, "from "+got.From,
 		!ok, "payload did not decode",
-		sealed.SDP != "v=0\r\ns=probe-offer\r\n", "sdp changed"))
+		sealed.SDP != sdp, "sdp changed"))
 
 	// Peer left notification.
 	b.c.close()
@@ -840,15 +840,9 @@ func peersNote(joined, rejected int) error {
 
 // ---------------------------------------------------------------- webrtc
 
-// sigBody is one description or candidate on its way to the other peer. It
-// travels inside an enc frame, which the server forwards without looking.
-type sigBody struct {
-	T    string          `json:"t"`
-	SDP  string          `json:"sdp,omitempty"`
-	Cand json.RawMessage `json:"candidate,omitempty"`
-}
-
-func sendSealed(c *sigClient, to string, body sigBody) error {
+// sendSealed puts one description or candidate inside an enc frame, which the
+// server forwards without looking. readSealed is the other end.
+func sendSealed(c *sigClient, to string, body sigMsg) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -856,14 +850,17 @@ func sendSealed(c *sigClient, to string, body sigBody) error {
 	return c.send(map[string]any{"t": "enc", "to": to, "b": base64.StdEncoding.EncodeToString(raw)})
 }
 
-func readSealed(m sigMsg) (sigBody, bool) {
-	var body sigBody
+func readSealed(m sigMsg) (sigMsg, bool) {
 	if m.T != "enc" || m.B == "" {
-		return body, false
+		return sigMsg{}, false
 	}
 	raw, err := base64.StdEncoding.DecodeString(m.B)
-	if err != nil || json.Unmarshal(raw, &body) != nil {
-		return body, false
+	if err != nil {
+		return sigMsg{}, false
+	}
+	var body sigMsg
+	if json.Unmarshal(raw, &body) != nil {
+		return sigMsg{}, false
 	}
 	return body, true
 }
@@ -895,10 +892,9 @@ func newPair(conf webrtc.Configuration, sigA, sigB *sigClient, aSelf, bSelf stri
 				return
 			}
 			raw, err := json.Marshal(c.ToJSON())
-			if err != nil {
-				return
+			if err == nil {
+				sendSealed(sig, remote, sigMsg{T: "ice", Candidate: raw})
 			}
-			sendSealed(sig, remote, sigBody{T: "ice", Cand: raw})
 		})
 		sig.setHandler(func(m sigMsg) {
 			body, ok := readSealed(m)
@@ -917,12 +913,12 @@ func newPair(conf webrtc.Configuration, sigA, sigB *sigClient, aSelf, bSelf stri
 				if err := pc.SetLocalDescription(ans); err != nil {
 					return
 				}
-				sendSealed(sig, m.From, sigBody{T: "answer", SDP: pc.LocalDescription().SDP})
+				sendSealed(sig, m.From, sigMsg{T: "answer", SDP: pc.LocalDescription().SDP})
 			case "answer":
 				pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: body.SDP})
 			case "ice":
 				var c webrtc.ICECandidateInit
-				if err := json.Unmarshal(body.Cand, &c); err == nil {
+				if err := json.Unmarshal(body.Candidate, &c); err == nil {
 					pc.AddICECandidate(c)
 				}
 			}
@@ -988,7 +984,7 @@ func runMesh(p *rtcPair, sigA *sigClient, bSelf string, timeout time.Duration) e
 	if err := p.a.SetLocalDescription(offer); err != nil {
 		return err
 	}
-	if err := sendSealed(sigA, bSelf, sigBody{T: "offer", SDP: p.a.LocalDescription().SDP}); err != nil {
+	if err := sendSealed(sigA, bSelf, sigMsg{T: "offer", SDP: p.a.LocalDescription().SDP}); err != nil {
 		return err
 	}
 
