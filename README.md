@@ -28,6 +28,10 @@ binary.
   device reset.
 - **Optional waiting room.** An admin can hold new guests outside until a
   member lets them in; the server enforces who may admit whom.
+- **A passphrase that can change.** The value the lobby holds becomes a gate the
+  members carry, so an admin can set or change it during the call. The change is
+  one sealed commit per pair with a counter; a pair that is already open keeps
+  its keys, and a guest with only the old value is refused at the proof.
 - **Optional transcription.** Vosk (per-language models) or a single
   multilingual Omnilingual ASR model, both running in the guest's tab. Off
   unless the server is given the model directory.
@@ -168,8 +172,9 @@ appears in a path or a query.
 - **Files.** A file offer travels as a sealed payload; the bytes go over one
   sealed data channel per pair. Nothing is written until the receiver clicks
   save.
-- **Logs.** Info level holds listen addresses and counts. Room ids appear at
-  debug level as a truncated hash, never in clear.
+- **Logs.** Info level holds listen addresses and counts. A join writes no room
+  id, no room fingerprint and no head count: the debug line says that a socket
+  joined and nothing about which room or how large it is.
 
 Changing the post-quantum module requires rebuilding the Wasm file:
 

@@ -110,7 +110,7 @@ manifest is `deploy/deployment.json`.
   server, including the live URL: the peer list carries no name, there is no
   plaintext chat path, the handshake agrees, and an observer with no key opens
   nothing.
-- `cmd/selftest` — 42 checks, 0 failed, including the join form, the blind relay and the
+- `cmd/selftest` — 47 checks, 0 failed, including the join form, the blind relay and the
   three removed page assets.
 - `tools/pq-browser-e2e.js` — two real headless browsers on the one join form:
   video and audio play through the transform, chat and names decrypt, the short
@@ -118,6 +118,10 @@ manifest is `deploy/deployment.json`.
   exactly 29 bytes larger, no name or chat text appears in signaling, and an
   isolated frame lab proves that a wrong key decodes nothing while a correct key
   installed live starts decoding.
+- `tools/gate-e2e.js` — two browsers in one room, the passphrase changed through
+  the real menu and prompt: the admin holds the new value with the next counter,
+  the peer learns it sealed, the menu names the state without the value, and the
+  pair that was open still carries chat.
 
 Measured on the live deployment: video plays at both peers, audio RMS is about
 0.38, roughly 240 frames per direction are sealed and opened in the short run,
