@@ -3057,7 +3057,12 @@ function lookSmall(p, a, filter) {
   const fcy = (browY + lipY) / 2;
   const frx = Math.max((g.eyeR[1][0] - g.eyeL[0][0]) / 2, g.fw * 0.3);
   const fry = Math.max((lipY - browY) / 2, g.fh * 0.12);
-  const prx = Math.max(frx * 1.22, 8), pry = Math.max(fry * 1.28, 8);
+  // The pad takes the whole face and not a box around the middle: the cheeks
+  // left and right, the hairline above and the chin below, so every feature
+  // sits well inside it and the edge of the pad is the edge of the face.
+  const pcx = cx;
+  const pcy = (g.top[1] + g.chin[1]) / 2;
+  const prx = Math.max(g.fw * 0.52, 8), pry = Math.max(g.fh * 0.54, 8);
   const iw = Math.ceil(2 * prx), ih = Math.ceil(2 * pry);
   if (iw < 8 || ih < 8 || !vw || !vh) return;
   const vx = (x) => x * vw / W, vy = (y) => y * vh / H;
@@ -3072,12 +3077,12 @@ function lookSmall(p, a, filter) {
   if (c.height < ih) c.height = ih;
   // A pad of forehead skin, stretched over the box: the only face skin that no
   // feature sits on. A small blur hides the stretch.
-  const bandY = browY - g.fh * 0.16;
-  const bandH = Math.max(g.fh * 0.12, 4);
+  const bandY = g.top[1] + g.fh * 0.02;
+  const bandH = Math.max(g.fh * 0.14, 4);
   cc.clearRect(0, 0, iw, ih);
   cc.globalCompositeOperation = 'source-over';
-  cc.filter = 'blur(4px)';
-  cc.drawImage(p.video, vx(cx - prx), vy(bandY), vx(2 * prx), vy(bandH), 0, 0, iw, ih);
+  cc.filter = 'blur(6px)';
+  cc.drawImage(p.video, vx(pcx - prx), vy(bandY), vx(2 * prx), vy(bandH), 0, 0, iw, ih);
   cc.filter = 'none';
   // The middle of the face, small, on the pad.
   const k = 0.55;
@@ -3101,23 +3106,24 @@ function lookSmall(p, a, filter) {
   fc.fillRect(-fw / 2, -fw / 2, fw, fw);
   fc.restore();
   fc.globalCompositeOperation = 'source-over';
-  cc.drawImage(f, 0, 0, fw, fh, iw / 2 - fw / 2, ih / 2 - fh / 2, fw, fh);
-  // The box fades at its edge, so the cheeks keep their own look.
+  cc.drawImage(f, 0, 0, fw, fh, iw / 2 - fw / 2, ih / 2 + (fcy - pcy) / (2 * pry) * ih - fh / 2, fw, fh);
+  // The pad keeps the shape of a face and not of a box: the edge is an ellipse
+  // that fades over the last part of the cheek, so no corner and no straight
+  // line shows.
   cc.globalCompositeOperation = 'destination-in';
-  const edge = (x0, y0, x1, y1) => {
-    const grad = cc.createLinearGradient(x0, y0, x1, y1);
-    grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(0.1, 'rgba(0,0,0,1)');
-    grad.addColorStop(0.9, 'rgba(0,0,0,1)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    cc.fillStyle = grad;
-    cc.fillRect(0, 0, iw, ih);
-  };
-  edge(0, 0, iw, 0);
-  edge(0, 0, 0, ih);
+  cc.save();
+  cc.translate(iw / 2, ih / 2);
+  cc.scale(1, ih / iw);
+  const edge = cc.createRadialGradient(0, 0, 0, 0, 0, iw / 2);
+  edge.addColorStop(0, 'rgba(0,0,0,1)');
+  edge.addColorStop(0.84, 'rgba(0,0,0,1)');
+  edge.addColorStop(1, 'rgba(0,0,0,0)');
+  cc.fillStyle = edge;
+  cc.fillRect(-iw / 2, -iw / 2, iw, iw);
+  cc.restore();
   cc.globalCompositeOperation = 'source-over';
   if (filter && filter !== 'none') p.ctx.filter = filter;
-  p.ctx.drawImage(c, 0, 0, iw, ih, cx - prx, fcy - pry, 2 * prx, 2 * pry);
+  p.ctx.drawImage(c, 0, 0, iw, ih, pcx - prx, pcy - pry, 2 * prx, 2 * pry);
   if (filter && filter !== 'none') p.ctx.filter = 'none';
 }
 
