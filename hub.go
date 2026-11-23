@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base32"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -13,15 +12,6 @@ import (
 )
 
 var errRoomUnavailable = errors.New("room unavailable")
-
-// roomIDBytes is also the amount of entropy per room id: 128 bits, which is
-// unguessable by brute force, so rooms need no directory.
-const roomIDBytes = 16
-
-// roomIDLen is the length of a base32 encoded room id.
-const roomIDLen = (roomIDBytes*8 + 4) / 5
-
-var b32Lower = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
 // roomNameMax is the longest accepted room name. Custom names are allowed on
 // purpose (a room can be named after a topic), so a name is only checked for
@@ -43,14 +33,6 @@ func validRoomName(id string) bool {
 		return false
 	}
 	return true
-}
-
-func newRoomID() (string, error) {
-	b := make([]byte, roomIDBytes)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return b32Lower.EncodeToString(b), nil
 }
 
 func newPeerID() (string, error) {
@@ -123,12 +105,11 @@ type Room struct {
 }
 
 type Hub struct {
-	mu           sync.Mutex
-	rooms        map[string]*Room
-	maxPeers     int
-	maxRooms     int
-	rnd          func() (string, error)
-	hashSem      chan struct{}
+	mu       sync.Mutex
+	rooms    map[string]*Room
+	maxPeers int
+	maxRooms int
+	hashSem  chan struct{}
 }
 
 // hashSlot bounds how many passphrase hashes run at once, so join attempts
@@ -140,11 +121,10 @@ func (h *Hub) hashSlot() func() {
 
 func newHub(cfg *Config) *Hub {
 	return &Hub{
-		rooms:        make(map[string]*Room),
-		maxPeers:     cfg.MaxPeers,
-		maxRooms:     cfg.MaxRooms,
-		rnd:          newRoomID,
-		hashSem:      make(chan struct{}, 4),
+		rooms:    make(map[string]*Room),
+		maxPeers: cfg.MaxPeers,
+		maxRooms: cfg.MaxRooms,
+		hashSem:  make(chan struct{}, 4),
 	}
 }
 
@@ -453,16 +433,6 @@ func (h *Hub) broadcast(p *Peer, payload []byte) {
 	for _, other := range h.peersOf(room, p.id) {
 		other.enqueue(payload)
 	}
-}
-
-// stats returns aggregate numbers only; no room identity can leave this call.
-func (h *Hub) stats() (rooms, peers int) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, r := range h.rooms {
-		peers += len(r.peers)
-	}
-	return len(h.rooms), peers
 }
 
 // fingerprint is the only form of a room id that ever reaches a log line.
