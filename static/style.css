@@ -1874,6 +1874,45 @@ body.self-waiting .admit { display: none; }
 .menu-choice { width: 100%; justify-content: flex-start; }
 .menu-choice[aria-pressed="true"] .menu-tick::after { content: "\2713"; }
 
+/* The custom face effect: one slider for each knob, under the mask rows. The
+ * value sits at the right, so a row reads as name, handle, number. */
+.cx-panel { padding: 2px 2px 3px; }
+.cx-panel[hidden] { display: none; }
+.cx-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 18px 2px 20px;
+  font-size: var(--fs-smaller);
+  line-height: 16px;
+}
+.cx-row .cx-name { flex: 0 0 58px; }
+.cx-row input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 16px;
+  margin: 0;
+}
+.cx-row .cx-val {
+  flex: 0 0 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cx-reset { justify-content: flex-end; padding-bottom: 4px; }
+.cx-btn {
+  min-height: 20px;
+  margin: 0;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: var(--fs-smaller);
+  color: var(--ink);
+  background: var(--panel);
+  border: 2px solid;
+  border-color: #fff var(--edge) var(--edge) #fff;
+  cursor: default;
+}
+.cx-btn:hover, .cx-btn:focus-visible { background: var(--navy); color: #fff; }
+
 /* ------------------------------------------------------- raised hands */
 
 /* The queue is one small panel above the list of names: the raised hands in

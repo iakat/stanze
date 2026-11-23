@@ -131,6 +131,17 @@
         <label class="menu-item"><input type="checkbox" data-mask="shades"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">shades</span></label>
         <label class="menu-item"><input type="checkbox" data-mask="miku"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">miku</span></label>
         <label class="menu-item"><input type="checkbox" data-mask="potion"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">potion seller</span></label>
+        <div class="menu-sep" role="separator"></div>
+        <label class="menu-item"><input type="checkbox" data-mask="custom"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">custom</span></label>
+        <div id="cx-panel" class="cx-panel" hidden>
+          <label class="cx-row"><span class="cx-name">head</span><input id="cx-head" type="range" min="80" max="140" step="5" value="100" aria-label="height of the head"><span class="cx-val" id="cx-head-v">100</span></label>
+          <label class="cx-row"><span class="cx-name">eyes</span><input id="cx-eyes" type="range" min="50" max="180" step="5" value="100" aria-label="size of the eyes"><span class="cx-val" id="cx-eyes-v">100</span></label>
+          <label class="cx-row"><span class="cx-name">spread</span><input id="cx-spread" type="range" min="50" max="170" step="5" value="100" aria-label="distance between the eyes"><span class="cx-val" id="cx-spread-v">100</span></label>
+          <label class="cx-row"><span class="cx-name">mouth</span><input id="cx-mouth" type="range" min="50" max="180" step="5" value="100" aria-label="size of the mouth"><span class="cx-val" id="cx-mouth-v">100</span></label>
+          <label class="cx-row"><span class="cx-name">mouth y</span><input id="cx-mshift" type="range" min="-40" max="40" step="5" value="0" aria-label="height of the mouth"><span class="cx-val" id="cx-mshift-v">0</span></label>
+          <label class="menu-item"><input id="cx-swap" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">swap eyes and mouth</span></label>
+          <div class="cx-row cx-reset"><button id="cx-reset" class="cx-btn" type="button">back to a normal face</button></div>
+        </div>
       </div>
     </div>
     <div class="menubar-slot">
