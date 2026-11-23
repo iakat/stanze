@@ -92,7 +92,7 @@ func (s stringList) Set(v string) error {
 func loadConfig(args []string) (*Config, error) {
 	cfg := &Config{}
 
-	stun := splitList(envStr("STUN_URLS", "stun:stun.l.google.com:19302"))
+	stun := splitList(envStr("STUN_URLS", ""))
 	turnURLs := splitList(envStr("TURN_URLS", ""))
 	var stunFlags []string
 
@@ -129,6 +129,16 @@ func loadConfig(args []string) (*Config, error) {
 	}
 	cfg.StunURLs = stun
 	cfg.TurnURLs = turnURLs
+
+	// With no explicit STUN, use the embedded relay as the STUN endpoint. The
+	// TURN server also answers Binding requests, so no third party is contacted.
+	if len(cfg.StunURLs) == 0 && cfg.turnEnabled() {
+		host := cfg.TurnPublicIP
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		cfg.StunURLs = []string{fmt.Sprintf("stun:%s:%d", host, cfg.TurnPort)}
+	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, err

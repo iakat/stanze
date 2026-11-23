@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
@@ -11,12 +12,14 @@ import (
 	"time"
 
 	"github.com/pion/logging"
+	"github.com/pion/stun/v4"
 	"github.com/pion/turn/v5"
 )
 
 // iceServersFor builds the ICE server list handed to a client at join time.
-// STUN is always offered; TURN is offered with a fresh ephemeral credential
-// derived from the shared secret, so the relay can be used as a fallback.
+// STUN is answered by the embedded relay itself (see stunMux); TURN is offered
+// with a fresh ephemeral credential derived from the shared secret, so the
+// relay can be used as a fallback. Neither needs a third party.
 func iceServersFor(cfg *Config) ([]iceServer, error) {
 	var out []iceServer
 	if len(cfg.StunURLs) > 0 {
@@ -75,7 +78,7 @@ func startTURN(cfg *Config, log *slog.Logger) (*turn.Server, error) {
 			return turnQuota.allow(username)
 		},
 		PacketConnConfigs: []turn.PacketConnConfig{{
-			PacketConn:            udpConn,
+			PacketConn:            stunMux{udpConn},
 			RelayAddressGenerator: relay,
 		}},
 		LoggerFactory: logging.NewDefaultLoggerFactory(),
@@ -125,4 +128,31 @@ func (q *quotaCounter) allow(user string) bool {
 	}
 	q.seen[user]++
 	return q.seen[user] <= q.max
+}
+
+// stunMux answers STUN binding requests on the relay socket and passes every
+// other datagram to the TURN server. One open UDP port therefore serves both,
+// so a client learns its public address from us and contacts no third party.
+type stunMux struct {
+	net.PacketConn
+}
+
+func (m stunMux) ReadFrom(p []byte) (int, net.Addr, error) {
+	for {
+		n, addr, err := m.PacketConn.ReadFrom(p)
+		if err != nil {
+			return n, addr, err
+		}
+		to, ok := addr.(*net.UDPAddr)
+		if !ok || n < 20 || !stun.IsMessage(p[:n]) ||
+			binary.BigEndian.Uint16(p) != stun.BindingRequest.Value() {
+			return n, addr, nil
+		}
+		res := stun.MustBuild(stun.BindingSuccess,
+			&stun.XORMappedAddress{IP: to.IP, Port: to.Port})
+		copy(res.TransactionID[:], p[8:20])
+		res.WriteHeader()
+		_ = stun.Fingerprint.AddTo(res)
+		_, _ = m.PacketConn.WriteTo(res.Raw, to)
+	}
 }

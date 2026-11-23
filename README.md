@@ -152,7 +152,7 @@ Every flag has an environment variable equivalent. Flags win.
 | flag | env | default | meaning |
 | --- | --- | --- | --- |
 | `-listen` | `LISTEN` | `:8095` | HTTP listen address (put TLS in front) |
-| `-stun` | `STUN_URLS` | `stun:stun.l.google.com:19302` | STUN URLs handed to browsers, repeatable or comma separated |
+| `-stun` | `STUN_URLS` | empty (embedded TURN address) | STUN URLs handed to browsers, repeatable or comma separated |
 | `-turn-public-ip` | `TURN_PUBLIC_IP` | empty | public IP advertised for relay candidates; empty disables TURN |
 | `-turn-port` | `TURN_PORT` | `3478` | UDP port of the embedded TURN server |
 | `-turn-tcp-port` | `TURN_TCP_PORT` | `0` | optional TCP listener for TURN (useful when UDP is blocked) |
