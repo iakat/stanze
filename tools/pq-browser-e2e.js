@@ -388,10 +388,19 @@ async function frameDump(page, label) {
     check('B opened inbound frames', countsB.decryptFrames > 50, countsB.decryptFrames);
     check('audio packets arrived at both peers', statsA.inAudio > 0, statsA.inAudio);
 
-    const frameOverhead = countsA.samples.filter((s) => s.dir === 'send')
-      .every((s) => s.cipherLen === s.plainLen + 29);
-    check('every sampled frame grew by exactly 29 bytes (1 version + 12 IV + 16 tag)',
-      countsA.samples.some((s) => s.dir === 'send') && frameOverhead, JSON.stringify(countsA.samples.slice(0, 2)));
+    // A sealed frame is 1 version byte, 12 IV bytes and a 16 byte tag around a
+    // padded plaintext, and the plaintext is a four byte length plus the rung
+    // of the ladder it fell in, so the sizes stop naming what was sent.
+    const onLadder = (n, kind) => {
+      const ladders = { audio: [128, 192, 256, 384, 512, 768, 1024, 1536], video: [512, 1024, 2048, 4096, 8192] };
+      const ladder = ladders[kind] || ladders.video;
+      return ladder.includes(n) || (n > ladder[ladder.length - 1] && n % ladder[ladder.length - 1] === 0);
+    };
+    const sent = countsA.samples.filter((s) => s.dir === 'send');
+    const frameOverhead = sent.every((s) => onLadder(s.cipherLen - 29, s.kind) &&
+      s.cipherLen - 29 >= s.plainLen + 4);
+    check('every sampled frame is padded to a rung of the ladder (1 version + 12 IV + 16 tag around it)',
+      sent.length > 0 && frameOverhead, JSON.stringify(sent.slice(0, 2)));
 
     // Chat in both directions.
     await a.page.fill('#chat-text', chatFromA);

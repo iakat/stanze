@@ -8,7 +8,11 @@
 // leave this worker again.
 //
 // Frame layout on the wire:
-//   [1 byte version=1][12 byte random IV][ciphertext][16 byte GCM tag]
+//   [1 byte version][12 byte random IV][ciphertext][16 byte GCM tag]
+// Version 0x82 (bit 1 set) says the plaintext is [4 byte length][payload]
+// padded with zeros to a rung of a size ladder, so the wire size stops naming
+// what was sent; 0x80 is the plain layout. Bit 0 of the same byte carries the
+// codec keyframe bit.
 // The GCM associated data binds the frame to the peer pair, to the sender and
 // to the track it belongs to. A frame from another pair, a frame moved to
 // another track, a frame reflected to its sender, or one modified in flight,
@@ -16,14 +20,32 @@
 
 const VERSION = 0x80;       // upper bits tag a pq-e2e v2 frame
 const VERSION_MASK = 0xfe;  // bit 0 is free: it carries the codec key bit
+const PADDED = 0x82;        // v3: the plaintext is length prefixed and padded
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
+// Padding ladders, in plaintext bytes. A sealed frame is rounded up to the
+// next rung, so its size stops being a fingerprint of what was sent; an audio
+// rung is small, because a frame every twenty milliseconds pays for it, and a
+// video rung starts at one packet and doubles to a whole frame.
+const LADDER = {
+  audio: [128, 192, 256, 384, 512, 768, 1024, 1536],
+  video: [512, 1024, 2048, 4096, 8192],
+};
+const LEN_BYTES = 4;        // payload length in front of a padded plaintext
 const text = new TextEncoder();
 
 const KEYS = new Map(); // pair -> { enc?: CryptoKey, dec?: CryptoKey }
 const STATS = new Map(); // pair|dir -> counters
 const SEND = new Map(); // pair|kind -> send transformer, for the key frame ask
+const PAD = new Set();  // pair|kind that pad, once the peer has said it reads them
 const FLUSH_EVERY = 30;
+
+// bucketFor returns the smallest rung of one ladder that holds n bytes, or a
+// whole multiple of the top rung when n is larger than the ladder.
+function bucketFor(n, ladder) {
+  for (const rung of ladder) if (n <= rung) return rung;
+  return Math.ceil(n / ladder[ladder.length - 1]) * ladder[ladder.length - 1];
+}
 
 function b64d(s) {
   const raw = atob(s);
@@ -71,6 +93,13 @@ self.onmessage = async (event) => {
     try { SEND.get(msg.pair + '|video').generateKeyFrame(); } catch (_err) { /* no encoder yet */ }
     return;
   }
+  if (msg.type === 'pad') {
+    // A peer told this page that it reads padded frames, so this pair may pad.
+    const key = msg.pair + '|' + (msg.kind || '');
+    if (msg.on) PAD.add(key);
+    else PAD.delete(key);
+    return;
+  }
   if (msg.type !== 'keys') return;
   let slot = KEYS.get(msg.pair);
   if (!slot) {
@@ -112,18 +141,29 @@ async function transformFrame(frame, controller, ctx) {
       report(pair, dir, kind, st);
       return;
     }
-    const out = new Uint8Array(1 + IV_BYTES + data.length + TAG_BYTES);
+    // A padded frame carries its own length and then zeros, so the wire size is
+    // a rung of the ladder and not the size of what was said. Both ends must
+    // read it, so the page turns this on only for a peer that said so.
+    const pad = PAD.has(pair + '|' + kind);
+    let body = data;
+    if (pad) {
+      const ladder = LADDER[kind] || LADDER.video;
+      body = new Uint8Array(bucketFor(LEN_BYTES + data.length, ladder));
+      new DataView(body.buffer).setUint32(0, data.length);
+      body.set(data, LEN_BYTES);
+    }
+    const out = new Uint8Array(1 + IV_BYTES + body.length + TAG_BYTES);
     const iv = crypto.getRandomValues(out.subarray(1, 1 + IV_BYTES));
     const sealed = new Uint8Array(await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv, additionalData: ad, tagLength: 128 },
       slot.enc,
-      data,
+      body,
     ));
     // Keep the codec's keyframe bit (VP8/VP9 put it in bit 0 of the first
     // payload byte) visible on the wire: the receiving stack reads it before
     // any transform runs and otherwise marks every frame as a delta frame,
     // so the decoder never starts. Only this one bit is exposed.
-    out[0] = VERSION | (data[0] & 0x01);
+    out[0] = (pad ? PADDED : VERSION) | (data[0] & 0x01);
     out.set(sealed, 1 + IV_BYTES);
     frame.data = out.buffer;
     st.ok++;
@@ -141,8 +181,11 @@ async function transformFrame(frame, controller, ctx) {
     return;
   }
 
-  // Receiving, or tapping: both need the ciphertext framing to be intact.
-  if (data.length < 1 + IV_BYTES + TAG_BYTES || (data[0] & VERSION_MASK) !== VERSION) {
+  // Receiving, or tapping: both need the ciphertext framing to be intact. A
+  // frame may be plain v2 or the padded v3, since a peer that has not said it
+  // reads padding still sends v2.
+  const ver = data.length ? (data[0] & VERSION_MASK) : 0;
+  if (data.length < 1 + IV_BYTES + TAG_BYTES || (ver !== VERSION && ver !== PADDED)) {
     st.fail++;
     if (st.fail === 1) self.postMessage({ type: 'sample', dir: 'recv-broken', pair, peer: options.peer, len: data.length });
     report(pair, dir, kind, st);
@@ -188,25 +231,37 @@ async function transformFrame(frame, controller, ctx) {
       slot.dec,
       data.subarray(1 + IV_BYTES),
     );
-    frame.data = plain;
+    let body = plain;
+    if (ver === PADDED) {
+      // The first four bytes are the real length; the rest of the rung is
+      // zeros and goes away before the frame meets the decoder.
+      const bytes = new Uint8Array(plain);
+      const len = new DataView(plain, 0, LEN_BYTES).getUint32(0);
+      if (bytes.byteLength < LEN_BYTES || len > bytes.byteLength - LEN_BYTES) {
+        throw new Error('padding out of range');
+      }
+      body = bytes.buffer.slice(bytes.byteOffset + LEN_BYTES, bytes.byteOffset + LEN_BYTES + len);
+    }
+    frame.data = body;
     st.ok++;
-    st.plain += plain.byteLength;
+    st.plain += body.byteLength;
     st.cipher += data.length;
     if (st.ok === 1) {
       self.postMessage({
         type: 'sample', dir, kind, peer: options.peer, pair,
-        plainLen: plain.byteLength, cipherLen: data.length, head: hex(data.slice(0, 16)),
-        plainHead: hex(new Uint8Array(plain).slice(0, 8)), ftype: frame.type,
+        plainLen: body.byteLength, cipherLen: data.length, head: hex(data.slice(0, 16)),
+        plainHead: hex(new Uint8Array(body).slice(0, 8)), ftype: frame.type,
       });
     }
     report(pair, dir, kind, st);
     controller.enqueue(frame);
-  } catch (_err) {
+  } catch (err) {
     st.fail++;
     if (st.fail === 1) {
       self.postMessage({
         type: 'sample', dir: 'recv-refused', pair, peer: options.peer,
         cipherLen: data.length, head: hex(data.slice(0, 16)),
+        why: String(err && err.message || err),
       });
     }
     report(pair, dir, kind, st);

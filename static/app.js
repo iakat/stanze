@@ -2522,6 +2522,8 @@ function stateFrame() {
     k: 'state',
     mic: state.mic, cam: state.cam, deaf: state.deaf,
     screen: !!state.screen, hand: state.hand, ts: state.handTs,
+    // This build reads padded frame sizes, so a peer may round its frames up.
+    pad: 1,
   };
 }
 
@@ -9037,10 +9039,22 @@ function sealedDispatchApp(peer, obj) {
   }
 }
 
+// padsOn tells the frame worker that this pair may round its frame sizes up.
+// The worker only pads a sender that the peer has said it reads, so a call with
+// a client that predates the padding keeps the old sizes on that side.
+function padsOn(peer) {
+  if (!state.worker || !peer || peer.padsOn) return;
+  peer.padsOn = true;
+  for (const kind of ['audio', 'video']) {
+    state.worker.postMessage({ type: 'pad', pair: pairLabel(peer.id), kind, on: true });
+  }
+}
+
 // sealedOnState paints the flags one guest sent over its sealed pair. The
 // queue order is the sender's own time, so no server numbers it; a time from
 // the future is clamped to now instead of trusted.
 function sealedOnState(peer, obj) {
+  if (obj.pad) padsOn(peer);
   if (obj.mic !== undefined) peer.mic = !!obj.mic;
   if (obj.cam !== undefined) peer.cam = !!obj.cam;
   if (obj.deaf !== undefined) peer.deaf = !!obj.deaf;
