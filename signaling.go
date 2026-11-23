@@ -162,21 +162,11 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// reload, and the peer hears nothing.
 			p.writeNow(conn, serverMsg{T: "error", Code: "sealed-only"})
 		case "state":
-			// A mute, camera, deafen or raised hand toggle is a small
-			// indicator for the other tiles and the member list. It carries
-			// no media, and the server keeps the last value only for the
-			// lifetime of the connection. The whole room gets the answer,
-			// the sender too, because a raised hand needs its queue number.
-			room := s.hub.roomOf(p)
-			mic, cam, deaf, screen := p.setFlags(m.Mic, m.Cam, m.Deaf, m.Screen)
-			if m.Hand != nil {
-				p.setHand(*m.Hand, func() int { return s.hub.nextHand(room) })
-			}
-			hand, seq := p.handState()
-			s.hub.broadcastTo(room, mustJSON(serverMsg{
-				T: "state", From: p.id, Mic: &mic, Cam: &cam, Deaf: &deaf, Screen: &screen,
-				Hand: &hand, HandSeq: seq,
-			}))
+			// The microphone, camera, deafen, share and hand flags travel
+			// sealed, one copy per pair, so the server keeps none of them and
+			// relays none of them. A frame from a client that still sends a
+			// clear toggle is dropped: the room state belongs to the guests.
+			break
 		case "enc":
 			// Opaque end-to-end payload: forwarded verbatim, never stored.
 			s.handleEnc(p, m)
@@ -228,21 +218,6 @@ func (s *server) handleMod(p *Peer, m clientMsg) {
 		if target := s.hub.peerOf(room, m.To); target != nil {
 			target.enqueueJSON(serverMsg{T: "mod", From: p.id, Action: "mute"})
 		}
-	case "lowerhand":
-		// The host takes a hand down, so a queue that nobody follows can be
-		// cleared from the front. The room gets the new state of that guest.
-		target := s.hub.peerOf(room, m.To)
-		if target == nil {
-			return
-		}
-		mic, cam, deaf, screen, hand, seq, changed := target.lowerHand()
-		if !changed {
-			return
-		}
-		s.hub.broadcastTo(room, mustJSON(serverMsg{
-			T: "state", From: target.id, Mic: &mic, Cam: &cam, Deaf: &deaf, Screen: &screen,
-			Hand: &hand, HandSeq: seq,
-		}))
 	case "kick":
 		target := s.hub.peerOf(room, m.To)
 		if target == nil {
@@ -304,11 +279,8 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 	}
 	peers := make([]peerInfo, 0, len(existing))
 	for _, other := range existing {
-		mic, cam, deaf, screen := other.flags()
-		hand, seq := other.handState()
 		peers = append(peers, peerInfo{
-			ID: other.id, Mic: mic, Cam: cam, Deaf: deaf, Screen: screen, Admin: isAdmin[other.id],
-			Waiting: s.hub.isWaiting(other), Hand: hand, HandSeq: seq,
+			ID: other.id, Admin: isAdmin[other.id], Waiting: s.hub.isWaiting(other),
 		})
 	}
 
@@ -330,17 +302,14 @@ func (s *server) handleJoin(p *Peer, conn *websocket.Conn, m clientMsg) bool {
 		Waiting:     selfWaiting,
 	})
 
-	ownMic, ownCam, ownDeaf, ownScreen := p.flags()
-	ownHand, ownSeq := p.handState()
-	joinedMsg := mustJSON(serverMsg{
+	ownJoined := mustJSON(serverMsg{
 		T: "peer-joined",
 		Peer: &peerInfo{
-			ID: p.id, Mic: ownMic, Cam: ownCam, Deaf: ownDeaf, Screen: ownScreen, Admin: isAdmin[p.id],
-			Waiting: selfWaiting, Hand: ownHand, HandSeq: ownSeq,
+			ID: p.id, Admin: isAdmin[p.id], Waiting: selfWaiting,
 		},
 	})
 	for _, other := range existing {
-		other.enqueue(joinedMsg)
+		other.enqueue(ownJoined)
 	}
 
 	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))

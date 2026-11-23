@@ -184,8 +184,8 @@ One JSON object per WebSocket text frame. Client to server:
 | Message | Fields |
 | --- | --- |
 | `join` | `room` (the passphrase is never on the wire; a `pass` field from an old client is ignored) |
-| `enc` | `to` (empty or `*` for the room), `b` (sealed description, candidate, name, chat or file) |
-| `state` | `mic`, `cam` |
+| `enc` | `to` (empty or `*` for the room), `b` (sealed description, candidate, name, chat, file or toggle state) |
+| `state` | – (an old client's clear toggles; accepted and dropped, never echoed) |
 | `mod` | `to`, `action` (`kick`, `mute`, `admin`) or `waitingroom` with `on` |
 | `admit` | `to` |
 | `leave`, `ping` | – |
@@ -197,7 +197,7 @@ Server to client:
 | `joined` | `self`, `peers[]`, `admins`, `waitingRoom`, `waiting`, `ice[]` |
 | `peer-joined`, `peer-left` | `peer`, `from` |
 | `enc` | `from`, `b` (forwarded verbatim) |
-| `state`, `admin`, `mod`, `kicked` | as above |
+| `admin`, `mod`, `kicked` | as above (the toggles travel sealed, one copy per pair) |
 | `waiting-room`, `admitted` | `waitingRoom` / `from`, `peer` |
 | `error`, `pong` | `code` / – |
 

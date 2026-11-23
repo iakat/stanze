@@ -76,8 +76,6 @@ func httpDo(method, path string, body string) (int, []byte, error) {
 type peerInfo struct {
 	ID      string `json:"id"`
 	Waiting bool   `json:"waiting"`
-	Hand    bool   `json:"hand"`
-	HandSeq int    `json:"handSeq"`
 }
 
 type iceCfg struct {
@@ -105,8 +103,6 @@ type sigMsg struct {
 
 	Waiting     bool  `json:"waiting"`
 	WaitingRoom *bool `json:"waitingRoom"`
-	Hand        *bool `json:"hand"`
-	HandSeq     int   `json:"handSeq"`
 }
 
 type sigClient struct {
@@ -545,116 +541,93 @@ func testRelay() {
 	report("peer-left reaches A", errOr(err, m.From != b.self, "wrong peer id"))
 }
 
-// testHandQueue checks the raised hand of a room: the flag reaches every guest
-// with a queue number, a later raise takes a later number, a lowered hand gives
-// its number back, and an admin can take a hand down.
-func testHandQueue() {
+// silent proves that no frame of one type arrives: the server answers some old
+// frames with nothing at all, and a stray echo would be a leak.
+func silent(c *sigClient, kind string, d time.Duration) error {
+	if m, err := c.wait(kind, d); err == nil {
+		return fmt.Errorf("a %s frame arrived from %s", kind, m.From)
+	}
+	return nil
+}
+
+// testTogglesBlind checks that the toggle flags no longer travel through the
+// server: a clear state frame is dropped without an echo and reaches no peer, a
+// lowerhand command does nothing, and no peer list carries a toggle field. The
+// sealed copies of the flags are the guests' own business.
+func testTogglesBlind() {
 	room, err := randomRoomID()
 	if err != nil {
-		report("hand: room", err)
+		report("toggles: room", err)
 		return
 	}
 	a, err := join(room)
 	if err != nil {
-		report("hand: peer A joins", err)
+		report("toggles: peer A joins", err)
 		return
 	}
 	defer a.c.close()
 	b, err := join(room)
 	if err != nil {
-		report("hand: peer B joins", err)
+		report("toggles: peer B joins", err)
 		return
 	}
 	defer b.c.close()
-	a.c.drain(300 * time.Millisecond)
-	b.c.drain(100 * time.Millisecond)
-
-	// nextState waits for the next state message of one peer.
-	nextState := func(c *sigClient, from string) (sigMsg, error) {
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			m, err := c.wait("state", time.Until(deadline))
-			if err != nil {
-				return m, err
-			}
-			if m.From == from {
-				return m, nil
-			}
-		}
-		return sigMsg{}, errors.New("no state from " + from)
-	}
-	raise := func(c *sigClient, on bool) error {
-		return c.send(map[string]any{"t": "state", "hand": on})
-	}
-
-	if err := raise(b.c, true); err != nil {
-		report("hand: a raise reaches the room", err)
-		return
-	}
-	m, err := nextState(a.c, b.self)
-	first := m.HandSeq
-	report("hand: a raise carries the hand and a queue number", errOr(err,
-		m.Hand == nil || !*m.Hand, "hand flag not set",
-		first < 1, fmt.Sprintf("queue number %d", first)))
-
-	// The sender gets its own state too, with the same number: that echo is
-	// where the client learns its place in the queue.
-	m, err = nextState(b.c, b.self)
-	report("hand: the sender learns its place", errOr(err,
-		m.HandSeq != first, fmt.Sprintf("own echo %d, room saw %d", m.HandSeq, first)))
-
-	if err := raise(a.c, true); err != nil {
-		report("hand: a second raise reaches the room", err)
-		return
-	}
-	m, err = nextState(b.c, a.self)
-	second := m.HandSeq
-	report("hand: a later raise takes a later place", errOr(err,
-		second <= first, fmt.Sprintf("second raise %d after first %d", second, first)))
-
-	if err := raise(a.c, false); err != nil {
-		report("hand: a lowered hand reaches the room", err)
-		return
-	}
-	m, err = nextState(b.c, a.self)
-	report("hand: a lowered hand gives its number back", errOr(err,
-		m.Hand != nil && *m.Hand, "hand still up",
-		m.HandSeq != 0, fmt.Sprintf("queue number %d", m.HandSeq)))
-
-	// A is the admin of the room. B raises again and A takes that hand down.
-	if err := raise(b.c, true); err != nil {
-		report("hand: a raise before the host lowers it", err)
-		return
-	}
-	if _, err := nextState(a.c, b.self); err != nil {
-		report("hand: the raise reaches the host", err)
-		return
-	}
-	// The echo of that raise is on its way back to B as well; drop it, so the
-	// next state of B is the answer to the host command.
+	a.c.drain(200 * time.Millisecond)
 	b.c.drain(200 * time.Millisecond)
+
+	// An old client still sends its flags in the clear. The server accepts the
+	// frame and keeps none of it: no guest sees it and the sender gets no echo.
+	if err := b.c.send(map[string]any{
+		"t": "state", "mic": false, "cam": false, "deaf": true, "screen": true, "hand": true,
+	}); err != nil {
+		report("toggles: an old clear state is accepted", err)
+		return
+	}
+	report("toggles: a clear state reaches no guest", silent(a.c, "state", 700*time.Millisecond))
+	report("toggles: a clear state is not echoed", silent(b.c, "state", 500*time.Millisecond))
+
+	// The same flags travel sealed, as one opaque blob per pair. The relay must
+	// carry it verbatim and must not read it.
+	sealed, _ := json.Marshal(map[string]any{
+		"k": "state", "mic": false, "cam": false, "deaf": true, "hand": true, "ts": 1700000000000,
+	})
+	blob := base64.StdEncoding.EncodeToString(sealed)
+	if err := b.c.send(map[string]any{"t": "enc", "to": a.self, "b": blob}); err != nil {
+		report("toggles: the sealed copy reaches the pair", err)
+		return
+	}
+	m, err := a.c.wait("enc", 3*time.Second)
+	report("toggles: the sealed copy reaches the pair", errOr(err,
+		m.From != b.self, "wrong sender",
+		m.B != blob, "the blob changed on the way"))
+
+	// An old host command that used to clear a queue from the server side is
+	// gone with the queue numbers: it must not produce a frame either.
 	a.c.send(map[string]any{"t": "mod", "to": b.self, "action": "lowerhand"})
-	m, err = nextState(b.c, b.self)
-	report("hand: the host takes a hand down", errOr(err,
-		m.Hand != nil && *m.Hand, "hand still up",
-		m.HandSeq != 0, fmt.Sprintf("queue number %d", m.HandSeq)))
+	report("toggles: a lowerhand command makes no frame", silent(b.c, "state", 500*time.Millisecond))
 
-	// A guest who is not an admin can not take a hand down.
-	if err := raise(b.c, true); err != nil {
-		report("hand: a raise before the guest tries", err)
+	// The peer lists are where the flags used to ride along. Neither a first
+	// nor a second join may name a toggle.
+	first, err := rawJoinMessage(room)
+	if err != nil {
+		report("toggles: the first join reply", err)
 		return
 	}
-	if _, err := nextState(a.c, b.self); err != nil {
-		report("hand: the raise reaches the room again", err)
+	report("toggles: the first join reply carries no toggle", errOr(nil,
+		strings.Contains(first, `"mic"`), "a mic field",
+		strings.Contains(first, `"cam"`), "a cam field",
+		strings.Contains(first, `"deaf"`), "a deaf field",
+		strings.Contains(first, `"hand"`), "a hand field"))
+	second, err := rawJoinMessage(room)
+	if err != nil {
+		report("toggles: the second join reply", err)
 		return
 	}
-	b.c.drain(200 * time.Millisecond)
-	b.c.send(map[string]any{"t": "mod", "to": a.self, "action": "lowerhand"})
-	if _, err := nextState(b.c, a.self); err == nil {
-		report("hand: a guest who is no admin can not lower a hand", errors.New("the hand went down"))
-	} else {
-		report("hand: a guest who is no admin can not lower a hand", nil)
-	}
+	report("toggles: the peer list carries no toggle", errOr(nil,
+		strings.Contains(second, `"mic"`), "a mic field",
+		strings.Contains(second, `"cam"`), "a cam field",
+		strings.Contains(second, `"deaf"`), "a deaf field",
+		strings.Contains(second, `"hand"`), "a hand field"))
 }
 
 // testNoNameInJoin checks that the room protocol never carries a name: the
@@ -1221,7 +1194,7 @@ func main() {
 	testHardening()
 	testRoomIsolation()
 	testWaitingRoom()
-	testHandQueue()
+	testTogglesBlind()
 	testNoNameInJoin()
 	testLimits()
 	testRoomLifetime()

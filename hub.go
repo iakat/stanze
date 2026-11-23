@@ -58,10 +58,6 @@ type Room struct {
 	// who joins a room that has someone inside waits until a member lets
 	// them in. It dies with the room, like everything else.
 	waitingRoom bool
-	// handSeq is the last queue number given to a raised hand in this room.
-	// It only grows, so the order of the raised hands is the same in every
-	// client and a second raise goes to the back.
-	handSeq int
 }
 
 type Hub struct {
@@ -222,17 +218,6 @@ func (h *Hub) setWaitingRoom(room *Room, on bool) {
 	if room != nil {
 		room.waitingRoom = on
 	}
-}
-
-// nextHand hands out the next queue number of a room for a raised hand.
-func (h *Hub) nextHand(room *Room) int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if room == nil {
-		return 0
-	}
-	room.handSeq++
-	return room.handSeq
 }
 
 // admit lets one waiting guest into the room. Only a guest that is inside may

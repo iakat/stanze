@@ -55,7 +55,7 @@ const state = {
   waitingRoom: false, // the room switch an admin sets
   waiting: false,     // this guest is held outside until a member lets it in
   hand: false,        // this guest has a raised hand
-  handSeq: 0,         // the queue number the server gave that hand
+  handTs: 0,          // when it went up, so every guest orders the queue the same
   insideFps: new Set(), // fingerprints of proven guests seen inside this call, for a quick return
   mirror: true,
   selfPip: false,     // the own picture is a small preview, not a tile in the grid
@@ -990,7 +990,7 @@ function applyFlags(tile, mic, cam, admin) {
   // A raised hand is on the tile with its place in the queue, and on the row
   // of the same member, so a small picture still shows it.
   const handOn = who ? !!who.hand : !!(tile.dataset.local && state.hand);
-  const handSeq = who ? who.handSeq : state.handSeq;
+  const place = handOn ? handPlace(who ? who.id : state.self) : 0;
   paintRowHand(row, handOn);
   if (!box) return;
   const out = [];
@@ -998,7 +998,7 @@ function applyFlags(tile, mic, cam, admin) {
   if (admin) out.push('host');
   if (mic === false) out.push('muted');
   if (cam === false) out.push('no cam');
-  if (handOn) out.push(handSeq ? `hand #${handSeq}` : 'hand');
+  if (handOn) out.push(place ? `hand #${place}` : 'hand');
   box.innerHTML = '';
   for (const text of out) {
     const chip = document.createElement('span');
@@ -1162,6 +1162,8 @@ function admitPeer(id) {
         attachScreen(peer);
       }
     }
+    // The room held our flags back while we waited; now every pair gets them.
+    sendState();
     paintWaiting();
     playSfx('pop');
     return;
@@ -2512,22 +2514,40 @@ async function setPeerNoise(peer, on) {
   wirePlayNoise(peer);
 }
 
-// sendState tells the room that the microphone, the camera or the hand
-// changed. The other clients show it as a small flag on the tile.
-function sendState() {
-  refreshSelf();
-  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    send({ t: 'state', mic: state.mic, cam: state.cam, deaf: state.deaf, screen: !!state.screen, hand: state.hand });
-  }
+// stateFrame is the one sealed message that carries the flags of this guest.
+// It goes to every pair separately, so the server relays an opaque blob and
+// keeps none of the values.
+function stateFrame() {
+  return {
+    k: 'state',
+    mic: state.mic, cam: state.cam, deaf: state.deaf,
+    screen: !!state.screen, hand: state.hand, ts: state.handTs,
+  };
 }
 
-// setHand raises or lowers the own hand and tells the room. The server numbers
-// every raise, so the queue order is the same in every client, and a hand that
-// is lowered and raised again goes to the back.
+// sendState tells the room that the microphone, the camera, the hand or the
+// share changed. Every guest gets its own sealed copy; the own tile is painted
+// here, because no server echoes the flags back any more.
+function sendState() {
+  refreshSelf();
+  if (!state.self || state.leaving) return;
+  toSealed(stateFrame());
+}
+
+// sealedSendState hands the current flags to one pair that has just proved the
+// passphrase, so a guest that joins later still learns the toggles.
+function sealedSendState(peer) {
+  if (!peer.keys || peer.waiting) return;
+  sealedSend(peer, stateFrame());
+}
+
+// setHand raises or lowers the own hand and tells the room. The time of the
+// raise is the queue order, and every guest reads the same one, so the panel
+// agrees without a server that numbers the hands.
 function setHand(on) {
   if (state.waiting || state.hand === on) return;
   state.hand = on;
-  if (!on) state.handSeq = 0;
+  state.handTs = on ? Date.now() : 0;
   const self = ownTile();
   if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
   updateButtons();
@@ -2535,22 +2555,34 @@ function setHand(on) {
   paintHandQueue();
 }
 
-// paintHandQueue draws the raised hands in the order the server numbered them:
-// the first row holds the hand that the room answers next. An admin gets a
-// button on every row that takes that hand down.
+// handRows lists the raised hands in the order every guest agrees on: the time
+// the sender put on the raise, ties broken by peer id. A hand that is still
+// waiting for its flag has no time, so it goes last, never first.
+function handRows() {
+  const rows = [];
+  for (const peer of state.peers.values()) {
+    if (peer.hand) rows.push({ id: String(peer.id), ts: peer.handTs || 0, name: peer.name, self: false });
+  }
+  if (state.hand) rows.push({ id: String(state.self), ts: state.handTs || 0, name: state.name || 'you', self: true });
+  rows.sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return rows;
+}
+
+// handPlace is the 1 based place of one guest in the raised hand queue, or 0
+// while that hand is down.
+function handPlace(id) {
+  const at = handRows().findIndex((row) => row.id === String(id));
+  return at < 0 ? 0 : at + 1;
+}
+
+// paintHandQueue draws the raised hands in that order: the first row holds the
+// hand that the room answers next. An admin gets a button on every row that
+// takes that hand down.
 function paintHandQueue() {
   const panel = document.getElementById('hand-queue');
   const list = document.getElementById('hand-queue-list');
   if (!panel || !list) return;
-  const rows = [];
-  for (const peer of state.peers.values()) {
-    if (peer.hand) rows.push({ id: peer.id, name: peer.name, seq: peer.handSeq, self: false });
-  }
-  if (state.hand) {
-    rows.push({ id: state.self, name: state.name || 'you', seq: state.handSeq, self: true });
-  }
-  // A hand whose number has not arrived yet goes last, never first.
-  rows.sort((a, b) => (a.seq || 1e9) - (b.seq || 1e9));
+  const rows = handRows();
   panel.hidden = rows.length === 0;
   list.replaceChildren();
   for (const row of rows) {
@@ -2566,11 +2598,19 @@ function paintHandQueue() {
       b.className = 'hq-lower';
       b.textContent = 'lower';
       b.setAttribute('aria-label', `take the hand of ${row.name} down`);
-      b.addEventListener('click', () => send({ t: 'mod', to: row.id, action: 'lowerhand' }));
+      b.addEventListener('click', () => askLower(row.id));
       li.appendChild(b);
     }
     list.appendChild(li);
   }
+}
+
+// askLower asks one guest to take its own hand down. The request travels
+// sealed to that guest, which lowers the hand and tells the room, so an admin
+// can still clear a queue that nobody follows.
+function askLower(id) {
+  const peer = state.peers.get(id);
+  if (peer) sealedSend(peer, { k: 'lower' });
 }
 
 // setCtrl writes the label of one toolbar button and its pressed state. The
@@ -3887,34 +3927,25 @@ function rtcConfig() {
   };
 }
 
-function ensurePeer(id, mic, cam, deaf, hand, seq) {
+// ensurePeer makes the tile and the pair state of one guest. The flags start
+// as microphone and camera on, the values a fresh guest has, and the first
+// sealed state of that pair corrects them: the server no longer sends any.
+function ensurePeer(id) {
   let peer = state.peers.get(id);
-  if (peer) {
-    if (mic !== undefined || cam !== undefined || deaf !== undefined) {
-      peer.mic = mic === undefined ? peer.mic : mic;
-      peer.cam = cam === undefined ? peer.cam : cam;
-      peer.deaf = deaf === undefined ? peer.deaf : deaf;
-      if (hand !== undefined) {
-        peer.hand = !!hand;
-        peer.handSeq = seq || 0;
-      }
-      applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
-      paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
-    }
-    return peer;
-  }
+  if (peer) return peer;
   // The name arrives sealed, later, so the short id keeps the tile readable
   // until then.
   const initial = String(id).slice(0, 6);
   peer = {
     id,
     name: initial,
-    mic: mic === undefined ? true : mic,
-    cam: cam === undefined ? true : cam,
-    deaf: deaf === undefined ? false : deaf,
+    mic: true,
+    cam: true,
+    deaf: false,
     waiting: false,   // held outside the room, see the waiting room
-    hand: !!hand,     // a raised hand, with its place in the queue
-    handSeq: seq || 0,
+    hand: false,      // a raised hand, with its time as its place in the queue
+    handTs: 0,
+    screenShared: false, // a live share, until this guest's sealed state says so
     vol: 100,
     pc: null,
     tile: null,
@@ -3980,8 +4011,8 @@ function ensurePeer(id, mic, cam, deaf, hand, seq) {
   return peer;
 }
 
-function connectPeer(id, initiator, mic, cam) {
-  const peer = ensurePeer(id, mic, cam);
+function connectPeer(id, initiator) {
+  const peer = ensurePeer(id);
   if (peer.pc) {
     peer.initiator = peer.initiator || initiator;
     return peer;
@@ -4317,10 +4348,10 @@ function handle(msg) {
       omniProbe();
       for (const info of msg.peers || []) {
         if (!info) continue;
-        const peer = ensurePeer(info.id, info.mic, info.cam, info.deaf, info.hand, info.handSeq);
+        // The toggle fields of an old server, or an old peer, are ignored: the
+        // flags come sealed from the guest itself.
+        const peer = ensurePeer(info.id);
         peer.waiting = !!info.waiting;
-        // A guest who shares nothing on join has no tile to wait for.
-        peer.screenShared = !!info.screen;
         sealedSendPub(peer);
       }
       markAdmins();
@@ -4332,9 +4363,10 @@ function handle(msg) {
     }
     case 'peer-joined': {
       if (!msg.peer) break;
-      const peer = ensurePeer(msg.peer.id, msg.peer.mic, msg.peer.cam, msg.peer.deaf, msg.peer.hand, msg.peer.handSeq);
+      // The toggles of an old server are ignored; the sealed state of the pair
+      // carries the real values.
+      const peer = ensurePeer(msg.peer.id);
       peer.waiting = !!msg.peer.waiting;
-      peer.screenShared = !!msg.peer.screen;
       if (msg.peer.admin) state.admins.add(msg.peer.id);
       markAdmins();
       paintWaiting();
@@ -4365,64 +4397,14 @@ function handle(msg) {
       markAdmins();
       break;
     }
-    case 'state': {
-      if (msg.from === state.self) {
-        // The echo of our own state carries the queue number of a hand that
-        // has just gone up, and it keeps the button in step if two tabs of
-        // one guest disagree.
-        if (msg.hand !== undefined) {
-          state.hand = !!msg.hand;
-          state.handSeq = msg.handSeq || 0;
-        }
-        if (msg.mic !== undefined) state.mic = msg.mic;
-        if (msg.cam !== undefined) state.cam = msg.cam;
-        if (msg.deaf !== undefined) state.deaf = msg.deaf;
-        const self = ownTile();
-        if (self) applyFlags(self, state.mic, state.cam, isAdmin(state.self));
-        updateButtons();
-        paintHandQueue();
-        break;
-      }
-      const peer = state.peers.get(msg.from);
-      if (peer) {
-        if (msg.mic !== undefined) peer.mic = msg.mic;
-        if (msg.cam !== undefined) peer.cam = msg.cam;
-        if (msg.deaf !== undefined) peer.deaf = msg.deaf;
-        if (msg.screen !== undefined) {
-          peer.screenShared = !!msg.screen;
-          // A share that stops must leave the stage, not stand there frozen on
-          // its last frame: the sender's track stays live and unmuted when it
-          // only replaces it with nothing, so the flag is the only news.
-          if (peer.screenShared) paintPeerScreen(peer);
-          else dropPeerScreen(peer);
-        }
-        if (msg.hand !== undefined) {
-          const was = peer.hand;
-          peer.hand = !!msg.hand;
-          peer.handSeq = msg.handSeq || 0;
-          if (peer.hand !== was) {
-            playSfx(peer.hand ? 'pop' : 'bonk');
-            // A hand that goes up on a phone brings the frame back, or
-            // nobody would see the queue on a screen that shows only the
-            // picture.
-            if (peer.hand) setChrome(true);
-          }
-        }
-        applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
-        if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
-        paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
-        paintHandQueue();
-      }
-      break;
-    }
     case 'enc': {
       if (msg.from && typeof msg.b === 'string') sealedHandleOpaque(msg.from, msg.b);
       break;
     }
   }
-  // A clear description or candidate has no case here on purpose. Everything
-  // that opens a connection arrives sealed, and a client old enough to send one
-  // of these is told to reload by the server.
+  // A clear description, a candidate or a toggle has no case here on purpose.
+  // Everything that carries content or a flag arrives sealed, and an old client
+  // that sends one of these is told to reload, or is dropped without an echo.
 }
 
 // ---------------------------------------------------------------- room flow
@@ -4577,7 +4559,7 @@ function leave(message) {
   state.waiting = false;
   state.waitingRoom = false;
   state.hand = false;
-  state.handSeq = 0;
+  state.handTs = 0;
   state.insideFps.clear();
   paintWaiting();
   paintHandQueue();
@@ -8892,6 +8874,7 @@ function sealedPassMaybe(peer) {
 // connection may start.
 function sealedPassDone(peer) {
   sealedAnnounceName(peer);
+  sealedSendState(peer);
   const held = peer.appHeld || [];
   peer.appHeld = [];
   for (const obj of held) sealedDispatchApp(peer, obj);
@@ -9021,9 +9004,46 @@ function sealedDispatchApp(peer, obj) {
     addChatLine(peer.name || shortPeer(peer.id), String(obj.x || ''), Date.now());
   } else if (obj.k === 'asr') {
     if (!peer.waiting) asrOnMessage(peer, obj);
+  } else if (obj.k === 'state') {
+    sealedOnState(peer, obj);
+  } else if (obj.k === 'lower') {
+    // Only an admin may ask, and only the guest that owns the hand lowers it.
+    if (isAdmin(peer.id) && state.hand) setHand(false);
   } else if (obj.k === 'file') {
     fileOnMessage(peer, obj);
   }
+}
+
+// sealedOnState paints the flags one guest sent over its sealed pair. The
+// queue order is the sender's own time, so no server numbers it; a time from
+// the future is clamped to now instead of trusted.
+function sealedOnState(peer, obj) {
+  if (obj.mic !== undefined) peer.mic = !!obj.mic;
+  if (obj.cam !== undefined) peer.cam = !!obj.cam;
+  if (obj.deaf !== undefined) peer.deaf = !!obj.deaf;
+  if (obj.screen !== undefined) {
+    peer.screenShared = !!obj.screen;
+    // A share that stops must leave the stage, not stand there frozen on its
+    // last frame: the sender's track stays live and unmuted when it only
+    // replaces it with nothing, so the flag is the only news.
+    if (peer.screenShared) paintPeerScreen(peer);
+    else dropPeerScreen(peer);
+  }
+  if (obj.hand !== undefined) {
+    const was = peer.hand;
+    peer.hand = !!obj.hand;
+    peer.handTs = peer.hand ? Math.max(0, Math.min(Number(obj.ts) || 0, Date.now())) : 0;
+    if (peer.hand !== was) {
+      playSfx(peer.hand ? 'pop' : 'bonk');
+      // A hand that goes up on a phone brings the frame back, or nobody would
+      // see the queue on a screen that shows only the picture.
+      if (peer.hand) setChrome(true);
+    }
+  }
+  applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+  if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
+  paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
+  paintHandQueue();
 }
 
 function sealedAnnounceName(peer) {

@@ -17,22 +17,6 @@ type Peer struct {
 	// written under the hub lock, like the room itself.
 	waiting bool
 
-	// mic, cam, deaf and hand are the flags the client reported last. They
-	// are only indicators for the other tiles and the member list; the media
-	// itself decides the truth. The read loop of this peer writes them and
-	// the join of another peer reads them, so fmu guards both.
-	fmu    sync.Mutex
-	mic    bool
-	cam    bool
-	deaf   bool
-	screen bool
-	hand   bool
-	// handSeq is the queue number of a raised hand: the oldest raised hand of
-	// the room is 1. It is 0 while the hand is down, and it never goes back
-	// to an old number, so a hand that is lowered and raised again goes to
-	// the back of the queue.
-	handSeq int
-
 	// wmu serialises writes to the websocket. gorilla allows one concurrent
 	// writer, and both the write loop and the read loop (terminal errors)
 	// write on the same connection.
@@ -49,8 +33,6 @@ func newPeer() *Peer {
 	return &Peer{
 		send:  make(chan []byte, 64),
 		limit: newTokenBucket(120, 60),
-		mic:   true,
-		cam:   true,
 	}
 }
 
@@ -65,72 +47,6 @@ func (p *Peer) enqueue(msg []byte) {
 	default:
 		p.close()
 	}
-}
-
-// setFlags stores the flags that a state message carries and returns all four
-// values as they are now. A nil pointer leaves that flag as it was. A share is
-// a flag like the others, because a picture that stops must leave the stage for
-// everyone at once, not only for the guest whose capture ended.
-func (p *Peer) setFlags(mic, cam, deaf, screen *bool) (bool, bool, bool, bool) {
-	p.fmu.Lock()
-	defer p.fmu.Unlock()
-	if mic != nil {
-		p.mic = *mic
-	}
-	if cam != nil {
-		p.cam = *cam
-	}
-	if deaf != nil {
-		p.deaf = *deaf
-	}
-	if screen != nil {
-		p.screen = *screen
-	}
-	return p.mic, p.cam, p.deaf, p.screen
-}
-
-// flags returns the last reported microphone, camera, deaf and screen flags.
-func (p *Peer) flags() (bool, bool, bool, bool) {
-	p.fmu.Lock()
-	defer p.fmu.Unlock()
-	return p.mic, p.cam, p.deaf, p.screen
-}
-
-// setHand writes the raised hand and returns it with its queue number. next is
-// called, with the hand lock held, only when a hand goes up, so a room hands
-// out one rising number to every raise and the queue order is the same in
-// every client. No path takes the hub lock before the hand lock, so the two
-// can not deadlock.
-func (p *Peer) setHand(on bool, next func() int) (bool, int) {
-	p.fmu.Lock()
-	defer p.fmu.Unlock()
-	switch {
-	case on && !p.hand:
-		p.hand, p.handSeq = true, next()
-	case !on:
-		p.hand, p.handSeq = false, 0
-	}
-	return p.hand, p.handSeq
-}
-
-// handState returns the raised hand and its queue number.
-func (p *Peer) handState() (bool, int) {
-	p.fmu.Lock()
-	defer p.fmu.Unlock()
-	return p.hand, p.handSeq
-}
-
-// lowerHand takes a raised hand down and reports whether there was one to
-// lower, with the flags the room has to be told. The check and the change share
-// one lock, so a raise that lands at the same moment is never swallowed.
-func (p *Peer) lowerHand() (bool, bool, bool, bool, bool, int, bool) {
-	p.fmu.Lock()
-	defer p.fmu.Unlock()
-	changed := p.hand
-	if changed {
-		p.hand, p.handSeq = false, 0
-	}
-	return p.mic, p.cam, p.deaf, p.screen, p.hand, p.handSeq, changed
 }
 
 // write sends one text frame. It is the only place that calls WriteMessage.
@@ -168,17 +84,10 @@ func (p *Peer) close() {
 }
 
 type peerInfo struct {
-	ID     string `json:"id"`
-	Mic    bool   `json:"mic"`
-	Cam    bool   `json:"cam"`
-	Deaf   bool   `json:"deaf,omitempty"`
-	Screen bool   `json:"screen,omitempty"`
-	Admin  bool   `json:"admin,omitempty"`
+	ID    string `json:"id"`
+	Admin bool   `json:"admin,omitempty"`
 	// Waiting is true for a guest that the room has not let in yet.
 	Waiting bool `json:"waiting,omitempty"`
-	// Hand is a raised hand, and HandSeq is its place in the queue.
-	Hand    bool `json:"hand,omitempty"`
-	HandSeq int  `json:"handSeq,omitempty"`
 }
 
 type iceServer struct {
@@ -189,21 +98,14 @@ type iceServer struct {
 
 // clientMsg is the whole client to server vocabulary: join, enc, state, mod,
 // admit, leave, ping. A description and a candidate are not part of it; they
-// travel inside enc.
+// travel inside enc. A `state` frame is an old client's clear toggle: it is
+// accepted and dropped, because the toggles travel sealed now.
 type clientMsg struct {
 	T    string `json:"t"`
 	Room string `json:"room,omitempty"`
 	To   string `json:"to,omitempty"`
 
-	// mic, cam, deaf and hand are pointers so "not sent" and "false" differ.
-	Mic    *bool `json:"mic,omitempty"`
-	Cam    *bool `json:"cam,omitempty"`
-	Deaf   *bool `json:"deaf,omitempty"`
-	Screen *bool `json:"screen,omitempty"`
-	Hand   *bool `json:"hand,omitempty"`
-
-	// action is the admin command: kick, mute, admin, lowerhand or
-	// waitingroom.
+	// action is the admin command: kick, mute, admin or waitingroom.
 	Action string `json:"action,omitempty"`
 
 	// on is the value of the waitingroom command. A pointer, so "not sent"
@@ -216,24 +118,19 @@ type clientMsg struct {
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
-// peer-left, state, admin, mod, kicked, enc, waiting-room, admitted, error,
-// pong. There is no description field, so the server cannot send one.
+// peer-left, admin, mod, kicked, enc, waiting-room, admitted, error, pong.
+// There is no description field, so the server cannot send one, and no toggle
+// field, so it cannot echo a flag either.
 type serverMsg struct {
-	T       string      `json:"t"`
-	Self    string      `json:"self,omitempty"`
-	Peers   []peerInfo  `json:"peers,omitempty"`
-	Peer    *peerInfo   `json:"peer,omitempty"`
-	From    string      `json:"from,omitempty"`
-	Mic     *bool       `json:"mic,omitempty"`
-	Cam     *bool       `json:"cam,omitempty"`
-	Deaf    *bool       `json:"deaf,omitempty"`
-	Screen  *bool       `json:"screen,omitempty"`
-	Hand    *bool       `json:"hand,omitempty"`
-	HandSeq int         `json:"handSeq,omitempty"`
-	Admins  []string    `json:"admins,omitempty"`
-	Action  string      `json:"action,omitempty"`
-	Code    string      `json:"code,omitempty"`
-	Ice     []iceServer `json:"ice,omitempty"`
+	T      string      `json:"t"`
+	Self   string      `json:"self,omitempty"`
+	Peers  []peerInfo  `json:"peers,omitempty"`
+	Peer   *peerInfo   `json:"peer,omitempty"`
+	From   string      `json:"from,omitempty"`
+	Admins []string    `json:"admins,omitempty"`
+	Action string      `json:"action,omitempty"`
+	Code   string      `json:"code,omitempty"`
+	Ice    []iceServer `json:"ice,omitempty"`
 
 	// WaitingRoom is the room switch, sent with `joined` and with a
 	// `waiting-room` change. Waiting is true in `joined` for a guest that
