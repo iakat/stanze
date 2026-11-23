@@ -2791,8 +2791,17 @@ async function lookStart() {
   // away keeps the camera on the senders and the drawn track comes back with
   // the first frame after the tab returns.
   state.lookParked = !!document.hidden;
+  pipe.armApply = false;
+  if (!state.lookParked) {
+    // One frame before the swap. A canvas that was never painted is black, and
+    // a browser that captures it early sends a black picture until the first
+    // paint; when the camera has no frame yet, the first painted frame does
+    // the swap instead.
+    if (video.readyState >= 2 && video.videoWidth) lookDraw(pipe);
+    else pipe.armApply = true;
+  }
+  await lookPublish(state.lookParked || pipe.armApply ? src : track);
   if (!state.lookParked) pipe.clock = lookClock(pipe);
-  await lookPublish(state.lookParked ? src : track);
 }
 
 // lookClock starts the frame clock of a pipeline. It stops with a parked tab:
@@ -2815,7 +2824,10 @@ function lookDraw(p) {
   if (filter !== 'none') p.ctx.filter = filter;
   p.ctx.drawImage(p.video, 0, 0, p.canvas.width, p.canvas.height);
   if (filter !== 'none') p.ctx.filter = 'none';
-  if (!state.masks.length || !p.sctx) return;
+  if (!state.masks.length || !p.sctx) {
+    armPublish(p);
+    return;
+  }
   p.frame++;
   lookMesh(p);
   // The colour test leads only until a mesh anchor exists, and it holds the
@@ -2828,6 +2840,17 @@ function lookDraw(p) {
     else if (which === 'small') lookSmall(p, a, filter);
     else drawMask(p.ctx, p.canvas.width, p.canvas.height, which, a);
   }
+  armPublish(p);
+}
+
+// armPublish hands the drawn track to the senders on the first frame that the
+// canvas really carries. A fresh canvas is black, and a browser that captures
+// it before the first paint sends black frames, which reads as a dark box
+// around the mask until the picture arrives.
+function armPublish(p) {
+  if (!p.armApply) return;
+  p.armApply = false;
+  lookPublish(p.track);
 }
 
 // lookMesh runs the landmarker on the small copy of the frame, once per painted
