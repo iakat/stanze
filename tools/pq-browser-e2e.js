@@ -242,7 +242,7 @@ async function frameDump(page, label) {
     }));
     await probe.close();
     check('the join form has no post-quantum toggle', defaults.box === false, defaults.box);
-    check('the lobby says every room is sealed', /sealed end to end/.test(defaults.note), defaults.note);
+    check('the lobby says every room is sealed', /sealed end to end/i.test(defaults.note), defaults.note);
 
     a = await joinPage(ctxA, 'alice', '');
     check('A loaded the post-quantum module', !!(a.app.test && a.app.test.sasMatch && a.app.test.confirm && a.app.test.open && a.app.test.wrongKeyRefused && a.app.test.pad),
