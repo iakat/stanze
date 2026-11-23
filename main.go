@@ -205,6 +205,11 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/openmoji/", func(w http.ResponseWriter, r *http.Request) {
 		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
 	})
+	// The landmarker lives in one folder too, so the module, the wasm and the
+	// model come from this origin and the page loads nothing from outside.
+	mux.HandleFunc("/facemesh/", func(w http.ResponseWriter, r *http.Request) {
+		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
+	})
 	// The queue and the done list are plain files on disk, so an update is a
 	// file write and needs no new binary.
 	mux.HandleFunc("/QUEUE.md", docHandler(cfg.DocsDir, "QUEUE.md"))
@@ -252,7 +257,7 @@ func (a *asset) gzip() []byte {
 }
 
 func compressible(name string) bool {
-	for _, ext := range [...]string{".wasm", ".js", ".css", ".html", ".svg", ".md"} {
+	for _, ext := range [...]string{".wasm", ".js", ".mjs", ".css", ".html", ".svg", ".md"} {
 		if strings.HasSuffix(name, ext) {
 			return true
 		}
@@ -342,6 +347,9 @@ func loadAssets(dir string) (map[string][]byte, error) {
 		if err := loadOpenmoji(dir, out); err != nil {
 			return nil, err
 		}
+		if err := loadFacemesh(dir, out); err != nil {
+			return nil, err
+		}
 		return withWorkletBundle(out), nil
 	}
 	if err := unpackArchive(out); err != nil {
@@ -409,6 +417,29 @@ func loadOpenmoji(dir string, out map[string][]byte) error {
 	return nil
 }
 
+// loadFacemesh reads the landmarker files for a static directory: the module,
+// the wasm loader, the wasm and the model. They are read by name from the one
+// folder, and the folder may be absent: without it the client keeps its colour
+// based face patch, so the landmarker is an extra, not a reason to fail.
+func loadFacemesh(dir string, out map[string][]byte) error {
+	names, err := filepath.Glob(filepath.Join(dir, "facemesh", "*"))
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		info, err := os.Stat(name)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		out["facemesh/"+filepath.Base(name)] = b
+	}
+	return nil
+}
+
 func assetNames() []string {
 	return []string{
 		"index.html", "app.js", "style.css", "favicon.svg",
@@ -458,6 +489,8 @@ func contentType(name string) string {
 	case strings.HasSuffix(name, ".html"):
 		return "text/html; charset=utf-8"
 	case strings.HasSuffix(name, ".js"):
+		return "text/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".mjs"):
 		return "text/javascript; charset=utf-8"
 	case strings.HasSuffix(name, ".css"):
 		return "text/css; charset=utf-8"
