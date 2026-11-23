@@ -2862,6 +2862,28 @@ function armPublish(p) {
   lookPublish(p.track);
 }
 
+// frameMark is the identity of the newest decoded camera frame: the media time
+// from requestVideoFrameCallback where the browser has it, else the decoded
+// frame count. It is undefined until one of them says, and nothing is skipped
+// then.
+function frameMark(p) {
+  const v = p.video;
+  if (v.requestVideoFrameCallback) {
+    if (!p.meshRVFC) {
+      p.meshRVFC = true;
+      const wait = () => v.requestVideoFrameCallback((_now, meta) => {
+        p.meshMedia = meta.mediaTime;
+        if (p.meshRVFC && state.lookPipe === p) wait();
+        else p.meshRVFC = false;
+      });
+      wait();
+    }
+    return p.meshMedia;
+  }
+  const q = v.getVideoPlaybackQuality && v.getVideoPlaybackQuality();
+  return q ? q.totalVideoFrames : undefined;
+}
+
 // lookMesh runs the landmarker on the small copy of the frame, once per painted
 // frame: the mesh rate is the camera rate. One detection at a time and no
 // queue, so a slow machine drops frames instead of piling them up.
@@ -2871,7 +2893,21 @@ function lookMesh(p) {
     meshOpen().then((fm) => { p.mesh = fm; });
   }
   if (!p.mesh || p.meshBusy || !p.meshCtx || document.hidden) return;
+  // A clock that runs faster than the camera repeats the frame it already has.
+  // A repeat goes to the detector again as the same face, so it is skipped.
+  const mark = frameMark(p);
+  if (mark !== undefined) {
+    if (mark === p.meshMark) return;
+    p.meshMark = mark;
+  }
+  // A detection that takes most of a frame period is dropped to every second or
+  // third new frame, so the detector cannot eat the clock of the picture.
+  const period = 1000 / (p.fps || 30);
+  p.meshTick = (p.meshTick || 0) + 1;
+  if ((p.meshTick - 1) % (p.meshStride || 1) !== 0) return;
+  meshSize(p);
   p.meshBusy = true;
+  const t0 = performance.now();
   try {
     p.meshCtx.drawImage(p.video, 0, 0, p.meshCanvas.width, p.meshCanvas.height);
     // The landmarker refuses two detections with one timestamp, so the stamp of
@@ -2887,6 +2923,24 @@ function lookMesh(p) {
     // keeps the mask in place and the next frame tries again.
   } finally {
     p.meshBusy = false;
+    const cost = performance.now() - t0;
+    p.meshCost = p.meshCost ? p.meshCost * 0.75 + cost * 0.25 : cost;
+    p.meshStride = p.meshCost > period * 0.9 ? 3 : p.meshCost > period * 0.55 ? 2 : 1;
+  }
+}
+
+// meshSize keeps the small copy of the frame at the shape of the camera, with
+// its longest side at MESH_W, so a portrait phone frame is not squashed and a
+// landmark x stays a fraction of the frame the mask is drawn on.
+function meshSize(p) {
+  const vw = p.video.videoWidth || settings.width || 1280;
+  const vh = p.video.videoHeight || settings.height || 720;
+  const k = MESH_W / Math.max(vw, vh);
+  const w = Math.max(64, Math.round(vw * k));
+  const h = Math.max(64, Math.round(vh * k));
+  if (p.meshCanvas.width !== w || p.meshCanvas.height !== h) {
+    p.meshCanvas.width = w;
+    p.meshCanvas.height = h;
   }
 }
 
@@ -2955,11 +3009,16 @@ function lookMeshAnchor(p, lm) {
     if (y > y1) y1 = y;
   }
   const next = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, lm: pts };
-  // How far the lips are apart, as a share of the face height: the dog tongue
-  // reads it, and a mouth that closes keeps it for about a second.
+  // How far the lips are apart, as a share of the mouth width: the dog tongue
+  // reads it, and it falls off over about a second when the mouth closes.
   const faceH = Math.hypot(pts[LM.chin * 2] - pts[LM.hairline * 2], pts[LM.chin * 2 + 1] - pts[LM.hairline * 2 + 1]) || 1;
   const lipGap = Math.hypot(pts[LM.lipLow * 2] - pts[LM.lip * 2], pts[LM.lipLow * 2 + 1] - pts[LM.lip * 2 + 1]);
-  next.tongue = lipGap / faceH > 0.03 ? 1 : 0;
+  const mouthW = Math.hypot(pts[LM.mouthR * 2] - pts[LM.mouthL * 2], pts[LM.mouthR * 2 + 1] - pts[LM.mouthL * 2 + 1]) || faceH * 0.35;
+  // A closed mouth is a gap of nearly nothing, a wide one can pass the mouth
+  // width. A share of the mouth width does not change with the distance to the
+  // camera, so the tongue grows with the mouth instead of snapping out at a
+  // fixed gap.
+  next.tongue = Math.min(1, Math.max(0, (lipGap / mouthW - 0.06) / 0.34));
   const a = p.anchor;
   const t = performance.now();
   const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
@@ -3555,13 +3614,14 @@ function drawDog(ctx, g) {
   ctx.fill();
   ctx.restore();
   // The mouth must be open: the anchor holds the openness for about a second,
-  // so a talking mouth does not make the tongue flicker.
+  // so a talking mouth does not make the tongue flicker. Openness is a share of
+  // the mouth width, so the tongue starts small and grows with the jaw.
   const open = Math.max(0, Math.min(1, g.tongue));
-  if (open > 0.06) {
+  if (open > 0.02) {
     const mx = (g.mouthL[0] + g.mouthR[0]) / 2;
     const my = (g.lip[1] + g.lipLow[1]) / 2;
     const half = (gap(g.mouthL, g.mouthR) * 0.42) || g.fw * 0.08;
-    const tip = g.spot(g.lip, 0, -(0.05 + 0.14 * open));
+    const tip = g.spot(g.lip, 0, -(0.02 + 0.17 * open));
     ctx.fillStyle = '#e2707f';
     ctx.beginPath();
     ctx.moveTo(mx - half, my);
