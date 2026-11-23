@@ -6,13 +6,14 @@
     "build": "node build.mjs",
     "check": "tsc -p tsconfig.json",
     "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.ts\" build.mjs eslint.config.mjs"
+    "outdated": "npm outdated || true"
   },
   "devDependencies": {
-    "esbuild": "^0.25.12",
-    "eslint": "^9.39.5",
-    "prettier": "^3.10.1",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.48.0"
+    "@eslint/js": "10.0.1",
+    "esbuild": "0.28.2",
+    "eslint": "10.15.0",
+    "globals": "17.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.74.0"
   }
 }

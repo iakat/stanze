@@ -54,7 +54,7 @@ export function claimText(n, admins) {
 // handshake, so every page that holds that key can check it.
 export async function makeClaim(n, admins) {
   if (!state.idKey) return null;
-  let sig = '';
+  let sig;
   try {
     sig = await state.idKey.sign(claimText(n, admins));
   } catch {

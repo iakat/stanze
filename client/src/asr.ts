@@ -1001,8 +1001,8 @@ export function omniWorker(cfg) {
   async function fromCache() {
     if (!G.caches || !cfg.size) return null;
     const count = Math.ceil(cfg.size / PART);
-    let cache = null;
-    let first = null;
+    let cache;
+    let first;
     try {
       cache = await G.caches.open(cfg.cache);
       first = await cache.match(partKey(0));
@@ -1238,7 +1238,7 @@ export function omniWorker(cfg) {
     const job = queue.shift();
     decoding = true;
     const t0 = performance.now();
-    let text = '';
+    let text;
     try {
       const stream = rec.createStream();
       stream.acceptWaveform(RATE, job.samples);

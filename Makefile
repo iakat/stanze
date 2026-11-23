@@ -6,7 +6,7 @@ NODE ?= /data/workspace/node/bin
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build client selftest run test typecheck lint format smoke sealed check clean
+.PHONY: all build client selftest run test typecheck lint deps smoke sealed check clean
 
 all: build selftest
 
@@ -35,8 +35,10 @@ typecheck:
 lint:
 	PATH=$(NODE):$$PATH client/node_modules/.bin/eslint client
 
-format:
-	PATH=$(NODE):$$PATH client/node_modules/.bin/prettier --write "client/src/**/*.ts" client/build.mjs client/eslint.config.mjs
+# Report dev dependencies that are behind the registry. Versions in
+# client/package.json are exact and take the update from this output.
+deps:
+	PATH=$(NODE):$$PATH npm --prefix client outdated || true
 
 # One real browser, one real join. Fails on the first uncaught exception.
 smoke:

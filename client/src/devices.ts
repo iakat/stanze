@@ -109,7 +109,7 @@ export function paintDevices() {
 // permission) and on every devicechange.
 export async function refreshDevices() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-  let all = [];
+  let all;
   try {
     all = await navigator.mediaDevices.enumerateDevices();
   } catch {

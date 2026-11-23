@@ -1635,7 +1635,7 @@ export async function lookPublish(track) {
 // that carries only that frame: the drawn canvas while a look or a mask draws,
 // else one frame of the camera itself, which needs a throwaway element.
 export async function freezeShot() {
-  let src = null;
+  let src;
   const p = state.lookPipe;
   if (lookOn() && p && p.canvas && p.canvas.width > 1) {
     src = p.canvas;

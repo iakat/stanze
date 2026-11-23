@@ -55,7 +55,7 @@ which is why the default cap is eight.
 ## Requirements
 
 - Go 1.24 or newer to build.
-- Node 20 or newer and `npm --prefix client install` once, for the client
+- Node 22.13 or newer and `npm --prefix client install` once, for the client
   bundle. The bundle is built here, it is not stored in the tree; a tree that
   already carries a fresh `static/app.js` skips the step with
   `SKIP_CLIENT=1 ./build.sh`.
@@ -78,6 +78,11 @@ The client source is TypeScript under `client/src`, one module per area.
 does that before packing. The bundle is the file the page loads, so a client
 change is one build and no server change. The bundle is not in the tree: it is
 ignored by version control and every checkout builds it.
+
+The client has six dev dependencies, and no more than the build, the checker and
+the linter need. Every version in `client/package.json` is exact, so an install
+is one version of each package; `make deps` prints the ones behind the registry
+and the update is a new exact version plus `npm --prefix client install`.
 
 The client is packed and embedded as one gzip compressed tar, with sorted names
 and no timestamps, so two builds of one commit produce the same archive.
@@ -257,8 +262,9 @@ PW=/tmp/pw/node_modules/playwright-core ROOMSBASE=http://127.0.0.1:8095 \
 ```
 
 `make` targets: `build`, `client`, `selftest`, `run`, `test` (selftest against
-`ADDR`), `typecheck` (the TypeScript client), `lint`, `format`, `smoke`,
-`sealed`, `check` (typecheck, lint, then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
+`ADDR`), `typecheck` (the TypeScript client), `lint`, `deps` (client
+dependencies behind the registry), `smoke`, `sealed`, `check` (typecheck, lint,
+then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
 for a one-shot join. With gcc present, `go test -race ./...` also runs.
 
 ## Repository layout
