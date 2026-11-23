@@ -197,24 +197,17 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 		}
 		serve("index.html")(w, r)
 	})
-	for _, name := range routeNames() {
+	for _, name := range assetNames() {
 		mux.Handle("/"+name, serve(name))
 	}
-	// The drawings of the short code are one folder of small files. The map
-	// holds only the listed names, so any other path still gets a 404.
-	mux.HandleFunc("/openmoji/", func(w http.ResponseWriter, r *http.Request) {
-		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
-	})
-	// The landmarker lives in one folder too, so the module, the wasm and the
-	// model come from this origin and the page loads nothing from outside.
-	mux.HandleFunc("/facemesh/", func(w http.ResponseWriter, r *http.Request) {
-		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
-	})
-	// The drawings a mask wears are their own folder as well, so the client
-	// names a file and the server keeps the names.
-	mux.HandleFunc("/miku/", func(w http.ResponseWriter, r *http.Request) {
-		serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
-	})
+	// The drawings of the short code, the landmarker and the art a mask wears
+	// are their own folders. The map holds only the listed names, so any other
+	// path under a folder is still a 404 and nothing comes from outside.
+	for _, name := range append(folderNames(), "openmoji") {
+		mux.HandleFunc("/"+name+"/", func(w http.ResponseWriter, r *http.Request) {
+			serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
+		})
+	}
 	// The queue and the done list are plain files on disk, so an update is a
 	// file write and needs no new binary.
 	mux.HandleFunc("/QUEUE.md", docHandler(cfg.DocsDir, "QUEUE.md"))
@@ -476,11 +469,6 @@ func assetNames() []string {
 // has its own scope, so a second module can not share its globals: the wasm
 // bundle and the processor must be served as a single file.
 const workletBundle = "gtcrn-node.js"
-
-// routeNames is every served asset, sources and the combined worklet.
-func routeNames() []string {
-	return assetNames()
-}
 
 // withWorkletBundle glues the module loader and the processor into the single
 // module that /gtcrn-node.js serves. The loader defines `Module` in that same
