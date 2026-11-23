@@ -338,10 +338,15 @@ func (h *Hub) roomOf(p *Peer) *Room {
 	return p.room
 }
 
-// peersOf returns a copy of the peer list of a room, excluding skip.
+// peersOf returns a copy of the peer list of a room, excluding skip. A room that
+// is already gone answers with nothing: a leave on another goroutine can clear
+// the room of a peer while its own read loop is still on one message.
 func (h *Hub) peersOf(room *Room, skip string) []*Peer {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if room == nil {
+		return nil
+	}
 	out := make([]*Peer, 0, len(room.peers))
 	for id, p := range room.peers {
 		if id != skip {
@@ -373,6 +378,9 @@ func (h *Hub) relay(p *Peer, to string, payload []byte) {
 func (h *Hub) adminsOf(room *Room) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if room == nil {
+		return nil
+	}
 	out := make([]string, 0, len(room.admins))
 	for _, id := range room.order {
 		if room.admins[id] {
