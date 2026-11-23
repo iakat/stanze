@@ -124,6 +124,7 @@ const state = {
   sealFault: '',       // why this browser can not seal media, if it can not
   wireFrames: 0,       // signaling frames inspected by the audit
   wireLeaks: [],       // a canary that appeared on the wire, must stay empty
+  clearSignaling: 0,   // frames that still carried a clear sdp or candidate
   canaries: new Set(), // the name and the chat lines that must never leak
   samples: [],         // a few frame samples, for the in-page lab proof
 };
@@ -4004,7 +4005,7 @@ function connectPeer(id, initiator, mic, cam) {
     try {
       peer.makingOffer = true;
       await pc.setLocalDescription();
-      send({ t: 'offer', to: peer.id, sdp: pc.localDescription.sdp });
+      sealedSendSdp(peer, 'offer', pc.localDescription.sdp);
     } catch (err) {
       console.warn('negotiation failed', err);
     } finally {
@@ -4013,9 +4014,7 @@ function connectPeer(id, initiator, mic, cam) {
   };
 
   pc.onicecandidate = (event) => {
-    if (event.candidate) {
-      send({ t: 'ice', to: peer.id, candidate: event.candidate.toJSON() });
-    }
+    if (event.candidate) sealedSendCand(peer, event.candidate.toJSON());
   };
 
   pc.ontrack = (event) => {
@@ -4142,7 +4141,7 @@ async function applyDescription(peer, type, sdp) {
 
     if (type === 'offer') {
       await pc.setLocalDescription();
-      send({ t: 'answer', to: peer.id, sdp: pc.localDescription.sdp });
+      sealedSendSdp(peer, 'answer', pc.localDescription.sdp);
     }
     await flushPending(peer);
     // The description is in place, so the encodings exist; a camera cap set
@@ -4292,6 +4291,11 @@ function handle(msg) {
     if (msg.code === 'unavailable') {
       state.fatal = 'room unavailable or passphrase incorrect';
       leave(state.fatal);
+    } else if (msg.code === 'sealed-only') {
+      // Only a page from before the sealed handshake can still ask for a clear
+      // relay. It cannot join, and a reload is the whole fix.
+      state.fatal = 'this page is out of date; reload it to join';
+      leave(state.fatal);
     }
     return;
   }
@@ -4411,23 +4415,10 @@ function handle(msg) {
       if (msg.from && typeof msg.b === 'string') sealedHandleOpaque(msg.from, msg.b);
       break;
     }
-    case 'offer': {
-      // The peer exists already: the handshake opened its connection.
-      const peer = state.peers.get(msg.from);
-      if (peer && msg.sdp) sealedOnOffer(peer, msg.sdp);
-      break;
-    }
-    case 'answer': {
-      const peer = state.peers.get(msg.from);
-      if (peer && msg.sdp) onDescription(peer, 'answer', msg.sdp);
-      break;
-    }
-    case 'ice': {
-      const peer = state.peers.get(msg.from);
-      if (peer && msg.candidate) onCandidate(peer, msg.candidate);
-      break;
-    }
   }
+  // A clear description or candidate has no case here on purpose. Everything
+  // that opens a connection arrives sealed, and a client old enough to send one
+  // of these is told to reload by the server.
 }
 
 // ---------------------------------------------------------------- room flow
@@ -4569,6 +4560,7 @@ function leave(message) {
   state.sealFault = '';
   state.wireFrames = 0;
   state.wireLeaks = [];
+  state.clearSignaling = 0;
   state.canaries = new Set();
   state.samples = [];
   asrStop();
@@ -8360,6 +8352,9 @@ function auditWire(where, raw) {
       state.wireLeaks.push({ where, canary: c });
     }
   }
+  // A key or a line that belongs to a description, or to a candidate. The
+  // markers are JSON keys and SDP lines, which a base64 blob can not contain.
+  if (/"sdp"|"candidate"|v=0|a=fingerprint/.test(text)) state.clearSignaling++;
 }
 
 // ------------------------------------------------------------- opaque payloads
@@ -8840,6 +8835,21 @@ function sealedOnApp(peer, b, seq) {
   }
   peer.seqIn = seq;
   if (obj.z !== undefined) delete obj.z; // the padding bucket, never content
+  if (obj.k === 'sdp') {
+    // A sealed description is the only kind this client sends. It arrives after
+    // the keys, so no clear offer is ever made or accepted from here.
+    if (obj.d === 'offer') sealedOnOffer(peer, obj.s).catch(() => sealedRefuse(peer, 'the offer could not be applied'));
+    else if (obj.d === 'answer' && peer.pc) onDescription(peer, 'answer', obj.s);
+    return;
+  }
+  if (obj.k === 'cand') {
+    // The socket and the pair counter are ordered, so a candidate always
+    // follows its description; the queue in onCandidate covers the gap while
+    // the description is still being applied.
+    if (peer.pc) onCandidate(peer, obj.c);
+    else (peer.candEarly = peer.candEarly || []).push(obj.c);
+    return;
+  }
   if (obj.k === 'name') {
     sealedSetName(peer, obj.n);
   } else if ((obj.k === 'chat' || obj.k === 'file') && peer.waiting) {
@@ -8903,6 +8913,20 @@ function padRoundTripOk() {
     if (!onBucket || JSON.stringify(back) !== raw) return false;
   }
   return true;
+}
+
+// Sealed negotiation. An offer, an answer and a candidate travel inside the
+// pair channel like a name does, so the server relays a blob and never sees a
+// codec, a fingerprint or an address. Both sides only reach this point after
+// the handshake, so the keys are always there.
+function sealedSendSdp(peer, kind, sdp) {
+  if (!peer.keys || !sdp) return;
+  sealedSend(peer, { k: 'sdp', d: kind, s: sdp });
+}
+
+function sealedSendCand(peer, cand) {
+  if (!peer.keys || !cand) return;
+  sealedSend(peer, { k: 'cand', c: cand });
 }
 
 function sealedSend(peer, obj) {
@@ -9104,6 +9128,8 @@ async function sealedOnOffer(peer, sdp) {
   }
   if (!state.peers.has(peer.id)) return; // the peer left while the keys installed
   const target = connectPeer(peer.id, false);
+  for (const cand of target.candEarly || []) onCandidate(target, cand);
+  target.candEarly = [];
   await onDescription(target, 'offer', sdp);
 }
 
@@ -9193,7 +9219,8 @@ function sealedCards() {
   const clean = state.workerErrors.length === 0;
   const counts = [
     ['frames ', `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`, refused === 0 && clean],
-    ['wire ', `frames ${state.wireFrames} leaks ${state.wireLeaks.length}`, state.wireLeaks.length === 0],
+    ['wire ', `frames ${state.wireFrames} leaks ${state.wireLeaks.length} clear ${state.clearSignaling}`,
+      state.wireLeaks.length === 0 && state.clearSignaling === 0],
   ];
   const files = state.fileOffers + state.fileRecv + state.fileChunksRecv + state.fileChunksSent +
     state.fileRefused + state.fileCancelled;
@@ -9417,6 +9444,7 @@ win().e2eApp = {
     workerErrors: state.workerErrors,
     wireFrames: state.wireFrames,
     wireLeaks: state.wireLeaks,
+    clearSignaling: state.clearSignaling,
     samples: state.samples,
   }),
   selfTest: pqSelfTest,

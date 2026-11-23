@@ -155,16 +155,12 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		switch m.T {
-		case "offer", "answer":
-			if m.SDP == "" || m.To == "" {
-				continue
-			}
-			s.hub.relay(p, m.To, mustJSON(serverMsg{T: m.T, From: p.id, SDP: m.SDP}))
-		case "ice":
-			if m.To == "" || len(m.Candidate) == 0 {
-				continue
-			}
-			s.hub.relay(p, m.To, mustJSON(serverMsg{T: "ice", From: p.id, Candidate: m.Candidate}))
+		case "offer", "answer", "ice":
+			// A description and a candidate belong inside the pair channel:
+			// this server carries the sealed blob and never a codec or an
+			// address. A client that is old enough to send one is told to
+			// reload, and the peer hears nothing.
+			p.writeNow(conn, serverMsg{T: "error", Code: "sealed-only"})
 		case "state":
 			// A mute, camera, deafen or raised hand toggle is a small
 			// indicator for the other tiles and the member list. It carries

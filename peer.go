@@ -187,15 +187,14 @@ type iceServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
-// clientMsg is the whole client to server vocabulary: join, offer, answer,
-// ice-candidate, leave.
+// clientMsg is the whole client to server vocabulary: join, enc, state, mod,
+// admit, leave, ping. A description and a candidate are not part of it; they
+// travel inside enc.
 type clientMsg struct {
-	T         string          `json:"t"`
-	Room      string          `json:"room,omitempty"`
-	Pass      string          `json:"pass,omitempty"`
-	To        string          `json:"to,omitempty"`
-	SDP       string          `json:"sdp,omitempty"`
-	Candidate json.RawMessage `json:"candidate,omitempty"`
+	T    string `json:"t"`
+	Room string `json:"room,omitempty"`
+	Pass string `json:"pass,omitempty"`
+	To   string `json:"to,omitempty"`
 
 	// mic, cam, deaf and hand are pointers so "not sent" and "false" differ.
 	Mic    *bool `json:"mic,omitempty"`
@@ -218,26 +217,24 @@ type clientMsg struct {
 }
 
 // serverMsg is the whole server to client vocabulary: joined, peer-joined,
-// peer-left, offer, answer, ice-candidate, state, admin, mod, kicked, enc,
-// waiting-room, admitted, error, pong.
+// peer-left, state, admin, mod, kicked, enc, waiting-room, admitted, error,
+// pong. There is no description field, so the server cannot send one.
 type serverMsg struct {
-	T         string          `json:"t"`
-	Self      string          `json:"self,omitempty"`
-	Peers     []peerInfo      `json:"peers,omitempty"`
-	Peer      *peerInfo       `json:"peer,omitempty"`
-	From      string          `json:"from,omitempty"`
-	SDP       string          `json:"sdp,omitempty"`
-	Candidate json.RawMessage `json:"candidate,omitempty"`
-	Mic       *bool           `json:"mic,omitempty"`
-	Cam       *bool           `json:"cam,omitempty"`
-	Deaf      *bool           `json:"deaf,omitempty"`
-	Screen    *bool           `json:"screen,omitempty"`
-	Hand      *bool           `json:"hand,omitempty"`
-	HandSeq   int             `json:"handSeq,omitempty"`
-	Admins    []string        `json:"admins,omitempty"`
-	Action    string          `json:"action,omitempty"`
-	Code      string          `json:"code,omitempty"`
-	Ice       []iceServer     `json:"ice,omitempty"`
+	T       string      `json:"t"`
+	Self    string      `json:"self,omitempty"`
+	Peers   []peerInfo  `json:"peers,omitempty"`
+	Peer    *peerInfo   `json:"peer,omitempty"`
+	From    string      `json:"from,omitempty"`
+	Mic     *bool       `json:"mic,omitempty"`
+	Cam     *bool       `json:"cam,omitempty"`
+	Deaf    *bool       `json:"deaf,omitempty"`
+	Screen  *bool       `json:"screen,omitempty"`
+	Hand    *bool       `json:"hand,omitempty"`
+	HandSeq int         `json:"handSeq,omitempty"`
+	Admins  []string    `json:"admins,omitempty"`
+	Action  string      `json:"action,omitempty"`
+	Code    string      `json:"code,omitempty"`
+	Ice     []iceServer `json:"ice,omitempty"`
 
 	// WaitingRoom is the room switch, sent with `joined` and with a
 	// `waiting-room` change. Waiting is true in `joined` for a guest that

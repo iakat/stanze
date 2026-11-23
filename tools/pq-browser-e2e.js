@@ -408,10 +408,20 @@ async function frameDump(page, label) {
       JSON.stringify({ replayed, replayBefore, replayAfter }));
 
     // No name or chat text ever appeared in a signaling frame.
-    const auditA = await a.page.evaluate(() => ({ leaks: window.e2eApp.state.wireLeaks, frames: window.e2eApp.state.wireFrames }));
-    const auditB = await b.page.evaluate(() => ({ leaks: window.e2eApp.state.wireLeaks, frames: window.e2eApp.state.wireFrames }));
+    const auditA = await a.page.evaluate(() => ({
+      leaks: window.e2eApp.state.wireLeaks, frames: window.e2eApp.state.wireFrames, clear: window.e2eApp.state.clearSignaling,
+    }));
+    const auditB = await b.page.evaluate(() => ({
+      leaks: window.e2eApp.state.wireLeaks, frames: window.e2eApp.state.wireFrames, clear: window.e2eApp.state.clearSignaling,
+    }));
     check('A signaling carries no plaintext name or chat', auditA.leaks.length === 0, JSON.stringify(auditA.leaks) + ' frames=' + auditA.frames);
     check('B signaling carries no plaintext name or chat', auditB.leaks.length === 0, JSON.stringify(auditB.leaks) + ' frames=' + auditB.frames);
+    // The pair still opens its media, so the descriptions and candidates did
+    // travel. None of them may have done so in the clear.
+    check('A signaling carries no clear description or candidate',
+      auditA.clear === 0 && auditA.frames > 5, JSON.stringify(auditA));
+    check('B signaling carries no clear description or candidate',
+      auditB.clear === 0 && auditB.frames > 5, JSON.stringify(auditB));
     check('both peers inspected a real number of signaling frames', auditA.frames > 10 && auditB.frames > 10, auditA.frames + '/' + auditB.frames);
 
     // The lab proves the frame layer directly: RTP arrives, a wrong key

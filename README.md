@@ -154,6 +154,13 @@ appears in a path or a query.
   transform joins without microphone and camera instead of sending clear frames.
 - **Names are content.** A peer has no name on the wire; the name arrives as a
   sealed payload after the pair keys exist, and can change at any time.
+- **Negotiation is sealed.** The offer, the answer and every candidate travel
+  as sealed payloads too, so the server never carries a codec list, a DTLS
+  fingerprint or an address. It relays the blob and refuses a clear description
+  with `sealed-only`, which only a page from before this change can send.
+- **Fixed sizes.** Every sealed payload is padded to 512, 2048 or 8192 bytes, or
+  a whole multiple of 8192, before it is sealed, so the frame size does not say
+  whether a chat line or a file offer went by.
 - **Short code.** Both sides show the same 13-character code and six emoji per
   tile, for comparison over the call, next to a fingerprint badge that reads
   `verified N of M`.
@@ -176,9 +183,7 @@ One JSON object per WebSocket text frame. Client to server:
 | Message | Fields |
 | --- | --- |
 | `join` | `room`, `pass` |
-| `offer`, `answer` | `to`, `sdp` |
-| `ice` | `to`, `candidate` |
-| `enc` | `to` (empty or `*` for the room), `b` |
+| `enc` | `to` (empty or `*` for the room), `b` (sealed description, candidate, name, chat or file) |
 | `state` | `mic`, `cam` |
 | `mod` | `to`, `action` (`kick`, `mute`, `admin`) or `waitingroom` with `on` |
 | `admit` | `to` |
@@ -190,7 +195,6 @@ Server to client:
 | --- | --- |
 | `joined` | `self`, `peers[]`, `admins`, `waitingRoom`, `waiting`, `ice[]` |
 | `peer-joined`, `peer-left` | `peer`, `from` |
-| `offer`, `answer`, `ice` | `from`, `sdp` / `candidate` |
 | `enc` | `from`, `b` (forwarded verbatim) |
 | `state`, `admin`, `mod`, `kicked` | as above |
 | `waiting-room`, `admitted` | `waitingRoom` / `from`, `peer` |
@@ -212,7 +216,8 @@ the shared secret). Nothing else is handed out.
 
 It covers: the embedded client is served, every plausible room-listing path is
 a 404, a room id never appears in a response, unknown rooms and wrong
-passphrases produce byte-identical errors, offer/answer/ICE relay verbatim,
+passphrases produce byte-identical errors, a clear description is refused and
+never relayed while the same description inside `enc` arrives intact,
 `peer-left` arrives, a freed id is a new room, the room cap holds, cross-room
 relaying is dropped, oversized messages close the connection, and two peers
 connect directly and through the embedded relay with the issued credentials.
