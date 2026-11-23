@@ -44,15 +44,31 @@ async function until(page, fn, arg, timeout, label) {
   throw new Error('timeout waiting for ' + (label || 'condition') + ' (last=' + JSON.stringify(last) + ')');
 }
 
+// The two model probes answer 404 when the operator set no directory for the
+// optional transcription engines, and the browser logs every such answer as a
+// console error. They are expected in a bare server, so the collector takes the
+// response status with its URL instead of the console text: a real miss still
+// fails the run, and it names the file.
+const EXPECTED_404 = ['/vosk/models', '/omni/models'];
+
 function attach(page, errors) {
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push('console: ' + m.text());
+    const text = m.text();
+    if (m.type() !== 'error') return;
+    if (/^Failed to load resource/.test(text)) return;
+    errors.push('console: ' + text);
   });
   page.on('pageerror', (e) => errors.push('pageerror: ' + String(e)));
+  page.on('response', (r) => {
+    if (r.status() < 400) return;
+    const path = new URL(r.url()).pathname;
+    if (r.status() === 404 && EXPECTED_404.includes(path)) return;
+    errors.push('http ' + r.status() + ': ' + r.url());
+  });
   page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url() + ' ' + (r.failure() || {}).errorText));
 }
 
-async function joinPage(context, name, room) {
+async function joinPage(context, name, room, pass) {
   const page = await context.newPage();
   const errors = [];
   attach(page, errors);
@@ -85,6 +101,7 @@ async function joinPage(context, name, room) {
     }));
     await page.fill('#name', name);
     if (room) await page.fill('#room', room);
+    if (pass) await page.fill('#pass', pass);
     await page.click('#enter-btn', { timeout: 20000 });
     try {
       await until(page, () => window.e2eApp && window.e2eApp.state.self && !document.getElementById('stage').hidden,
@@ -458,6 +475,41 @@ async function frameDump(page, label) {
 
     await a.page.screenshot({ path: OUT + '/a.png' });
     await b.page.screenshot({ path: OUT + '/b.png' });
+
+    // A room with a passphrase: the proof is the only gate now, so a guest
+    // with a wrong one is refused by the admin and removed from the room.
+    const owner = await joinPage(ctxA, 'carol', '', 'sesame');
+    const roomP = owner.app.room;
+    check('an owner opens a room with a passphrase', /^[a-z2-7]{26}$/.test(roomP), roomP);
+    const ownerState = await owner.page.evaluate(() => ({
+      w: typeof window.e2eApp.state.w,
+      pass: 'pass' in window.e2eApp.state,
+    }));
+    check('the passphrase lives as a scalar only', ownerState.w === 'string' && ownerState.pass === false,
+      JSON.stringify(ownerState));
+    const guest = await joinPage(ctxB, 'mallory', roomP, 'wrong-one');
+    const guestId = await guest.page.evaluate(() => window.e2eApp.state.self);
+    let kicked = false;
+    try {
+      kicked = await until(owner.page, (id) => {
+        const seen = window.e2eApp.state.peers.has(id);
+        return !seen ? 'gone' : '';
+      }, guestId, 20000, 'the guest is removed');
+    } catch (err) {
+      kicked = 'timeout';
+    }
+    check('a guest with a wrong passphrase is removed by the admin', kicked === 'gone', kicked);
+    await sleep(1000);
+    const guestAfter = await guest.page.evaluate(() => ({
+      self: window.e2eApp.state.self,
+      peers: window.e2eApp.state.peers.size,
+      lobby: !document.getElementById('lobby').hidden,
+      note: (document.getElementById('sealed-note') || {}).textContent || '',
+    }));
+    check('the refused guest is back in the lobby', guestAfter.peers === 0 && guestAfter.lobby,
+      JSON.stringify(guestAfter));
+    check('the lobby gives the guest a reason', /removed you from the room/i.test(guestAfter.note), guestAfter.note);
+    await owner.page.screenshot({ path: OUT + '/owner.png' });
   } catch (err) {
     check('test completed without exception', false, err && err.stack ? err.stack.split('\n')[0] : String(err));
     if (a) await a.page.screenshot({ path: OUT + '/a-fail.png' }).catch(() => {});

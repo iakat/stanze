@@ -23,6 +23,7 @@
 
 const fs = require('fs');
 const { chromium } = require(process.env.PW);
+const { expectedMiss } = require('./expected-404');
 
 const BASE = process.env.ROOMSBASE || 'http://127.0.0.1:8096';
 const OUT = process.env.OUTDIR || 'shots';
@@ -339,7 +340,7 @@ async function newContext(browser) {
 
 async function attach(page, errors) {
   page.on('console', (m) => {
-    if (m.type() === 'error' || m.type() === 'warning') errors.push(m.type() + ': ' + m.text().slice(0, 240));
+    if ((m.type() === 'error' || m.type() === 'warning') && !expectedMiss(m)) errors.push(m.type() + ': ' + m.text().slice(0, 240));
   });
   page.on('pageerror', (e) => errors.push('pageerror: ' + String(e).slice(0, 240)));
 }

@@ -15,6 +15,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const { chromium } = require(process.env.PW);
+const { expectedMiss } = require('./expected-404');
 
 const BASE = process.env.ROOMSBASE || 'http://127.0.0.1:8096';
 const OUT = process.env.OUTDIR || 'shots';
@@ -48,7 +49,7 @@ async function until(page, fn, arg, timeout, label) {
 
 function attach(page, errors) {
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push('console: ' + m.text());
+    if (m.type() === 'error' && !expectedMiss(m)) errors.push('console: ' + m.text());
   });
   page.on('pageerror', (e) => errors.push('pageerror: ' + String(e)));
   page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url() + ' ' + (r.failure() || {}).errorText));

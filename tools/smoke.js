@@ -11,6 +11,7 @@
 
 const fs = require('fs');
 const { chromium } = require(process.env.PW);
+const { expectedMiss } = require('./expected-404');
 
 const BASE = (process.env.ROOMSBASE || 'http://127.0.0.1:8095').replace(/\/+$/, '');
 const OUT = process.env.OUTDIR || '';
@@ -38,7 +39,9 @@ function attach(page, who) {
   });
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return;
-    const loc = msg.location ? ' at ' + msg.location().url + ':' + msg.location().lineNumber : '';
+    if (expectedMiss(msg)) return;
+    const at = msg.location ? msg.location() : null;
+    const loc = at ? ' at ' + at.url + ':' + at.lineNumber : '';
     die(who + ' console error: ' + msg.text() + loc);
   });
 }

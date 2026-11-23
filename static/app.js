@@ -4291,7 +4291,9 @@ function handle(msg) {
   }
   if (msg.t === 'error') {
     if (msg.code === 'unavailable') {
-      state.fatal = 'room unavailable or passphrase incorrect';
+      // The passphrase is not a server question any more, so this code only
+      // means a malformed id or a full room.
+      state.fatal = 'room unavailable or full';
       leave(state.fatal);
     } else if (msg.code === 'sealed-only') {
       // Only a page from before the sealed handshake can still ask for a clear
@@ -4646,7 +4648,16 @@ function leave(message) {
   // needs no retyping.
   if (was) $('room').value = was;
   else suggestRoom();
-  if (message) say(message);
+  if (message) {
+    say(message);
+    // The chat log goes with the call, so the lobby says why this page is back
+    // in it. A guest removed by the host must not be left guessing.
+    const note = $('sealed-note');
+    if (note) {
+      note.hidden = false;
+      note.textContent = message;
+    }
+  }
 }
 
 // ---------------------------------------------------------------- chat
@@ -8484,6 +8495,19 @@ function sealedRefuse(peer, why) {
   updatePinCount();
 }
 
+// sealedRefusePass is sealedRefuse for a guest that failed the room proof. A
+// wrong passphrase costs one failed handshake, and an admin also removes the
+// guest: a seat in the room is not the prize for guessing. A guest with no role
+// only closes the link, because the kick is the server's word and only an admin
+// holds it.
+function sealedRefusePass(peer) {
+  sealedRefuse(peer, 'does not know the room passphrase');
+  if (!isAdmin(state.self) || isAdmin(peer.id)) return;
+  const gone = state.peers.get(peer.id);
+  if (gone && gone.fp) state.insideFps.delete(gone.fp);
+  send({ t: 'mod', to: peer.id, action: 'kick' });
+}
+
 // sealedRestart drops a pair's state so a new handshake can run. The deliberate
 // case is "this device was reset", which re-pins and starts over; the automatic
 // case is a peer that comes back with a fresh session id.
@@ -8850,7 +8874,7 @@ function sealedOnPassFrame(peer, msg) {
   // spakeok: the peer's confirmation of the key our side derived.
   const out = pqCall((json) => pqModule().spakeverify(json), { id: peer.pass.id, tag: msg.c });
   if (!out || !out.ok) {
-    sealedRefuse(peer, 'does not know the room passphrase');
+    sealedRefusePass(peer);
     return;
   }
   peer.pass.peerOk = true;
@@ -9053,7 +9077,7 @@ function padRoundTripOk() {
 
 // roomW turns the room passphrase into the SPAKE2 scalar. The count is high on
 // purpose: it is the price of one guess at the passphrase after a dump, and it
-// is paid here, so the server never sees the passphrase at all.
+// is paid here, where the passphrase never leaves the page.
 function roomW(pass, room) {
   // An open room has no passphrase, and an empty password would make SPAKE2
   // prove the same public constant to everyone. That is exactly what an open

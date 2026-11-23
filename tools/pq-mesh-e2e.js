@@ -11,6 +11,7 @@
 
 const fs = require('fs');
 const { chromium } = require(process.env.PW);
+const { expectedMiss } = require('./expected-404');
 
 const BASE = process.env.ROOMSBASE || 'http://127.0.0.1:8095';
 const OUT = process.env.OUTDIR || 'shots';
@@ -44,7 +45,7 @@ async function until(page, fn, arg, timeout, label) {
 
 function attach(page, errors) {
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push('console: ' + m.text());
+    if (m.type() === 'error' && !expectedMiss(m)) errors.push('console: ' + m.text());
   });
   page.on('pageerror', (e) => errors.push('pageerror: ' + String(e)));
   page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url() + ' ' + (r.failure() || {}).errorText));
@@ -409,7 +410,7 @@ async function dump(page, label, errors) {
           settle('initiator');
         }
       };
-      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: window.e2eApp.state.room, pass: '' }));
+      ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room: window.e2eApp.state.room }));
       ws.onmessage = (ev) => {
         const m = JSON.parse(ev.data);
         if (m.t === 'joined') {
@@ -486,7 +487,7 @@ async function dump(page, label, errors) {
     const fake = await a.page.evaluate(async (room) => {
       const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
       const self = await new Promise((resolve, reject) => {
-        ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room, pass: '' }));
+        ws.onopen = () => ws.send(JSON.stringify({ t: 'join', room }));
         ws.onmessage = (ev) => {
           const m = JSON.parse(ev.data);
           if (m.t === 'joined') resolve(m.self);
