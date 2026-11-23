@@ -2981,20 +2981,64 @@ function lookWarp(p, a, filter) {
   warpPatch(p, cx, cy, rx, ry, 1.3, 1.5, filter);
 }
 
-// The wide effect stretches the whole head sideways: one patch over the face,
+// The wide effect stretches the whole head sideways: one box over the face,
 // widened and left at its own height, so the eyes, the nose and the mouth all
-// move out together and the head reads as very wide. The patch is measured on
-// the face and not on the frame, so a head that turns or leans keeps it.
+// move out together and the head reads as very wide. The box takes the crown
+// as well as the face, because the head above the hairline is a third of the
+// face height, and a stretch of the face alone would leave a narrow forehead.
+// The patch is measured on the face, so a head that turns or leans keeps it.
 function lookWide(p, a, filter) {
   const W = p.canvas.width, H = p.canvas.height;
   const g = maskGeo(a, W, H);
-  // The middle of the face: the middle of the two outer eye corners, and the
-  // middle of the hairline and the chin.
+  // The middle of the face from the two outer eye corners, and the box from
+  // above the crown to below the chin.
   const cx = (g.eyeL[0][0] + g.eyeR[1][0]) / 2;
-  const cy = (g.top[1] + g.chin[1]) / 2;
-  const rx = Math.max(g.fw * 0.56, 6);
-  const ry = Math.max(g.fh * 0.6, 6);
-  warpPatch(p, cx, cy, rx, ry, 1.8, 1, filter);
+  const top = g.top[1] - g.fh * 0.34;
+  const bottom = g.chin[1] + g.fh * 0.06;
+  const rx = Math.max(g.fw * 0.62, 8);
+  const ry = Math.max((bottom - top) / 2, 8);
+  warpWide(p, cx, (top + bottom) / 2, rx, ry, 1.8, filter);
+}
+
+// warpWide draws one box of the video, stretched by kx across and kept at its
+// own height. A short fade on each edge meets the untouched frame, and the
+// box stays solid inside, so the forehead widens with the rest of the head
+// instead of fading back to its own width.
+function warpWide(p, cx, cy, rx, ry, kx, filter) {
+  const W = p.canvas.width, H = p.canvas.height;
+  const dw = 2 * rx * kx, dh = 2 * ry;
+  const iw = Math.ceil(dw), ih = Math.ceil(dh);
+  const vw = p.video.videoWidth, vh = p.video.videoHeight;
+  if (iw < 8 || ih < 8 || !vw || !vh) return;
+  if (!p.wideCanvas) {
+    p.wideCanvas = document.createElement('canvas');
+    p.wideCtx = p.wideCanvas.getContext('2d');
+  }
+  const c = p.wideCanvas, cc = p.wideCtx;
+  if (c.width < iw) c.width = iw;
+  if (c.height < ih) c.height = ih;
+  const sx = (cx - rx) * vw / W, sy = (cy - ry) * vh / H;
+  cc.clearRect(0, 0, iw, ih);
+  cc.globalCompositeOperation = 'source-over';
+  cc.drawImage(p.video, sx, sy, 2 * rx * vw / W, 2 * ry * vh / H, 0, 0, iw, ih);
+  // Two fades, one per axis, so the short edge is a straight line and not a
+  // ring: eight percent at each side, and the head itself stays solid.
+  cc.globalCompositeOperation = 'destination-in';
+  const fade = (x0, y0, x1, y1) => {
+    const grad = cc.createLinearGradient(x0, y0, x1, y1);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(0.08, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.92, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    cc.fillStyle = grad;
+    cc.fillRect(0, 0, iw, ih);
+  };
+  fade(0, 0, iw, 0);
+  fade(0, 0, 0, ih);
+  cc.globalCompositeOperation = 'source-over';
+  if (filter && filter !== 'none') p.ctx.filter = filter;
+  p.ctx.drawImage(c, 0, 0, iw, ih, cx - dw / 2, cy - dh / 2, dw, dh);
+  if (filter && filter !== 'none') p.ctx.filter = 'none';
 }
 
 // warpPatch draws one ellipse of the video, widened by kx and heightened by ky
