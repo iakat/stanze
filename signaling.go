@@ -62,12 +62,19 @@ func (s *server) checkOrigin(r *http.Request) bool {
 	return s.cfg.AllowedOrigin != "" && strings.EqualFold(origin, s.cfg.AllowedOrigin)
 }
 
+// clientAddr is the key of the per address limits. Behind the proxy the right
+// end of X-Forwarded-For is the address the proxy itself saw: it appends to the
+// header, so every entry to the left of it is whatever the client sent and can
+// name any address it likes. Taking the left end would hand a new rate limit to
+// anyone who writes a different first entry on each join.
 func clientAddr(r *http.Request, behindProxy bool) string {
 	if behindProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.Split(xff, ",")
-			if ip := strings.TrimSpace(parts[0]); ip != "" {
-				return ip
+			for i := len(parts) - 1; i >= 0; i-- {
+				if ip := strings.TrimSpace(parts[i]); ip != "" {
+					return ip
+				}
 			}
 		}
 	}
