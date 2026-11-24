@@ -1,0 +1,32 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {"name": "ortmin-build", "namespace": "ocbot2"},
+  "spec": {
+    "backoffLimit": 0,
+    "activeDeadlineSeconds": 7200,
+    "template": {
+      "spec": {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "name": "build",
+            "image": "debian:bookworm",
+            "command": ["/bin/sh", "-c"],
+            "args": [
+              "set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends git curl ca-certificates build-essential cmake ninja-build python3 python3-pip python3-venv nodejs npm; git clone --depth 1 --branch ortmin https://github.com/iakat/stanze.git /w; cd /w; sh tools/ortmin/build.sh; for f in ort-wasm-simd-threaded.wasm ort-wasm-simd-threaded.mjs fastenhancer-s.ort; do curl -sS -X PUT --data-binary @static/ort-min/$f -o /dev/null -w \"$f %{http_code} %{size_upload}\\n\" http://files-sink.ocbot2.svc.cluster.local:8088/ortmin/$f; done; ls -l static/ort-min"
+            ],
+            "resources": {
+              "requests": {"cpu": "2", "memory": "3Gi"},
+              "limits": {"cpu": "6", "memory": "6Gi"}
+            },
+            "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}],
+            "securityContext": {"allowPrivilegeEscalation": false}
+          }
+        ],
+        "volumes": [{"name": "tmp", "emptyDir": {"sizeLimit": "12Gi"}}]
+      }
+    }
+  }
+}
