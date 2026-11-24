@@ -4,6 +4,7 @@
 
 import { LOOKS, PERF, QUALITY, ROOM_RE } from './config.js';
 import { $ } from './dom.js';
+import { paintBuildTag } from './buildtag.js';
 import { state } from './state.js';
 import { isAdmin, newRoomID, say } from './util.js';
 import { load, store } from './prefs.js';
@@ -597,6 +598,9 @@ function wireCallBar() {
   // The form shows a picker before the first permission: the labels are hidden,
   // so the options are numbered until a request has succeeded once.
   refreshDevices();
+
+  // The commit this bundle came from, so a deploy can be checked at a glance.
+  paintBuildTag();
 }
 
 function init() {
