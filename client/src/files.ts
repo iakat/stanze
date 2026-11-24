@@ -29,6 +29,10 @@ const FILE_LOW = 64 * 1024;
 
 const FILE_OPEN_WAIT = 15000;
 
+// A transfer in one of these states has ended, so a peer that leaves can not
+// change it again.
+const FILE_DONE = new Set(['done', 'refused', 'cancelled', 'gone']);
+
 // A file name is shown in the chat only, but it comes from another page, so it is
 // cleaned like a sealed guest name.
 function cleanFileName(raw) {
@@ -634,22 +638,21 @@ export function fileBindChannel(peer, dc) {
 
 // fileChannelClosed ends every transfer of a pair whose channel went away; the
 // guest may stay in the room, so only the files stop.
-function fileChannelClosed(peer) {
+function fileOutGone(id) {
   for (const out of state.files.values()) {
-    const st = out.peers.get(peer.id);
-    if (
-      !st ||
-      st.status === 'done' ||
-      st.status === 'refused' ||
-      st.status === 'cancelled' ||
-      st.status === 'gone'
-    )
-      continue;
+    const st = out.peers.get(id);
+    if (!st || FILE_DONE.has(st.status)) continue;
     st.status = 'gone';
     fileStop(st);
     if (!out.cancelled) filePaintOut(out);
     fileSettle(out);
   }
+}
+
+// fileChannelClosed is a data channel that went away under a live peer: the
+// outgoing offers are gone and a half received file is dropped.
+function fileChannelClosed(peer) {
+  fileOutGone(peer.id);
   for (const rec of state.filesIn.values()) {
     if (rec.peerId === peer.id && rec.status === 'receiving') fileFinishIn(rec, 'cancelled');
   }
@@ -676,31 +679,9 @@ export function fileDropPeer(peer) {
 }
 
 function filePeerGone(id) {
-  for (const out of state.files.values()) {
-    const st = out.peers.get(id);
-    if (!st) continue;
-    if (
-      st.status !== 'done' &&
-      st.status !== 'refused' &&
-      st.status !== 'cancelled' &&
-      st.status !== 'gone'
-    ) {
-      st.status = 'gone';
-      fileStop(st);
-      if (!out.cancelled) filePaintOut(out);
-      fileSettle(out);
-    }
-  }
+  fileOutGone(id);
   for (const rec of state.filesIn.values()) {
-    if (rec.peerId !== id) continue;
-    if (
-      rec.status === 'done' ||
-      rec.status === 'refused' ||
-      rec.status === 'cancelled' ||
-      rec.status === 'gone'
-    )
-      continue;
-    fileFinishIn(rec, 'gone');
+    if (rec.peerId === id && !FILE_DONE.has(rec.status)) fileFinishIn(rec, 'gone');
   }
 }
 
