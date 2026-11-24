@@ -73,7 +73,7 @@ module in `src` has no row yet.
 | [src/stats.ts](src/stats.ts) | 955 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1278 | Local transcription, one language and many. |
 | [src/look.ts](src/look.ts) | 1930 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 817 | The device pickers of the join card and the toolbar. |
+| [src/devices.ts](src/devices.ts) | 815 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 899 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory

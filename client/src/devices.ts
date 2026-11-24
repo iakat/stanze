@@ -663,6 +663,18 @@ export function dropPeerScreen(peer) {
   layoutStage();
 }
 
+// clearFreeze drops the frozen still and unticks its switch, so the live camera
+// comes back with no stale picture in front of it.
+function clearFreeze() {
+  if (!state.freeze) return;
+  if (state.freezeTrack) stopQuietly(state.freezeTrack);
+  state.freeze = false;
+  state.freezeTrack = null;
+  state.freezeCanvas = null;
+  const box = $('freeze');
+  if (box) box.checked = false;
+}
+
 // adoptCam makes one camera track the live video. The picture goes to the camera
 // sender, never the share, and a switch needs no renegotiation.
 async function adoptCam(track) {
@@ -670,14 +682,7 @@ async function adoptCam(track) {
   const prev = state.camTrack;
   state.camTrack = track;
   // A new camera hands the live picture back: the frozen frame is stale.
-  if (state.freeze) {
-    if (state.freezeTrack) stopQuietly(state.freezeTrack);
-    state.freeze = false;
-    state.freezeTrack = null;
-    state.freezeCanvas = null;
-    const box = $('freeze');
-    if (box) box.checked = false;
-  }
+  clearFreeze();
   track.contentHint = 'motion';
   track.enabled = true;
   paintSelfCam(true);
@@ -769,14 +774,7 @@ export function disableCam(persist = true) {
   const track = state.camTrack;
   state.camTrack = null;
   // A frozen still has no camera behind it any more, so the freeze goes too.
-  if (state.freeze) {
-    if (state.freezeTrack) stopQuietly(state.freezeTrack);
-    state.freeze = false;
-    state.freezeTrack = null;
-    state.freezeCanvas = null;
-    const box = $('freeze');
-    if (box) box.checked = false;
-  }
+  clearFreeze();
   // The drawn track reads from the camera, so it goes with it.
   lookStop();
   if (track) stopQuietly(track);
