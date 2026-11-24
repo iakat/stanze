@@ -4,9 +4,8 @@
 */
 
 // ---------------------------------------------------------------- preferences
-// The browser keeps a few small strings: the name, the room, the last
-// microphone and camera choice, the media path, denoise, and the volume of
-// each peer by name. An unreadable storage (private mode) simply keeps nothing.
+// Small strings under a rooms. prefix: name, room, devices, path, denoise, and
+// each peer's volume under its key fingerprint. A storage that throws keeps nothing.
 export function store(key, value) {
   if (!window.localStorage) return;
   try {

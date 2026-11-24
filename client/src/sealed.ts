@@ -1,6 +1,5 @@
 /*
- Opaque payloads, the sealed channel of a pair and its frame
- sizes.
+ Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair.
 */
 
 import { B32 } from './config.js';
@@ -11,23 +10,21 @@ import { sealedSetE2E } from './gate.js';
 
 // ---------------------------------------------------------------- sealing
 //
-// Every room is sealed end to end and keeps the stage and the plumbing of any
-// call, with three differences from a relayed one: the join never carries a
-// name, the chat never uses the server `chat` message, and every encoded media
-// frame goes through an AES-GCM transform in a worker. The keys come from the
-// WebAssembly build of X25519 + ML-KEM-768 (static/pq.wasm) through the JSON
-// bridge in wasm_exec.js, so the relay only ever sees opaque blobs.
-// The wasm and its shim must be the build this page is. app.js carries the
-// build query, so both fetches inherit it and a cached old pair can never meet
-// a newer page, which would fail every handshake without a word.
+// The join carries no name, the chat avoids the server message, and every
+// encoded media frame goes through an AES-GCM transform in a worker. The keys
+// come from the WebAssembly build of X25519 + ML-KEM-768 (pq.wasm) through the
+// JSON bridge in wasm_exec.js, so the relay only ever sees opaque blobs.
+// The wasm and its shim must be the build this page is: app.js carries the build
+// query, so both fetches inherit it and a cached old pair can never meet a newer
+// page, which would fail every handshake without a word.
 export const BUILD_Q =
   '?' + (((document.currentScript as HTMLScriptElement) || { src: '' }).src.split('?')[1] || 'v=1');
 
-// The short code is 13 base32 characters, which is fine to compare on a screen
-// but clumsy to read aloud. The same bits are shown as six OpenMoji drawings
-// with a different shape and a different name each, so two people on a voice
-// call can compare them without spelling anything and without confusing two of
-// them. The third field is the file name of the drawing in static/openmoji.
+// The short code is 13 base32 characters: fine to compare on a screen, clumsy to
+// read aloud. The same bits are shown as six OpenMoji drawings with a different
+// shape and a different name each, so two people on a voice call can compare them
+// without spelling anything and without confusing two of them. The third field
+// is the file name of the drawing in static/openmoji.
 export const VERIFY_EMOJI = [
   ['⚓', 'anchor', '2693'],
   ['🔔', 'bell', '1F514'],

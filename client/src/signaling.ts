@@ -66,8 +66,7 @@ export function connectWS() {
     stopLost();
     // The join carries no name and no passphrase: the server announces every
     // peer as its placeholder, and the real name travels sealed once the keys
-    // exist. The passphrase proves itself in the sealed handshake, so a wrong
-    // one costs a failed exchange and never a server-side check.
+    // exist. A wrong passphrase fails the sealed exchange, never a server check.
     send({ t: 'join', room: state.room });
   };
 
@@ -86,7 +85,7 @@ export function connectWS() {
     if (state.ws === ws) state.ws = null;
     if (state.leaving) return;
     // The old peer id dies with the old socket, so the remote connections go
-    // away too; the join after the reconnect rebuilds them.
+    // with it; the join after the reconnect rebuilds them.
     dropPeers();
     if (state.fatal) {
       leave(state.fatal);
@@ -103,17 +102,17 @@ export function connectWS() {
 }
 
 export function handle(msg) {
-  // A kick, a mute and a role change are sealed notices now, so the only clear
-  // frames with a meaning of their own are a terminal join error and a leave.
+  // Kick, mute and role change travel sealed, so the only clear frames with a
+  // meaning of their own are a terminal join error and a leave.
   if (msg.t === 'error') {
     if (msg.code === 'unavailable') {
-      // The passphrase is not a server question any more, so this code only
-      // means a malformed id or a full room.
+      // No passphrase check reaches the server, so this code means a malformed
+      // id or a full room.
       state.fatal = 'room unavailable or full';
       leave(state.fatal);
     } else if (msg.code === 'sealed-only') {
-      // Only a page from before the sealed handshake can still ask for a clear
-      // relay. It cannot join, and a reload is the whole fix.
+      // Only a page from before the sealed handshake still asks for a clear
+      // relay; a reload is the whole fix.
       state.fatal = 'this page is out of date; reload it to join';
       leave(state.fatal);
     }
@@ -124,7 +123,7 @@ export function handle(msg) {
       state.self = msg.self;
       state.ice = msg.ice || [];
       // Only the reconnect notice ends here. A device or sealing notice that
-      // the join itself wrote must stay up until the guest has read it.
+      // the join itself wrote stays up until the guest has read it.
       if (state.notice === 'connection lost, reconnecting') say('');
       // Every join is a new socket and a new peer id, so the role and the
       // switch start from nothing here: both are sealed commits that arrive
@@ -137,8 +136,8 @@ export function handle(msg) {
       let listed = 0;
       for (const info of msg.peers || []) {
         if (!info || !info.id) continue;
-        // The toggle fields of an old server, or of the room control it used
-        // to keep, are ignored: the flags come sealed from the guest itself.
+        // A toggle field in the roster is ignored: the flags come sealed from
+        // the guest itself.
         const peer = ensurePeer(info.id);
         peer.waiting = false;
         sealedSendPub(peer);
@@ -182,6 +181,6 @@ export function handle(msg) {
     }
   }
   // A clear description, a candidate, a toggle, a role, a kick and a waiting
-  // flag all have no case here on purpose: every one of them arrives sealed,
-  // so the server can not send one and hope this page acts on it.
+  // flag all have no case here on purpose: every one arrives sealed, so the
+  // server can not send one and hope this page acts on it.
 }

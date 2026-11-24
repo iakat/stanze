@@ -10,33 +10,28 @@ import { load, store } from './prefs.js';
 import { paintSelfCam } from './devices.js';
 
 // ---------------------------------------------------------------- camera look
-// lookOn answers "is any drawn step wanted". The camera itself is not touched.
+// lookOn is true when a drawn step is wanted. The camera itself is not touched.
 export function lookOn() {
   return (state.look && state.look !== 'none') || state.masks.length > 0;
 }
 
-// maskSet reads a stored or a remote mask choice into the list the frame draws,
-// in the order the drawings are layered. One name, a plus-joined list and an
-// array all land here; a name this page does not know is dropped.
+// maskSet reads a stored or a remote mask choice into the drawn list, in MASKS
+// order; a name this page does not know is dropped.
 export function maskSet(value) {
   const names = Array.isArray(value) ? value : String(value || '').split(/[+,\s]+/);
   return MASKS.filter((m) => m !== 'none' && names.includes(m));
 }
 
-// lookTrack is the drawn track while it is live and the tab draws, or null.
-// A parked pipeline hands the camera back to the senders, so the drawn track is
-// not the live picture then.
+// lookTrack is the drawn track while it is live and the tab draws, else null:
+// a parked pipeline hands the camera back to the senders.
 export function lookTrack() {
   if (state.lookParked) return null;
   return state.lookOut && state.lookOut.readyState === 'live' ? state.lookOut : null;
 }
 
-// The drawn track is painted from a worker clock, not from an animation frame
-// loop: a tab that is not in front is handed no animation frames at all, so a
-// display-driven loop stops dead and the peers keep the last picture for ever.
-// The worker timer lives outside the page's timer budget and ticks at the rate
-// of the camera, in front or behind, so one tick is one camera frame and one
-// mesh detection.
+// The frame clock is a worker timer, not an animation frame loop: a tab that is
+// not in front is handed no animation frames, and the peers would keep the last
+// picture for ever. One tick is one camera frame and one mesh detection.
 /** @type {Map<number, string>} */
 
 export const drawClockURLs = new Map();
@@ -56,10 +51,9 @@ export function drawClockURL(fps) {
   return drawClockURLs.get(hz);
 }
 
-// The mesh points every mask reads, by their canonical FaceMesh numbers. L and
-// R are the sides of the drawn frame, which is the camera frame unmirrored: the
-// mirror the guest sees is a css flip of the preview, so a landmark x is a
-// plain fraction here and needs no turn.
+// The mesh points every mask reads, by canonical FaceMesh number. L and R name
+// the side of the drawn frame, the unmirrored camera frame: the guest's mirror
+// is a css flip, so a landmark x stays a plain fraction.
 export const LM = {
   noseTip: 1,
   noseBase: 2,
@@ -84,25 +78,23 @@ export const LM = {
   earR: 323,
 };
 
-// The hairline from the temple on the image left to the temple on the right, so
-// a fringe follows a head that turns.
+// The hairline, temple to temple across the head, so a fringe follows a turn.
 export const HAIRLINE = [127, 162, 21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251, 389, 356];
 
-// meshOpenTask is the one landmarker of the page. It outlives a pipeline, so a
-// mask switch or a camera switch does not load the wasm again; a failure is
-// remembered as null and the skin patch stays in charge for the session.
+// meshOpenTask is the one landmarker of the page; it outlives a pipeline, so a
+// mask or camera switch does not load the wasm again. A failure is remembered
+// as null and the skin patch stays in charge.
 /** @type {Promise<any> | null} */
 
 export let meshOpenTask = null;
 
-// meshOpen loads the landmarker in the background. It never throws into a call:
-// a browser without wasm, without the memory or too old gives null and the
-// colour test keeps placing the mask.
+// meshOpen loads the landmarker in the background and never throws into a call:
+// a browser without wasm or memory gives null, and the colour test places the
+// mask.
 export function meshOpen() {
   if (!meshOpenTask) {
     meshOpenTask = (async () => {
-      // The bundle sits in our own static directory: a constant prefix and a
-      // constant file name, so no message reaches the specifier.
+      // The bundle is local, so the specifier stays a constant string.
       // eslint-disable-next-line no-unsanitized/method
       const vision = await import(MESH_DIR + 'vision_bundle.mjs');
       const files = await vision.FilesetResolver.forVisionTasks(MESH_DIR.slice(0, -1));
@@ -122,8 +114,8 @@ export function meshOpen() {
 
 // lookStart builds the pipeline once: the camera feeds a video element, every
 // frame is drawn on a canvas with the colour step and the mask, and the canvas
-// track becomes what peers receive. Nothing is uploaded. A shared screen has its
-// own sender, so a look never touches it.
+// track becomes what peers receive. A shared screen has its own sender and is
+// never touched.
 export async function lookStart() {
   if (!lookOn() || !state.camTrack) return;
   if (state.lookPipe) return;
@@ -156,15 +148,13 @@ export async function lookStart() {
   const track = stream.getVideoTracks()[0];
   if (!track) return;
   track.contentHint = 'motion';
-  // A 64 x 48 sample for the skin patch of a mask. It is read in this tab
-  // only, and it never leaves it.
+  // A 64 x 48 sample for the skin patch of a mask, read in this tab only.
   const sample = document.createElement('canvas');
   sample.width = 64;
   sample.height = 48;
   const sctx = sample.getContext('2d', { alpha: false, willReadFrequently: true });
-  // A second, bigger sample for the landmarker. It keeps the shape of the
-  // camera, so a landmark x is a fraction of the frame the mask is drawn on,
-  // and it is only read here.
+  // A second, bigger sample for the landmarker, at the shape of the camera, so
+  // a landmark x is a fraction of the frame the mask is drawn on.
   const meshCanvas = document.createElement('canvas');
   meshCanvas.width = MESH_W;
   meshCanvas.height = Math.min(
@@ -209,15 +199,14 @@ export async function lookStart() {
   document.addEventListener('visibilitychange', () => pipe.wake && pipe.wake());
   state.lookOut = track;
   // A hidden tab paints nothing, so a pipeline that starts while the tab is
-  // away keeps the camera on the senders and the drawn track comes back with
-  // the first frame after the tab returns.
+  // away leaves the camera on the senders; the drawn track comes back with the
+  // first frame after the tab returns.
   state.lookParked = !!document.hidden;
   pipe.armApply = false;
   if (!state.lookParked) {
-    // One frame before the swap. A canvas that was never painted is black, and
-    // a browser that captures it early sends a black picture until the first
-    // paint; when the camera has no frame yet, the first painted frame does
-    // the swap instead.
+    // One frame before the swap: a canvas that was never painted is black, and
+    // a browser that captures it early sends black until the first paint. With
+    // no camera frame yet, the first painted frame does the swap instead.
     if (video.readyState >= 2 && video.videoWidth) lookDraw(pipe);
     else pipe.armApply = true;
   }
@@ -225,8 +214,8 @@ export async function lookStart() {
   if (!state.lookParked) pipe.clock = lookClock(pipe);
 }
 
-// lookClock starts the frame clock of a pipeline. It stops with a parked tab:
-// a background tab draws nothing, so it should not read a camera either.
+// lookClock starts the frame clock of a pipeline. It stops with a parked tab,
+// which draws nothing.
 export function lookClock(p) {
   const clock = new Worker(p.clockURL || drawClockURL(p.fps));
   clock.onmessage = () => {
@@ -266,28 +255,24 @@ export function lookDraw(p) {
   armPublish(p);
 }
 
-// armPublish hands the drawn track to the senders on the first frame that the
-// canvas really carries. A fresh canvas is black, and a browser that captures
-// it before the first paint sends black frames, which reads as a dark box
-// around the mask until the picture arrives.
+// armPublish hands the drawn track to the senders on the first frame the canvas
+// really carries: a browser that captures a fresh canvas before the first paint
+// sends black, which reads as a dark box around the mask.
 export function armPublish(p) {
   if (!p.armApply) return;
   p.armApply = false;
   lookPublish(p.track);
 }
 
-// frameMark is the identity of the newest decoded camera frame: a count of the
-// frames the element really presented, from requestVideoFrameCallback where the
-// browser has it, else the decoded frame count. It is undefined until one of
-// them says, and nothing is skipped then.
-//
-// The count is the callback itself, not its media time: a live camera stream
-// can report the same media time on every frame in one browser, and then a mark
-// on the time would say "no new frame" forever and freeze the mask after the
-// first detect. A callback that stops coming cannot count either, so a count
-// older than a few frames is dropped and every frame is detected again.
+// A frame mark older than this many milliseconds is stale: its callback
+// stopped, so every frame is detected again.
 export const FRAME_MARK_FRESH_MS = 300;
 
+// The identity of the newest decoded camera frame: the count of frames the
+// element presented, from requestVideoFrameCallback where the browser has it,
+// else the decoded frame count. Media time can repeat on a live stream, so the
+// count, not the time, marks a frame; undefined marks nothing, and no frame is
+// skipped then.
 export function frameMark(p) {
   const v = p.video;
   if (v.requestVideoFrameCallback) {
@@ -309,9 +294,9 @@ export function frameMark(p) {
   return q ? q.totalVideoFrames : undefined;
 }
 
-// lookMesh runs the landmarker on the small copy of the frame, once per painted
-// frame: the mesh rate is the camera rate. One detection at a time and no
-// queue, so a slow machine drops frames instead of piling them up.
+// lookMesh runs the landmarker on the small copy of the frame at the camera
+// rate. One detection at a time and no queue, so a slow machine drops frames
+// instead of piling them up.
 export function lookMesh(p) {
   if (!p.meshTried) {
     p.meshTried = true;
@@ -320,12 +305,10 @@ export function lookMesh(p) {
     });
   }
   if (!p.mesh || p.meshBusy || !p.meshCtx || document.hidden) return;
-  // A clock that runs faster than the camera repeats the frame it already has.
-  // A repeat goes to the detector again as the same face, so it is skipped.
-  // A mask that has stood still for longer than a mark stays fresh gets a
-  // detect anyway: a browser that holds the frame or reports one identity for
-  // all of them must not leave the mask frozen, and a detect costs less than a
-  // mask that never moves.
+  // A clock faster than the camera repeats the frame it has, and a repeat is
+  // skipped. A mark older than FRAME_MARK_FRESH_MS gets a detect anyway: a
+  // browser that holds the frame or reports one identity for all of them must
+  // not leave the mask frozen.
   const mark = frameMark(p);
   const quiet = !p.meshAt || performance.now() - p.meshAt > FRAME_MARK_FRESH_MS;
   if (mark !== undefined && mark === p.meshMark && !quiet) return;
@@ -362,9 +345,9 @@ export function lookMesh(p) {
   }
 }
 
-// meshSize keeps the small copy of the frame at the shape of the camera, with
-// its longest side at MESH_W, so a portrait phone frame is not squashed and a
-// landmark x stays a fraction of the frame the mask is drawn on.
+// meshSize keeps the small copy at the shape of the camera, longest side MESH_W,
+// so a portrait phone frame is not squashed and a landmark x stays a fraction
+// of the drawn frame.
 export function meshSize(p) {
   const vw = p.video.videoWidth || 1280;
   const vh = p.video.videoHeight || 720;
@@ -378,10 +361,8 @@ export function meshSize(p) {
 }
 
 // The landmark smoothing is the One Euro filter of Casiez, Roussel and Vogel
-// (CHI 2012), one state for the whole set of coordinates, so a slow move is
-// smoothed hard and a fast one is let through. A fixed 0.35 blend cost about
-// 55 ms of lag on top of the detector at 30 Hz; a 1 Hz minimum cutoff with
-// beta 30 brings that to about 10 ms and keeps the mask as steady as before.
+// (CHI 2012), one state per point list: a slow move is smoothed hard and a fast
+// one is let through.
 export const ONEEURO_MIN_HZ = 1.0;
 
 export const ONEEURO_BETA = 30.0;
@@ -401,9 +382,9 @@ export function oneEuroAlpha(hz, dt) {
   return 1 / (1 + tau / dt);
 }
 
-// oneEuroRun filters one frame and returns the filtered list. A gap longer
-// than half a second, as a paused tab leaves, is clamped, so a face does not
-// sweep in from where it was before the pause.
+// oneEuroRun filters one frame and returns the filtered list. A gap longer than
+// half a second, as a returning tab leaves, is clamped, so a face does not sweep
+// in from where it was.
 export function oneEuroRun(s, src, t) {
   const n = src.length;
   if (!s.on || s.x.length !== n) {
@@ -428,9 +409,9 @@ export function oneEuroRun(s, src, t) {
   return s.x;
 }
 
-// lookMeshAnchor turns the first face into the same anchor the colour test
-// makes, plus every point of the mesh, and smooths both. A face that leaves the
-// frame finds the last anchor still there, so a mask does not flick to a corner.
+// lookMeshAnchor turns the first face into the anchor the colour test makes,
+// plus every mesh point, and smooths both. A face that leaves the frame leaves
+// the last anchor in place, so the mask does not flick to a corner.
 export function lookMeshAnchor(p, lm) {
   const pts = new Float32Array(lm.length * 2);
   let x0 = 1,
@@ -464,10 +445,8 @@ export function lookMeshAnchor(p, lm) {
       pts[LM.mouthR * 2] - pts[LM.mouthL * 2],
       pts[LM.mouthR * 2 + 1] - pts[LM.mouthL * 2 + 1],
     ) || faceH * 0.35;
-  // A closed mouth is a gap of nearly nothing, a wide one can pass the mouth
-  // width. A share of the mouth width does not change with the distance to the
-  // camera, so the tongue grows with the mouth instead of snapping out at a
-  // fixed gap.
+  // A share of the mouth width does not change with the distance to the camera,
+  // so the tongue grows with the mouth instead of snapping out at a fixed gap.
   next.tongue = Math.min(1, Math.max(0, (lipGap / mouthW - 0.06) / 0.34));
   const a = p.anchor;
   const t = performance.now();
@@ -546,7 +525,7 @@ export function lookAnchor(p) {
   };
 }
 
-// roundPath draws a rounded rectangle path, so the glasses fit a face.
+// roundPath draws a rounded rectangle path.
 export function roundPath(ctx, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
@@ -574,9 +553,9 @@ export function roll(g) {
   return Math.atan2(g.eyeR[1][1] - g.eyeL[0][1], g.eyeR[1][0] - g.eyeL[0][0]);
 }
 
-// maskGeo reads an anchor into pixels. A mesh anchor carries every point of the
-// face; a skin anchor carries only a box, so the same points are stood in the
-// box and one drawing serves both, fine on a mesh and sane without one.
+// maskGeo reads an anchor into pixels. A mesh anchor carries every face point; a
+// skin anchor only a box, so the points are stood in the box and one drawing
+// serves both.
 export function maskGeo(a, W, H) {
   const cx = a.x * W;
   const cy = a.y * H;
@@ -629,8 +608,7 @@ export function maskGeo(a, W, H) {
     templeR: at(LM.templeR, 0.46, -0.16),
     earL: at(LM.earL, -0.48, 0.02),
     earR: at(LM.earR, 0.48, 0.02),
-    // The hairline from the temple on the left of the frame over the head to
-    // the right one, so a fringe follows a head that turns.
+    // The hairline in box coordinates, over the head from temple to temple.
     hair: HAIRLINE.map((i, k) =>
       at(
         i,
@@ -642,10 +620,10 @@ export function maskGeo(a, W, H) {
   };
 }
 
-// The big effect is a warp and not a drawing: a patch of the camera picture is
-// scaled about the middle of an eye or of the mouth and laid back on the face,
-// the way a phone filter does it. Every patch is read from the video element,
-// so a frame is never read back, and its own edge is feathered so no seam shows.
+// The big effect is a warp, not a drawing: a patch of the camera picture is
+// scaled about the middle of an eye or the mouth and laid back on the face.
+// Every patch is read from the video element, so a frame is never read back,
+// and its own edge is feathered.
 export function lookWarp(p, a, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
@@ -663,12 +641,10 @@ export function lookWarp(p, a, filter) {
   warpPatch(p, cx, cy, rx, ry, 1.3, 1.5, filter);
 }
 
-// The wide effect stretches the whole head sideways: one box over the face,
-// widened and left at its own height, so the eyes, the nose and the mouth all
-// move out together and the head reads as very wide. The box takes the crown
-// as well as the face, because the head above the hairline is a third of the
-// face height, and a stretch of the face alone would leave a narrow forehead.
-// The patch is measured on the face, so a head that turns or leans keeps it.
+// The wide effect stretches the whole head sideways: one box from above the
+// crown to below the chin, widened and left at its own height, so the eyes, the
+// nose and the mouth move out together. The patch is measured on the face, so a
+// head that turns or leans keeps it.
 export function lookWide(p, a, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
@@ -676,11 +652,10 @@ export function lookWide(p, a, filter) {
   // The middle of the face from the two outer eye corners, and the box from
   // above the crown to below the chin.
   const cx = (g.eyeL[0][0] + g.eyeR[1][0]) / 2;
-  // The box takes the hair as well as the face: a head is wider than the
-  // cheeks and taller than the hairline, so a box on the face alone leaves the
-  // hair outside it and a cut shows. The top sits two crowns above the
-  // hairline, which is empty frame above most heads, so its fade never lands
-  // on hair.
+  // The box takes the hair as well as the face: a box on the face alone leaves
+  // the hair outside it and a cut shows. Its top sits 0.78 face heights above
+  // the hairline, on empty frame above most heads, so the fade never lands on
+  // hair.
   const top = g.top[1] - g.fh * 0.78;
   const bottom = g.chin[1] + g.fh * 0.08;
   const rx = Math.max(g.fw * 0.78, 8);
@@ -689,10 +664,9 @@ export function lookWide(p, a, filter) {
 }
 
 // warpWide draws one box of the video, stretched by kx across and kept at its
-// own height, along the axes of the face: the box turns with the head, so a
-// lean does not cut it. A short fade on each edge meets the untouched frame,
-// and the box stays solid inside, so the forehead and the hair widen with the
-// rest of the head instead of fading back to their own width.
+// own height, along the axes of the face: a lean does not cut it. A short fade
+// on each edge meets the untouched frame and the box stays solid inside, so the
+// hair and the forehead widen with the rest of the head.
 export function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
@@ -711,9 +685,9 @@ export function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
     cc = p.wideCtx;
   if (c.width < iw) c.width = iw;
   if (c.height < ih) c.height = ih;
-  // The box turns with the head: the canvas is laid along the face axes, and
-  // the video goes in through one transform. Only the turning bounding box of
-  // the box is read, so a lean does not read the whole frame.
+  // The canvas is laid along the face axes and the video goes in through one
+  // transform; only the turning bounding box is read, so a lean does not read
+  // the whole frame.
   const cos = Math.abs(Math.cos(rollAngle)),
     sin = Math.abs(Math.sin(rollAngle));
   const ex = rx * cos + ry * sin,
@@ -764,11 +738,10 @@ export function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
   if (filter && filter !== 'none') p.ctx.filter = 'none';
 }
 
-// The small effect shrinks the middle of the face and pads it out: the skin
-// above the brows is stretched over a box as a plain pad, and the eyes, the
-// nose and the mouth are drawn small in the middle of it, so the face keeps a
-// wide ring of skin around them. Both layers come from the camera element, the
-// pad is skin and not a colour, and the box fades at its edge onto the cheeks.
+// The small effect shrinks the middle of the face and pads it out: skin from
+// the forehead above the brows is stretched over a box as a pad, and the eyes,
+// nose and mouth are drawn small in the middle of it. Both layers come from the
+// camera element, and the pad fades at its edge onto the cheeks.
 export function lookSmall(p, a, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
@@ -784,9 +757,8 @@ export function lookSmall(p, a, filter) {
   // tenth, and a mouth on that edge would fade away with it.
   const frx = Math.max((g.eyeR[1][0] - g.eyeL[0][0]) / 2, g.fw * 0.3) * 1.25;
   const fry = Math.max((lipY - browY) / 2, g.fh * 0.12) * 1.55;
-  // The pad takes the whole face and not a box around the middle: the cheeks
-  // left and right, the hairline above and the chin below, so every feature
-  // sits well inside it and the edge of the pad is the edge of the face.
+  // The pad takes the whole face, the cheeks left and right, the hairline above
+  // and the chin below, so every feature sits well inside it.
   const pcx = cx;
   const pcy = (g.top[1] + g.chin[1]) / 2;
   const prx = Math.max(g.fw * 0.52, 8),
@@ -870,12 +842,11 @@ export function lookSmall(p, a, filter) {
   if (filter && filter !== 'none') p.ctx.filter = 'none';
 }
 
-// lookPotion stretches a head into the proportions of the potion seller: a
-// tall forehead and a small chin. The band of the head is cut into horizontal
-// strips and each strip goes back at another height, so the change is smooth in
-// both directions. The band keeps the full width of the frame and its map is
-// the same at its top and bottom edge, so no seam can show: the picture beside
-// the head moves with it, and the effect reads as one glass, not a patch.
+// lookPotion stretches a head into the proportions of the potion seller: a tall
+// forehead and a small chin. The band of the head is cut into horizontal strips,
+// each strip going back at another height, so the change is smooth. The band
+// keeps the full width of the frame and its map is the same at both edges, so
+// the picture beside the head moves with it and no seam can show.
 export function lookPotion(p, a) {
   const W = p.canvas.width,
     H = p.canvas.height;
@@ -899,8 +870,8 @@ export function lookPotion(p, a) {
   cc.clearRect(0, 0, W, ih);
   cc.drawImage(p.canvas, 0, y0, W, ih, 0, 0, W, ih);
   // The sine moves the top half of the band up and the bottom half down, so the
-  // forehead grows and the chin shrinks; it is the same at both ends, so the
-  // rows at the edge of the band do not move at all.
+  // forehead grows and the chin shrinks; it is zero at both ends, so the rows
+  // at the edge of the band do not move.
   const N = 28,
     STRETCH = 0.095;
   const put = (s) => s + STRETCH * Math.sin(2 * Math.PI * s);
@@ -920,14 +891,12 @@ export function lookPotion(p, a) {
 // ------------------------------------------------------------ custom effect
 //
 // The custom effect is one set of knobs for the whole face: the height of the
-// head, the size and the spread of the eyes, the size and the height of the
-// mouth, and a swap that puts the eyes where the mouth is and the mouth
-// between the eyes. Each knob is a percent, so the same numbers hold for a face
-// near the camera and far from it.
+// head, the size and spread of the eyes, the size and height of the mouth, and
+// a swap that puts the eyes where the mouth is and the mouth between the eyes.
+// Each knob is a percent, so the numbers hold near and far from the camera.
 // bandPut maps a share of the head band to its place after a stretch of k. It
-// is one at both of its own ends, so the band joins the picture without a step,
-// and it is steepest in the middle, so the face takes the change and not the
-// edges.
+// is the identity at both ends, so the band joins the picture without a step,
+// and it is steepest in the middle, so the face takes the change, not the edges.
 export function bandPut(s, k) {
   return 0.5 + (s - 0.5) * (1 + (k - 1) * Math.sin(Math.PI * s) ** 2);
 }
@@ -940,11 +909,9 @@ export function bandSpan(a, H) {
   return { y0, ih: y1 - y0 };
 }
 
-// headBand stretches the band of the head about its middle by k. It uses the
-// same strip trick as the potion seller: the band has the full width of the
-// frame, its map is the same at both of its own edges, and the rows only move
-// up and down, so the picture beside the head travels with it and no seam can
-// show.
+// headBand stretches the band of the head about its middle by k, with the strip
+// trick of the potion seller: full width of the frame, the map the same at both
+// edges, rows moving only up and down, so no seam can show.
 export function headBand(p, a, k) {
   const W = p.canvas.width,
     H = p.canvas.height;
@@ -1030,10 +997,9 @@ export function featurePaste(p, slot, size, dst) {
 
 // featureShift moves one feature: it holds the feature, covers the place it
 // came from with skin, and paints the feature at its new place and size. The
-// skin comes from the cheek below and to the side, away from the nose, and its
-// edge is feathered, so the old place reads as skin and not as a hole or as a
-// second copy of the same eye. `side` is -1 for the left eye, 1 for the right
-// eye and 0 for one feature in the middle of the face.
+// skin comes from below and to the side, away from the nose, and its edge is
+// feathered, so the old place reads as skin. `side` is -1 for the left eye, 1
+// for the right eye and 0 for a feature in the middle of the face.
 export function featureShift(p, slot, src, dst, side) {
   const size = featureCopy(p, slot, src);
   if (!size) return;
@@ -1480,8 +1446,7 @@ export function drawHalo(ctx, g) {
 
 // The miku mask wears a real drawing: a wig with the face cut out, a CC0 file
 // from Wikimedia Commons (static/miku/NOTICE.txt keeps the source and the
-// licence). The cut-out is placed on the face and the camera shows through it,
-// so the hair is the artist's and the face is the guest's.
+// licence). The cut-out goes on the face and the camera shows through it.
 export const WIG_URL = '/miku/wig.svg';
 
 export const WIG_FILE_ASPECT = 334.55 / 366.31;
@@ -1610,9 +1575,7 @@ export function drawMikuFringe(ctx, g) {
 }
 
 // lookPublish swaps the drawn track into every camera sender and the own
-// preview. The screen sender is left alone: it carries the share. It is the
-// only path that touches the camera senders, so a look never reaches the screen
-// share.
+// preview; the screen sender is left alone, so a look never reaches the share.
 export async function lookPublish(track) {
   if (!state.outStream) return;
   // A frozen picture stays on the senders: only the freeze itself swaps it.
@@ -1658,7 +1621,7 @@ export async function freezeShot() {
     try {
       await v.play();
     } catch {
-      /* the element still holds frames */
+      /* a frame may already be there */
     }
     for (let i = 0; i < 20 && !v.videoWidth; i += 1) await new Promise((r) => setTimeout(r, 25));
     src = v;
@@ -1717,11 +1680,10 @@ export async function setFreeze(on) {
   return true;
 }
 
-// lookPark answers a hidden tab. The clock that paints the canvas also runs in
-// the background, but a browser may hold the camera element still there, and
-// then the canvas would carry one picture for as long as the tab is away. The
-// camera track keeps running, so the senders take it while the tab is hidden,
-// and the drawn track comes back with the next frame. The camera is not
+// lookPark answers a hidden tab: a browser may hold the frames of the camera
+// element while the tab is away, and the canvas would then carry one picture.
+// The camera track keeps running, so the senders take it while the tab is
+// hidden, and the drawn track comes back with the next frame. The camera is not
 // stopped, so its light stays on.
 export async function lookPark(hidden) {
   const p = state.lookPipe;
@@ -1791,15 +1753,8 @@ export function lookStop(restore = true) {
   paintSelfCam(!!track && state.cam);
 }
 
-// lookRestart starts or stops the pipeline to match the current choice and the
-// live camera. It is the one path the menu uses, and the camera path calls it
-// when the track changes.
-//
-// A running pipeline is kept while the choice still draws something, and for a
-// short grace after the last effect goes off. Every swap of a sender track
-// costs a fresh keyframe and the picture blinks, so a menu click that only
-// changes what is drawn must not rebuild the pipeline. Only a new camera track,
-// or the end of the grace, does that.
+// armLookTearDown re-arms the tear-down timer that ends the grace; it does
+// nothing while an effect is on.
 export function armLookTearDown() {
   if (state.lookTimer) {
     clearTimeout(state.lookTimer);
@@ -1814,6 +1769,12 @@ export function armLookTearDown() {
   }, left + 250);
 }
 
+// lookRestart starts or stops the pipeline to match the choice and the live
+// camera; the menu and the camera path both come here. A running pipeline is
+// kept while the choice draws something and for a grace after the last effect
+// goes off: every sender track swap costs a fresh keyframe and the picture
+// blinks, so a menu click that only changes what is drawn must not rebuild it.
+// Only a new camera track or the end of the grace does that.
 export async function lookRestart() {
   // The camera changed under a running pipeline: the old one is stale.
   if (state.lookPipe && state.lookSrc !== state.camTrack) lookStop(false);
@@ -1929,7 +1890,8 @@ export function customInit() {
   paintCustomValues();
 }
 
-// CUSTOM_ROWS is the knob list once, so the panel and the reset use one table.
+// CUSTOM_ROWS is the knob table the paint helpers walk: slider id, state key,
+// readout id.
 export const CUSTOM_ROWS = [
   ['cx-head', 'head', 'cx-head-v'],
   ['cx-eyes', 'eyes', 'cx-eyes-v'],
@@ -1969,7 +1931,8 @@ export function maskBoxes() {
   ) as NodeListOf<HTMLInputElement>;
 }
 
-// lookResize follows a camera step so the canvas keeps the picture's shape.
+// lookResize resizes the canvas to the camera step, so the picture keeps its
+// shape.
 export function lookResize() {
   const p = state.lookPipe;
   if (!p) return;

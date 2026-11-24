@@ -12,11 +12,9 @@ import { refreshSelf } from './devices.js';
 import { sealedSend, toSealed } from './gate.js';
 
 // ------------------------------------------------------------- talking light
-//
-// Every audio source has a small RMS tap, and a green light marks the tile of
-// the person who speaks. The tap sits before the per peer gain, so a guest
-// turned down to zero still lights up. A short hold keeps the light steady
-// between syllables instead of blinking.
+// Every audio source has an RMS tap, and a green light marks the tile of the
+// person who speaks. The tap sits before the peer gain, so a guest turned down
+// to zero still lights up; a short hold keeps the light steady between syllables.
 export const SPEAK_MS = 100;
 
 export const SPEAK_ON = 0.03;
@@ -95,9 +93,8 @@ export function levelText(peak) {
 }
 
 // micLevelCells splits the own input into the four columns of the microphone
-// row: the level in decibels, the share of the scale it fills, and the state
-// word. A peak under -60 dB is below anything a person hears, so it reads as
-// silent rather than as a number.
+// row: decibels, the share of the scale and the state word. A peak under -60 dB
+// is below anything a person hears, so it reads as silent.
 export function micLevelCells(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
   if (!(db > -60)) return { db: '0 dB', pct: '0 %', state: 'silent' };
@@ -115,10 +112,9 @@ export function micLevelLine() {
   return `level ${levelText(state.meterPeak)}`;
 }
 
-// inLevelLine reports what arrives from one peer, read at its source node
-// before the gain. A silent line beside a live inbound rate points at the
-// decode or the graph, not at the network; a live line with no sound points
-// after the gain. It returns the level alone, so the caller names the line.
+// inLevelLine reports what arrives from one peer, read before the gain. A silent
+// line beside a live inbound rate points at the decode or the graph, not at the
+// network; a live line with no sound points after the gain.
 export function inLevelLine(peer) {
   if (!peer.audioSrc || !peer.meter) return '';
   return levelText(peer.meterPeak || 0);
@@ -160,9 +156,8 @@ export async function setNoise(on) {
   }
   if (on && !state.denoise) {
     try {
-      // The worklet module gets the wasm bytes from the page: a worklet can
-      // only build a module from bytes it already holds, so the binary comes
-      // over the wire as a file and travels in processorOptions.
+      // The wasm bytes travel in processorOptions: a worklet can only build a
+      // module from bytes it already holds.
       state.denoise = await makeDenoiseNode(state.audioCtx);
       state.denoise.connect(state.micGain);
     } catch (err) {
@@ -204,15 +199,14 @@ export function resumeAudio() {
 
 // ---------------------------------------------------------------- remote audio
 // Remote audio does not play from the video element: one gain node per peer
-// takes it to the output, so 100 percent is unity and 200 is a real boost.
-// The context is created while the join click is still the last gesture, and a
-// suspended context resumes on the next click.
+// takes it to the output, so 100 percent is unity and 200 a real boost. The
+// context is created on the join click, and a suspended one resumes on a click.
 export function ensurePlayback() {
   if (state.playCtx) {
     resumePlayback();
     return state.playCtx;
   }
-  // Safari still exposes the prefixed constructor, which the DOM lib omits.
+  // Older Safari exposes only the prefixed constructor, which the DOM lib omits.
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return null;
   try {
@@ -234,8 +228,8 @@ export function resumePlayback() {
 }
 
 // routeAudio sends one incoming audio track through the gain of its peer. The
-// element path is only used when the browser has no Web Audio; it can not go
-// over 100 percent.
+// element path is only for a browser without Web Audio and can not go over 100
+// percent.
 export function routeAudio(peer, track) {
   const ctx = ensurePlayback();
   if (!ctx) {
@@ -248,9 +242,8 @@ export function routeAudio(peer, track) {
     return;
   }
   dropAudio(peer);
-  // A silent element is the decode sink for the remote track. Chromium does not
-  // always pull the decoder for a source node alone, and then every node reads
-  // zeros while the packets arrive. A muted element adds no sound.
+  // A muted element is the decode sink: Chromium does not always pull the
+  // decoder for a source node alone, and then every node reads zeros.
   const pump = new Audio();
   pump.muted = true;
   pump.volume = 0;
@@ -263,8 +256,8 @@ export function routeAudio(peer, track) {
   peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
   peer.audioSrc.connect(peer.gain);
   peer.gain.connect(ctx.destination);
-  // The talking light reads the source, before the gain, so a guest turned
-  // down to zero still shows that they speak.
+  // The talking light reads the source, before the gain, so a guest turned down
+  // to zero still shows that they speak.
   peer.meter = ctx.createAnalyser();
   peer.meter.fftSize = 1024;
   peer.audioSrc.connect(peer.meter);
@@ -272,8 +265,8 @@ export function routeAudio(peer, track) {
   // now, without a second toggle.
   if (peer.inNoise) void setPeerNoise(peer, true);
   resumePlayback();
-  // A context that is still suspended after a resume attempt plays nothing.
-  // Say it, because the video looks correct and only the sound is missing.
+  // A context still suspended after a resume attempt plays nothing. Say it,
+  // because the video looks correct and only the sound is missing.
   if (ctx.state === 'suspended')
     say('the browser holds the audio output; tap the page once to hear the room');
 }
@@ -333,9 +326,8 @@ export function dropAudio(peer) {
   }
 }
 
-// wirePlayNoise connects the source of one guest to its gain, through that
-// guest's own noise cancel when it is on. The talking light reads the source
-// directly, so it keeps working on either path.
+// wirePlayNoise connects one guest's source to its gain, through that guest's
+// own noise cancel when on. The talking light reads the source either way.
 export function wirePlayNoise(peer) {
   if (!peer.audioSrc || !peer.gain) return;
   try {
@@ -360,8 +352,7 @@ export function wirePlayNoise(peer) {
 }
 
 // setPeerNoise turns the local noise cancel of one incoming stream on or off.
-// The processor is built on the first use of that guest; a browser without Web
-// Audio says so once and keeps the raw audio.
+// The processor is built on first use; a browser without Web Audio says so.
 export async function setPeerNoise(peer, on) {
   if (!peer) return;
   if (on) {
@@ -396,14 +387,14 @@ export function stateFrame() {
     screen: !!state.screen,
     hand: state.hand,
     ts: state.handTs,
-    // This build reads padded frame sizes, so a peer may round its frames up.
+    // This build reads padded frames, so a peer may round its frame sizes up.
     pad: 1,
   };
 }
 
 // sendState tells the room that the microphone, the camera, the hand or the
-// share changed. Every guest gets its own sealed copy; the own tile is painted
-// here, because no server echoes the flags back any more.
+// share changed. Every guest gets its own sealed copy, and the own tile is
+// painted here, because no server echoes the flags back.
 export function sendState() {
   refreshSelf();
   if (!state.self || state.leaving) return;
@@ -417,9 +408,8 @@ export function sealedSendState(peer) {
   sealedSend(peer, stateFrame());
 }
 
-// setHand raises or lowers the own hand and tells the room. The time of the
-// raise is the queue order, and every guest reads the same one, so the panel
-// agrees without a server that numbers the hands.
+// setHand raises or lowers the own hand and tells the room. The raise time is
+// the queue order and every guest reads it, so no server numbers the hands.
 export function setHand(on) {
   if (state.waiting || state.hand === on) return;
   state.hand = on;
@@ -431,9 +421,8 @@ export function setHand(on) {
   paintHandQueue();
 }
 
-// handRows lists the raised hands in the order every guest agrees on: the time
-// the sender put on the raise, ties broken by peer id. A hand that is still
-// waiting for its flag has no time, so it goes last, never first.
+// handRows lists the raised hands in the order every guest agrees on: sender
+// time, ties by peer id. A hand with no time yet goes last, never first.
 export function handRows() {
   const rows = [];
   for (const peer of state.peers.values()) {

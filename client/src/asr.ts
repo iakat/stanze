@@ -10,15 +10,10 @@ import { sealedSend, toSealed } from './gate.js';
 
 // ------------------------------------------------------------- transcription
 // Optional, off by default, two engines in this tab. Vosk holds one model per
-// language and the guest picks the language. The multilingual engine holds one
-// model for every language, so it has no picker and is offered only when the
-// server lists its files. Nothing is loaded until the guest asks. For either
-// engine the page downloads what it needs once (the size is shown first), keeps
-// it in a browser cache, and runs the recognition for each incoming voice. The
-// text goes out as sealed chat, labelled with the name of the guest who
-// transcribes, and every other guest is told that someone transcribes before
-// the first line. A refused or failed download leaves the call exactly as it
-// was.
+// language, the multilingual engine one model for every language and no picker.
+// Nothing loads until the guest asks; the model is downloaded once, kept in a
+// browser cache, and the text goes out as sealed chat under the name of the
+// guest who transcribes. A failed download leaves the call as it was.
 export const ASR_MODELS = '/vosk/models';
 
 export const ASR_LIB = '/vosk/vosk.js';
@@ -28,9 +23,9 @@ export const ASR_CACHE = 'stanze-vosk';
 export const ASR_LINE_MAX = 400;
 
 // The multilingual engine is the sherpa-onnx OfflineRecognizer wasm build with
-// one Omnilingual model for every language. Its five files, their sizes and
-// their hashes come from /omni/models, which answers only when the operator
-// set the directory; without it the engine is not offered at all.
+// one Omnilingual model for every language. /omni/models lists the four files it
+// needs, with sizes and hashes, and answers only when the operator set the
+// directory; without it the engine is not offered.
 export const OMNI_MODELS = '/omni/models';
 
 export const OMNI_DIR = '/omni/';
@@ -48,7 +43,7 @@ export const OMNI_GLUE = 'sherpa-onnx-wasm-main-vad-asr.js';
 export const asr = {
   probed: false,
   models: [], // [{ lang, file, size, modified }] as the server lists them
-  lang: '', // the label the guest picked, en by default
+  lang: '', // the label the guest picked, empty until a pick
   engine: '', // 'vosk' or 'omni', the kept choice, see asrEngine
   busy: false, // a download or a start is under way
   on: false,
@@ -75,9 +70,9 @@ export const omni = {
   recs: new Map(), // peer id -> { proc, src, sink }
 };
 
-// asrStats is what the engine last said about itself: the start, the tail of
-// the phrases it decoded with the time each one took, and what the tap saw. A
-// browser test reads it through window.e2eApp; the page itself never does.
+// asrStats is what the engine last said about itself: start time, the last few
+// decoded phrases with their cost, and what the tap saw. Only window.e2eApp
+// reads it.
 export const asrStats = {
   engine: '',
   ready: false,
@@ -97,8 +92,8 @@ export function asrNote(text) {
   el.hidden = !text;
 }
 
-// asrPaintOthers tells a guest who else in the room transcribes, and what the
-// chosen engine costs before it runs.
+// asrPaintOthers names the other guests who transcribe, or the cost of the chosen
+// engine.
 export function asrPaintOthers() {
   if (asr.busy || asr.on || omni.busy || omni.on) return;
   const names = [...state.peers.values()]
@@ -119,9 +114,8 @@ export function asrPaintOthers() {
   asrNote('');
 }
 
-// asrProbe asks the server, once, which vosk models it offers. Without any
-// model that engine stays out of the menu, and there is no second name to try:
-// the list is the only offer.
+// asrProbe asks the server once which vosk models it offers; an empty list keeps
+// that engine out of the menu.
 export async function asrProbe() {
   if (asr.probed) return;
   asr.probed = true;
@@ -140,10 +134,8 @@ export async function asrProbe() {
   asrOffers();
 }
 
-// omniProbe asks the server, once, whether the multilingual engine is on
-// offer. The one model covers every language, so there is no picker here. A
-// 404, a partial list or a blocked request simply leaves the engine out of the
-// menu.
+// omniProbe asks the server once whether the multilingual engine is on offer; a
+// 404, a partial list or a blocked request leaves it out of the menu.
 export async function omniProbe() {
   if (omni.probed) return;
   omni.probed = true;
@@ -175,9 +167,8 @@ export async function omniProbe() {
   asrOffers();
 }
 
-// asrOffers reveals the transcribe entry once at least one engine is on offer
-// and settles the engine choice on one the server still serves. The kept choice
-// is not written here: only a guest's own pick is.
+// asrOffers reveals the transcribe entry and settles the engine on one the server
+// serves; only a guest's own pick is stored.
 export function asrOffers() {
   if (!asr.models.length && !omni.model) return;
   asrSetEngine(asrEngine(), false);
@@ -185,9 +176,8 @@ export function asrOffers() {
   if (entry) entry.hidden = false;
 }
 
-// asrEngine is the engine the guest picked, else the one this browser kept,
-// and never an engine the server does not offer. Vosk wins the first visit
-// when both are on offer, so an existing room behaves as it did.
+// asrEngine is the engine the guest picked, else the one kept in prefs, and never
+// one the server does not offer. Vosk wins when both are on offer.
 export function asrEngine() {
   const kept = asr.engine || load('asr.engine');
   if (kept === 'omni' && omni.model) return 'omni';
@@ -215,9 +205,8 @@ export function asrSetEngine(name, keep?) {
   asrPaintOthers();
 }
 
-// asrChoices is everything the one picker offers: each vosk language, then the
-// multilingual model, which covers every language alone. Every entry carries
-// the size of what it downloads, so the price of a pick is on the pick.
+// asrChoices is everything the picker offers: each vosk language, then the
+// multilingual model, each with the size of its download.
 export function asrChoices() {
   const list = asr.models.map((m) => ({
     value: `vosk:${m.lang}`,
@@ -239,8 +228,7 @@ export function asrChoice() {
   return model ? `vosk:${model.lang}` : '';
 }
 
-// asrChoose takes one value of the picker: a language of the vosk engine or
-// the multilingual model.
+// asrChoose takes one picker value: a vosk language or the multilingual model.
 export function asrChoose(value) {
   if (value === 'omni') {
     asrSetEngine('omni');
@@ -252,10 +240,8 @@ export function asrChoose(value) {
   }
 }
 
-// asrPaintLangRow fills the one picker from asrChoices and hides the row while
-// there is no second thing to pick: one model that is the only offer needs no
-// menu. The row and the select go together, so the picker is never drawn inside
-// a row the page declares hidden.
+// asrPaintLangRow fills the picker from asrChoices and hides it, with its row,
+// while there is no second thing to pick.
 export function asrPaintLangRow() {
   const select = document.getElementById('asr-lang') as HTMLSelectElement | null;
   if (!select) return;
@@ -276,8 +262,7 @@ export function asrPaintLangRow() {
   if (row) (row as HTMLElement).hidden = choices.length < 2;
 }
 
-// asrPaintEntry puts the engine and its size on the menu entry, before the
-// guest opens the menu.
+// asrPaintEntry puts the engine and its size on the menu entry.
 export function asrPaintEntry() {
   const btn = document.getElementById('menu-asr-btn');
   if (!btn) return;
@@ -289,8 +274,8 @@ export function asrPaintEntry() {
   if (model) btn.title = `transcription, language ${model.lang}, ${mb(model.size)}`;
 }
 
-// asrDefaultLang is the kept choice, else the language of the browser, else the
-// first model the server lists, which is en by the server's order.
+// asrDefaultLang is the kept choice, else the browser language, else the first
+// model the server lists.
 export function asrDefaultLang() {
   const have = asr.models.map((m) => m.lang);
   const kept = load('asr.lang');
@@ -302,13 +287,13 @@ export function asrDefaultLang() {
   return have[0];
 }
 
-// asrModel is the entry the guest picked, and never nothing once a model is on
+// asrModel is the entry the guest picked, or the first one while a model is on
 // offer.
 export function asrModel() {
   return asr.models.find((m) => m.lang === asr.lang) || asr.models[0] || null;
 }
 
-// asrPick sets the label and paints the picker and the size of that model.
+// asrPick keeps one language and paints the picker and the menu entry.
 export function asrPick(lang) {
   const model = asr.models.find((m) => m.lang === lang) || asr.models[0];
   if (!model) return;
@@ -319,8 +304,8 @@ export function asrPick(lang) {
   if (btn) asrPaintEntry();
 }
 
-// asrCacheKey is a request that is only ever used as a key. The file name is in
-// the key, so a second language gets its own entry and the old one goes.
+// asrCacheKey is a request that is only ever used as a key: file name and stamp,
+// so a new model never matches the stored entry.
 export function asrCacheKey() {
   const model = asrModel();
   const file = model ? model.file : '';
@@ -339,8 +324,8 @@ export async function asrCached() {
   }
 }
 
-// asrFetchModel downloads the model with a progress line. It reads the body to
-// the end, keeps it in the cache and returns the blob.
+// asrFetchModel downloads the model with a progress line, replaces the cache
+// entry and returns the blob.
 export async function asrFetchModel(signal) {
   const model = asrModel();
   if (!model) throw new Error('no model is on offer');
@@ -364,7 +349,7 @@ export async function asrFetchModel(signal) {
   const blob = new Blob(parts, { type: 'application/gzip' });
   try {
     if (window.caches) {
-      // Older entries go, so the cache holds one model only.
+      // The cache holds one model only.
       await caches.delete(ASR_CACHE);
       const cache = await caches.open(ASR_CACHE);
       await cache.put(
@@ -403,16 +388,15 @@ export function asrSay(obj) {
   toSealed({ k: 'asr', ...obj });
 }
 
-// asrAnnounce tells a guest who joined later that we transcribe, whichever
-// engine runs: the message is the same one for both.
+// asrAnnounce tells a guest who joined later that this tab transcribes; the
+// message is the same for either engine.
 export function asrAnnounce(peer) {
   if ((!asr.on && !omni.on) || !peer.keys || peer.waiting) return;
   sealedSend(peer, { k: 'asr', s: 'on' });
 }
 
-// asrTap hooks one incoming voice to a recognizer of its own. It reads the
-// source before the volume of that guest, so a guest turned down is still heard
-// by the engine.
+// asrTap hooks one incoming voice to a recognizer of its own, at the source
+// before the gain, so a guest turned down is still transcribed.
 export function asrTap(peer) {
   const ctx = state.playCtx;
   if (!asr.on || !asr.model || !ctx || !peer.audioSrc) return;
@@ -481,8 +465,8 @@ export function asrUntap(id) {
   }, 1500);
 }
 
-// asrSync follows the room: a recognizer for each guest inside who has a voice,
-// none for a guest who waits, and none for a guest who left.
+// asrSync follows the room: a recognizer for each guest inside, none for a guest
+// who waits or left.
 export function asrSync() {
   if (!asr.on) return;
   for (const id of [...asr.recs.keys()]) {
@@ -576,10 +560,8 @@ export async function asrStart() {
   }
 }
 
-// paintAsr puts the state of the chosen engine on the tick row of the menu: a
-// tick while it runs, and the same tick while its model is on the way, so the
-// row stays a way to cancel a download that has started. A start in progress
-// therefore does not lock the row.
+// paintAsr ticks the menu row while the chosen engine runs or its model is on the
+// way; the row stays live, so a running download can be cancelled there.
 export function paintAsr() {
   const box = document.getElementById('asr-on') as HTMLInputElement | null;
   if (!box) return;
@@ -605,9 +587,8 @@ export function initAsr() {
   const select = document.getElementById('asr-lang') as HTMLSelectElement | null;
   if (select) {
     select.addEventListener('change', () => {
-      // One engine runs at a time and a pick may be a 348 MB download, so a
-      // change stops what runs and restarts only the engine that was running:
-      // the new pick is started by the guest's own tick otherwise.
+      // One engine runs at a time and a pick may be a large download, so a change
+      // stops what runs and restarts only the engine that was running.
       const was = asr.on || omni.on;
       asrStop();
       omniStop();
@@ -632,18 +613,17 @@ export function asrOnMessage(peer, obj) {
   const text = String(obj.x || '').slice(0, ASR_LINE_MAX);
   const who = String(obj.w || '').slice(0, 64);
   if (!text) return;
-  // The label is the guest who sent it, as this tab knows that guest, and never
-  // a name taken from the message.
+  // The label is the guest as this tab knows it, never a name taken from the
+  // message.
   state.chatRecv++;
   addChatLine(`transcript by ${name}`, `${who}: ${text}`, Date.now());
 }
 
 // ------------------------------------------------- multilingual transcription
-// The multilingual engine runs in one worker of its own. Its model is 348 MB,
-// so the page keeps it in the browser cache in parts, checks it against the
-// hash the server lists, and mounts it into the wasm filesystem. A stop
-// terminates the worker, which drops the model, the threads and any download
-// at once, and leaves the call untouched.
+// The multilingual engine runs in one worker of its own. The model is kept in the
+// browser cache in 32 MB parts, checked against the hash the server lists, and
+// mounted into the wasm filesystem. A stop terminates the worker, which drops the
+// model, the threads and any download, and leaves the call untouched.
 export async function omniStart() {
   if (omni.busy || omni.on || !omni.model) return;
   if (!window.crossOriginIsolated) {
@@ -654,8 +634,8 @@ export async function omniStart() {
     return;
   }
   const size = omni.size ? mb(omni.size) : 'a large file';
-  // The model is best effort in the browser cache, so ask for a durable store
-  // and say when the space is not there, before the download and not after it.
+  // The cache is best effort: ask for a durable store and warn about tight space
+  // before the download.
   let tight = false;
   try {
     if (navigator.storage && navigator.storage.persist) {
@@ -691,9 +671,8 @@ export async function omniStart() {
   }
 }
 
-// omniSpawn starts the engine worker. The script is built here, so the client
-// stays one file, and its blob lives as long as the engine: the wasm build
-// starts its own threads from the same url.
+// omniSpawn starts the engine worker from a blob built here, so the client stays
+// one file; the wasm threads reuse the same url, so the blob lives as long.
 export function omniSpawn() {
   const cfg = {
     base: location.origin + OMNI_DIR,
@@ -716,8 +695,8 @@ export function omniSpawn() {
   return worker;
 }
 
-// omniOnWorker is every word the engine says: its progress, its ready, one line
-// of text for each phrase, and its faults.
+// omniOnWorker is every word the engine says: status, progress, ready, decoded
+// phrases and faults.
 export function omniOnWorker(msg) {
   if (!omni.busy && !omni.on) return;
   switch (msg.ev) {
@@ -777,8 +756,7 @@ export function omniProgress(msg) {
   );
 }
 
-// omniFail fails the engine and nothing else: the note says so and the call
-// keeps working.
+// omniFail stops the engine only; the note says so and the call keeps working.
 export function omniFail(text) {
   const was = omni.on;
   omniStop();
@@ -820,9 +798,8 @@ export function omniStop() {
   asrPaintOthers();
 }
 
-// omniTap hooks one incoming voice to the engine worker. It reads the source
-// before the volume of that guest, like the vosk tap, so a guest turned down is
-// still heard by the engine.
+// omniTap hooks one incoming voice to the engine worker at the source, before the
+// gain, like the vosk tap.
 export function omniTap(peer) {
   const ctx = state.playCtx;
   if (!omni.on || !omni.worker || !ctx || !peer.audioSrc) return;
@@ -879,8 +856,8 @@ export function omniUntap(id) {
   h.proc.onaudioprocess = null;
 }
 
-// omniSync follows the room like the vosk one: a tap for each guest inside who
-// has a voice, none for a guest who waits, and none for a guest who left.
+// omniSync follows the room: a tap for each guest inside, none for a guest who
+// waits or left.
 export function omniSync() {
   if (!omni.on) return;
   for (const id of [...omni.recs.keys()]) {
@@ -892,8 +869,8 @@ export function omniSync() {
   }
 }
 
-// omniDown mixes one block to mono at 16 kHz with a box filter. The engine
-// takes 16 kHz and a speech model needs nothing finer.
+// omniDown brings one block to mono 16 kHz with a box filter; the engine needs
+// nothing finer.
 export function omniDown(input, rate) {
   if (rate === 16000) return new Float32Array(input);
   const ratio = rate / 16000;
@@ -909,8 +886,8 @@ export function omniDown(input, rate) {
   return out;
 }
 
-// omniLine puts one decoded phrase on the chat and sends it to the others, in
-// the same shape the vosk engine uses.
+// omniLine puts one decoded phrase on the chat and sends it, in the shape the
+// vosk engine uses.
 export function omniLine(id, text) {
   if (!omni.on) return;
   const line = text.slice(0, ASR_LINE_MAX);
@@ -921,24 +898,22 @@ export function omniLine(id, text) {
   asrSay({ w: who.slice(0, 64), x: line, ts: Date.now() });
 }
 
-// omniWorkerSource turns the function below into the worker script. The blob
-// needs no extra file and no build step.
+// omniWorkerSource turns the function below into the worker script, with no extra
+// file and no build step.
 export function omniWorkerSource(cfg) {
   return `(${omniWorker.toString()})(${JSON.stringify(cfg)});`;
 }
 
-// omniWorker is the engine in its own thread: a model load takes seconds and
-// one phrase most of a second, and the call must keep its picture and its sound
-// meanwhile. The wasm build is the sherpa-onnx OfflineRecognizer with the
-// Omnilingual model. No voice activity model is served, so the phrase gate here
-// is a plain level gate: four quiet frames end a phrase, the quiet tail is cut
-// and three frames before the first loud one are kept, so the first word is not
-// lost.
+// omniWorker is the engine in its own thread, so the call keeps its picture and
+// sound while a model loads and a phrase decodes. No voice activity model is
+// served, so the phrase gate is a level gate: four quiet frames end a phrase, the
+// quiet tail is cut, and three frames before the first loud one keep the first
+// word.
 export function omniWorker(cfg) {
   const G = self as any;
   G.Module = {
-    // The wasm and its worker threads live under /omni/. The base is absolute,
-    // because a blob worker has no useful directory of its own.
+    // The wasm and its threads live under /omni/. The base is absolute, as a blob
+    // worker has no useful directory of its own.
     locateFile: (path) => cfg.base + path,
     print: (text) => {
       if (text) console.log('[omni] ' + text);
@@ -950,8 +925,8 @@ export function omniWorker(cfg) {
   };
   // The API layer first, then the emscripten glue that starts the wasm.
   G.importScripts(cfg.api, cfg.glue);
-  // One of the wasm build's own threads runs this same script again. The glue
-  // then owns the port, so nothing below may run there.
+  // A wasm thread runs this same script again; the glue owns its port, so nothing
+  // below may run there.
   if (/^em-pthread/.test(G.name || '')) return;
 
   const RATE = 16000;
@@ -995,9 +970,8 @@ export function omniWorker(cfg) {
     return `${cfg.base}${cfg.modelName}?part=${index}&m=${encodeURIComponent(cfg.stamp)}`;
   }
 
-  // fromCache reads the model out of the browser cache in parts. A part that is
-  // missing or short means no hit at all. The hash is checked before the wasm
-  // reads a byte, so a cut or stale entry goes instead of breaking the engine.
+  // fromCache reads the model out of the browser cache in parts. A missing or
+  // short part is no hit; a stale hash drops the cache before the wasm reads it.
   async function fromCache() {
     if (!G.caches || !cfg.size) return null;
     const count = Math.ceil(cfg.size / PART);
@@ -1039,9 +1013,8 @@ export function omniWorker(cfg) {
     return bytes;
   }
 
-  // fromNetwork downloads the model once and writes every finished part to the
-  // cache. The cache is best effort: a tab without cache storage still
-  // transcribes now, it just pays the download again next time.
+  // fromNetwork downloads the model and writes every finished part to the cache.
+  // The cache is best effort: without it the tab still transcribes now.
   async function fromNetwork() {
     const res = await fetch(cfg.modelUrl, { cache: 'no-store' });
     if (!res.ok || !res.body) throw new Error(`the server answered ${res.status}`);
@@ -1168,8 +1141,8 @@ export function omniWorker(cfg) {
     return { rest: new Float32Array(0), pre: [], samples: [], len: 0, speech: false, quiet: 0 };
   }
 
-  // flush hands one finished phrase to the queue. A phrase shorter than half a
-  // second carries no word, only a door or a chair.
+  // flush hands one finished phrase to the queue; a phrase under half a second
+  // carries no word.
   function flush(id, st) {
     const parts = st.samples;
     const len = st.len;
@@ -1184,8 +1157,7 @@ export function omniWorker(cfg) {
       all.set(part, at);
       at += part.length;
     }
-    // The queue is short on purpose: a slow tab drops the oldest phrase rather
-    // than grow without end.
+    // The queue is short on purpose: a slow tab drops the oldest phrase.
     queue.push({ id, samples: all });
     if (queue.length > 8) queue.shift();
     setTimeout(pump, 0);
@@ -1252,8 +1224,8 @@ export function omniWorker(cfg) {
       return;
     }
     decoding = false;
-    // Every phrase decoded goes to the page, empty or not, so its counters show
-    // a deaf engine apart from a silent room.
+    // Every phrase goes to the page, empty or not, so a deaf engine differs from
+    // a silent room.
     post({
       ev: 'decoded',
       ms: Math.round(performance.now() - t0),

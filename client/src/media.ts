@@ -1,6 +1,6 @@
 /*
- The local tracks, the sender pipeline, the join and leave flow of
- the media itself.
+ The camera and screen requests, the performance step and the sender
+ bitrate and frame ceilings.
 */
 
 import { PERF, QUALITY } from './config.js';
@@ -46,14 +46,13 @@ export function videoFor(q, p) {
 
 // camVideo builds the camera request for the chosen steps. The join and every
 // later camera switch go through it, so the performance step sets the size the
-// camera itself delivers, and not only what the encoder does with it.
+// camera itself delivers, not only what the encoder does with it.
 export function camVideo() {
   return videoFor(qualityNow(), perfNow());
 }
 
 // shareVideo is the screen share request. A shared screen is read as text, so
-// it has a step of its own and never takes the performance step. The camera
-// step does not touch it.
+// it has a step of its own and never takes the performance step.
 export function shareVideo() {
   return videoFor(QUALITY[state.shareQuality] || QUALITY['1920x1080@30'], PERF[0]);
 }
@@ -94,9 +93,9 @@ export async function ask(constraints) {
 }
 
 // capVideoSender sets the encoder ceiling on one video sender. The parameters
-// object comes back from the sender and is copied, because a sender refuses a
-// reused one. A sender has no encodings until its description exists, so an
-// empty list is skipped; the same call runs again when the pair connects.
+// come back from the sender and are copied, because a sender refuses a reused
+// object. A sender has no encodings until its description exists, so an empty
+// list is skipped; the same call runs again when the pair connects.
 export async function capVideoSender(sender) {
   if (!sender || !sender.getParameters || !sender.setParameters) return true;
   let params;
@@ -108,8 +107,7 @@ export async function capVideoSender(sender) {
   if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return true;
   const q = qualityNow();
   const p = perfNow();
-  // Step 0 sets the same ceiling as before and no frame cap, so the default
-  // path is the one that always ran.
+  // Step 0 sets the same ceiling and no frame cap, which is the default path.
   const max = Math.round(q.max * p.bits);
   const fps = p.fps ? perfFps(q, p) : 0;
   const next = {
@@ -129,8 +127,8 @@ export async function capVideoSender(sender) {
   }
 }
 
-// capCameraSenders caps every sender that carries the camera. A sender for the
-// screen share is left alone, because the share keeps its own quality.
+// capCameraSenders caps every sender that carries the camera. The screen share
+// sender is left alone, because the share keeps its own quality.
 export function capCameraSenders(pc) {
   if (!pc || !state.camTrack) return;
   const drawn = lookTrack();
@@ -141,8 +139,8 @@ export function capCameraSenders(pc) {
 }
 
 // applyQuality pushes the chosen steps into the live camera: the raw track gets
-// the new size and frame rate, and every peer's encoder gets the matching
-// ceiling. The screen share is not touched; it carries its own quality.
+// the new size and frame rate, and every peer's encoder the matching ceiling.
+// The screen share carries its own quality and is not touched.
 export async function applyQuality() {
   let refused = false;
   const track = state.camTrack;

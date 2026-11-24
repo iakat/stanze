@@ -66,8 +66,7 @@ import { runLab } from './lab.js';
 import { applyImmersive, phoneQuery, setChrome } from './phone.js';
 
 // window.e2eApp is the hook the browser test drives; a person never needs it.
-// It exposes the same shape the old sealed page had, so a test can read the
-// counters of a sealed call from the one client.
+// It exposes the counters of a sealed call from the one client.
 win().e2eApp = {
   get state() {
     return state;
@@ -191,8 +190,8 @@ win().e2eApp = {
 
 // ---------------------------------------------------------------- boot
 export function init() {
-  // Older builds kept a volume under the guest name. That is a list of the
-  // people who used this machine, so it goes before anything else reads it.
+  // A volume kept under a guest name is a list of the people who used this
+  // machine, so the purge goes before anything else reads it.
   purgeNamedVolume();
   const fromHash = roomFromHash();
   const last = load('room');
@@ -207,13 +206,12 @@ export function init() {
   if (lastName) $('name').value = lastName;
 
   // The last microphone, camera, path and denoise choice comes back, like the
-  // name. No stored value means on: the join asks for both by default. A
-  // stored off is honoured, and that device is not asked for at all.
+  // name. No stored value means on; a stored off is honoured and not asked for.
   state.mic = load('mic') !== '0';
   state.cam = load('cam') !== '0';
-  // The chosen devices come back like the on and off choices. An id is opaque
-  // and only meaningful inside this browser profile, so a stale one is simply
-  // not found and the system device is used.
+  // The chosen devices come back like the on and off choices. An id is only
+  // meaningful inside this browser profile, so a stale one is not found and the
+  // system device is used.
   state.camId = load('camId').slice(0, 256);
   state.micId = load('micId').slice(0, 256);
   const storedPath = load('path');
@@ -221,8 +219,8 @@ export function init() {
     state.path = storedPath;
     $('path').value = storedPath;
   }
-  // The quality step comes back like the devices, and the picker shows it, so
-  // the first camera request is already the chosen size.
+  // The quality step comes back too, so the first camera request is already the
+  // chosen size.
   const storedQuality = load('quality');
   if (Object.hasOwn(QUALITY, storedQuality)) state.quality = storedQuality;
   // The screen has its own step, kept the same way.
@@ -240,9 +238,8 @@ export function init() {
   // left it that way.
   state.selfPip = load('selfpip') === '1';
   $('pip').checked = state.selfPip;
-  // A guest without a camera holds a tile of its own by default, so the switch
-  // is the one that hides those tiles. It comes back on the next visit. The
-  // key before this one stored the opposite meaning and is dropped.
+  // A guest without a camera holds a tile by default, so the switch hides those
+  // tiles. The older key that stored the opposite meaning is dropped.
   state.voiceTiles = load('hidevoicetiles') !== '1';
   $('voice-tiles').checked = !state.voiceTiles;
   localStorage.removeItem('rooms.voicetiles');
@@ -322,8 +319,7 @@ export function init() {
     applyMirror();
   });
 
-  // A frozen camera keeps sending the frame it held, so the freeze frame
-  // behaviour is still there for anyone who wants it.
+  // A frozen camera keeps sending the frame it held.
   $('freeze').addEventListener('change', async () => {
     const ok = await setFreeze($('freeze').checked);
     if (!ok) $('freeze').checked = !!state.freeze;
@@ -434,13 +430,11 @@ export function init() {
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
 
-  // A click on a tile is a spotlight: that guest takes the large area alone
-  // and every other guest becomes a rail row. The same click again, a click on
-  // the empty stage, or Esc gives the normal layout back. A click on a control
-  // in the tile stays with that control.
-  // A touch screen has no hover, so the first tap on a picture opens its
-  // controls (volume, code card, enlarge) and a second tap, or the enlarge
-  // button, enlarges it. The controls close on their own after a few seconds.
+  // A click on a tile is a spotlight: that guest takes the large area and the
+  // others become rail rows. The same click, a click on the empty stage or Esc
+  // gives the normal layout back, and a click on a control stays with it.
+  // A touch screen has no hover, so the first tap opens the controls and a
+  // second tap, or the enlarge button, enlarges. Controls close after 5 s.
   const touch = window.matchMedia ? window.matchMedia('(hover: none)') : { matches: false };
   $('grid').addEventListener('click', (event) => {
     // The click that ends a drag of the small tile is not a zoom.
@@ -477,10 +471,9 @@ export function init() {
     }
     setSpotlight(id);
   });
-  // A tap on the picture folds the frame of the app away on a phone, and the
-  // next tap brings it back. A tap on the frame itself never folds it, or no
-  // button of the frame could be used while the frame is open. A desktop has
-  // no immersive class, so nothing here reaches it.
+  // A tap on the picture folds the app frame away on a phone and the next tap
+  // brings it back; a tap on the frame itself never folds it, or no button of
+  // the frame could be used while it is open. A desktop has no immersive class.
   $('stage').addEventListener('click', (event) => {
     if (Date.now() - cornerDropAt < 300) return;
     if (!$('stage').classList.contains('immersive')) return;
@@ -565,10 +558,9 @@ export function init() {
 }
 init();
 
-// A classic script leaves its top level names on the page, and the browser
-// tests read a few of them straight from there. The bundle closes over them,
-// so the same names are put back for the tests; the page itself never reads
-// them.
+// The bundle closes over its top level names, and the browser tests read a few
+// of them from the page, so the same names are put back here. The page itself
+// never reads them.
 Object.assign(globalThis, {
   state,
   disableCam,

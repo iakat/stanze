@@ -18,18 +18,13 @@ import { sealedSendCand, sealedSendSdp } from './gate.js';
 import { paintRelay } from './badge.js';
 
 // ---------------------------------------------------------------- peers
-// iceServers drops the TURN servers on a direct only path. A relay only path
-// needs no filter: the transport policy below already drops every other
-// candidate.
+// A direct only path drops the TURN servers. A relay path needs no filter:
+// the transport policy already drops every other candidate.
 export function iceServers() {
   const all = state.ice || [];
   if (state.path !== 'p2p') return all;
   return all.filter((server) => !/^turns?:/i.test(String(server.urls)));
 }
-
-/**
- * @returns {RTCConfiguration}
- */
 
 export function rtcConfig(): RTCConfiguration {
   return {
@@ -39,14 +34,12 @@ export function rtcConfig(): RTCConfiguration {
   };
 }
 
-// ensurePeer makes the tile and the pair state of one guest. The flags start
-// as microphone and camera on, the values a fresh guest has, and the first
-// sealed state of that pair corrects them: the server no longer sends any.
+// ensurePeer makes the tile and the pair state of one guest. The flags start as
+// microphone and camera on; the first sealed state of that pair corrects them.
 export function ensurePeer(id) {
   let peer = state.peers.get(id);
   if (peer) return peer;
-  // The name arrives sealed, later, so the short id keeps the tile readable
-  // until then.
+  // The name arrives sealed later, so the short id keeps the tile readable.
   const initial = String(id).slice(0, 6);
   peer = {
     id,
@@ -54,15 +47,15 @@ export function ensurePeer(id) {
     mic: true,
     cam: true,
     deaf: false,
-    waiting: !!state.waitingRoom && !state.waiting, // held outside, see the waiting room
-    hand: false, // a raised hand, with its time as its place in the queue
+    waiting: !!state.waitingRoom && !state.waiting, // held outside the room
+    hand: false, // a raised hand
     handTs: 0,
-    screenShared: false, // a live share, until this guest's sealed state says so
+    screenShared: false, // a live share, until the sealed state says otherwise
     vol: 100,
     pc: null,
     tile: null,
     video: null,
-    screenTile: null, // the second tile of this guest, built on the first screen track
+    screenTile: null, // the second tile, built from the first screen track
     screenTrack: null,
     gain: null,
     audioSrc: null,
@@ -96,7 +89,7 @@ export function ensurePeer(id) {
     ctlPending: [], // hello/ok held until the pub and the keys are here
     seqOut: 0, // sealed chat/name frames sent on this pair
     seqIn: 0, // the last one opened, inbound only grows
-    dc: null, // the file data channel of this pair
+    dc: null,
     dcPromise: null, // resolves with that channel, or null when it never comes
     dcResolve: null,
     mySig: '',
@@ -134,9 +127,8 @@ export function connectPeer(id, initiator) {
   const pc = new RTCPeerConnection(rtcConfig());
   peer.pc = pc;
 
-  // One ordered data channel per pair carries file bytes. Only the initiator
-  // opens it and the answerer takes the channel that the offer brings, so both
-  // sides hold the same one. The channel is peer to peer: no server sees it.
+  // One ordered data channel per pair carries file bytes: the initiator opens
+  // it, the answerer takes the channel the offer brings. No server sees it.
   peer.dc = null;
   peer.dcPromise = new Promise((resolve) => {
     peer.dcResolve = resolve;
@@ -171,10 +163,9 @@ export function connectPeer(id, initiator) {
       track.addEventListener('ended', () => dropAudio(peer));
       return;
     }
-    // The screen has a transceiver of its own, matched by its mid. Its track
-    // goes to a second tile, so the camera keeps its tile and its sender. A
-    // track that arrives before preparePeer runs is named by the second video
-    // transceiver, which is the same object that preparePeer seals.
+    // The screen has its own transceiver, matched by mid, and its track goes to
+    // a second tile. Before preparePeer runs, the second video transceiver
+    // names it.
     const named = peer.tx && peer.tx.screen;
     const screen =
       named || peer.pc.getTransceivers().filter((t) => t.receiver.track.kind === 'video')[1];
@@ -191,14 +182,13 @@ export function connectPeer(id, initiator) {
       track.addEventListener('ended', () => paintPeerScreen(peer));
       return;
     }
-    // The track is kept, so undeafen can put the same picture back without a
-    // new negotiation, and a deafened guest never draws it at all.
+    // The track is kept, so undeafen needs no new negotiation, and a deafened
+    // guest never draws it.
     peer.videoTrack = track;
     paintPeerVideo(peer);
-    // A sender that stops its camera mutes the track here instead of ending
-    // it, so both edges of the track take the last frame down and put the
-    // picture back. The track is kept either way, so undeafen and a fresh
-    // camera need no new negotiation.
+    // A sender that stops its camera mutes the track instead of ending it, so
+    // mute, unmute and ended each repaint, and a fresh camera needs no new
+    // negotiation.
     track.addEventListener('mute', () => paintPeerVideo(peer));
     track.addEventListener('unmute', () => paintPeerVideo(peer));
     track.addEventListener('ended', () => paintPeerVideo(peer));
@@ -234,9 +224,9 @@ export function connectPeer(id, initiator) {
 
 export function setPeerState(peer, text) {
   peer.state = text;
-  // The badge on the tile names the key state, so the link state lives in the
-  // data attribute only. The status line carries no guest count: the chip at
-  // the far end of it counts the peers, so the two can never disagree.
+  // The badge names the key state, so the link state lives in the data
+  // attribute only. The status line carries no guest count: the chip at its far
+  // end counts the peers, so the two can never disagree.
   if (peer.tile) peer.tile.dataset.state = text;
   const row = peer.tile ? rowOf.get(peer.tile) : null;
   if (row) row.dataset.state = text;
@@ -256,10 +246,8 @@ export async function flushPending(peer) {
   }
 }
 
-// onDescription queues one description per peer. Two offers, or an answer that
-// races a rejoin, would interleave setRemoteDescription and
-// setLocalDescription and leave the pair at "new"; the chain makes them run one
-// after the other in arrival order.
+// onDescription queues one description per peer: two offers, or an answer that
+// races a rejoin, would interleave the set calls and leave the pair at "new".
 export function onDescription(peer, type, sdp) {
   const run = () => applyDescription(peer, type, sdp);
   peer.desc = (peer.desc || Promise.resolve()).then(run, run);
@@ -279,16 +267,16 @@ export async function applyDescription(peer, type, sdp) {
   if (type === 'answer' && pc.signalingState !== 'have-local-offer') return;
 
   try {
-    // Perfect negotiation: the polite side rolls its offer back, so the remote
-    // offer can be applied; without this the pair stays at "new".
+    // Perfect negotiation: the polite side rolls its offer back so the remote
+    // one can be applied.
     if (collision && peer.polite && pc.signalingState === 'have-local-offer') {
       await pc.setRemoteDescription({ type: 'rollback' });
     }
     peer.settingAnswer = type === 'answer';
     await pc.setRemoteDescription({ type, sdp });
     peer.settingAnswer = false;
-    // The transceivers exist now, so this is where both directions get their
-    // transform and their track. It happens before the answer leaves.
+    // The transceivers exist now, so both directions get their transform and
+    // their track here, before the answer leaves.
     preparePeer(peer);
 
     if (type === 'offer') {
@@ -296,13 +284,13 @@ export async function applyDescription(peer, type, sdp) {
       sealedSendSdp(peer, 'answer', pc.localDescription.sdp);
     }
     await flushPending(peer);
-    // The description is in place, so the encodings exist; a camera cap set
-    // before the negotiation can land now.
+    // The description is in place, so a camera cap set before the negotiation
+    // can land.
     capCameraSenders(pc);
   } catch (err) {
     peer.settingAnswer = false;
-    // A description that the browser rejects leaves the pair at "new": no
-    // media, no retry, and nothing on screen. Say it, and keep the detail.
+    // A rejected description leaves the pair at "new": no media, no retry,
+    // nothing on screen. Say it and keep the detail.
     const why = err && err.message ? err.message : String(err);
     state.workerErrors.push('description failed for ' + shortPeer(peer.id) + ': ' + why);
     say('the ' + type + ' with ' + shortPeer(peer.id) + ' failed; the link has no media');

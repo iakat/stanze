@@ -1,5 +1,5 @@
 /*
- The stats panel and the wire audit numbers it shows.
+ The stats panel: media metrics per guest and the wire and crypto counters.
 */
 
 import { $ } from './dom.js';
@@ -16,13 +16,11 @@ import {
 import { pinState } from './identity.js';
 
 // ---------------------------------------------------------------- telemetry
-// The stats panel is read at 1 Hz from getStats deltas: two byte counters give
-// a bitrate, two packet counters give the loss, the inbound streams give the
-// jitter, and the selected candidate pair gives the round trip time and the
-// path. Polling stops when the panel is closed or the tab is hidden.
+// One getStats read a second: byte counters give bitrates, packet counters the
+// loss, inbound streams the jitter, the candidate pair the round trip and path.
 export const STATS_MS = 1000;
 
-export const STATS_HISTORY = 60; // one sample a second, so a minute of the call
+export const STATS_HISTORY = 60; // one sample a second, a minute of the call
 
 export function statsOpen() {
   const panel = $('stats-panel');
@@ -46,8 +44,8 @@ export function stopStats() {
   state.statsTimer = null;
 }
 
-// setStatsOpen is the one place that shows or hides the panel, so the toolbar
-// button and the close button on the panel head cannot disagree.
+// setStatsOpen shows or hides the panel and the toolbar button together, so the
+// two controls cannot disagree.
 export function setStatsOpen(open) {
   $('stats-panel').hidden = !open;
   $('stats-btn').setAttribute('aria-pressed', String(open));
@@ -62,8 +60,8 @@ export function clearStatsPanel() {
   if (sum) sum.replaceChildren();
 }
 
-// bitrate turns two samples of one byte counter into kilobits per second. The first sample
-// of a counter yields 0, which is honest: nothing was measured yet.
+// bitrate turns two samples of one byte counter into kbit/s. The first sample of
+// a counter, and one that does not move the clock forward, yields 0.
 export function bitrate(last, report, field) {
   const bytes = report[field] || 0;
   const ts = report.timestamp || 0;
@@ -79,9 +77,8 @@ export function isDirectType(type) {
   return type === 'host' || type === 'srflx' || type === 'prflx';
 }
 
-// counterDelta is the movement of one cumulative counter since the last tick.
-// A counter that is missing or that went backwards yields null, so a restarted
-// report cannot turn into a burst of invented packets.
+// counterDelta is the movement of one cumulative counter since the last tick. A
+// missing counter or a first sample yields null; the caller clamps backwards.
 export function counterDelta(last, report, field) {
   const value = report[field];
   if (typeof value !== 'number') return null;
@@ -91,8 +88,8 @@ export function counterDelta(last, report, field) {
   return prev ? value - prev.bytes : null;
 }
 
-// peerStats reads one report of one peer. Every access is guarded: a peer that
-// closed between two ticks must not throw.
+// peerStats reads one report of one peer. Every access is guarded, so a peer that
+// closed between two ticks does not throw.
 export async function peerStats(peer) {
   const pc = peer.pc;
   if (!pc || typeof pc.getStats !== 'function') return null;
@@ -127,14 +124,13 @@ export async function peerStats(peer) {
         out.up[r.kind] += bitrate(peer.statLast, r, 'bytesSent');
       } else if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.kind === 'video')) {
         out.down[r.kind] += bitrate(peer.statLast, r, 'bytesReceived');
-        // The decoder reports the picture it is handed, which is the only
-        // size that matters: the sender may clamp for its own bandwidth.
+        // The decoder's picture size is the one that matters; the sender may
+        // clamp for its own bandwidth.
         if (r.kind === 'video' && r.frameWidth && r.frameHeight) {
           out.shot = `${r.frameWidth}x${r.frameHeight}`;
         }
-        // Jitter and loss belong to the side that listens: a packet lost on
-        // the way here is a packet gone for this guest, so this report is the
-        // only honest place to read them.
+        // Jitter and loss belong to the listening side: a packet lost on the way
+        // here is gone for this guest.
         if (typeof r.jitter === 'number') {
           jitterMax = jitterMax === null ? r.jitter : Math.max(jitterMax, r.jitter);
         }
@@ -189,8 +185,8 @@ export async function peerStats(peer) {
   }
   if (jitterMax !== null) out.jitter = jitterMax * 1000;
   if (got > 0) {
-    // One tick is a short window, so the share is smoothed: a single burst
-    // moves the number without pinning it for the rest of the call.
+    // One tick is a short window, so the share is smoothed: a burst moves the
+    // number without pinning it for the rest of the call.
     const now = (lost / (lost + got)) * 100;
     out.loss = typeof peer.statLoss === 'number' ? peer.statLoss * 0.7 + now * 0.3 : now;
     peer.statLoss = out.loss;
@@ -198,13 +194,11 @@ export async function peerStats(peer) {
   return out;
 }
 
-// rateText renders a bitrate as the number and the first letter of its unit,
-// because the column beside it already says what the number is. A rate of
-// zero returns an empty string, so a cell with nothing to say stays empty.
+// rateText renders a bitrate as a number and the first letter of its unit; zero
+// returns an empty string, so a cell with nothing to say stays empty.
 export function rateText(kbit) {
   if (!(kbit > 0)) return '';
-  // With the byte setting on, the same rate is read in bytes, so a guest can
-  // compare it with the size of a file or a disk.
+  // With the byte setting on, the same rate reads in bytes, like a file size.
   if (state.statsBytes) {
     const bytes = kbit * 125;
     if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + 'm';
@@ -214,37 +208,32 @@ export function rateText(kbit) {
   return Math.round(kbit) + 'k';
 }
 
-// msText renders one round trip time in milliseconds, as "12 ms". The unit is
-// spelled out because the bitrate column already uses a bare "m" for megabits.
+// msText renders milliseconds as "12 ms"; the unit is spelled out because the
+// bitrate column uses a bare "m" for megabits.
 export function msText(ms) {
   return Math.round(ms) + ' ms';
 }
 
-// jitterText renders one jitter in milliseconds. The numbers are small and a
-// few milliseconds decide whether a voice sounds clear, so under 10 keeps one
+// jitterText renders jitter in ms. The numbers are small, so under 10 keeps one
 // decimal.
 export function jitterText(ms) {
   if (typeof ms !== 'number') return '';
   return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + ' ms';
 }
 
-// lossText renders a packet loss share. Under a twentieth of a percent is not
-// a loss that a person can hear, so it reads as none; two percent and more is
-// the point where a voice starts to break, and the caller marks it red.
+// lossText renders a loss share; under 0.05 % is not audible, so it reads none.
 export function lossText(pct) {
   if (typeof pct !== 'number') return '';
   if (pct < 0.05) return 'none';
   return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + ' %';
 }
 
-// lossMark is the colour rule for a loss row: red from two percent, no mark
-// below it.
+// lossMark colours a loss row red from two percent, where a voice starts to break.
 export function lossMark(pct) {
   return pct >= 2 ? false : undefined;
 }
 
-// The drawings of the panel. Each stands where a word would and carries the
-// word in its title, so a hover names it.
+// Panel drawings: each stands for a word and carries it in its title for a hover.
 export const VIDEO_ICON = ['1F3A5', 'video'];
 
 export const AUDIO_ICON = ['1F50A', 'audio'];
@@ -265,25 +254,22 @@ export const UP_ICON = ['2B06', 'out, what this browser sends'];
 
 export const DOWN_ICON = ['2B07', 'in, what this browser receives'];
 
-// routeCell is the value of the route row: the drawing and the word. A link
-// when the two browsers talk to each other, a satellite when the media has to
-// pass the server.
+// routeCell is the route row: a link when the browsers talk directly, a
+// satellite when the media passes the server.
 export function routeCell(path) {
   if (!path) return ['', '', 'not known yet'];
   const direct = path === 'direct' || path === 'p2p';
   return [...(direct ? DIRECT_ICON : RELAY_ICON), path === 'p2p' ? 'direct' : path];
 }
 
-// rateCell is one bitrate with the arrow of its direction. Both directions sit
-// on the same row, so the two rates of the video row and of the audio row line
-// up under each other.
+// rateCell is one bitrate with its direction arrow; up and down share a row, so
+// the columns line up.
 export function rateCell(dir, kbit) {
   return [...(dir === 'up' ? UP_ICON : DOWN_ICON), rateText(kbit) || '-'];
 }
 
-// tripCells are the three numbers of one path: how long a packet takes, how
-// far apart the packets arrive, and how many of them never arrive. A number
-// that is not there yet leaves its cell empty, and the column stays.
+// tripCells are the round trip, the jitter and the loss of one path; a number
+// that is not there yet leaves its cell empty and the column stays.
 export function tripCells(rtt, jitter, loss) {
   return [
     [...PING_ICON, typeof rtt === 'number' ? msText(rtt) : ''],
@@ -292,14 +278,13 @@ export function tripCells(rtt, jitter, loss) {
   ];
 }
 
-// pathText is the word a guest reads for one route: the report says p2p for a
-// direct pair, and the panel says direct.
+// pathText is the word a guest reads for a route: the report says p2p, the panel
+// direct.
 export function pathText(path) {
   return path === 'p2p' ? 'direct' : path;
 }
 
-// callPath is the route of the whole call: one word when every pair takes the
-// same route, and the list of routes when they do not.
+// callPath is the route of the whole call: one word, or a list when the pairs differ.
 export function callPath(live) {
   const words = new Set();
   for (const s of live) if (s.path) words.add(pathText(s.path));
@@ -308,10 +293,8 @@ export function callPath(live) {
   return 'mixed: ' + [...words].join(', ');
 }
 
-// callPairs is the first card and the glance of the panel: the route with the
-// three numbers of the path on one row, then what the whole call sends and
-// receives. A number that is not there yet leaves its cell empty, so the rows
-// below it still line up.
+// callPairs is the call card: the route and its three numbers, then the video and
+// audio rates of the whole call.
 /** @returns {(string | (string | boolean)[][])[][]} */
 
 export function callPairs(live, total) {
@@ -339,37 +322,32 @@ export function callPairs(live, total) {
   return out;
 }
 
-// levelDb is one input peak as decibels, or the word silent under -60 dB, which
-// is below anything a person hears.
+// levelDb is one peak in dB, or silent under -60 dB, below what a person hears.
 export function levelDb(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
   return db > -60 ? `${Math.round(db)} dB` : 'silent';
 }
 
-// levelFraction is the share of the -60 dB to 0 dB scale that one peak fills,
-// from 0 to 1, for the bar of a meter row.
+// levelFraction is one peak as a share of the -60 dB to 0 dB scale, clamped to 0..1.
 export function levelFraction(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
   return Math.max(0, Math.min(1, (db + 60) / 60));
 }
 
-// peerLevel is what arrives from one guest, read before the gain. It is empty
-// until the audio path of that guest exists.
+// peerLevel is what arrives from one guest, read at the source before the gain;
+// empty until its audio path exists.
 export function peerLevel(peer) {
   if (!peer.audioSrc || !peer.meter) return '';
   return levelDb(peer.meterPeak || 0);
 }
 
-// ownPairs is the own card: the key this browser holds, then what its own
-// camera and microphone do. A live track with a silent meter points at the
-// graph; a dead context points at the autoplay rule of a phone, so the sound
-// state only shows when it needs a click.
+// ownPairs is the own card: the identity key, then the camera, microphone and
+// audio output. The sound row shows only when the context needs a tap.
 /** @returns {(string | (string | boolean)[][])[][]} */
 
 export function ownPairs(total) {
   const out = [];
-  // The long-term identity of this browser: the fingerprint alone, under the
-  // name of the card, because where the key lives is the panel's noise.
+  // The long-term identity: the fingerprint alone, under the name of the card.
   if (state.idKey) out.push(['key ', state.idKey.fp, undefined, 'mono']);
   const live = !!(state.mic && state.micTrack && state.micTrack.readyState === 'live');
   const mic =
@@ -396,8 +374,8 @@ export function ownPairs(total) {
       rateCell('down', total ? total.down.audio : 0),
     ],
   ]);
-  // The microphone has a meter of its own: a bar that fills with the level,
-  // so a speaker sees at once that the voice is going out.
+  // The microphone meter fills with the level, so a speaker sees the voice going
+  // out.
   const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
   out.push([
     'mic ',
@@ -412,18 +390,15 @@ export function ownPairs(total) {
   return out;
 }
 
-// peerPairs is one guest card: the identity first, then the path and the two
-// media rows of that pair. A cell with no number stays empty, so the columns
-// line up with the row above it, and with one guest in the room this card is
-// the whole call.
+// peerPairs is one guest card: identity, then the path and the two media rows. A
+// cell with no number stays empty, so the columns line up.
 /** @returns {(string | (string | boolean)[][])[][]} */
 
 export function peerPairs(peer, s) {
   const out = [];
   const pin = pinState(peer);
   if (peer.fp && pin !== 'new') {
-    // The key sits right under the name of the card, with a green tick when
-    // this browser can name that guest and the state word when it cannot. A
+    // A green tick when this browser can name the guest, else the pin state; a
     // key is read letter by letter, so it is monospace.
     const bad = pin === 'changed' || pin === 'rollback';
     const cells = [pin === 'known' ? ['2714', 'verified', peer.fp] : ['', '', peer.fp]];
@@ -444,8 +419,7 @@ export function peerPairs(peer, s) {
       [['', '', peerLevel(peer)], rateCell('up', s.up.audio), rateCell('down', s.down.audio)],
     ]);
   }
-  // With one code in the room the code card below names it once, and a line
-  // on every guest would say the same thing again.
+  // One room code is named once on the code card below, not on every guest.
   if (peer.sas && sealedRoomCodes().size > 1)
     out.push(['code ', verifyText(peer.sas), undefined, true]);
   if (!peer.keys) out.push(['keys ', 'none', false, true]);
@@ -456,12 +430,8 @@ export function peerPairs(peer, s) {
   return out;
 }
 
-// statsRow is one card of the panel: a name and a short list of key/value
-// lines. A line is [key, value] or [key, value, mark] with a mark of true for
-// green and false for red. The fourth field is true for an indented sub row,
-// or 'mono' for a value that is read letter by letter, such as a key.
-// statIcon is one OpenMoji drawing with the word it stands for in its title,
-// so a line can say "video" with a picture and still answer a hover.
+// statIcon is one OpenMoji drawing with its word in the title, so a picture
+// still answers a hover.
 export function statIcon(hex, title) {
   const img = document.createElement('img');
   img.className = 'sico';
@@ -471,10 +441,8 @@ export function statIcon(hex, title) {
   return img;
 }
 
-// statCells fills one row with one cell per part. A part is text, or
-// [drawing, word, text] with the word in the title, or the same with a fourth
-// false to mark that cell red. An empty part keeps its column, so the numbers
-// of the row below still line up with it.
+// statCells fills a row with one cell per part: text, or [drawing, word, text],
+// or the same with a fourth false for red. An empty part keeps its column.
 export function statCells(value, metrics) {
   const span = document.createElement('span');
   span.className = 'sv';
@@ -487,8 +455,8 @@ export function statCells(value, metrics) {
     const text = document.createElement('span');
     text.textContent = word === null || word === undefined ? '' : String(word);
     if (metrics && p.length > 1 && p[1]) {
-      // A metric reads as a small label over a number: the word is the first
-      // part of the title of its drawing, so the two never disagree.
+      // A metric reads as a small label over a number; the label is the first
+      // part of the drawing's title, so the two never disagree.
       const label = document.createElement('span');
       label.className = 'cl';
       label.title = String(p[1]);
@@ -515,9 +483,8 @@ export function statLine(key, value, mark, sub, meter) {
   line.dataset.n = String(parts.length);
   const k = document.createElement('span');
   k.className = 'sk';
-  // A key of two is [drawing, word]: the drawing and the first words of its
-  // title, so the row reads without a hover. A key with no drawing keeps its
-  // word as text.
+  // A [drawing, word] key shows the drawing and the first words of its title; a
+  // key with no drawing keeps its word as text.
   if (Array.isArray(key) && key[0]) {
     k.appendChild(statIcon(key[0], key[1]));
     k.appendChild(document.createTextNode(String(key[1]).split(',')[0]));
@@ -537,6 +504,8 @@ export function statLine(key, value, mark, sub, meter) {
   return line;
 }
 
+// statsRow is one card: a name and lines of [key, value, mark, sub, meter]; mark
+// true is green, false red; sub true indents, 'mono' reads by letter.
 export function statsRow(title, pairs, mark = null, badge = null) {
   const row = document.createElement('div');
   row.className = 'srow';
@@ -546,8 +515,7 @@ export function statsRow(title, pairs, mark = null, badge = null) {
   name.className = 'stitle';
   name.textContent = title;
   head.appendChild(name);
-  // The badge is the verdict of one guest: a lamp and a word, so the card says
-  // how that link is before a number has to be read.
+  // The badge is the verdict of one guest: a lamp and a word, read before any number.
   if (badge && badge.level) {
     const chip = document.createElement('span');
     chip.className = 'sbadge';
@@ -564,9 +532,8 @@ export function statsRow(title, pairs, mark = null, badge = null) {
   return row;
 }
 
-// linkLevel is the verdict on one link: poor from 5 percent loss or 400 ms,
-// fair from 2 percent, 200 ms or 40 ms of jitter, good otherwise. A link with
-// nothing measured yet has no verdict, because a guess would be a lie.
+// linkLevel is the verdict on one link: poor from 5 % loss or 400 ms, fair from
+// 2 %, 200 ms or 40 ms jitter, good otherwise. Nothing measured means no verdict.
 export function linkLevel(s) {
   if (!s) return '';
   const { rtt, loss, jitter } = s;
@@ -586,8 +553,7 @@ export function worstLevel(levels) {
   return '';
 }
 
-// statsSummary is the first card: one lamp and one sentence for the whole
-// call, so a healthy call needs no reading and a weak one says what to do.
+// statsSummary is the first card: one lamp and one sentence for the whole call.
 export function statsSummary(live, guestCount) {
   const level = worstLevel(live.map(linkLevel));
   const box = document.createElement('div');
@@ -621,9 +587,8 @@ export function statsSummary(live, guestCount) {
   return box;
 }
 
-// recordStatsHistory appends one sample of the whole call: what came down,
-// the worst round trip and the worst loss of that second. The graph is a
-// glance, so a healthy call draws a flat floor and not a row of numbers.
+// recordStatsHistory appends one sample of the whole call: what came down, the
+// worst round trip and the worst loss of that second.
 export function recordStatsHistory(total, live) {
   const worst = (key) => {
     const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
@@ -637,11 +602,9 @@ export function recordStatsHistory(total, live) {
   if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
 }
 
-// statsPlot draws one series on one small canvas. A filled series is an area
-// that stands on the floor, a line series is a stroke that breaks where a
-// sample has no value. The peak comes from the caller, so a small number still
-// fills the box, and the floor under it keeps a quiet call from reading as a
-// dead one.
+// statsPlot draws one series on one canvas: an optional filled area under a line,
+// the line breaking on a null sample. The peak comes from the caller, so a small
+// number still fills the box.
 export function statsPlot(canvas, values, peak, fill, color) {
   if (!canvas) return;
   const cssW = canvas.clientWidth || 288;
@@ -656,14 +619,12 @@ export function statsPlot(canvas, values, peak, fill, color) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  // A black screen with a dark green grid, like the performance monitor of the
-  // era: the shape reads at a glance and the colours need no legend.
+  // A black screen with a dark green grid: the shape reads at a glance.
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, cssW, cssH);
   const n = values.length;
   // One step is one second of a fixed minute and the newest sample sits at the
-  // right edge, so a call that has run for ten seconds fills a sixth of the
-  // box and the picture scrolls left from there, instead of stretching.
+  // right edge, so a young call fills part of the box and then scrolls left.
   const stepX = (cssW - 2) / (STATS_HISTORY - 1);
   const px = (i) => cssW - 1 - (n - 1 - i) * stepX;
   const py = (v) => cssH - 1 - (Math.min(v, peak) / peak) * (cssH - 2);
@@ -714,9 +675,7 @@ export function statsPlot(canvas, values, peak, fill, color) {
   ctx.stroke();
 }
 
-// statsNote writes the text line under one drawing. The drawing is a glance,
-// the line under it carries the numbers, so a guest who cannot read the shapes
-// loses nothing.
+// statsNote writes the text line under one drawing, so the numbers read without it.
 export function statsNote(id, text) {
   const note = $(id);
   if (note) note.textContent = text;
@@ -734,10 +693,8 @@ export function rateWords(kbit) {
   return Math.round(kbit) + ' kbit/s';
 }
 
-// drawStatsGraphs draws the last minute as three drawings: the downlink as a
-// filled area, the round trip and the loss as lines. Each keeps its own peak,
-// so one guest with a bad path shows on its own drawing and not as a small
-// bump under a big one.
+// drawStatsGraphs draws the last minute as three graphs: downlink as a filled
+// area, round trip and loss as lines, each with its own peak.
 export function drawStatsGraphs() {
   const box = $('stats-graph-box');
   if (!box) return;
@@ -753,8 +710,8 @@ export function drawStatsGraphs() {
   };
   const secs = `last ${hist.length} s`;
 
-  // Downlink: the area says "steady" or "collapsing" at a glance. The floor of
-  // 100 kbit/s keeps a quiet call on the floor of the box, not off it.
+  // Downlink as an area. A floor of 100 kbit/s keeps a quiet call on the floor of
+  // the box.
   const down = series('down');
   statsPlot($('stats-graph-down'), down, peak(down, 100), true, '#00e000');
   const downMax = Math.max(0, ...values(down));
@@ -773,8 +730,7 @@ export function drawStatsGraphs() {
       : `round trip not measured, ${secs}`,
   );
 
-  // Loss: a line on a scale that starts at one percent, so a clean call is a
-  // flat floor and any loss at all leaves the floor.
+  // Loss on a scale from one percent, so any loss at all leaves the floor.
   const loss = series('loss');
   statsPlot($('stats-graph-loss'), loss, peak(loss, 1), false, '#ff5050');
   const lossMax = Math.max(0, ...values(loss));
@@ -786,9 +742,8 @@ export function drawStatsGraphs() {
   );
 }
 
-// updateStats draws one round: the faults and the verdict of the call, the
-// graphs of the last minute, then one card per guest, the own side and the
-// crypto counters.
+// updateStats draws one round: alarms and verdict, the graphs, one card per guest,
+// the own card and the crypto counters.
 export async function updateStats() {
   if (!statsOpen() || state.statsBusy) return;
   const body = $('stats-body');
@@ -810,15 +765,13 @@ export async function updateStats() {
     }
     const rows = [];
     recordStatsHistory(total, live);
-    // With one guest in the room that card is the whole call, and a second
-    // card of the same numbers would only be read twice.
+    // With one guest that card is the whole call, so no call card repeats it.
     if (state.peers.size > 1) {
       const call = callPairs(live, total);
       if (call.length) rows.push(statsRow('call', call));
     }
     for (const { peer, s } of guests) {
-      // The route can change in a call, so the tile mark follows what the
-      // report says now and not only what it said when the link came up.
+      // The route can change mid call, so the tile mark follows the current report.
       if (s && s.path && peer.tile)
         peer.tile.dataset.relay = s.path.startsWith('relay') ? 'yes' : 'no';
       const level = linkLevel(s);
@@ -835,8 +788,8 @@ export async function updateStats() {
       }
     }
     rows.push(statsRow('you', ownPairs(total)));
-    // The faults and the verdict sit in their own block above the graphs, so a
-    // red line is the first thing on the panel and a healthy call needs no scroll.
+    // Alarms and verdict sit above the graphs, so a red line is the first thing
+    // on the panel.
     $('stats-sum').replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
     const legend = document.createElement('p');
     legend.className = 'slegend';
@@ -867,9 +820,8 @@ export function sealedPairCount(id) {
   return { out, inn, refused };
 }
 
-// sealedAlarms are the lines that mean something is wrong now. A healthy call
-// shows none of them, so the panel opens on the numbers and not on a warning
-// that has to be read twice to be dismissed.
+// sealedAlarms are the lines that mean something is wrong now; a healthy call
+// shows none.
 export function sealedAlarms() {
   const out = [];
   if (state.sealFault) out.push(statsRow('sealing fault', [['', state.sealFault, false]]));
@@ -921,9 +873,8 @@ export function wasmTestOk(wt) {
   );
 }
 
-// wasmTestFaults lists only the checks that failed.
-// The whole list belongs in the test output, not on a screen a guest reads
-// during a call.
+// wasmTestFaults lists only the failed checks; the whole list belongs in the test
+// output, not on a screen a guest reads during a call.
 /** @returns {(string | boolean)[][]} */
 
 export function wasmTestFaults(wt) {
@@ -944,9 +895,8 @@ export function wasmTestFaults(wt) {
   return out;
 }
 
-// sealedCards is the crypto half of the panel, below the person cards: what
-// the relay cannot see, in the few lines that answer it. A line that only
-// repeats the suite or says "not run yet" is left out.
+// sealedCards is the crypto half of the panel, below the person cards: what the
+// relay cannot see, in the few lines that answer it.
 export function sealedCards() {
   const out = [];
   const available = sealingAvailable();

@@ -32,14 +32,14 @@ export function say(text) {
   box.hidden = !text;
 }
 
-// isAdmin answers "does this peer hold the role". It is safe before the first
+// isAdmin answers whether this peer holds the role. Safe before the first
 // `joined` message, when no role is known yet.
 export function isAdmin(id) {
   return !!(id && state.admins && state.admins.has(id));
 }
 
 // setAdmins replaces the role list in place, so every reader of the same set
-// sees the new list. It also rebuilds a missing set instead of throwing.
+// sees the new list. A missing set is rebuilt instead of throwing.
 export function setAdmins(list) {
   if (!(state.admins instanceof Set)) state.admins = new Set();
   state.admins.clear();
@@ -54,7 +54,6 @@ export function joinWords(list) {
 
 // ---------------------------------------------------------------- menu bar
 
-// The menu bar carries one thin entry per drop-down. Both panels are wired by
-// the same code, and only one panel is open at a time, the way a Windows menu
-// bar behaves.
+// The menu bar carries one thin entry per drop-down. Only one panel is open at
+// a time, the way a Windows menu bar behaves.
 /** @type {[keyof Elements, keyof Elements][]} */

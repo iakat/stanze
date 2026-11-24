@@ -1,11 +1,10 @@
 /*
- The relay badge and the sealed badge.
+ The relay badge.
 */
 
 // ---------------------------------------------------------------- relay badge
-// selectedPair is the candidate pair that carries the media. The standard way
-// to find it is the transport report; the `selected` flag on the pair is a
-// Firefox extra, so a lookup that relied on it never marked a Chrome guest.
+// selectedPair is the pair that carries the media: from the transport report,
+// else a selected or nominated pair. The `selected` flag is a Firefox extra.
 export function selectedPair(stats) {
   let pair = null;
   stats.forEach((r) => {
@@ -26,8 +25,7 @@ export function selectedPair(stats) {
 }
 
 // paintRelay marks a tile when the link to that peer runs through the TURN
-// relay. The selected pair is read once, when the link comes up; a reconnect
-// runs this again.
+// relay. The selected pair is read once, when the link comes up.
 export async function paintRelay(peer) {
   try {
     const stats = await peer.pc.getStats();

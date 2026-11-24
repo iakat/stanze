@@ -5,9 +5,9 @@
 import { state } from './state.js';
 
 // ------------------------------------------------------------- wire audit
-// The audit watches every signaling frame in both directions for the strings
-// that must never leave the sealed channel (the name and the chat lines). It is
-// the client half of the server log check.
+// Checks every signaling frame in both directions for the passphrase, names,
+// chat lines and file names, which must never leave the sealed channel. Client
+// half of the server log check.
 export function canary(value) {
   const s = String(value || '');
   if (s.length >= 4) state.canaries.add(s);
@@ -21,7 +21,6 @@ export function auditWire(where, raw) {
       state.wireLeaks.push({ where, canary: c });
     }
   }
-  // A key or a line that belongs to a description, or to a candidate. The
-  // markers are JSON keys and SDP lines, which a base64 blob can not contain.
+  // Clear sdp or candidate markers; a base64 blob never contains them.
   if (/"sdp"|"candidate"|v=0|a=fingerprint/.test(text)) state.clearSignaling++;
 }
