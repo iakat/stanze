@@ -26,7 +26,7 @@ export function paintName(tile, name, local) {
 
 // paintRowName keeps the label of a list row in step with its tile, so a guest
 // that names itself once the keys are proven shows it in both places at once.
-export function paintRowName(row, name, local) {
+function paintRowName(row, name, local) {
   if (!row) return;
   row.querySelector('.row-name').textContent = local ? `${name} (you)` : name;
   row.setAttribute('aria-label', local ? `${name}, you` : name);
@@ -183,7 +183,7 @@ export function makeTile(id, name, local = false, screen = false) {
 // makeRow builds the list row of one member: name, the two lamps and the volume
 // slider. The row is one line and the slider always open, so a pointer that
 // crosses it never moves the stage.
-export function makeRow(id, name, local = false) {
+function makeRow(id, name, local = false) {
   const row = document.createElement('div');
   row.className = 'plist-row';
   if (local) row.dataset.local = 'yes';
@@ -228,7 +228,7 @@ export function makeRow(id, name, local = false) {
 }
 
 // ---------------------------------------------------------------- stage layout
-export let localTile = null; // the own preview tile, made once per room
+let localTile = null; // the own preview tile, made once per room
 // The tile is made in one place and dropped in another, so the two write it
 // through this setter; a plain imported binding cannot be assigned.
 export function setLocalTile(tile) {
@@ -242,7 +242,7 @@ export function ownTile() {
 // stageTiles is every tile in a stable order: the own preview and its screen,
 // then the guests in join order, each guest's screen right after its picture.
 // The zones follow this order, so a relayout never reshuffles the room.
-export function stageTiles() {
+function stageTiles() {
   const out = [];
   const self = ownTile();
   if (self) out.push(self);
@@ -258,7 +258,7 @@ export function stageTiles() {
 // that is off, a muted track and a stopped track all say no, and that guest
 // belongs in the rail. A screen tile needs a decoded frame too: its receiver
 // track exists from the negotiation on.
-export function tileHasPicture(tile) {
+function tileHasPicture(tile) {
   if (!tile || tile.classList.contains('camoff')) return false;
   const video = tile.querySelector('video');
   const stream = video && video.srcObject;
@@ -269,7 +269,7 @@ export function tileHasPicture(tile) {
 
 // spotlightTile is the one tile that holds the large area while the spotlight
 // is on. A guest that left takes it away; a screen tile is its own key.
-export function spotlightTile() {
+function spotlightTile() {
   if (!state.spotlight) return null;
   if (state.spotlight === 'self') return ownTile();
   const screen = state.spotlight.endsWith(':screen');
@@ -286,16 +286,16 @@ export function spotlightTile() {
 // A stage with two pictures puts one guest small in a corner. A corner is two
 // letters, the vertical side first and then the horizontal one, and the own
 // preview gives way to the guest by taking the opposite corner while it is on.
-export const CORNERS = ['tl', 'tr', 'bl', 'br'];
+const CORNERS = ['tl', 'tr', 'bl', 'br'];
 
-export const OPPOSITE_CORNER = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
+const OPPOSITE_CORNER = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
 
-export const cornerCall = new Map(); // peer id -> corner, this call only
+const cornerCall = new Map(); // peer id -> corner, this call only
 
 export let cornerDropAt = 0; // when a drag ended, so its click is not a zoom
 
 // peerOfTile is the peer record of one tile, or null for the own tile.
-export function peerOfTile(tile) {
+function peerOfTile(tile) {
   const id = tile && tile.dataset.peer;
   return id && state.peers ? state.peers.get(id) || null : null;
 }
@@ -303,13 +303,13 @@ export function peerOfTile(tile) {
 // storedCorner reads the kept corner of one guest: on disk under its
 // fingerprint, or for this call only without a key. The default is the bottom
 // right corner, where the own preview also sits.
-export function storedCorner(peer) {
+function storedCorner(peer) {
   const raw =
     peer && peer.fp ? load(`corner.fp.${peer.fp}`) : peer ? cornerCall.get(peer.id) || '' : '';
   return CORNERS.includes(raw) ? raw : 'br';
 }
 
-export function saveCorner(peer, corner) {
+function saveCorner(peer, corner) {
   if (!peer || !CORNERS.includes(corner)) return;
   cornerCall.set(peer.id, corner);
   if (peer.fp) store(`corner.fp.${peer.fp}`, corner);

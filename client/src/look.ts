@@ -34,9 +34,9 @@ export function lookTrack() {
 // picture for ever. One tick is one camera frame and one mesh detection.
 /** @type {Map<number, string>} */
 
-export const drawClockURLs = new Map();
+const drawClockURLs = new Map();
 
-export function drawClockURL(fps) {
+function drawClockURL(fps) {
   const hz = Math.max(MESH_HZ_MIN, Math.min(MESH_HZ_MAX, Math.round(fps) || 30));
   if (!drawClockURLs.has(hz)) {
     drawClockURLs.set(
@@ -54,7 +54,7 @@ export function drawClockURL(fps) {
 // The mesh points every mask reads, by canonical FaceMesh number. L and R name
 // the side of the drawn frame, the unmirrored camera frame: the guest's mirror
 // is a css flip, so a landmark x stays a plain fraction.
-export const LM = {
+const LM = {
   noseTip: 1,
   noseBase: 2,
   lipTop: 0,
@@ -79,19 +79,19 @@ export const LM = {
 };
 
 // The hairline, temple to temple across the head, so a fringe follows a turn.
-export const HAIRLINE = [127, 162, 21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251, 389, 356];
+const HAIRLINE = [127, 162, 21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251, 389, 356];
 
 // meshOpenTask is the one landmarker of the page; it outlives a pipeline, so a
 // mask or camera switch does not load the wasm again. A failure is remembered
 // as null and the skin patch stays in charge.
 /** @type {Promise<any> | null} */
 
-export let meshOpenTask = null;
+let meshOpenTask = null;
 
 // meshOpen loads the landmarker in the background and never throws into a call:
 // a browser without wasm or memory gives null, and the colour test places the
 // mask.
-export function meshOpen() {
+function meshOpen() {
   if (!meshOpenTask) {
     meshOpenTask = (async () => {
       // The bundle is local, so the specifier stays a constant string.
@@ -116,7 +116,7 @@ export function meshOpen() {
 // frame is drawn on a canvas with the colour step and the mask, and the canvas
 // track becomes what peers receive. A shared screen has its own sender and is
 // never touched.
-export async function lookStart() {
+async function lookStart() {
   if (!lookOn() || !state.camTrack) return;
   if (state.lookPipe) return;
   const src = state.camTrack;
@@ -216,7 +216,7 @@ export async function lookStart() {
 
 // lookClock starts the frame clock of a pipeline. It stops with a parked tab,
 // which draws nothing.
-export function lookClock(p) {
+function lookClock(p) {
   const clock = new Worker(p.clockURL || drawClockURL(p.fps));
   clock.onmessage = () => {
     if (state.lookPipe === p) lookDraw(p);
@@ -227,7 +227,7 @@ export function lookClock(p) {
 // lookDraw paints one frame: the colour step, then the mask on the face patch.
 // The camera goes in unmirrored, which is what the peers get and what the
 // landmarks are measured on.
-export function lookDraw(p) {
+function lookDraw(p) {
   if (state.lookParked) return;
   if (p.video.readyState < 2 || !p.video.videoWidth) return;
   const filter = LOOKS[state.look] || 'none';
@@ -258,7 +258,7 @@ export function lookDraw(p) {
 // armPublish hands the drawn track to the senders on the first frame the canvas
 // really carries: a browser that captures a fresh canvas before the first paint
 // sends black, which reads as a dark box around the mask.
-export function armPublish(p) {
+function armPublish(p) {
   if (!p.armApply) return;
   p.armApply = false;
   lookPublish(p.track);
@@ -266,14 +266,14 @@ export function armPublish(p) {
 
 // A frame mark older than this many milliseconds is stale: its callback
 // stopped, so every frame is detected again.
-export const FRAME_MARK_FRESH_MS = 300;
+const FRAME_MARK_FRESH_MS = 300;
 
 // The identity of the newest decoded camera frame: the count of frames the
 // element presented, from requestVideoFrameCallback where the browser has it,
 // else the decoded frame count. Media time can repeat on a live stream, so the
 // count, not the time, marks a frame; undefined marks nothing, and no frame is
 // skipped then.
-export function frameMark(p) {
+function frameMark(p) {
   const v = p.video;
   if (v.requestVideoFrameCallback) {
     if (!p.meshRVFC) {
@@ -297,7 +297,7 @@ export function frameMark(p) {
 // lookMesh runs the landmarker on the small copy of the frame at the camera
 // rate. One detection at a time and no queue, so a slow machine drops frames
 // instead of piling them up.
-export function lookMesh(p) {
+function lookMesh(p) {
   if (!p.meshTried) {
     p.meshTried = true;
     meshOpen().then((fm) => {
@@ -348,7 +348,7 @@ export function lookMesh(p) {
 // meshSize keeps the small copy at the shape of the camera, longest side MESH_W,
 // so a portrait phone frame is not squashed and a landmark x stays a fraction
 // of the drawn frame.
-export function meshSize(p) {
+function meshSize(p) {
   const vw = p.video.videoWidth || 1280;
   const vh = p.video.videoHeight || 720;
   const k = MESH_W / Math.max(vw, vh);
@@ -363,21 +363,21 @@ export function meshSize(p) {
 // The landmark smoothing is the One Euro filter of Casiez, Roussel and Vogel
 // (CHI 2012), one state per point list: a slow move is smoothed hard and a fast
 // one is let through.
-export const ONEEURO_MIN_HZ = 1.0;
+const ONEEURO_MIN_HZ = 1.0;
 
-export const ONEEURO_BETA = 30.0;
+const ONEEURO_BETA = 30.0;
 
-export const ONEEURO_D_HZ = 1.0;
+const ONEEURO_D_HZ = 1.0;
 
 // oneEuroState holds the last filtered value and the last filtered rate of a
 // list of coordinates, and the time of the last frame.
-export function oneEuroState() {
+function oneEuroState() {
   return { x: new Float64Array(0), dx: new Float64Array(0), t: 0, on: false };
 }
 
 // oneEuroAlpha is the share of the way to the sample that one step takes at a
 // cutoff, for a frame that is dt seconds after the last one.
-export function oneEuroAlpha(hz, dt) {
+function oneEuroAlpha(hz, dt) {
   const tau = 1 / (2 * Math.PI * hz);
   return 1 / (1 + tau / dt);
 }
@@ -385,7 +385,7 @@ export function oneEuroAlpha(hz, dt) {
 // oneEuroRun filters one frame and returns the filtered list. A gap longer than
 // half a second, as a returning tab leaves, is clamped, so a face does not sweep
 // in from where it was.
-export function oneEuroRun(s, src, t) {
+function oneEuroRun(s, src, t) {
   const n = src.length;
   if (!s.on || s.x.length !== n) {
     s.x = Float64Array.from(src);
@@ -412,7 +412,7 @@ export function oneEuroRun(s, src, t) {
 // lookMeshAnchor turns the first face into the anchor the colour test makes,
 // plus every mesh point, and smooths both. A face that leaves the frame leaves
 // the last anchor in place, so the mask does not flick to a corner.
-export function lookMeshAnchor(p, lm) {
+function lookMeshAnchor(p, lm) {
   const pts = new Float32Array(lm.length * 2);
   let x0 = 1,
     y0 = 1,
@@ -473,7 +473,7 @@ export function lookMeshAnchor(p, lm) {
 
 // lookAnchor finds the face patch with the classic skin tone test on the small
 // sample, and moves the last place towards it, so a mask does not jump.
-export function lookAnchor(p) {
+function lookAnchor(p) {
   try {
     p.sctx.drawImage(p.video, 0, 0, 64, 48);
   } catch {
@@ -526,7 +526,7 @@ export function lookAnchor(p) {
 }
 
 // roundPath draws a rounded rectangle path.
-export function roundPath(ctx, x, y, w, h, r) {
+function roundPath(ctx, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
   ctx.moveTo(x + rr, y);
@@ -549,14 +549,14 @@ export function unit(x, y) {
 }
 
 // roll is the angle of the eye line, the tilt a head has when it leans.
-export function roll(g) {
+function roll(g) {
   return Math.atan2(g.eyeR[1][1] - g.eyeL[0][1], g.eyeR[1][0] - g.eyeL[0][0]);
 }
 
 // maskGeo reads an anchor into pixels. A mesh anchor carries every face point; a
 // skin anchor only a box, so the points are stood in the box and one drawing
 // serves both.
-export function maskGeo(a, W, H) {
+function maskGeo(a, W, H) {
   const cx = a.x * W;
   const cy = a.y * H;
   const bw = Math.max(a.w * W, W * 0.22);
@@ -624,7 +624,7 @@ export function maskGeo(a, W, H) {
 // scaled about the middle of an eye or the mouth and laid back on the face.
 // Every patch is read from the video element, so a frame is never read back,
 // and its own edge is feathered.
-export function lookWarp(p, a, filter) {
+function lookWarp(p, a, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
   const g = maskGeo(a, W, H);
@@ -645,7 +645,7 @@ export function lookWarp(p, a, filter) {
 // crown to below the chin, widened and left at its own height, so the eyes, the
 // nose and the mouth move out together. The patch is measured on the face, so a
 // head that turns or leans keeps it.
-export function lookWide(p, a, filter) {
+function lookWide(p, a, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
   const g = maskGeo(a, W, H);
@@ -667,7 +667,7 @@ export function lookWide(p, a, filter) {
 // own height, along the axes of the face: a lean does not cut it. A short fade
 // on each edge meets the untouched frame and the box stays solid inside, so the
 // hair and the forehead widen with the rest of the head.
-export function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
+function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
   const vw = p.video.videoWidth,
@@ -742,7 +742,7 @@ export function warpWide(p, cx, cy, rx, ry, kx, rollAngle, filter) {
 // the forehead above the brows is stretched over a box as a pad, and the eyes,
 // nose and mouth are drawn small in the middle of it. Both layers come from the
 // camera element, and the pad fades at its edge onto the cheeks.
-export function lookSmall(p, a, filter) {
+function lookSmall(p, a, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
   const g = maskGeo(a, W, H);
@@ -847,7 +847,7 @@ export function lookSmall(p, a, filter) {
 // each strip going back at another height, so the change is smooth. The band
 // keeps the full width of the frame and its map is the same at both edges, so
 // the picture beside the head moves with it and no seam can show.
-export function lookPotion(p, a) {
+function lookPotion(p, a) {
   const W = p.canvas.width,
     H = p.canvas.height;
   // The band of the head: above the hairline and below the chin.
@@ -897,13 +897,13 @@ export function lookPotion(p, a) {
 // bandPut maps a share of the head band to its place after a stretch of k. It
 // is the identity at both ends, so the band joins the picture without a step,
 // and it is steepest in the middle, so the face takes the change, not the edges.
-export function bandPut(s, k) {
+function bandPut(s, k) {
   return 0.5 + (s - 0.5) * (1 + (k - 1) * Math.sin(Math.PI * s) ** 2);
 }
 
 // bandSpan is the part of the frame that the head band takes: above the
 // hairline and below the chin, as wide as the frame.
-export function bandSpan(a, H) {
+function bandSpan(a, H) {
   const y0 = Math.max(0, Math.round((a.y - a.h * 1.2) * H));
   const y1 = Math.min(H, Math.round((a.y + a.h * 1.25) * H));
   return { y0, ih: y1 - y0 };
@@ -912,7 +912,7 @@ export function bandSpan(a, H) {
 // headBand stretches the band of the head about its middle by k, with the strip
 // trick of the potion seller: full width of the frame, the map the same at both
 // edges, rows moving only up and down, so no seam can show.
-export function headBand(p, a, k) {
+function headBand(p, a, k) {
   const W = p.canvas.width,
     H = p.canvas.height;
   const span = bandSpan(a, H);
@@ -950,7 +950,7 @@ export function headBand(p, a, k) {
 // gives back its size, so a swap can hold both features before either is
 // painted. The edge is a soft oval: a moved eye or mouth then sits on the skin
 // and not on it as a pasted block.
-export function featureCopy(p, slot, src) {
+function featureCopy(p, slot, src) {
   const W = p.canvas.width,
     H = p.canvas.height;
   const sx = Math.max(0, Math.round(src.x)),
@@ -986,7 +986,7 @@ export function featureCopy(p, slot, src) {
 }
 
 // featurePaste puts one held feature at another place, at another size.
-export function featurePaste(p, slot, size, dst) {
+function featurePaste(p, slot, size, dst) {
   if (!size) return;
   const c = p['feat' + slot];
   if (!c) return;
@@ -1000,7 +1000,7 @@ export function featurePaste(p, slot, size, dst) {
 // skin comes from below and to the side, away from the nose, and its edge is
 // feathered, so the old place reads as skin. `side` is -1 for the left eye, 1
 // for the right eye and 0 for a feature in the middle of the face.
-export function featureShift(p, slot, src, dst, side) {
+function featureShift(p, slot, src, dst, side) {
   const size = featureCopy(p, slot, src);
   if (!size) return;
   const under = featureCopy(p, slot + 'skin', {
@@ -1017,7 +1017,7 @@ export function featureShift(p, slot, src, dst, side) {
 // two patches of their own, so their size and their spread are separate; the
 // mouth is one patch; the swap holds both before it paints either, so the mouth
 // content cannot be lost under the eyes.
-export function lookCustom(p, a) {
+function lookCustom(p, a) {
   const cfg = state.cust;
   const W = p.canvas.width,
     H = p.canvas.height;
@@ -1105,7 +1105,7 @@ export function lookCustom(p, a) {
 // about its centre. The patch is prepared on a small reused canvas; a frame
 // pays three of them, and the colour step of the look is applied again so the
 // patch matches the picture around it.
-export function warpPatch(p, cx, cy, rx, ry, kx, ky, filter) {
+function warpPatch(p, cx, cy, rx, ry, kx, ky, filter) {
   const W = p.canvas.width,
     H = p.canvas.height;
   const dw = 2 * rx * kx,
@@ -1150,7 +1150,7 @@ export function warpPatch(p, cx, cy, rx, ry, kx, ky, filter) {
 
 // drawMask puts one mask on a face. Every mask reads the face geometry, so the
 // same points carry a mesh mask and the box the colour test gives.
-export function drawMask(ctx, W, H, which, a) {
+function drawMask(ctx, W, H, which, a) {
   const g = maskGeo(a, W, H);
   ctx.save();
   ctx.lineJoin = 'round';
@@ -1166,7 +1166,7 @@ export function drawMask(ctx, W, H, which, a) {
 }
 
 // eyeFrame is the middle, width and angle of one eye, from its two corners.
-export function eyeFrame(e) {
+function eyeFrame(e) {
   const [o, i] = e;
   return {
     x: (o[0] + i[0]) / 2,
@@ -1178,7 +1178,7 @@ export function eyeFrame(e) {
 
 // drawGlasses puts a lens on each eye, the bridge between the inner corners and
 // one arm to each temple, so the frame follows a face that leans.
-export function drawGlasses(ctx, g) {
+function drawGlasses(ctx, g) {
   ctx.fillStyle = 'rgba(20, 24, 32, 0.5)';
   ctx.strokeStyle = '#14181f';
   ctx.lineWidth = Math.max(2, g.fw * 0.022);
@@ -1216,7 +1216,7 @@ export function drawGlasses(ctx, g) {
 
 // drawShades puts a tilted teardrop lens over each eye, dark at the top and lit
 // along the upper edge, on the eye line across the whole frame.
-export function drawShades(ctx, g) {
+function drawShades(ctx, g) {
   const ang = roll(g);
   const sides = [
     { e: g.eyeL, brow: g.browL, out: g.templeL },
@@ -1273,7 +1273,7 @@ export function drawShades(ctx, g) {
 
 // drawMoustache follows the upper lip from one corner to the other and sits
 // between the nose base and the lip line.
-export function drawMoustache(ctx, g) {
+function drawMoustache(ctx, g) {
   const l = g.mouthL;
   const r = g.mouthR;
   const mx = (l[0] + r[0]) / 2;
@@ -1317,7 +1317,7 @@ export function drawMoustache(ctx, g) {
 
 // drawCat puts two ears on the hairline, one each side of the head, along the
 // face axes so a leaning head keeps them on.
-export function drawCat(ctx, g) {
+function drawCat(ctx, g) {
   ctx.strokeStyle = '#20242c';
   ctx.lineWidth = Math.max(1.5, g.fw * 0.012);
   for (const side of [-1, 1]) {
@@ -1348,7 +1348,7 @@ export function drawCat(ctx, g) {
 
 // drawDog puts two floppy ears on the sides of the head, a nose on the nose tip
 // and a tongue under the lip that hangs out while the mouth is open.
-export function drawDog(ctx, g) {
+function drawDog(ctx, g) {
   ctx.strokeStyle = '#241a15';
   ctx.lineWidth = Math.max(1.5, g.fw * 0.012);
   for (const side of [-1, 1]) {
@@ -1419,7 +1419,7 @@ export function drawDog(ctx, g) {
 
 // drawHalo puts a glowing ring over the head, on the forehead line, turned with
 // the eye line and sized from the face.
-export function drawHalo(ctx, g) {
+function drawHalo(ctx, g) {
   const c = g.spot(g.top, 0, 0.26);
   const rx = g.fw * 0.42;
   const ry = g.fw * 0.12;
@@ -1447,26 +1447,26 @@ export function drawHalo(ctx, g) {
 // The miku mask wears a real drawing: a wig with the face cut out, a CC0 file
 // from Wikimedia Commons (static/miku/NOTICE.txt keeps the source and the
 // licence). The cut-out goes on the face and the camera shows through it.
-export const WIG_URL = '/miku/wig.svg';
+const WIG_URL = '/miku/wig.svg';
 
-export const WIG_FILE_ASPECT = 334.55 / 366.31;
+const WIG_FILE_ASPECT = 334.55 / 366.31;
 
 // The face cut-out inside the drawing, as shares of its width and height, read
 // off the file: the fringe edge at the top, the chin at the bottom.
-export const WIG_HOLE = { x0: 0.2951, y0: 0.3632, x1: 0.7122, y1: 0.7409 };
+const WIG_HOLE = { x0: 0.2951, y0: 0.3632, x1: 0.7122, y1: 0.7409 };
 
 // The drawing is rastered once at this width and kept as a bitmap, so a frame
 // pays for one drawImage and not for the vector work again.
-export const WIG_PX = 640;
+const WIG_PX = 640;
 /** @type {HTMLCanvasElement|null} */
 
-export let wigArt = null;
+let wigArt = null;
 
-export let wigTried = false;
+let wigTried = false;
 
 // wigLoad reads the drawing into a canvas. It is asked for on the first masked
 // frame and never twice; a missing file leaves the vector fringe in place.
-export function wigLoad() {
+function wigLoad() {
   if (wigTried) return;
   wigTried = true;
   const img = new Image();
@@ -1490,7 +1490,7 @@ export function wigLoad() {
 // its way. The cut-out is the anchor: it is the width of the face and it runs
 // from a little under the hairline to the chin, so the crown sits on the head
 // and a tail falls past each ear.
-export function drawMiku(ctx, g) {
+function drawMiku(ctx, g) {
   wigLoad();
   if (!wigArt) return drawMikuFringe(ctx, g);
   const H = WIG_HOLE;
@@ -1525,7 +1525,7 @@ export function drawMiku(ctx, g) {
 // drawMikuFringe is the mask without the drawing: a teal fringe along the
 // hairline and one long tail behind each ear, in the same colours. It is what a
 // missing wig file or a blocked image falls back to.
-export function drawMikuFringe(ctx, g) {
+function drawMikuFringe(ctx, g) {
   const hair = '#39c5bb';
   const h = g.hair;
   if (h.length > 2) {
@@ -1600,7 +1600,7 @@ export async function lookPublish(track) {
 // freezeShot takes one picture of what the peers see now and returns a track
 // that carries only that frame: the drawn canvas while a look or a mask draws,
 // else one frame of the camera itself, which needs a throwaway element.
-export async function freezeShot() {
+async function freezeShot() {
   let src;
   const p = state.lookPipe;
   if (lookOn() && p && p.canvas && p.canvas.width > 1) {
@@ -1750,7 +1750,7 @@ export function lookStop(restore = true) {
 
 // armLookTearDown re-arms the tear-down timer that ends the grace; it does
 // nothing while an effect is on.
-export function armLookTearDown() {
+function armLookTearDown() {
   if (state.lookTimer) {
     clearTimeout(state.lookTimer);
     state.lookTimer = null;
@@ -1836,7 +1836,7 @@ export function lookInit() {
 // customInit wires the knobs of the custom face effect. Each slider writes its
 // own value and the next painted frame carries it, so the face changes while
 // the handle moves; no restart and no new track.
-export function customInit() {
+function customInit() {
   const raw = load('cust');
   if (raw) {
     try {
@@ -1887,7 +1887,7 @@ export function customInit() {
 
 // CUSTOM_ROWS is the knob table the paint helpers walk: slider id, state key,
 // readout id.
-export const CUSTOM_ROWS = [
+const CUSTOM_ROWS = [
   ['cx-head', 'head', 'cx-head-v'],
   ['cx-eyes', 'eyes', 'cx-eyes-v'],
   ['cx-spread', 'spread', 'cx-spread-v'],
@@ -1896,7 +1896,7 @@ export const CUSTOM_ROWS = [
 ];
 
 // paintCustomValue puts one knob and its number back from the state.
-export function paintCustomValue(key) {
+function paintCustomValue(key) {
   for (const [id, name, out] of CUSTOM_ROWS) {
     if (name !== key) continue;
     const el = document.getElementById(id) as HTMLInputElement | null;
@@ -1907,14 +1907,14 @@ export function paintCustomValue(key) {
 }
 
 // paintCustomValues puts every knob and the swap box back from the state.
-export function paintCustomValues() {
+function paintCustomValues() {
   for (const [, key] of CUSTOM_ROWS) paintCustomValue(key);
   const swap = document.getElementById('cx-swap') as HTMLInputElement | null;
   if (swap) swap.checked = !!state.cust.swap;
 }
 
 // paintCustomPanel shows the knobs only while the custom mask is on.
-export function paintCustomPanel() {
+function paintCustomPanel() {
   const panel = document.getElementById('cx-panel');
   if (panel) panel.hidden = !state.masks.includes('custom');
 }

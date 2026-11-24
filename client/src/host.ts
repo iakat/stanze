@@ -25,7 +25,7 @@ import {
 // ---------------------------------------------------------------- host control
 // hostMenu returns the menu element of one member. A tile holds its own menu,
 // a rail row shares one popup on the page, because the scrolling list clips it.
-export let rowMenuEl = null;
+let rowMenuEl = null;
 
 export function hostMenu(host) {
   if (!host) return null;
@@ -124,7 +124,7 @@ export function wireAdmit(host) {
 
 // waitingText tells a waiting guest that the room already sees and hears
 // whatever device is on, and how to switch it off.
-export function waitingText() {
+function waitingText() {
   const both = state.mic && state.cam;
   const lead = 'You are in the waiting room. ';
   const mid = both

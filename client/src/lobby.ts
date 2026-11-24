@@ -8,10 +8,10 @@ import { load, store } from './prefs.js';
 // A desktop window: dragged by its title bar, kept inside the viewport and
 // remembered. The arrow keys move it too, for a guest without a pointer. The
 // call stage is maximised and has no drag.
-export const LOBBY_STEP = 16;
+const LOBBY_STEP = 16;
 
 // lobbyPlace puts the window at x, y inside the viewport and returns the place.
-export function lobbyPlace(win, x, y) {
+function lobbyPlace(win, x, y) {
   const w = win.offsetWidth;
   const h = win.offsetHeight;
   const maxX = Math.max(0, document.documentElement.clientWidth - w);

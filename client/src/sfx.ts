@@ -8,26 +8,26 @@ import { state } from './state.js';
 // Four one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
 // lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3 copy
 // last for a browser that can not decode either.
-export const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
+const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
 
-export const SFX_RATE = 0.35;
+const SFX_RATE = 0.35;
 
 // The pad sits under the room for as long as the socket is down, so it plays
 // quieter than a one shot cue.
-export const LOST_RATE = 0.2;
+const LOST_RATE = 0.2;
 
 // The lost cue loops the middle 8.0 s of the file.
-export const LOST_LOOP_START = 0.16;
+const LOST_LOOP_START = 0.16;
 
-export const LOST_LOOP_END = 8.16;
+const LOST_LOOP_END = 8.16;
 
 export const sfxCache = new Map();
 
-export let sfxExt = '';
+let sfxExt = '';
 
 // pickSfxExt returns the first container the browser plays: Ogg Opus, then
 // WebM Opus, then mp3.
-export function pickSfxExt() {
+function pickSfxExt() {
   if (sfxExt) return sfxExt;
   const probe = document.createElement('audio');
   const tries = [

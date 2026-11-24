@@ -7,7 +7,7 @@ import { state } from './state.js';
 
 // ---------------------------------------------------------------- call clock
 // clockText renders a duration as h:mm:ss.
-export function clockText(ms) {
+function clockText(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);

@@ -13,27 +13,27 @@ export const MIC_AUDIO = { echoCancellation: true, noiseSuppression: false, auto
 
 // qualityNow is the chosen step, with its encoder ceiling, or the default for a
 // value this build does not know (a stored string from an older page).
-export function qualityNow() {
+function qualityNow() {
   return QUALITY[state.quality] || QUALITY['1280x720@30'];
 }
 
 // perfNow is the chosen performance step, full quality for an unknown value.
-export function perfNow() {
+function perfNow() {
   return PERF[state.perf] || PERF[0];
 }
 
 // evenPx scales a side and keeps it even, which every encoder accepts.
-export function evenPx(n, scale) {
+function evenPx(n, scale) {
   return scale === 1 ? n : Math.max(2, Math.round((n * scale) / 2) * 2);
 }
 
 // perfFps is the frame rate the camera sends at the chosen steps.
-export function perfFps(q, p) {
+function perfFps(q, p) {
   return p.fps ? Math.min(q.fps, p.fps) : q.fps;
 }
 
 // videoFor builds one video request from a quality step and a performance step.
-export function videoFor(q, p) {
+function videoFor(q, p) {
   const w = evenPx(q.w, p.scale);
   const h = evenPx(q.h, p.scale);
   const fps = perfFps(q, p);
@@ -58,7 +58,7 @@ export function shareVideo() {
 }
 
 // perfText says what the chosen step sends, in words and in numbers.
-export function perfText() {
+function perfText() {
   const q = qualityNow();
   const p = perfNow();
   const v = videoFor(q, p);

@@ -189,7 +189,7 @@ win().e2eApp = {
 };
 
 // ---------------------------------------------------------------- boot
-export function init() {
+function init() {
   // A volume kept under a guest name is a list of the people who used this
   // machine, so the purge goes before anything else reads it.
   purgeNamedVolume();

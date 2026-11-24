@@ -24,21 +24,21 @@ import { paintState, refreshCodeCard } from './gate.js';
 // static ECDH, never a KEM. It lives in IndexedDB, non-extractable where the
 // browser can hold such a key, and never in localStorage, a cookie or the
 // server. A browser that can not keep a key gets a fresh one per page and says so.
-export const ID_DB = 'stanze-identity';
+const ID_DB = 'stanze-identity';
 
-export const ID_CHALLENGE = 'stanze identity';
+const ID_CHALLENGE = 'stanze identity';
 
-export const ID_NOTE = {
+const ID_NOTE = {
   kept: 'the identity is kept in this browser',
   fresh: 'the stored identity could not be reopened: a new key for this page',
   session: 'this browser keeps no identity: a new key each load, the device stays unverified',
 };
 
-export let idDb = null;
+let idDb = null;
 
 // idStore opens the one local database: the identity, the pins this guest made
 // and the fingerprints a pin replaced. No session material is written.
-export function idStore() {
+function idStore() {
   if (idDb) return idDb;
   idDb = new Promise((resolve, reject) => {
     if (!window.indexedDB) {
@@ -61,7 +61,7 @@ export function idStore() {
   return idDb;
 }
 
-export function idbRequest(store, mode, fn) {
+function idbRequest(store, mode, fn) {
   return idStore().then(
     (db) =>
       new Promise((resolve, reject) => {
@@ -72,19 +72,19 @@ export function idbRequest(store, mode, fn) {
   );
 }
 
-export function idbGet(store, key) {
+function idbGet(store, key) {
   return idbRequest(store, 'readonly', (s) => s.get(key));
 }
 
-export function idbAll(store) {
+function idbAll(store) {
   return idbRequest(store, 'readonly', (s) => s.getAll());
 }
 
-export function idbPut(store, key, value) {
+function idbPut(store, key, value) {
   return idbRequest(store, 'readwrite', (s) => s.put(value, key));
 }
 
-export function idbDelete(store, key) {
+function idbDelete(store, key) {
   return idbRequest(store, 'readwrite', (s) => s.delete(key));
 }
 
@@ -96,7 +96,7 @@ export function fingerprint(pub) {
 // provesKey checks that a stored record still signs for its own public key: a
 // browser that keeps a CryptoKey it can not use fails here, not in the first
 // handshake.
-export async function provesKey(pub, sign) {
+async function provesKey(pub, sign) {
   if (!pub || typeof sign !== 'function') return false;
   const msg = b64e(sealUtf8.encode(ID_CHALLENGE));
   let sig = '';
@@ -111,7 +111,7 @@ export async function provesKey(pub, sign) {
 
 // subtleIdentity is the preferred shape: WebCrypto holds a non-extractable
 // Ed25519 key and no script can export it, not even this origin.
-export function subtleIdentity(key, pub) {
+function subtleIdentity(key, pub) {
   return {
     kind: 'webcrypto',
     pub,
@@ -123,7 +123,7 @@ export function subtleIdentity(key, pub) {
 
 // seedIdentity is the fallback: the wasm module signs with a 32 byte seed, and
 // the database keeps it sealed under a non-extractable AES-GCM key.
-export function seedIdentity(seed, pub, kind) {
+function seedIdentity(seed, pub, kind) {
   return {
     kind,
     pub,
@@ -145,7 +145,7 @@ export function seedIdentity(seed, pub, kind) {
   };
 }
 
-export function createIdentity() {
+function createIdentity() {
   return Promise.resolve()
     .then(() => crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']))
     .then(async (pair) =>
@@ -164,7 +164,7 @@ export function createIdentity() {
     });
 }
 
-export async function reopenIdentity(rec) {
+async function reopenIdentity(rec) {
   if (!rec || !rec.pub) return null;
   let key = null;
   try {
@@ -182,7 +182,7 @@ export async function reopenIdentity(rec) {
   return key && (await provesKey(rec.pub, key.sign)) ? key : null;
 }
 
-export function loadPins() {
+function loadPins() {
   return Promise.all([idbAll('pins'), idbAll('revoked')])
     .then(([pins, revoked]) => {
       for (const rec of pins || []) if (rec && rec.label && rec.fp) state.pins.set(rec.label, rec);
@@ -193,7 +193,7 @@ export function loadPins() {
     });
 }
 
-export let identityLoad = null;
+let identityLoad = null;
 
 // ensureIdentity loads or creates the long-term key and the pins, once per page.
 export function ensureIdentity() {

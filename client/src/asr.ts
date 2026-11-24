@@ -14,31 +14,31 @@ import { sealedSend, toSealed } from './gate.js';
 // Nothing loads until the guest asks; the model is downloaded once, kept in a
 // browser cache, and the text goes out as sealed chat under the name of the
 // guest who transcribes. A failed download leaves the call as it was.
-export const ASR_MODELS = '/vosk/models';
+const ASR_MODELS = '/vosk/models';
 
-export const ASR_LIB = '/vosk/vosk.js';
+const ASR_LIB = '/vosk/vosk.js';
 
-export const ASR_CACHE = 'stanze-vosk';
+const ASR_CACHE = 'stanze-vosk';
 
-export const ASR_LINE_MAX = 400;
+const ASR_LINE_MAX = 400;
 
 // The multilingual engine is the sherpa-onnx OfflineRecognizer wasm build with
 // one Omnilingual model for every language. /omni/models lists the four files it
 // needs, with sizes and hashes, and answers only when the operator set the
 // directory; without it the engine is not offered.
-export const OMNI_MODELS = '/omni/models';
+const OMNI_MODELS = '/omni/models';
 
-export const OMNI_DIR = '/omni/';
+const OMNI_DIR = '/omni/';
 
-export const OMNI_CACHE = 'stanze-omni';
+const OMNI_CACHE = 'stanze-omni';
 
-export const OMNI_MODEL = 'model.int8.onnx';
+const OMNI_MODEL = 'model.int8.onnx';
 
-export const OMNI_TOKENS = 'tokens.txt';
+const OMNI_TOKENS = 'tokens.txt';
 
-export const OMNI_API = 'sherpa-onnx-asr.js';
+const OMNI_API = 'sherpa-onnx-asr.js';
 
-export const OMNI_GLUE = 'sherpa-onnx-wasm-main-vad-asr.js';
+const OMNI_GLUE = 'sherpa-onnx-wasm-main-vad-asr.js';
 
 export const asr = {
   probed: false,
@@ -55,7 +55,7 @@ export const asr = {
   lib: null,
 };
 
-export const omni = {
+const omni = {
   probed: false,
   files: [], // [{ name, size, modified, sha256 }] as the server lists them
   model: null, // the one model entry, null when the engine is not offered
@@ -83,9 +83,9 @@ export const asrStats = {
   decoded: 0,
 };
 
-export const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB`;
+const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB`;
 
-export function asrNote(text) {
+function asrNote(text) {
   const el = document.getElementById('asr-note');
   if (!el) return;
   el.textContent = text;
@@ -94,7 +94,7 @@ export function asrNote(text) {
 
 // asrPaintOthers names the other guests who transcribe, or the cost of the chosen
 // engine.
-export function asrPaintOthers() {
+function asrPaintOthers() {
   if (asr.busy || asr.on || omni.busy || omni.on) return;
   const names = [...state.peers.values()]
     .filter((p) => p.asr)
@@ -169,7 +169,7 @@ export async function omniProbe() {
 
 // asrOffers reveals the transcribe entry and settles the engine on one the server
 // serves; only a guest's own pick is stored.
-export function asrOffers() {
+function asrOffers() {
   if (!asr.models.length && !omni.model) return;
   asrSetEngine(asrEngine(), false);
   const entry = document.getElementById('menu-asr-btn');
@@ -178,7 +178,7 @@ export function asrOffers() {
 
 // asrEngine is the engine the guest picked, else the one kept in prefs, and never
 // one the server does not offer. Vosk wins when both are on offer.
-export function asrEngine() {
+function asrEngine() {
   const kept = asr.engine || load('asr.engine');
   if (kept === 'omni' && omni.model) return 'omni';
   if (kept === 'vosk' && asr.models.length) return 'vosk';
@@ -188,7 +188,7 @@ export function asrEngine() {
 }
 
 // asrSetEngine keeps the choice and paints the picker and the menu entry.
-export function asrSetEngine(name, keep?) {
+function asrSetEngine(name, keep?) {
   const engine =
     name === 'omni' && omni.model
       ? 'omni'
@@ -207,7 +207,7 @@ export function asrSetEngine(name, keep?) {
 
 // asrChoices is everything the picker offers: each vosk language, then the
 // multilingual model, each with the size of its download.
-export function asrChoices() {
+function asrChoices() {
   const list = asr.models.map((m) => ({
     value: `vosk:${m.lang}`,
     text: m.size ? `${m.lang} (${mb(m.size)})` : m.lang,
@@ -222,14 +222,14 @@ export function asrChoices() {
 }
 
 // asrChoice is the picker value of the engine and language in force.
-export function asrChoice() {
+function asrChoice() {
   if (asrEngine() === 'omni') return 'omni';
   const model = asrModel();
   return model ? `vosk:${model.lang}` : '';
 }
 
 // asrChoose takes one picker value: a vosk language or the multilingual model.
-export function asrChoose(value) {
+function asrChoose(value) {
   if (value === 'omni') {
     asrSetEngine('omni');
     return;
@@ -242,7 +242,7 @@ export function asrChoose(value) {
 
 // asrPaintLangRow fills the picker from asrChoices and hides it, with its row,
 // while there is no second thing to pick.
-export function asrPaintLangRow() {
+function asrPaintLangRow() {
   const select = document.getElementById('asr-lang') as HTMLSelectElement | null;
   if (!select) return;
   const choices = asrChoices();
@@ -263,7 +263,7 @@ export function asrPaintLangRow() {
 }
 
 // asrPaintEntry puts the engine and its size on the menu entry.
-export function asrPaintEntry() {
+function asrPaintEntry() {
   const btn = document.getElementById('menu-asr-btn');
   if (!btn) return;
   if (asrEngine() === 'omni') {
@@ -276,7 +276,7 @@ export function asrPaintEntry() {
 
 // asrDefaultLang is the kept choice, else the browser language, else the first
 // model the server lists.
-export function asrDefaultLang() {
+function asrDefaultLang() {
   const have = asr.models.map((m) => m.lang);
   const kept = load('asr.lang');
   if (kept && have.includes(kept)) return kept;
@@ -289,12 +289,12 @@ export function asrDefaultLang() {
 
 // asrModel is the entry the guest picked, or the first one while a model is on
 // offer.
-export function asrModel() {
+function asrModel() {
   return asr.models.find((m) => m.lang === asr.lang) || asr.models[0] || null;
 }
 
 // asrPick keeps one language and paints the picker and the menu entry.
-export function asrPick(lang) {
+function asrPick(lang) {
   const model = asr.models.find((m) => m.lang === lang) || asr.models[0];
   if (!model) return;
   asr.lang = model.lang;
@@ -306,14 +306,14 @@ export function asrPick(lang) {
 
 // asrCacheKey is a request that is only ever used as a key: file name and stamp,
 // so a new model never matches the stored entry.
-export function asrCacheKey() {
+function asrCacheKey() {
   const model = asrModel();
   const file = model ? model.file : '';
   const stamp = model ? `${model.size}-${model.modified}` : '';
   return new Request(`${location.origin}/vosk/${file}?m=${encodeURIComponent(stamp)}`);
 }
 
-export async function asrCached() {
+async function asrCached() {
   try {
     if (!window.caches) return null;
     const cache = await caches.open(ASR_CACHE);
@@ -326,7 +326,7 @@ export async function asrCached() {
 
 // asrFetchModel downloads the model with a progress line, replaces the cache
 // entry and returns the blob.
-export async function asrFetchModel(signal) {
+async function asrFetchModel(signal) {
   const model = asrModel();
   if (!model) throw new Error('no model is on offer');
   const res = await fetch(`/vosk/${model.file}`, { signal, cache: 'no-store' });
@@ -363,7 +363,7 @@ export async function asrFetchModel(signal) {
   return blob;
 }
 
-export function asrLoadLib() {
+function asrLoadLib() {
   if (asr.lib) return asr.lib;
   asr.lib = new Promise((resolve, reject) => {
     const have = (window as any).Vosk;
@@ -384,7 +384,7 @@ export function asrLoadLib() {
 }
 
 // asrSay sends one sealed transcription message to everyone inside.
-export function asrSay(obj) {
+function asrSay(obj) {
   toSealed({ k: 'asr', ...obj });
 }
 
@@ -397,7 +397,7 @@ export function asrAnnounce(peer) {
 
 // asrTap hooks one incoming voice to a recognizer of its own, at the source
 // before the gain, so a guest turned down is still transcribed.
-export function asrTap(peer) {
+function asrTap(peer) {
   const ctx = state.playCtx;
   if (!asr.on || !asr.model || !ctx || !peer.audioSrc) return;
   const have = asr.recs.get(peer.id);
@@ -435,7 +435,7 @@ export function asrTap(peer) {
   asr.recs.set(peer.id, { rec, proc, src: peer.audioSrc, sink });
 }
 
-export function asrUntap(id) {
+function asrUntap(id) {
   const h = asr.recs.get(id);
   if (!h) return;
   asr.recs.delete(id);
@@ -467,7 +467,7 @@ export function asrUntap(id) {
 
 // asrSync follows the room: a recognizer for each guest inside, none for a guest
 // who waits or left.
-export function asrSync() {
+function asrSync() {
   if (!asr.on) return;
   for (const id of [...asr.recs.keys()]) {
     const peer = state.peers.get(id);
@@ -505,7 +505,7 @@ export function asrStop() {
   asrPaintOthers();
 }
 
-export async function asrStart() {
+async function asrStart() {
   asr.busy = true;
   asr.abort = new AbortController();
   const signal = asr.abort.signal;
@@ -562,7 +562,7 @@ export async function asrStart() {
 
 // paintAsr ticks the menu row while the chosen engine runs or its model is on the
 // way; the row stays live, so a running download can be cancelled there.
-export function paintAsr() {
+function paintAsr() {
   const box = document.getElementById('asr-on') as HTMLInputElement | null;
   if (!box) return;
   const engine = asrEngine();
@@ -624,7 +624,7 @@ export function asrOnMessage(peer, obj) {
 // browser cache in 32 MB parts, checked against the hash the server lists, and
 // mounted into the wasm filesystem. A stop terminates the worker, which drops the
 // model, the threads and any download, and leaves the call untouched.
-export async function omniStart() {
+async function omniStart() {
   if (omni.busy || omni.on || !omni.model) return;
   if (!window.crossOriginIsolated) {
     asrNote(
@@ -673,7 +673,7 @@ export async function omniStart() {
 
 // omniSpawn starts the engine worker from a blob built here, so the client stays
 // one file; the wasm threads reuse the same url, so the blob lives as long.
-export function omniSpawn() {
+function omniSpawn() {
   const cfg = {
     base: location.origin + OMNI_DIR,
     api: location.origin + OMNI_DIR + OMNI_API,
@@ -697,7 +697,7 @@ export function omniSpawn() {
 
 // omniOnWorker is every word the engine says: status, progress, ready, decoded
 // phrases and faults.
-export function omniOnWorker(msg) {
+function omniOnWorker(msg) {
   if (!omni.busy && !omni.on) return;
   switch (msg.ev) {
     case 'status':
@@ -742,7 +742,7 @@ export function omniOnWorker(msg) {
   }
 }
 
-export function omniProgress(msg) {
+function omniProgress(msg) {
   if (!omni.busy) return;
   const total = Number(msg.total) || omni.size;
   const got = Number(msg.got) || 0;
@@ -757,7 +757,7 @@ export function omniProgress(msg) {
 }
 
 // omniFail stops the engine only; the note says so and the call keeps working.
-export function omniFail(text) {
+function omniFail(text) {
   const was = omni.on;
   omniStop();
   asrNote(
@@ -800,7 +800,7 @@ export function omniStop() {
 
 // omniTap hooks one incoming voice to the engine worker at the source, before the
 // gain, like the vosk tap.
-export function omniTap(peer) {
+function omniTap(peer) {
   const ctx = state.playCtx;
   if (!omni.on || !omni.worker || !ctx || !peer.audioSrc) return;
   const have = omni.recs.get(peer.id);
@@ -838,7 +838,7 @@ export function omniTap(peer) {
   omni.recs.set(id, { proc, src: peer.audioSrc, sink });
 }
 
-export function omniUntap(id) {
+function omniUntap(id) {
   const h = omni.recs.get(id);
   if (!h) return;
   omni.recs.delete(id);
@@ -858,7 +858,7 @@ export function omniUntap(id) {
 
 // omniSync follows the room: a tap for each guest inside, none for a guest who
 // waits or left.
-export function omniSync() {
+function omniSync() {
   if (!omni.on) return;
   for (const id of [...omni.recs.keys()]) {
     const peer = state.peers.get(id);
@@ -871,7 +871,7 @@ export function omniSync() {
 
 // omniDown brings one block to mono 16 kHz with a box filter; the engine needs
 // nothing finer.
-export function omniDown(input, rate) {
+function omniDown(input, rate) {
   if (rate === 16000) return new Float32Array(input);
   const ratio = rate / 16000;
   const n = Math.max(0, Math.floor(input.length / ratio));
@@ -888,7 +888,7 @@ export function omniDown(input, rate) {
 
 // omniLine puts one decoded phrase on the chat and sends it, in the shape the
 // vosk engine uses.
-export function omniLine(id, text) {
+function omniLine(id, text) {
   if (!omni.on) return;
   const line = text.slice(0, ASR_LINE_MAX);
   if (!line) return;
@@ -900,7 +900,7 @@ export function omniLine(id, text) {
 
 // omniWorkerSource turns the function below into the worker script, with no extra
 // file and no build step.
-export function omniWorkerSource(cfg) {
+function omniWorkerSource(cfg) {
   return `(${omniWorker.toString()})(${JSON.stringify(cfg)});`;
 }
 
@@ -909,7 +909,7 @@ export function omniWorkerSource(cfg) {
 // served, so the phrase gate is a level gate: four quiet frames end a phrase, the
 // quiet tail is cut, and three frames before the first loud one keep the first
 // word.
-export function omniWorker(cfg) {
+function omniWorker(cfg) {
   const G = self as any;
   G.Module = {
     // The wasm and its threads live under /omni/. The base is absolute, as a blob

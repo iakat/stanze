@@ -8,7 +8,7 @@ import { state } from './state.js';
 import { newRoomID } from './util.js';
 import { auditWire } from './audit.js';
 
-export const MENUS = [
+const MENUS = [
   ['menu-settings-btn', 'menu-settings'],
   ['menu-effects-btn', 'menu-effects'],
   ['menu-asr-btn', 'menu-asr'],
@@ -19,7 +19,7 @@ export const MENUS = [
 // the left, which is right on the left of the bar and wrong on the right: the
 // last slot would push its panel past the edge. The panel is slid back by the
 // pixels it hangs out, and never past the left edge.
-export function fitMenu(list) {
+function fitMenu(list) {
   if (!(list instanceof HTMLElement)) return;
   const room = document.documentElement.clientWidth;
   list.style.left = '';
@@ -67,7 +67,7 @@ export function menuClose() {
 }
 
 // closeSubmenus puts every nested list of one panel back to closed.
-export function closeSubmenus(panel) {
+function closeSubmenus(panel) {
   if (!panel) return;
   for (const sub of Array.from(panel.querySelectorAll('.menu-sub-list'))) {
     if (sub instanceof HTMLElement) sub.hidden = true;

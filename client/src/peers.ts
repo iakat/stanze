@@ -26,7 +26,7 @@ export function iceServers() {
   return all.filter((server) => !/^turns?:/i.test(String(server.urls)));
 }
 
-export function rtcConfig(): RTCConfiguration {
+function rtcConfig(): RTCConfiguration {
   return {
     iceServers: iceServers(),
     iceTransportPolicy: (state.path === 'relay' ? 'relay' : 'all') as RTCIceTransportPolicy,
@@ -222,7 +222,7 @@ export function connectPeer(id, initiator) {
   return peer;
 }
 
-export function setPeerState(peer, text) {
+function setPeerState(peer, text) {
   peer.state = text;
   // The badge names the key state, so the link state lives in the data
   // attribute only. The status line carries no guest count: the chip at its far
@@ -235,7 +235,7 @@ export function setPeerState(peer, text) {
   updateCount();
 }
 
-export async function flushPending(peer) {
+async function flushPending(peer) {
   const queued = peer.pending.splice(0);
   for (const cand of queued) {
     try {
@@ -254,7 +254,7 @@ export function onDescription(peer, type, sdp) {
   return peer.desc;
 }
 
-export async function applyDescription(peer, type, sdp) {
+async function applyDescription(peer, type, sdp) {
   const pc = peer.pc;
   if (!pc || pc.signalingState === 'closed') return;
   const readyForOffer = !peer.makingOffer && (pc.signalingState === 'stable' || peer.settingAnswer);

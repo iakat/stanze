@@ -12,7 +12,7 @@ import { handPlace } from './audio.js';
 // under the key fingerprint of a peer that proved its key, never under a name,
 // so a shared machine keeps no list of who was called. A peer without a proven
 // key keeps its setting in memory for this call only.
-export const volCall = new Map(); // peer id -> percent, this call only
+const volCall = new Map(); // peer id -> percent, this call only
 
 // purgeNamedVolume drops the name-keyed volume entries that older builds wrote,
 // so nothing on the disk is indexed by guest name.
@@ -32,9 +32,9 @@ export function purgeNamedVolume() {
 // so the gain is a power of the position: 100 is unity, and every 50 points of
 // travel is about 10 dB, which the ear takes for half or double the loudness.
 // 0 is silence, 200 is +10 dB. The stored value is the position.
-export const VOL_MAX = 200;
+const VOL_MAX = 200;
 
-export const VOL_EXP = 5 / 3; // 2^(5/3) is 3.17, +10 dB
+const VOL_EXP = 5 / 3; // 2^(5/3) is 3.17, +10 dB
 
 // volGain turns a slider position (0 to 200) into the gain of the node.
 export function volGain(pos) {
@@ -54,7 +54,7 @@ export function storedVolume(peer) {
 
 // saveVolume keeps the percent of one peer: a proven guest by fingerprint on
 // the disk, a guest without a key in memory for this call only.
-export function saveVolume(peer) {
+function saveVolume(peer) {
   if (!peer) return;
   volCall.set(peer.id, peer.vol);
   if (peer.fp) store(`vol.fp.${peer.fp}`, peer.vol);
@@ -62,7 +62,7 @@ export function saveVolume(peer) {
 
 // volumePairs is every slider of one peer, on its tile and on its row. Both
 // write the one peer.vol, so the two can never disagree.
-export function volumePairs(peer) {
+function volumePairs(peer) {
   const out = [];
   for (const host of [peer.tile, rowOf.get(peer.tile)]) {
     const range = host ? host.querySelector('.vol-range') : null;

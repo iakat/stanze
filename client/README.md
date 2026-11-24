@@ -23,7 +23,7 @@ module in `src` has no row yet.
 | [src/state.ts](src/state.ts) | 181 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 76 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
-| [src/util.ts](src/util.ts) | 59 | Small helpers that touch nothing but their arguments and storage. |
+| [src/util.ts](src/util.ts) | 70 | Small helpers that touch nothing but their arguments and storage. |
 | [src/dom.ts](src/dom.ts) | 93 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
 | [src/globals.d.ts](src/globals.d.ts) | 20 | Optional globals the loader sets at run time: the wasm glue, the transcriber, the test hook. |
 
@@ -45,7 +45,7 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/media.ts](src/media.ts) | 164 | Camera and screen requests, the performance step, the sender bitrate and frame ceilings. |
-| [src/audio.ts](src/audio.ts) | 518 | The talking light, the remote audio graph and the noise suppression worklet. |
+| [src/audio.ts](src/audio.ts) | 485 | The talking light, the remote audio graph and the noise suppression worklet. |
 | [src/screen.ts](src/screen.ts) | 99 | Screen share: points the screen sender at the display track, never the camera sender. |
 | [src/volume.ts](src/volume.ts) | 148 | Per peer volume, remembered by identity when one is pinned. |
 | [src/sfx.ts](src/sfx.ts) | 203 | The page's own sound effects, decoded once and cached. |
@@ -72,8 +72,8 @@ module in `src` has no row yet.
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
 | [src/stats.ts](src/stats.ts) | 956 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1253 | Local transcription, one language and many. |
-| [src/look.ts](src/look.ts) | 1947 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 875 | The device pickers of the join card and the toolbar. |
+| [src/look.ts](src/look.ts) | 1942 | The drawn camera: the face mesh, the masks and the custom effect. |
+| [src/devices.ts](src/devices.ts) | 855 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 899 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory

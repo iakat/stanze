@@ -15,15 +15,15 @@ import { sealedSend, toSealed } from './gate.js';
 // Every audio source has an RMS tap, and a green light marks the tile of the
 // person who speaks. The tap sits before the peer gain, so a guest turned down
 // to zero still lights up; a short hold keeps the light steady between syllables.
-export const SPEAK_MS = 100;
+const SPEAK_MS = 100;
 
-export const SPEAK_ON = 0.03;
+const SPEAK_ON = 0.03;
 
-export const SPEAK_HOLD_MS = 400;
+const SPEAK_HOLD_MS = 400;
 
-export const speakBufs = new WeakMap();
+const speakBufs = new WeakMap();
 
-export function analyserLevel(a) {
+function analyserLevel(a) {
   if (!a) return 0;
   let buf = speakBufs.get(a);
   if (!buf || buf.length !== a.fftSize) {
@@ -38,7 +38,7 @@ export function analyserLevel(a) {
 
 // paintSpeaking turns the light on for a level over the threshold and keeps it
 // on for the hold. The last time is kept in the given object.
-export function paintSpeaking(tile, level, hold) {
+function paintSpeaking(tile, level, hold) {
   if (!tile) return;
   const now = performance.now();
   if (level >= SPEAK_ON) hold.last = now;
@@ -84,14 +84,6 @@ export function stopSpeaking() {
   state.ownSpoke = null;
 }
 
-// levelText renders one RMS peak as a percent between -60 dB and full scale,
-// with the dB value beside it, because that is what a phone's meter shows.
-export function levelText(peak) {
-  const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
-  const pct = db > -60 ? Math.round(((db + 60) / 60) * 100) : 0;
-  return db > -90 ? `${pct}% ${Math.round(db)} dB` : '0% silent';
-}
-
 // micLevelCells splits the own input into the four columns of the microphone
 // row: decibels, the share of the scale and the state word. A peak under -60 dB
 // is below anything a person hears, so it reads as silent.
@@ -103,21 +95,6 @@ export function micLevelCells(peak) {
     pct: `${Math.round(((db + 60) / 60) * 100)} %`,
     state: 'transmitting',
   };
-}
-
-// micLevelLine reports the local input. A value near zero with a live track
-// points at the graph, not at the device.
-export function micLevelLine() {
-  if (!state.micAnalyser) return 'level none';
-  return `level ${levelText(state.meterPeak)}`;
-}
-
-// inLevelLine reports what arrives from one peer, read before the gain. A silent
-// line beside a live inbound rate points at the decode or the graph, not at the
-// network; a live line with no sound points after the gain.
-export function inLevelLine(peer) {
-  if (!peer.audioSrc || !peer.meter) return '';
-  return levelText(peer.meterPeak || 0);
 }
 
 // noiseWasm fetches the model once; every processor builds its module from the
@@ -135,7 +112,7 @@ export function noiseWasm() {
 // makeDenoiseNode builds one GTCRN processor on one context. The microphone and
 // every incoming stream that wants it own a node, because the filter state
 // belongs to one stream.
-export async function makeDenoiseNode(ctx) {
+async function makeDenoiseNode(ctx) {
   const [binary] = await Promise.all([noiseWasm(), ctx.audioWorklet.addModule('/gtcrn-node.js')]);
   return new AudioWorkletNode(ctx, 'gtcrn', {
     numberOfInputs: 1,
@@ -219,7 +196,7 @@ export function ensurePlayback() {
   return state.playCtx;
 }
 
-export function resumePlayback() {
+function resumePlayback() {
   const ctx = state.playCtx;
   if (!ctx || ctx.state !== 'suspended') return;
   ctx.resume().catch(() => {
@@ -318,7 +295,7 @@ export function dropAudio(peer) {
 
 // wirePlayNoise connects one guest's source to its gain, through that guest's
 // own noise cancel when on. The talking light reads the source either way.
-export function wirePlayNoise(peer) {
+function wirePlayNoise(peer) {
   if (!peer.audioSrc || !peer.gain) return;
   try {
     peer.audioSrc.disconnect();
@@ -368,7 +345,7 @@ export async function setPeerNoise(peer, on) {
 // stateFrame is the one sealed message that carries the flags of this guest.
 // It goes to every pair separately, so the server relays an opaque blob and
 // keeps none of the values.
-export function stateFrame() {
+function stateFrame() {
   return {
     k: 'state',
     mic: state.mic,
@@ -413,7 +390,7 @@ export function setHand(on) {
 
 // handRows lists the raised hands in the order every guest agrees on: sender
 // time, ties by peer id. A hand with no time yet goes last, never first.
-export function handRows() {
+function handRows() {
   const rows = [];
   for (const peer of state.peers.values()) {
     if (peer.hand)
@@ -470,7 +447,7 @@ export function paintHandQueue() {
 // askLower asks one guest to take its own hand down. The request travels
 // sealed to that guest, which lowers the hand and tells the room, so an admin
 // can still clear a queue that nobody follows.
-export function askLower(id) {
+function askLower(id) {
   const peer = state.peers.get(id);
   if (peer) sealedSend(peer, { k: 'lower' });
 }
@@ -478,7 +455,7 @@ export function askLower(id) {
 // setCtrl writes the label of one toolbar button and its pressed state. The
 // drawing sits in its own place left of the label, so only the label text and
 // the pressed state change here.
-export function setCtrl(id, text, on) {
+function setCtrl(id, text, on) {
   const btn = $(id);
   const label = btn.querySelector('span');
   if (label) label.textContent = text;

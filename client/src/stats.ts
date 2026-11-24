@@ -18,9 +18,9 @@ import { pinState } from './identity.js';
 // ---------------------------------------------------------------- telemetry
 // One getStats read a second: byte counters give bitrates, packet counters the
 // loss, inbound streams the jitter, the candidate pair the round trip and path.
-export const STATS_MS = 1000;
+const STATS_MS = 1000;
 
-export const STATS_HISTORY = 60; // one sample a second, a minute of the call
+const STATS_HISTORY = 60; // one sample a second, a minute of the call
 
 export function statsOpen() {
   const panel = $('stats-panel');
@@ -73,13 +73,13 @@ export function bitrate(last, report, field) {
   return kbit > 0 ? Math.round(kbit) : 0;
 }
 
-export function isDirectType(type) {
+function isDirectType(type) {
   return type === 'host' || type === 'srflx' || type === 'prflx';
 }
 
 // counterDelta is the movement of one cumulative counter since the last tick. A
 // missing counter or a first sample yields null; the caller clamps backwards.
-export function counterDelta(last, report, field) {
+function counterDelta(last, report, field) {
   const value = report[field];
   if (typeof value !== 'number') return null;
   const key = `${report.id || report.type + ':' + report.kind}:${field}`;
@@ -90,7 +90,7 @@ export function counterDelta(last, report, field) {
 
 // peerStats reads one report of one peer. Every access is guarded, so a peer that
 // closed between two ticks does not throw.
-export async function peerStats(peer) {
+async function peerStats(peer) {
   const pc = peer.pc;
   if (!pc || typeof pc.getStats !== 'function') return null;
   if (pc.connectionState === 'closed' || pc.signalingState === 'closed') return null;
@@ -196,7 +196,7 @@ export async function peerStats(peer) {
 
 // rateText renders a bitrate as a number and the first letter of its unit; zero
 // returns an empty string, so a cell with nothing to say stays empty.
-export function rateText(kbit) {
+function rateText(kbit) {
   if (!(kbit > 0)) return '';
   // With the byte setting on, the same rate reads in bytes, like a file size.
   if (state.statsBytes) {
@@ -210,53 +210,53 @@ export function rateText(kbit) {
 
 // msText renders milliseconds as "12 ms"; the unit is spelled out because the
 // bitrate column uses a bare "m" for megabits.
-export function msText(ms) {
+function msText(ms) {
   return Math.round(ms) + ' ms';
 }
 
 // jitterText renders jitter in ms. The numbers are small, so under 10 keeps one
 // decimal.
-export function jitterText(ms) {
+function jitterText(ms) {
   if (typeof ms !== 'number') return '';
   return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + ' ms';
 }
 
 // lossText renders a loss share; under 0.05 % is not audible, so it reads none.
-export function lossText(pct) {
+function lossText(pct) {
   if (typeof pct !== 'number') return '';
   if (pct < 0.05) return 'none';
   return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + ' %';
 }
 
 // lossMark colours a loss row red from two percent, where a voice starts to break.
-export function lossMark(pct) {
+function lossMark(pct) {
   return pct >= 2 ? false : undefined;
 }
 
 // Panel drawings: each stands for a word and carries it in its title for a hover.
-export const VIDEO_ICON = ['1F3A5', 'video'];
+const VIDEO_ICON = ['1F3A5', 'video'];
 
-export const AUDIO_ICON = ['1F50A', 'audio'];
+const AUDIO_ICON = ['1F50A', 'audio'];
 
-export const PICTURE_ICON = ['1F5BC', 'picture size'];
+const PICTURE_ICON = ['1F5BC', 'picture size'];
 
-export const PING_ICON = ['1F3D3', 'round trip'];
+const PING_ICON = ['1F3D3', 'round trip'];
 
-export const JITTER_ICON = ['1F30A', 'jitter, how far apart the packets arrive'];
+const JITTER_ICON = ['1F30A', 'jitter, how far apart the packets arrive'];
 
-export const LOSS_ICON = ['1F4C9', 'packet loss'];
+const LOSS_ICON = ['1F4C9', 'packet loss'];
 
-export const DIRECT_ICON = ['1F517', 'direct, the two browsers talk to each other'];
+const DIRECT_ICON = ['1F517', 'direct, the two browsers talk to each other'];
 
-export const RELAY_ICON = ['1F4E1', 'relay, the media goes through the server'];
+const RELAY_ICON = ['1F4E1', 'relay, the media goes through the server'];
 
-export const UP_ICON = ['2B06', 'out, what this browser sends'];
+const UP_ICON = ['2B06', 'out, what this browser sends'];
 
-export const DOWN_ICON = ['2B07', 'in, what this browser receives'];
+const DOWN_ICON = ['2B07', 'in, what this browser receives'];
 
 // routeCell is the route row: a link when the browsers talk directly, a
 // satellite when the media passes the server.
-export function routeCell(path) {
+function routeCell(path) {
   if (!path) return ['', '', 'not known yet'];
   const direct = path === 'direct' || path === 'p2p';
   return [...(direct ? DIRECT_ICON : RELAY_ICON), path === 'p2p' ? 'direct' : path];
@@ -264,13 +264,13 @@ export function routeCell(path) {
 
 // rateCell is one bitrate with its direction arrow; up and down share a row, so
 // the columns line up.
-export function rateCell(dir, kbit) {
+function rateCell(dir, kbit) {
   return [...(dir === 'up' ? UP_ICON : DOWN_ICON), rateText(kbit) || '-'];
 }
 
 // tripCells are the round trip, the jitter and the loss of one path; a number
 // that is not there yet leaves its cell empty and the column stays.
-export function tripCells(rtt, jitter, loss) {
+function tripCells(rtt, jitter, loss) {
   return [
     [...PING_ICON, typeof rtt === 'number' ? msText(rtt) : ''],
     [...JITTER_ICON, typeof jitter === 'number' ? jitterText(jitter) : ''],
@@ -280,12 +280,12 @@ export function tripCells(rtt, jitter, loss) {
 
 // pathText is the word a guest reads for a route: the report says p2p, the panel
 // direct.
-export function pathText(path) {
+function pathText(path) {
   return path === 'p2p' ? 'direct' : path;
 }
 
 // callPath is the route of the whole call: one word, or a list when the pairs differ.
-export function callPath(live) {
+function callPath(live) {
   const words = new Set();
   for (const s of live) if (s.path) words.add(pathText(s.path));
   if (words.size === 0) return '';
@@ -297,7 +297,7 @@ export function callPath(live) {
 // audio rates of the whole call.
 /** @returns {(string | (string | boolean)[][])[][]} */
 
-export function callPairs(live, total) {
+function callPairs(live, total) {
   const out = [];
   const path = callPath(live);
   const worst = (key) => {
@@ -323,20 +323,20 @@ export function callPairs(live, total) {
 }
 
 // levelDb is one peak in dB, or silent under -60 dB, below what a person hears.
-export function levelDb(peak) {
+function levelDb(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
   return db > -60 ? `${Math.round(db)} dB` : 'silent';
 }
 
 // levelFraction is one peak as a share of the -60 dB to 0 dB scale, clamped to 0..1.
-export function levelFraction(peak) {
+function levelFraction(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
   return Math.max(0, Math.min(1, (db + 60) / 60));
 }
 
 // peerLevel is what arrives from one guest, read at the source before the gain;
 // empty until its audio path exists.
-export function peerLevel(peer) {
+function peerLevel(peer) {
   if (!peer.audioSrc || !peer.meter) return '';
   return levelDb(peer.meterPeak || 0);
 }
@@ -345,7 +345,7 @@ export function peerLevel(peer) {
 // audio output. The sound row shows only when the context needs a tap.
 /** @returns {(string | (string | boolean)[][])[][]} */
 
-export function ownPairs(total) {
+function ownPairs(total) {
   const out = [];
   // The long-term identity: the fingerprint alone, under the name of the card.
   if (state.idKey) out.push(['key ', state.idKey.fp, undefined, 'mono']);
@@ -394,7 +394,7 @@ export function ownPairs(total) {
 // cell with no number stays empty, so the columns line up.
 /** @returns {(string | (string | boolean)[][])[][]} */
 
-export function peerPairs(peer, s) {
+function peerPairs(peer, s) {
   const out = [];
   const pin = pinState(peer);
   if (peer.fp && pin !== 'new') {
@@ -432,7 +432,7 @@ export function peerPairs(peer, s) {
 
 // statIcon is one OpenMoji drawing with its word in the title, so a picture
 // still answers a hover.
-export function statIcon(hex, title) {
+function statIcon(hex, title) {
   const img = document.createElement('img');
   img.className = 'sico';
   img.src = `/openmoji/${hex}.svg`;
@@ -443,7 +443,7 @@ export function statIcon(hex, title) {
 
 // statCells fills a row with one cell per part: text, or [drawing, word, text],
 // or the same with a fourth false for red. An empty part keeps its column.
-export function statCells(value, metrics) {
+function statCells(value, metrics) {
   const span = document.createElement('span');
   span.className = 'sv';
   const parts = Array.isArray(value) ? value : [value];
@@ -472,7 +472,7 @@ export function statCells(value, metrics) {
   return span;
 }
 
-export function statLine(key, value, mark, sub, meter) {
+function statLine(key, value, mark, sub, meter) {
   const line = document.createElement('div');
   const parts = Array.isArray(value) ? value : [value];
   line.className =
@@ -506,7 +506,7 @@ export function statLine(key, value, mark, sub, meter) {
 
 // statsRow is one card: a name and lines of [key, value, mark, sub, meter]; mark
 // true is green, false red; sub true indents, 'mono' reads by letter.
-export function statsRow(title, pairs, mark = null, badge = null) {
+function statsRow(title, pairs, mark = null, badge = null) {
   const row = document.createElement('div');
   row.className = 'srow';
   const head = document.createElement('div');
@@ -534,7 +534,7 @@ export function statsRow(title, pairs, mark = null, badge = null) {
 
 // linkLevel is the verdict on one link: poor from 5 % loss or 400 ms, fair from
 // 2 %, 200 ms or 40 ms jitter, good otherwise. Nothing measured means no verdict.
-export function linkLevel(s) {
+function linkLevel(s) {
   if (!s) return '';
   const { rtt, loss, jitter } = s;
   if (rtt === null && loss === null) return '';
@@ -548,13 +548,13 @@ export function linkLevel(s) {
   return 'good';
 }
 
-export function worstLevel(levels) {
+function worstLevel(levels) {
   for (const word of ['poor', 'fair', 'good']) if (levels.includes(word)) return word;
   return '';
 }
 
 // statsSummary is the first card: one lamp and one sentence for the whole call.
-export function statsSummary(live, guestCount) {
+function statsSummary(live, guestCount) {
   const level = worstLevel(live.map(linkLevel));
   const box = document.createElement('div');
   box.className = 'ssum';
@@ -589,7 +589,7 @@ export function statsSummary(live, guestCount) {
 
 // recordStatsHistory appends one sample of the whole call: what came down, the
 // worst round trip and the worst loss of that second.
-export function recordStatsHistory(total, live) {
+function recordStatsHistory(total, live) {
   const worst = (key) => {
     const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
     return nums.length ? Math.max(...nums) : null;
@@ -605,7 +605,7 @@ export function recordStatsHistory(total, live) {
 // statsPlot draws one series on one canvas: an optional filled area under a line,
 // the line breaking on a null sample. The peak comes from the caller, so a small
 // number still fills the box.
-export function statsPlot(canvas, values, peak, fill, color) {
+function statsPlot(canvas, values, peak, fill, color) {
   if (!canvas) return;
   const cssW = canvas.clientWidth || 288;
   const cssH = canvas.clientHeight || 34;
@@ -676,13 +676,13 @@ export function statsPlot(canvas, values, peak, fill, color) {
 }
 
 // statsNote writes the text line under one drawing, so the numbers read without it.
-export function statsNote(id, text) {
+function statsNote(id, text) {
   const note = $(id);
   if (note) note.textContent = text;
 }
 
 // rateWords is a bitrate with its unit spelled out, for the line under a graph.
-export function rateWords(kbit) {
+function rateWords(kbit) {
   if (state.statsBytes) {
     const bytes = Math.max(0, kbit) * 125;
     if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + ' MiB/s';
@@ -695,7 +695,7 @@ export function rateWords(kbit) {
 
 // drawStatsGraphs draws the last minute as three graphs: downlink as a filled
 // area, round trip and loss as lines, each with its own peak.
-export function drawStatsGraphs() {
+function drawStatsGraphs() {
   const box = $('stats-graph-box');
   if (!box) return;
   const hist = state.statHist;
@@ -804,7 +804,7 @@ export async function updateStats() {
 }
 
 // ------------------------------------------------------------- sealed stats
-export function sealedPairCount(id) {
+function sealedPairCount(id) {
   const label = pairLabel(id);
   let out = 0;
   let inn = 0;
@@ -822,7 +822,7 @@ export function sealedPairCount(id) {
 
 // sealedAlarms are the lines that mean something is wrong now; a healthy call
 // shows none.
-export function sealedAlarms() {
+function sealedAlarms() {
   const out = [];
   if (state.sealFault) out.push(statsRow('sealing fault', [['', state.sealFault, false]]));
   const failed = sealedFailedPairs();
@@ -858,7 +858,7 @@ export function sealedAlarms() {
   return out;
 }
 
-export function wasmTestOk(wt) {
+function wasmTestOk(wt) {
   return !!(
     wt.sasMatch &&
     wt.confirm &&
@@ -877,7 +877,7 @@ export function wasmTestOk(wt) {
 // output, not on a screen a guest reads during a call.
 /** @returns {(string | boolean)[][]} */
 
-export function wasmTestFaults(wt) {
+function wasmTestFaults(wt) {
   const bad = [
     ['sas ', wt.sasMatch ? 'match' : 'no', !!wt.sasMatch],
     ['confirm ', wt.confirm ? 'ok' : 'no', !!wt.confirm],
@@ -897,7 +897,7 @@ export function wasmTestFaults(wt) {
 
 // sealedCards is the crypto half of the panel, below the person cards: what the
 // relay cannot see, in the few lines that answer it.
-export function sealedCards() {
+function sealedCards() {
   const out = [];
   const available = sealingAvailable();
   const wt = state.wasmTest;

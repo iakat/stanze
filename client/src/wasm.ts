@@ -10,7 +10,7 @@ import { padRoundTripOk } from './gate.js';
 
 // ------------------------------------------------------------- wasm loading
 // loadScriptOnce inserts wasm_exec.js once; an existing window.Go skips the fetch.
-export function loadScriptOnce(src) {
+function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     if (win().Go) return resolve(null);
     const el = document.createElement('script');
@@ -21,7 +21,7 @@ export function loadScriptOnce(src) {
   });
 }
 
-export function loadWasmModule() {
+function loadWasmModule() {
   return new Promise((resolve, reject) => {
     const Go = win().Go;
     if (!window.WebAssembly || typeof Go !== 'function')
@@ -268,9 +268,9 @@ export function pqSelfTest() {
 
 // ensureWasm loads the script, the module and the self test once. A failed
 // attempt is cleared, so the next call can try again.
-export let wasmLoad = null;
+let wasmLoad = null;
 
-export function ensureWasm() {
+function ensureWasm() {
   if (state.wasmOk) return Promise.resolve();
   if (wasmLoad) return wasmLoad;
   wasmLoad = loadScriptOnce('/wasm_exec.js' + BUILD_Q)

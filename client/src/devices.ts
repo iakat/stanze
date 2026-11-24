@@ -22,21 +22,21 @@ import { pairLabel, sealingAvailable } from './sealed.js';
 // Pickers share one list and the choice in state.camId and state.micId, so they
 // can not disagree. Labels and ids need one permission; a stored id stays in its
 // picker as an extra entry until then, so a reload keeps the camera.
-export const DEVICE_NOUN = { video: 'camera', audio: 'microphone' };
+const DEVICE_NOUN = { video: 'camera', audio: 'microphone' };
 
 export function devicePickers(kind) {
   return kind === 'video' ? [$('cam-select')] : [$('mic-select')];
 }
 
-export function deviceList(kind) {
+function deviceList(kind) {
   return kind === 'video' ? state.devCams : state.devMics;
 }
 
-export function chosenDevice(kind) {
+function chosenDevice(kind) {
   return (kind === 'video' ? state.camId : state.micId) || '';
 }
 
-export function setChosenDevice(kind, id) {
+function setChosenDevice(kind, id) {
   if (kind === 'video') state.camId = id;
   else state.micId = id;
   store(kind === 'video' ? 'camId' : 'micId', id);
@@ -45,7 +45,7 @@ export function setChosenDevice(kind, id) {
 // paintDeviceSelect rewrites one picker in place. The wanted id keeps its place
 // while the browser lists it; a list without labels keeps it as one extra entry,
 // a labelled list that lacks it falls back to the system device.
-export function paintDeviceSelect(select, kind, list, wanted) {
+function paintDeviceSelect(select, kind, list, wanted) {
   if (!select) return '';
   const noun = DEVICE_NOUN[kind];
   const seen = new Set();
@@ -82,7 +82,7 @@ export function paintDeviceSelect(select, kind, list, wanted) {
 
 // paintDevices fills every picker from the last enumeration. A choice the
 // enumeration does not carry is dropped with one line in the status box.
-export function paintDevices() {
+function paintDevices() {
   for (const kind of ['video', 'audio']) {
     const wanted = chosenDevice(kind);
     const list = deviceList(kind);
@@ -114,7 +114,7 @@ export async function refreshDevices() {
 }
 
 // The words of the quality steps, used by both quality lists.
-export const QUALITY_LABEL = {
+const QUALITY_LABEL = {
   '640x360@30': '360p 30',
   '1280x720@30': '720p 30',
   '1920x1080@30': '1080p 30',
@@ -124,7 +124,7 @@ export const QUALITY_LABEL = {
 
 // deviceRows lists the system device, every enumerated device and the stored id
 // as one extra row when the enumeration does not carry it.
-export function deviceRows(kind) {
+function deviceRows(kind) {
   const noun = DEVICE_NOUN[kind];
   const rows = [{ value: '', label: `system ${noun}` }];
   const seen = new Set();
@@ -140,13 +140,13 @@ export function deviceRows(kind) {
   return rows;
 }
 
-export function qualityRows() {
+function qualityRows() {
   return Object.keys(QUALITY).map((value) => ({ value, label: QUALITY_LABEL[value] || value }));
 }
 
 // paintMenuChoice rewrites one submenu: a button row per choice, ticked on the
 // choice in force, with one callback per row.
-export function paintMenuChoice(list, rows, current, pick) {
+function paintMenuChoice(list, rows, current, pick) {
   if (!list) return;
   const frag = document.createDocumentFragment();
   for (const row of rows) {
@@ -193,7 +193,7 @@ export function paintDeviceMenu() {
 
 // constraintsFor builds one request: the chosen device when there is one, else the
 // plain ideal request. Only that one takes facingMode; a deviceId names the lens.
-export function constraintsFor(kind, pick) {
+function constraintsFor(kind, pick) {
   if (kind === 'video') {
     const base = camVideo();
     return pick ? { ...base, deviceId: { exact: pick } } : { ...base, facingMode: 'user' };
@@ -203,7 +203,7 @@ export function constraintsFor(kind, pick) {
 
 // askKind opens one kind of device. A stored id the browser can not honour falls
 // back to the plain request once, so a stale choice never blocks a join.
-export async function askKind(kind, pick) {
+async function askKind(kind, pick) {
   const want = (id) =>
     kind === 'video'
       ? { video: constraintsFor('video', id) }
@@ -227,7 +227,7 @@ export async function askKind(kind, pick) {
 
 // switchDevice moves one live call to another device: audio rides the mixer the
 // peers already receive, video replaces its track on the sender, so no rejoin.
-export async function switchDevice(kind, id) {
+async function switchDevice(kind, id) {
   if (!sealingAvailable()) {
     say('this browser cannot seal media frames, so the device stays off');
     return;
@@ -276,7 +276,7 @@ export function onDevicePicked(kind, id) {
 
 // onDeviceChange reacts to a camera or a microphone that came or went. A live
 // track that ended is dropped and the call marks that device off.
-export let devTimer = null;
+let devTimer = null;
 
 export function onDeviceChange() {
   if (state.camTrack && state.camTrack.readyState === 'ended') {
@@ -431,7 +431,7 @@ export function setDeaf(on) {
 
 // sealOne puts the frame transform on one sender or receiver. It is the only
 // install path and never waits for keys; a setter that throws becomes a fault.
-export function sealOne(peer, side, dir, kind) {
+function sealOne(peer, side, dir, kind) {
   try {
     side.transform = new RTCRtpScriptTransform(state.worker, {
       // `from` names who sends these frames: the page on send, the peer on receive;
@@ -508,7 +508,7 @@ export function attachScreen(peer) {
 
 // publishTrack hands one new track to every connection that has transceivers; a
 // connection that is handshaking picks it up in preparePeer.
-export function publishTrack(track) {
+function publishTrack(track) {
   if (!track) return;
   for (const peer of state.peers.values()) {
     if (peer.pc) attachTrack(peer, track);
@@ -517,7 +517,7 @@ export function publishTrack(track) {
 
 // adoptMic makes one microphone track the live input: GTCRN and the gain feed the
 // mixer that peers receive. A source can not be repointed, so a switch rebuilds it.
-export async function adoptMic(track) {
+async function adoptMic(track) {
   if (!track) return;
   const prev = state.micTrack;
   state.micTrack = track;
@@ -562,7 +562,7 @@ export async function adoptMic(track) {
 
 // setVideoTrack reuses the stream when the same track is attached, so a repaint
 // does not restart the element.
-export function setVideoTrack(video, track) {
+function setVideoTrack(video, track) {
   const stream = video.srcObject;
   if (
     !stream ||
@@ -575,7 +575,7 @@ export function setVideoTrack(video, track) {
 
 // camSource is the own preview picture: the frozen still while the freeze is on,
 // else the drawn track, else the camera.
-export function camSource() {
+function camSource() {
   if (state.freeze && state.freezeTrack && state.freezeTrack.readyState === 'live')
     return state.freezeTrack;
   return lookTrack() || state.camTrack;
@@ -626,7 +626,7 @@ export function dropPeerCamera(peer) {
 }
 
 // paintRemoteVideo applies the deaf state to every guest in the room.
-export function paintRemoteVideo() {
+function paintRemoteVideo() {
   for (const peer of state.peers.values()) {
     paintPeerVideo(peer);
     paintPeerScreen(peer);
@@ -635,7 +635,7 @@ export function paintRemoteVideo() {
 
 // makeScreenTile builds the second picture of a guest on its first screen track.
 // It has no row of its own, and the node stays for the pair so a share reuses it.
-export function makeScreenTile(peer) {
+function makeScreenTile(peer) {
   if (peer.screenTile) return peer.screenTile;
   peer.screenTile = makeTile(peer.id, `${peer.name}, screen`, false, true);
   peer.screenTile.dataset.peer = peer.id;
@@ -679,7 +679,7 @@ export function dropPeerScreen(peer) {
 
 // adoptCam makes one camera track the live video. The picture goes to the camera
 // sender, never the share, and a switch needs no renegotiation.
-export async function adoptCam(track) {
+async function adoptCam(track) {
   if (!track) return;
   const prev = state.camTrack;
   state.camTrack = track;
@@ -825,7 +825,7 @@ export function disableCam(persist = true) {
 
 // buildAudio wires mic -> GTCRN -> gain -> mixer, and the mixer track is what the
 // peers receive. The mixer exists without a microphone so screen audio fits later.
-export async function buildAudio() {
+async function buildAudio() {
   // Safari exposes only the prefixed constructor, which the DOM lib omits.
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
@@ -847,7 +847,7 @@ export async function buildAudio() {
 
 // startMeter taps the microphone before the gain on a second branch, so the stats
 // show a live device while the local mute is on. speakTick reads that tap.
-export function startMeter() {
+function startMeter() {
   if (!state.audioCtx || !state.micSource || state.micAnalyser) return;
   state.micAnalyser = state.audioCtx.createAnalyser();
   state.micAnalyser.fftSize = 1024;

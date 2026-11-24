@@ -25,7 +25,7 @@ export const BUILD_Q =
 // shape and a different name each, so two people on a voice call can compare them
 // without spelling anything and without confusing two of them. The third field
 // is the file name of the drawing in static/openmoji.
-export const VERIFY_EMOJI = [
+const VERIFY_EMOJI = [
   ['⚓', 'anchor', '2693'],
   ['🔔', 'bell', '1F514'],
   ['🚲', 'bicycle', '1F6B2'],

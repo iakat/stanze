@@ -37,7 +37,7 @@ export function startSealedWorker() {
   state.worker = worker;
 }
 
-export function paintFrameCounters() {
+function paintFrameCounters() {
   let enc = 0;
   let dec = 0;
   for (const st of Object.values(state.frames)) {

@@ -23,7 +23,7 @@ export function dropPeers() {
 // scheduleReconnect retries the signaling socket with a capped backoff. The
 // camera and the microphone stay open across a reconnect, so a short network
 // drop does not need a click from the user.
-export function scheduleReconnect() {
+function scheduleReconnect() {
   if (state.leaving || state.fatal || state.reconnectTimer) return;
   const delay = state.reconnectDelay;
   state.reconnectDelay = Math.min(state.reconnectDelay * 2, 10000);

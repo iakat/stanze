@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------- relay badge
 // selectedPair is the pair that carries the media: from the transport report,
 // else a selected or nominated pair. The `selected` flag is a Firefox extra.
-export function selectedPair(stats) {
+function selectedPair(stats) {
   let pair = null;
   stats.forEach((r) => {
     if (!pair && r.type === 'transport' && r.selectedCandidatePairId) {

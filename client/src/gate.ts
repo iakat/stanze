@@ -44,13 +44,13 @@ import { setChrome } from './phone.js';
 // counter: the highest wins, the lower peer id breaks a tie.
 // claimText is the exact byte string a role claim signs. The room id binds the
 // claim to this room, and the counter orders two admins that act at once.
-export function claimText(n, admins) {
+function claimText(n, admins) {
   return b64e(sealUtf8.encode(`stanze/claim/1|${state.room}|${n}|${admins.join(',')}`));
 }
 
 // makeClaim signs one role list with the identity this page announced in the
 // handshake, so every page that holds that key can check it.
-export async function makeClaim(n, admins) {
+async function makeClaim(n, admins) {
   if (!state.idKey) return null;
   let sig;
   try {
@@ -63,7 +63,7 @@ export async function makeClaim(n, admins) {
 
 // adoptClaim installs a checked claim: the role list, its counter and the page
 // that signed it.
-export function adoptClaim(claim) {
+function adoptClaim(claim) {
   state.auth = { n: claim.n, admins: claim.admins.slice(), by: claim.by, sig: claim.sig };
   setAdmins(claim.admins);
   markAdmins();
@@ -219,7 +219,7 @@ export function maybeAdmitHeld(peer) {
 
 // askHeldAgain repeats the held note on one pair. It is idempotent on the far
 // side and stops with the room; the count is capped so a silent room stays quiet.
-export function askHeldAgain(peer) {
+function askHeldAgain(peer) {
   if (!peer || !state.waiting) return;
   if ((peer.heldAsks || 0) >= 6) return;
   peer.heldAsks = (peer.heldAsks || 0) + 1;
@@ -299,7 +299,7 @@ export function sealedOnKick(peer, obj) {
 
 // padsOn tells the frame worker that this pair may round its frame sizes up.
 // The worker pads a sender only when the peer has said it reads padding.
-export function padsOn(peer) {
+function padsOn(peer) {
   if (!state.worker || !peer || peer.padsOn) return;
   peer.padsOn = true;
   for (const kind of ['audio', 'video']) {
@@ -356,11 +356,11 @@ export function sealedAnnounceName(peer) {
 // A sealed payload is padded to a fixed bucket before sealing, so the ciphertext
 // length stops saying what was sent. The true length rides inside as the filler
 // field and the receiver drops it; the biggest bucket repeats for larger payloads.
-export const PAD_BUCKETS = [512, 2048, 8192];
+const PAD_BUCKETS = [512, 2048, 8192];
 
-export const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
+const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
 
-export function padPayload(obj) {
+function padPayload(obj) {
   const withPad = Object.assign({}, obj, { z: '' }) as any;
   const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
   let target = PAD_BUCKETS.find((n) => n >= bytes);
@@ -551,7 +551,7 @@ export function sealedCodePanel(peer) {
 }
 
 // sealedIdentityRow is the who of one pair: the pin label and the fingerprint.
-export function sealedIdentityRow(peer) {
+function sealedIdentityRow(peer) {
   const row = document.createElement('span');
   row.className = 'id-row';
   const what = pinState(peer);
@@ -584,7 +584,7 @@ export function sealedIdentityRow(peer) {
   return row;
 }
 
-export function pinButton(text, onclick) {
+function pinButton(text, onclick) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'pin-btn';

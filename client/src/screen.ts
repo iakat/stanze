@@ -13,7 +13,7 @@ import { sealingAvailable } from './sealed.js';
 // replaceScreenTrack points the screen sender of every peer at the display
 // track, or at nothing. The camera sender is not touched, so the two pictures
 // travel side by side and a share needs no renegotiation.
-export async function replaceScreenTrack(track) {
+async function replaceScreenTrack(track) {
   for (const peer of state.peers.values()) {
     const tr = peer.tx && peer.tx.screen;
     if (tr && !peer.waiting) await tr.sender.replaceTrack(track || null).catch(() => {});
