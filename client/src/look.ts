@@ -4,7 +4,7 @@
 
 import { LOOKS, LOOK_MAX, MASKS, MESH_DIR, MESH_HZ_MAX, MESH_HZ_MIN, MESH_W } from './config.js';
 import { $ } from './dom.js';
-import { state } from './state.js';
+import { CUST_DEFAULTS, state } from './state.js';
 import { clamp, detachMedia, say, stopQuietly, stopTracks } from './util.js';
 import { load, store } from './prefs.js';
 import { paintSelfCam } from './devices.js';
@@ -842,58 +842,113 @@ function lookSmall(p, a, filter) {
   if (filter && filter !== 'none') p.ctx.filter = 'none';
 }
 
-// lookPotion stretches a head into the proportions of the potion seller: a tall
-// forehead and a small chin. The band of the head is cut into horizontal strips,
-// each strip going back at another height, so the change is smooth. The band
-// keeps the full width of the frame and its map is the same at both edges, so
-// the picture beside the head moves with it and no seam can show.
-function lookPotion(p, a) {
+// warpEllipse warps one ellipse of the finished picture, for the potion seller
+// and the pinch and width knobs. The ellipse is cut into rings from the rim in;
+// each ring is drawn from a copy of the frame at the scale its radius asks for.
+// The scale is one at the rim, so no seam shows, and reaches kx across and ky up
+// at the middle: k above one pinches, k below one bulges. ang turns the ellipse
+// with a leaning head.
+const WARP_RINGS = 36;
+
+function warpEllipse(p, cx, cy, rx, ry, ang, kx, ky) {
   const W = p.canvas.width,
     H = p.canvas.height;
-  // The band of the head: above the hairline and below the chin.
-  const y0 = Math.max(0, Math.round((a.y - a.h * 1.15) * H));
-  const y1 = Math.min(H, Math.round((a.y + a.h * 1.2) * H));
-  const ih = y1 - y0;
-  if (ih < 32 || W < 32) return;
-  if (!p.potionCanvas) {
-    p.potionCanvas = document.createElement('canvas');
-    p.potionCtx = p.potionCanvas.getContext('2d');
+  if (rx < 8 || ry < 8) return;
+  if (Math.abs(kx - 1) < 0.02 && Math.abs(ky - 1) < 0.02) return;
+  // The copy is the square that holds the ellipse, turned or not. A ring never
+  // reads further out than its own rim, so nothing outside it is needed.
+  const E = Math.ceil(Math.max(rx, ry)) + 2;
+  const bx = Math.max(0, Math.floor(cx - E)),
+    by = Math.max(0, Math.floor(cy - E));
+  const bw = Math.min(W, Math.ceil(cx + E)) - bx,
+    bh = Math.min(H, Math.ceil(cy + E)) - by;
+  if (bw < 8 || bh < 8) return;
+  if (!p.ringCanvas) {
+    p.ringCanvas = document.createElement('canvas');
+    p.ringCtx = p.ringCanvas.getContext('2d');
   }
-  const c = p.potionCanvas,
-    cc = p.potionCtx;
-  if (c.width !== W || c.height !== ih) {
-    c.width = W;
-    c.height = ih;
+  const c = p.ringCanvas,
+    cc = p.ringCtx;
+  if (c.width < bw) c.width = bw;
+  if (c.height < bh) c.height = bh;
+  cc.clearRect(0, 0, c.width, c.height);
+  cc.drawImage(p.canvas, bx, by, bw, bh, 0, 0, bw, bh);
+  const ctx = p.ctx;
+  const cos = Math.cos(ang),
+    sin = Math.sin(ang);
+  // One ellipse as a closed sub-path; the move keeps the two rims of a ring
+  // from being joined by a line.
+  const rim = (t) => {
+    ctx.moveTo(cx + rx * t * cos, cy + rx * t * sin);
+    ctx.ellipse(cx, cy, rx * t, ry * t, ang, 0, 2 * Math.PI);
+  };
+  // A ring reaches a pixel and a half under the ring inside it, which paints
+  // over the overlap, so the soft edge of a clip leaves no hairline between rings.
+  const overlap = 1.5 / Math.min(rx, ry);
+  for (let j = 0; j < WARP_RINGS; j++) {
+    const t1 = 1 - j / WARP_RINGS,
+      t0 = 1 - (j + 1) / WARP_RINGS;
+    const mid = (t0 + t1) / 2;
+    const f = (1 - mid) * (1 - mid);
+    const mx = 1 + (kx - 1) * f,
+      my = 1 + (ky - 1) * f;
+    // The rings at the rim change nothing that can be seen.
+    if (Math.abs(mx - 1) < 0.004 && Math.abs(my - 1) < 0.004) continue;
+    ctx.save();
+    ctx.beginPath();
+    rim(t1);
+    if (j < WARP_RINGS - 1) rim(Math.max(0, t0 - overlap));
+    ctx.clip('evenodd');
+    // A pixel of the ring shows the frame at m times its distance from the
+    // middle, along the axes of the ellipse.
+    ctx.translate(cx, cy);
+    ctx.rotate(ang);
+    ctx.scale(1 / mx, 1 / my);
+    ctx.rotate(-ang);
+    ctx.translate(-cx, -cy);
+    ctx.drawImage(c, 0, 0, bw, bh, bx, by, bw, bh);
+    ctx.restore();
   }
-  // The unwarped band, so a strip never reads a strip that this frame already
-  // moved.
-  cc.clearRect(0, 0, W, ih);
-  cc.drawImage(p.canvas, 0, y0, W, ih, 0, 0, W, ih);
-  // The sine moves the top half of the band up and the bottom half down, so the
-  // forehead grows and the chin shrinks; it is zero at both ends, so the rows
-  // at the edge of the band do not move.
-  const N = 28,
-    STRETCH = 0.095;
-  const put = (s) => s + STRETCH * Math.sin(2 * Math.PI * s);
-  for (let i = 0; i < N; i++) {
-    const s0 = i / N,
-      s1 = (i + 1) / N;
-    const sy = s0 * ih,
-      sh = (s1 - s0) * ih;
-    const dy = put(s0) * ih,
-      dh = (put(s1) - put(s0)) * ih;
-    if (dh <= 0) continue;
-    // One extra pixel of height hides the seam between two strips.
-    p.ctx.drawImage(c, 0, sy, W, sh, 0, y0 + dy, W, dh + 1);
-  }
+}
+
+// pinchFace squeezes the middle of the face towards one point (k above one) or
+// blows it up (k below one). The point sits between the eye line and the tip of
+// the nose, so the eyes, the nose and the mouth all close in on it, and the ring
+// of the warp reaches past the cheeks and the hairline, so the cheeks swell out
+// into the frame as the features go in.
+function pinchFace(p, g, k) {
+  const eyeX = (g.eyeL[0][0] + g.eyeR[1][0]) / 2,
+    eyeY = (g.eyeL[0][1] + g.eyeR[1][1]) / 2;
+  const cx = eyeX * 0.5 + g.nose[0] * 0.5,
+    cy = eyeY * 0.5 + g.nose[1] * 0.5;
+  warpEllipse(p, cx, cy, g.fw * 0.95, g.fh * 0.9, roll(g), k, k);
+}
+
+// POTION_PINCH is the pinch of the potion seller: the middle of the face goes
+// small by this, the cheeks and the hair swell out round it.
+const POTION_PINCH = 2.6;
+
+// lookPotion is the potion seller: eyes, nose and mouth pinched into a knot in
+// the middle of the face.
+function lookPotion(p, a) {
+  const g = maskGeo(a, p.canvas.width, p.canvas.height);
+  pinchFace(p, g, POTION_PINCH);
+}
+
+// custom reads the knobs of the custom effect from the state.
+function custom() {
+  return state.cust;
 }
 
 // ------------------------------------------------------------ custom effect
 //
-// The custom effect is one set of knobs for the whole face: the height of the
-// head, the size and spread of the eyes, the size and height of the mouth, and
-// a swap that puts the eyes where the mouth is and the mouth between the eyes.
-// Each knob is a percent, so the numbers hold near and far from the camera.
+// The custom effect is one set of knobs for the whole face: the height and the
+// width of the head, the size, spread and height of the eyes, the size of the
+// nose, the size and height of the mouth, a pinch or bulge of the middle of the
+// face, and a swap that puts the eyes where the mouth is and the mouth between
+// the eyes. Each knob is a percent, so the numbers hold near and far from the
+// camera. 100 is neutral for a size and 0 for a shift or the pinch.
+
 // bandPut maps a share of the head band to its place after a stretch of k. It
 // is the identity at both ends, so the band joins the picture without a step,
 // and it is steepest in the middle, so the face takes the change, not the edges.
@@ -901,24 +956,15 @@ function bandPut(s, k) {
   return 0.5 + (s - 0.5) * (1 + (k - 1) * Math.sin(Math.PI * s) ** 2);
 }
 
-// bandSpan is the part of the frame that the head band takes: above the
-// hairline and below the chin, as wide as the frame.
-function bandSpan(a, H) {
-  const y0 = Math.max(0, Math.round((a.y - a.h * 1.2) * H));
-  const y1 = Math.min(H, Math.round((a.y + a.h * 1.25) * H));
-  return { y0, ih: y1 - y0 };
-}
-
-// headBand stretches the band of the head about its middle by k, with the strip
-// trick of the potion seller: full width of the frame, the map the same at both
-// edges, rows moving only up and down, so no seam can show.
+// headBand stretches the band of the head about its middle by k: full width of
+// the frame, the map the same at both edges, rows moving only up and down, so no
+// seam can show. The band runs from above the hairline to below the chin.
 function headBand(p, a, k) {
   const W = p.canvas.width,
     H = p.canvas.height;
-  const span = bandSpan(a, H);
-  const y0 = span.y0,
-    ih = span.ih;
-  if (ih < 32 || W < 32) return null;
+  const y0 = Math.max(0, Math.round((a.y - a.h * 1.2) * H));
+  const ih = Math.min(H, Math.round((a.y + a.h * 1.25) * H)) - y0;
+  if (ih < 32 || W < 32) return;
   if (!p.bandCanvas) {
     p.bandCanvas = document.createElement('canvas');
     p.bandCtx = p.bandCanvas.getContext('2d');
@@ -943,7 +989,6 @@ function headBand(p, a, k) {
     // One extra pixel of height hides the seam between two strips.
     p.ctx.drawImage(c, 0, sy, W, sh, 0, y0 + dy, W, dh + 1);
   }
-  return span;
 }
 
 // featureCopy cuts one rectangle of the picture into a scratch canvas and
@@ -995,110 +1040,130 @@ function featurePaste(p, slot, size, dst) {
   p.ctx.drawImage(c, 0, 0, size.w, size.h, Math.round(dst.x), Math.round(dst.y), dw, dh);
 }
 
-// featureShift moves one feature: it holds the feature, covers the place it
-// came from with skin, and paints the feature at its new place and size. The
-// skin comes from below and to the side, away from the nose, and its edge is
-// feathered, so the old place reads as skin. `side` is -1 for the left eye, 1
-// for the right eye and 0 for a feature in the middle of the face.
-function featureShift(p, slot, src, dst, side) {
-  const size = featureCopy(p, slot, src);
-  if (!size) return;
-  const under = featureCopy(p, slot + 'skin', {
-    x: src.x + side * src.w * 0.06,
-    y: src.y + src.h * 0.62,
-    w: src.w,
-    h: src.h,
-  });
-  featurePaste(p, slot + 'skin', under, src);
-  featurePaste(p, slot, size, dst);
+// featureMoves moves a set of features at once: every feature and the skin that
+// covers its old place is held first, then the skins are painted, then the
+// features. A move is { slot, src, dst, skin }; skin is the cover offset as a
+// share of the feature size, just below it when left out.
+function featureMoves(p, moves) {
+  const held = [];
+  for (const m of moves) {
+    const size = featureCopy(p, m.slot, m.src);
+    const off = m.skin || [0, 0.62];
+    const under = featureCopy(p, m.slot + 'skin', {
+      x: m.src.x + off[0] * m.src.w,
+      y: m.src.y + off[1] * m.src.h,
+      w: m.src.w,
+      h: m.src.h,
+    });
+    held.push({ m, size, under });
+  }
+  for (const h of held) featurePaste(p, h.m.slot + 'skin', h.under, h.m.src);
+  for (const h of held) featurePaste(p, h.m.slot, h.size, h.m.dst);
 }
 
-// lookCustom applies the knobs of the custom effect to one face. The eyes are
-// two patches of their own, so their size and their spread are separate; the
-// mouth is one patch; the swap holds both before it paints either, so the mouth
-// content cannot be lost under the eyes.
+// lookCustom applies the knobs of the custom effect to one face. First the
+// features move on the picture as the camera gave it, where the mesh points are
+// exact, or the eyes and the mouth swap. Then the whole face is warped as it
+// stands: the pinch or bulge, the head width, the head height. A knob at its
+// neutral value does nothing at all.
 function lookCustom(p, a) {
-  const cfg = state.cust;
+  const cfg = custom();
   const W = p.canvas.width,
     H = p.canvas.height;
-  const k = (cfg.head || 100) / 100;
-  const band = Math.abs(k - 1) > 0.02 ? headBand(p, a, k) : null;
-  // The mesh read the frame before the band moved it, so a feature is looked
-  // for at the place the band put it, and its height is read with the same
-  // ruler.
-  const at = (y) => {
-    if (!band) return { y, h: 1 };
-    const s = clamp((y - band.y0) / band.ih, 0, 1);
-    const lo = clamp(s - 0.02, 0, 1),
-      hi = clamp(s + 0.02, 0, 1);
-    const h = (bandPut(hi, k) - bandPut(lo, k)) / (hi - lo);
-    return { y: band.y0 + bandPut(s, k) * band.ih, h: clamp(h, 0.35, 2.8) };
-  };
+  const es = cfg.eyes / 100,
+    sp = cfg.spread / 100,
+    lift = cfg.eyey / 100,
+    ns = cfg.nose / 100,
+    ms = cfg.mouth / 100,
+    mshift = cfg.mshift / 100,
+    hk = cfg.head / 100,
+    wk = cfg.width / 100,
+    pk = cfg.pinch / 100;
   const g = maskGeo(a, W, H);
   const fL = eyeFrame(g.eyeL),
     fR = eyeFrame(g.eyeR);
-  const pL = at(fL.y),
-    pR = at(fR.y);
   const cxe = (fL.x + fR.x) / 2,
-    cye = (pL.y + pR.y) / 2;
-  const gapE = Math.max(8, Math.hypot(fR.x - fL.x, pR.y - pL.y));
+    cye = (fL.y + fR.y) / 2;
+  const gapE = Math.max(8, Math.hypot(fR.x - fL.x, fR.y - fL.y));
   const eyeW = Math.max(g.fw * 0.2, gapE * 0.34);
   const ew = eyeW * 2.0,
     eh = eyeW * 1.15;
-  const pm = at((g.mouthL[1] + g.mouthR[1]) / 2);
+  const mcx = (g.mouthL[0] + g.mouthR[0]) / 2,
+    mcy = (g.mouthL[1] + g.mouthR[1]) / 2;
   const mw = Math.max(g.fw * 0.34, gap(g.mouthL, g.mouthR) * 1.7);
   const mh = Math.max(mw * 0.62, g.fh * 0.16);
-  const mcx = (g.mouthL[0] + g.mouthR[0]) / 2;
-  const mcy = pm.y;
-  const es = (cfg.eyes || 100) / 100;
-  const sp = (cfg.spread || 100) / 100;
-  const ms = (cfg.mouth || 100) / 100;
-  const mdy = ((cfg.mshift || 0) / 100) * g.fh;
   const box = (cx, cy, w, h) => ({ x: cx - w / 2, y: cy - h / 2, w, h });
+  // The mouth goes down the face by the knob, along the face axis, so a head
+  // that leans carries the shift with it.
+  const mouthAt = g.spot([mcx, mcy], 0, -mshift);
+  const moves = [];
   if (cfg.swap) {
-    // Both features are held first, then painted, so neither reads a region
-    // that the other has already covered. The pair of eyes goes to the mouth,
-    // and the mouth goes between the eyes.
+    // The pair of eyes goes to the mouth, and the mouth goes between the eyes.
     const eyesBox = box(cxe, cye, gapE * 1.35 + ew * 0.5, eh * 1.7);
-    const mouthBox = box(mcx, mcy, mw, mh * pm.h);
-    const eyes = featureCopy(p, 'A', eyesBox);
-    const mouth = featureCopy(p, 'B', mouthBox);
-    const skinEyes = featureCopy(p, 'Askin', {
-      x: eyesBox.x,
-      y: eyesBox.y + eyesBox.h * 0.7,
-      w: eyesBox.w,
-      h: eyesBox.h,
+    const mouthBox = box(mcx, mcy, mw, mh);
+    moves.push({
+      slot: 'A',
+      src: eyesBox,
+      dst: box(mouthAt[0], mouthAt[1], mw * 1.05, mw * 1.05 * (eyesBox.h / eyesBox.w)),
+      skin: [0, 0.7],
     });
-    const skinMouth = featureCopy(p, 'Bskin', {
-      x: mouthBox.x,
-      y: mouthBox.y + mouthBox.h * 0.7,
-      w: mouthBox.w,
-      h: mouthBox.h,
+    moves.push({
+      slot: 'B',
+      src: mouthBox,
+      dst: box(cxe, cye, gapE * 1.15, gapE * 1.15 * (mouthBox.h / mouthBox.w)),
+      skin: [0, 0.7],
     });
-    featurePaste(p, 'Askin', skinEyes, eyesBox);
-    featurePaste(p, 'Bskin', skinMouth, mouthBox);
-    featurePaste(p, 'A', eyes, box(mcx, mcy + mdy, mw * 1.05, mw * 1.05 * (eyesBox.h / eyesBox.w)));
-    featurePaste(
-      p,
-      'B',
-      mouth,
-      box(cxe, cye, gapE * 1.15, gapE * 1.15 * (mouthBox.h / mouthBox.w)),
-    );
-    return;
+  } else {
+    if (es !== 1 || sp !== 1 || lift !== 0) {
+      // Both eyes are moved about the middle of the eye line, so the spread
+      // follows a head that leans, and the lift is up the face axis.
+      const eyes: Array<[{ x: number; y: number; w: number; ang: number }, number]> = [
+        [fL, fL.x < cxe ? -1 : 1],
+        [fR, fR.x > cxe ? 1 : -1],
+      ];
+      eyes.forEach(([f, side], i) => {
+        const to = g.spot([cxe + (f.x - cxe) * sp, cye + (f.y - cye) * sp], 0, lift);
+        moves.push({
+          slot: 'E' + i,
+          src: box(f.x, f.y, ew, eh),
+          dst: box(to[0], to[1], ew * es, eh * es),
+          skin: [side * 0.06, 0.62],
+        });
+      });
+    }
+    if (ns !== 1) {
+      // The nose is a soft oval a little above its tip. The skin that covers
+      // the old nose comes from the cheek beside it and not from the lip below.
+      const n = g.spot(g.nose, 0, 0.03);
+      const nw = g.fw * 0.34,
+        nh = g.fh * 0.26;
+      moves.push({
+        slot: 'N',
+        src: box(n[0], n[1], nw, nh),
+        dst: box(n[0], n[1], nw * ns, nh * ns),
+        skin: [-0.95, 0.05],
+      });
+    }
+    if (ms !== 1 || mshift !== 0) {
+      moves.push({
+        slot: 'M',
+        src: box(mcx, mcy, mw, mh),
+        dst: box(mouthAt[0], mouthAt[1], mw * ms, mh * ms),
+      });
+    }
   }
-  const sideL = fL.x < cxe ? -1 : 1;
-  const sideR = fR.x > cxe ? 1 : -1;
-  const eyeRows: [number, { y: number; h: number }, number][] = [
-    [fL.x, pL, sideL],
-    [fR.x, pR, sideR],
-  ];
-  for (const [fx, py, side] of eyeRows) {
-    const cx = cxe + (fx - cxe) * sp;
-    const src = box(fx, py.y, ew, eh * py.h);
-    featureShift(p, 'A', src, box(cx, py.y, ew * es, eh * py.h * es), side);
+  if (moves.length) featureMoves(p, moves);
+  // The warps use the mesh of the camera frame, and the face has not moved far
+  // from it: the pinch goes first, about the middle of the face, then the width,
+  // about the middle of the head, then the height of the whole band.
+  if (pk !== 0) pinchFace(p, g, pk > 0 ? 1 + 1.8 * pk : 1 + 0.5 * pk);
+  if (Math.abs(wk - 1) > 0.02) {
+    const mx = (g.top[0] + g.chin[0]) / 2,
+      my = (g.top[1] + g.chin[1]) / 2;
+    // The ring has to hold the widened head, so it grows with the knob.
+    warpEllipse(p, mx, my, g.fw * (0.8 + 0.4 * Math.max(wk, 1)), g.fh * 1.15, roll(g), 1 / wk, 1);
   }
-  const msrc = box(mcx, mcy, mw, mh * pm.h);
-  featureShift(p, 'B', msrc, box(mcx, mcy + mdy, mw * ms, mh * pm.h * ms), 0);
+  if (Math.abs(hk - 1) > 0.02) headBand(p, a, hk);
 }
 
 // warpPatch draws one ellipse of the video, widened by kx and heightened by ky
@@ -1825,6 +1890,7 @@ export function lookInit() {
 // own value and the next painted frame carries it, so the face changes while
 // the handle moves; no restart and no new track.
 function customInit() {
+  customRowsAdd();
   const raw = load('cust');
   if (raw) {
     try {
@@ -1838,14 +1904,7 @@ function customInit() {
       // An old or half written value: the defaults stay.
     }
   }
-  const rows = [
-    ['cx-head', 'head', 'cx-head-v'],
-    ['cx-eyes', 'eyes', 'cx-eyes-v'],
-    ['cx-spread', 'spread', 'cx-spread-v'],
-    ['cx-mouth', 'mouth', 'cx-mouth-v'],
-    ['cx-mshift', 'mshift', 'cx-mshift-v'],
-  ];
-  for (const [id, key] of rows) {
+  for (const [id, key] of CUSTOM_ROWS) {
     const el = document.getElementById(id) as HTMLInputElement | null;
     if (!el) continue;
     el.addEventListener('input', () => {
@@ -1865,7 +1924,7 @@ function customInit() {
   const reset = document.getElementById('cx-reset');
   if (reset) {
     reset.addEventListener('click', () => {
-      state.cust = { head: 100, eyes: 100, spread: 100, mouth: 100, mshift: 0, swap: false };
+      state.cust = { ...CUST_DEFAULTS };
       store('cust', JSON.stringify(state.cust));
       paintCustomValues();
     });
@@ -1877,11 +1936,54 @@ function customInit() {
 // readout id.
 const CUSTOM_ROWS = [
   ['cx-head', 'head', 'cx-head-v'],
+  ['cx-width', 'width', 'cx-width-v'],
   ['cx-eyes', 'eyes', 'cx-eyes-v'],
   ['cx-spread', 'spread', 'cx-spread-v'],
+  ['cx-eyey', 'eyey', 'cx-eyey-v'],
+  ['cx-nose', 'nose', 'cx-nose-v'],
   ['cx-mouth', 'mouth', 'cx-mouth-v'],
   ['cx-mshift', 'mshift', 'cx-mshift-v'],
+  ['cx-pinch', 'pinch', 'cx-pinch-v'],
+] as const;
+
+// CUSTOM_EXTRA are the knobs the panel markup does not carry: slider id, state
+// key, label, lowest, highest, and the row each new row follows.
+type CustomKnob = Exclude<keyof typeof CUST_DEFAULTS, 'swap'>;
+
+const CUSTOM_EXTRA: ReadonlyArray<readonly [string, CustomKnob, string, number, number, string]> = [
+  ['cx-width', 'width', 'head width', 60, 200, 'cx-head'],
+  ['cx-eyey', 'eyey', 'eye height', -25, 25, 'cx-spread'],
+  ['cx-nose', 'nose', 'nose size', 40, 220, 'cx-eyey'],
+  ['cx-pinch', 'pinch', 'pinch / bulge', -100, 100, 'cx-mshift'],
 ];
+
+// customRowsAdd gives each knob in CUSTOM_EXTRA a row in the panel. The row is a
+// copy of the mouth y row, so it takes the look of the others, with its own ids,
+// label and range. A page that already carries the row keeps it.
+function customRowsAdd() {
+  const panel = document.getElementById('cx-panel');
+  const source = document.getElementById('cx-mshift')?.closest('.cx-row');
+  if (!panel || !source || source.parentElement !== panel) return;
+  for (const [id, key, label, lo, hi, after] of CUSTOM_EXTRA) {
+    if (document.getElementById(id)) continue;
+    const row = document.getElementById(after)?.closest('.cx-row');
+    if (!row || row.parentElement !== panel) continue;
+    const copy = source.cloneNode(true) as HTMLElement;
+    const range = copy.querySelector('input');
+    const name = copy.querySelector('.cx-name');
+    const readout = copy.querySelector('.cx-val');
+    if (!range || !name || !readout) continue;
+    for (const el of copy.querySelectorAll('[id]')) el.removeAttribute('id');
+    range.id = id;
+    readout.id = id + '-v';
+    range.min = String(lo);
+    range.max = String(hi);
+    range.value = String(state.cust[key]);
+    range.setAttribute('aria-label', label);
+    name.textContent = label;
+    row.after(copy);
+  }
+}
 
 // paintCustomValue puts one knob and its number back from the state.
 function paintCustomValue(key) {

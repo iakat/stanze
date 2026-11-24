@@ -2,6 +2,22 @@
  The client state, one object per page.
 */
 
+// CUST_DEFAULTS are the knobs of the custom effect: each a percent of a face
+// measure, so they hold near and far from the camera. 100 is neutral for a size
+// and 0 for a shift or the pinch.
+export const CUST_DEFAULTS = {
+  head: 100,
+  width: 100,
+  eyes: 100,
+  spread: 100,
+  eyey: 0,
+  nose: 100,
+  mouth: 100,
+  mshift: 0,
+  pinch: 0,
+  swap: false,
+};
+
 export const state = {
   ws: null,
   self: null,
@@ -19,7 +35,7 @@ export const state = {
   outStream: null, // what is sent to peers
   lookParked: false, // true while a hidden tab sends the raw camera
   // Face effect knobs, each a percent of a face measure, so they hold near and far from the camera.
-  cust: { head: 100, eyes: 100, spread: 100, mouth: 100, mshift: 0, swap: false },
+  cust: { ...CUST_DEFAULTS },
   audioCtx: null, // the microphone graph
   mixer: null,
   micGain: null,
