@@ -19,24 +19,24 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 572 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/boot.ts](src/boot.ts) | 603 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
 | [src/state.ts](src/state.ts) | 181 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 76 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
-| [src/util.ts](src/util.ts) | 70 | Small helpers that touch nothing but their arguments and storage. |
-| [src/dom.ts](src/dom.ts) | 93 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
+| [src/util.ts](src/util.ts) | 101 | Small helpers that touch nothing but their arguments and storage. |
+| [src/dom.ts](src/dom.ts) | 95 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
 | [src/globals.d.ts](src/globals.d.ts) | 20 | Optional globals the loader sets at run time: the wasm glue, the transcriber, the test hook. |
 
 ## Room, signalling and panels
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/room.ts](src/room.ts) | 285 | Create, join, wait, leave, and the lobby that drives them. |
+| [src/room.ts](src/room.ts) | 267 | Create, join, wait, leave, and the lobby that drives them. |
 | [src/signaling.ts](src/signaling.ts) | 186 | The websocket frames, both directions. |
 | [src/peers.ts](src/peers.ts) | 331 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
 | [src/gate.ts](src/gate.ts) | 594 | The room gate: the passphrase, the member list and the sealed claims. |
 | [src/host.ts](src/host.ts) | 227 | The host controls in the call panel: waiting room, let in, member menus. |
-| [src/lobby.ts](src/lobby.ts) | 89 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
+| [src/lobby.ts](src/lobby.ts) | 91 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
 | [src/menu.ts](src/menu.ts) | 207 | The drop-down menu bar. |
 | [src/phone.ts](src/phone.ts) | 37 | The phone frame: the stylesheet folds the app frame away and a tap brings it back. |
 
@@ -45,10 +45,10 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/media.ts](src/media.ts) | 164 | Camera and screen requests, the performance step, the sender bitrate and frame ceilings. |
-| [src/audio.ts](src/audio.ts) | 485 | The talking light, the remote audio graph and the noise suppression worklet. |
-| [src/screen.ts](src/screen.ts) | 99 | Screen share: points the screen sender at the display track, never the camera sender. |
-| [src/volume.ts](src/volume.ts) | 148 | Per peer volume, remembered by identity when one is pinned. |
-| [src/sfx.ts](src/sfx.ts) | 203 | The page's own sound effects, decoded once and cached. |
+| [src/audio.ts](src/audio.ts) | 455 | The talking light, the remote audio graph and the noise suppression worklet. |
+| [src/screen.ts](src/screen.ts) | 89 | Screen share: points the screen sender at the display track, never the camera sender. |
+| [src/volume.ts](src/volume.ts) | 149 | Per peer volume, remembered by identity when one is pinned. |
+| [src/sfx.ts](src/sfx.ts) | 185 | The page's own sound effects, decoded once and cached. |
 | [src/clock.ts](src/clock.ts) | 36 | The call clock. |
 | [src/badge.ts](src/badge.ts) | 43 | The relay badge, read from the transport stats. |
 
@@ -70,10 +70,10 @@ module in `src` has no row yet.
 | --- | ---: | --- |
 | [src/tiles.ts](src/tiles.ts) | 489 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
-| [src/stats.ts](src/stats.ts) | 956 | The stats panel: media metrics per guest and the wire and crypto counters. |
-| [src/asr.ts](src/asr.ts) | 1253 | Local transcription, one language and many. |
-| [src/look.ts](src/look.ts) | 1942 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 855 | The device pickers of the join card and the toolbar. |
+| [src/stats.ts](src/stats.ts) | 957 | The stats panel: media metrics per guest and the wire and crypto counters. |
+| [src/asr.ts](src/asr.ts) | 1278 | Local transcription, one language and many. |
+| [src/look.ts](src/look.ts) | 1930 | The drawn camera: the face mesh, the masks and the custom effect. |
+| [src/devices.ts](src/devices.ts) | 817 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 899 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory
