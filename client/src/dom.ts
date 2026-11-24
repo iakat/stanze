@@ -84,6 +84,8 @@ export interface Elements {
   'asr-note': HTMLElement;
   'look-filter': HTMLSelectElement;
   freeze: HTMLInputElement;
+  'stats-bytes': HTMLInputElement;
+  'cx-swap': HTMLInputElement;
 }
 
 export function $<K extends keyof Elements>(id: K): Elements[K];

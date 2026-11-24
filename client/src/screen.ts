@@ -3,7 +3,7 @@
 */
 
 import { state } from './state.js';
-import { say } from './util.js';
+import { disconnectQuietly, say, stopTracks } from './util.js';
 import { layoutStage, makeTile } from './tiles.js';
 import { shareVideo } from './media.js';
 import { resumeAudio, sendState, updateButtons } from './audio.js';
@@ -72,19 +72,9 @@ export async function startShare() {
 
 export async function stopShare() {
   if (!state.screen) return;
-  for (const track of state.screen.getTracks()) {
-    try {
-      track.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  stopTracks(state.screen);
   if (state.screenSource) {
-    try {
-      state.screenSource.disconnect();
-    } catch {
-      /* not connected */
-    }
+    disconnectQuietly(state.screenSource);
     state.screenSource = null;
   }
   state.screen = null;

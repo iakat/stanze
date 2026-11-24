@@ -5,7 +5,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { detachMedia, isAdmin, say } from './util.js';
+import { detachMedia, disconnectQuietly, isAdmin, say } from './util.js';
 import { layoutStage, ownTile, rowOf } from './tiles.js';
 import { applyFlags, volGain } from './volume.js';
 import { refreshSelf } from './devices.js';
@@ -144,11 +144,7 @@ export async function setNoise(on) {
       return false;
     }
   }
-  try {
-    state.micSource.disconnect();
-  } catch {
-    /* not connected */
-  }
+  disconnectQuietly(state.micSource);
   if (on) {
     state.micSource.connect(state.denoise);
     state.denoiseOn = true;
@@ -252,35 +248,17 @@ export function routeAudio(peer, track) {
 // its nodes can be collected.
 export function dropAudio(peer) {
   if (!peer) return;
-  if (peer.inDenoise) {
-    try {
-      peer.inDenoise.disconnect();
-    } catch {
-      /* already gone */
-    }
-  }
+  if (peer.inDenoise) disconnectQuietly(peer.inDenoise);
   if (peer.audioSrc) {
-    try {
-      peer.audioSrc.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(peer.audioSrc);
     peer.audioSrc = null;
   }
   if (peer.meter) {
-    try {
-      peer.meter.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(peer.meter);
     peer.meter = null;
   }
   if (peer.gain) {
-    try {
-      peer.gain.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(peer.gain);
     peer.gain = null;
   }
   if (peer.pump) {
@@ -297,17 +275,9 @@ export function dropAudio(peer) {
 // own noise cancel when on. The talking light reads the source either way.
 function wirePlayNoise(peer) {
   if (!peer.audioSrc || !peer.gain) return;
-  try {
-    peer.audioSrc.disconnect();
-  } catch {
-    /* not connected */
-  }
+  disconnectQuietly(peer.audioSrc);
   if (peer.inDenoise) {
-    try {
-      peer.inDenoise.disconnect();
-    } catch {
-      /* not connected */
-    }
+    disconnectQuietly(peer.inDenoise);
   }
   if (peer.inNoise && peer.inDenoise) {
     peer.audioSrc.connect(peer.inDenoise);

@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say } from './util.js';
+import { clamp, say } from './util.js';
 import { CHAT_MAX, addChatLine, chatTime } from './chat.js';
 import { b64d, b64e, fileAAD, pqCall, pqModule, shortPeer } from './sealed.js';
 import { canary } from './audit.js';
@@ -145,7 +145,7 @@ function addFileRow(who, name, size) {
 function fileSetBar(el, show, frac) {
   if (!el) return;
   el.bar.hidden = !show;
-  el.fill.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + '%';
+  el.fill.style.width = clamp(Math.round(frac * 100), 0, 100) + '%';
 }
 
 // fileOffer announces one file to every sealed peer; each peer keeps its own

@@ -57,6 +57,37 @@ export function detachMedia(media: HTMLMediaElement) {
   media.srcObject = null;
 }
 
+// clamp keeps a number inside a range.
+export function clamp(n: number, lo: number, hi: number) {
+  return Math.min(Math.max(n, lo), hi);
+}
+
+// stopQuietly stops a track or a source node. A second stop throws in some
+// browsers, which is not an error at teardown.
+export function stopQuietly(node: { stop(): void }) {
+  try {
+    node.stop();
+  } catch {
+    /* already stopped */
+  }
+}
+
+// disconnectQuietly drops a node from its graph. A node that is already out
+// throws, which is not an error at teardown.
+export function disconnectQuietly(node: { disconnect(): void }) {
+  try {
+    node.disconnect();
+  } catch {
+    /* not connected */
+  }
+}
+
+// stopTracks stops every track of a stream, the camera, the microphone or a
+// screen.
+export function stopTracks(stream: MediaStream) {
+  for (const track of stream.getTracks()) stopQuietly(track);
+}
+
 // joinWords renders a short list for the status line ("a, b and c").
 export function joinWords(list) {
   if (list.length <= 1) return list[0] || '';

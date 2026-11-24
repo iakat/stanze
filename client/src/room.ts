@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say, setAdmins } from './util.js';
+import { say, setAdmins, stopQuietly, stopTracks } from './util.js';
 import { load, store } from './prefs.js';
 import { menuSet, setHash, suggestRoom } from './menu.js';
 import { setLocalTile } from './tiles.js';
@@ -144,13 +144,7 @@ export function leave(message) {
     }
   }
   if (state.screen) {
-    for (const track of state.screen.getTracks()) {
-      try {
-        track.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
+    stopTracks(state.screen);
     state.screen = null;
     if (state.screenTile) {
       state.screenTile.remove();
@@ -201,20 +195,8 @@ export function leave(message) {
   paintHandQueue();
   updatePinCount();
   $('chat-note').hidden = true;
-  if (state.micTrack) {
-    try {
-      state.micTrack.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
-  if (state.camTrack) {
-    try {
-      state.camTrack.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (state.micTrack) stopQuietly(state.micTrack);
+  if (state.camTrack) stopQuietly(state.camTrack);
   if (state.audioCtx) {
     state.audioCtx.close().catch(() => {});
     state.audioCtx = null;

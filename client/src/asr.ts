@@ -2,10 +2,12 @@
  Local transcription, one language and many.
 */
 
+import { $ } from './dom.js';
 import { state } from './state.js';
 import { load, store } from './prefs.js';
 import { addChatLine } from './chat.js';
 import { shortPeer } from './sealed.js';
+import { disconnectQuietly } from './util.js';
 import { sealedSend, toSealed } from './gate.js';
 
 // ------------------------------------------------------------- transcription
@@ -86,7 +88,7 @@ export const asrStats = {
 const mb = (n) => `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB`;
 
 function asrNote(text) {
-  const el = document.getElementById('asr-note');
+  const el = $('asr-note');
   if (!el) return;
   el.textContent = text;
   el.hidden = !text;
@@ -243,7 +245,7 @@ function asrChoose(value) {
 // asrPaintLangRow fills the picker from asrChoices and hides it, with its row,
 // while there is no second thing to pick.
 function asrPaintLangRow() {
-  const select = document.getElementById('asr-lang') as HTMLSelectElement | null;
+  const select = $('asr-lang');
   if (!select) return;
   const choices = asrChoices();
   const value = asrChoice();
@@ -264,7 +266,7 @@ function asrPaintLangRow() {
 
 // asrPaintEntry puts the engine and its size on the menu entry.
 function asrPaintEntry() {
-  const btn = document.getElementById('menu-asr-btn');
+  const btn = $('menu-asr-btn');
   if (!btn) return;
   if (asrEngine() === 'omni') {
     btn.title = `transcription, every language, ${omni.size ? mb(omni.size) : 'one model'}`;
@@ -300,7 +302,7 @@ function asrPick(lang) {
   asr.lang = model.lang;
   store('asr.lang', model.lang);
   asrPaintLangRow();
-  const btn = document.getElementById('menu-asr-btn');
+  const btn = $('menu-asr-btn');
   if (btn) asrPaintEntry();
 }
 
@@ -395,36 +397,13 @@ export function asrAnnounce(peer) {
   sealedSend(peer, { k: 'asr', s: 'on' });
 }
 
-// asrTap hooks one incoming voice to a recognizer of its own, at the source
-// before the gain, so a guest turned down is still transcribed.
-function asrTap(peer) {
+// tapVoice wires one incoming voice, at the source before the gain, through a
+// processor of its own; the callback takes each block the tap sees. Both engines
+// use it and each keeps what it needs for the voice it hooked.
+function tapVoice(peer, onBlock) {
   const ctx = state.playCtx;
-  if (!asr.on || !asr.model || !ctx || !peer.audioSrc) return;
-  const have = asr.recs.get(peer.id);
-  if (have && have.src === peer.audioSrc) return;
-  if (have) asrUntap(peer.id);
-  const rec = new asr.model.KaldiRecognizer(ctx.sampleRate);
-  const speaker = () => peer.name || shortPeer(peer.id);
-  rec.on('result', (message) => {
-    const text = String((message.result && message.result.text) || '').trim();
-    if (!text || !asr.on) return;
-    const line = text.slice(0, ASR_LINE_MAX);
-    const who = speaker();
-    addChatLine(`transcript by ${state.name || 'you'}`, `${who}: ${line}`, Date.now());
-    asrSay({ w: who.slice(0, 64), x: line, ts: Date.now() });
-  });
   const proc = ctx.createScriptProcessor(4096, 1, 1);
-  proc.onaudioprocess = (event) => {
-    // A copy, because the engine takes the buffer to its worker.
-    try {
-      rec.acceptWaveformFloat(
-        new Float32Array(event.inputBuffer.getChannelData(0)),
-        ctx.sampleRate,
-      );
-    } catch {
-      /* recognizer gone */
-    }
-  };
+  proc.onaudioprocess = (event) => onBlock(event.inputBuffer.getChannelData(0));
   // The processor only runs when it is wired to an output; the gain of zero
   // keeps it silent.
   const sink = ctx.createGain();
@@ -432,25 +411,71 @@ function asrTap(peer) {
   peer.audioSrc.connect(proc);
   proc.connect(sink);
   sink.connect(ctx.destination);
-  asr.recs.set(peer.id, { rec, proc, src: peer.audioSrc, sink });
+  return { proc, src: peer.audioSrc, sink };
 }
 
-function asrUntap(id) {
-  const h = asr.recs.get(id);
-  if (!h) return;
-  asr.recs.delete(id);
+// untapVoice unhooks one voice and answers the handle it removed, so the engine
+// can let go of what it kept for it.
+function untapVoice(recs, id) {
+  const h = recs.get(id);
+  if (!h) return null;
+  recs.delete(id);
   try {
     h.src.disconnect(h.proc);
   } catch {
     /* source already gone */
   }
-  try {
-    h.proc.disconnect();
-    h.sink.disconnect();
-  } catch {
-    /* already gone */
-  }
+  disconnectQuietly(h.proc);
+  disconnectQuietly(h.sink);
   h.proc.onaudioprocess = null;
+  return h;
+}
+
+// sayLine puts one decoded phrase on the chat and sends it, in the shape both
+// engines use; each caller keeps its own liveness check.
+function sayLine(who, text) {
+  const line = text.slice(0, ASR_LINE_MAX);
+  if (!line) return;
+  addChatLine(`transcript by ${state.name || 'you'}`, `${who}: ${line}`, Date.now());
+  asrSay({ w: who.slice(0, 64), x: line, ts: Date.now() });
+}
+
+// tapReady answers false when this voice is already hooked to the same source;
+// a handle for another source goes first. Both engines hook this way.
+function tapReady(recs, peer, untap) {
+  const have = recs.get(peer.id);
+  if (have && have.src === peer.audioSrc) return false;
+  if (have) untap(peer.id);
+  return true;
+}
+
+// asrTap hooks one incoming voice to a recognizer of its own, at the source
+// before the gain, so a guest turned down is still transcribed.
+function asrTap(peer) {
+  const ctx = state.playCtx;
+  if (!asr.on || !asr.model || !ctx || !peer.audioSrc) return;
+  if (!tapReady(asr.recs, peer, asrUntap)) return;
+  const rec = new asr.model.KaldiRecognizer(ctx.sampleRate);
+  const speaker = () => peer.name || shortPeer(peer.id);
+  rec.on('result', (message) => {
+    const text = String((message.result && message.result.text) || '').trim();
+    if (!text || !asr.on) return;
+    sayLine(speaker(), text);
+  });
+  const tap = tapVoice(peer, (block) => {
+    // A copy, because the engine takes the buffer to its worker.
+    try {
+      rec.acceptWaveformFloat(new Float32Array(block), ctx.sampleRate);
+    } catch {
+      /* recognizer gone */
+    }
+  });
+  asr.recs.set(peer.id, { rec, proc: tap.proc, src: tap.src, sink: tap.sink });
+}
+
+function asrUntap(id) {
+  const h = untapVoice(asr.recs, id);
+  if (!h) return;
   try {
     h.rec.retrieveFinalResult();
   } catch {
@@ -465,17 +490,23 @@ function asrUntap(id) {
   }, 1500);
 }
 
+// syncTaps follows the room for one engine: a tap for each guest inside, none
+// for a guest who waits or left.
+function syncTaps(engine, tap, untap) {
+  if (!engine.on) return;
+  for (const id of [...engine.recs.keys()]) {
+    const peer = state.peers.get(id);
+    if (!peer || peer.waiting) untap(id);
+  }
+  for (const peer of state.peers.values()) {
+    if (!peer.waiting) tap(peer);
+  }
+}
+
 // asrSync follows the room: a recognizer for each guest inside, none for a guest
 // who waits or left.
 function asrSync() {
-  if (!asr.on) return;
-  for (const id of [...asr.recs.keys()]) {
-    const peer = state.peers.get(id);
-    if (!peer || peer.waiting) asrUntap(id);
-  }
-  for (const peer of state.peers.values()) {
-    if (!peer.waiting) asrTap(peer);
-  }
+  syncTaps(asr, asrTap, asrUntap);
 }
 
 export function asrStop() {
@@ -499,10 +530,7 @@ export function asrStop() {
     asr.model = null;
   }
   asr.busy = false;
-  if (was) asrSay({ s: 'off' });
-  paintAsr();
-  asrNote('');
-  asrPaintOthers();
+  asrStopped(was);
 }
 
 async function asrStart() {
@@ -563,7 +591,7 @@ async function asrStart() {
 // paintAsr ticks the menu row while the chosen engine runs or its model is on the
 // way; the row stays live, so a running download can be cancelled there.
 function paintAsr() {
-  const box = document.getElementById('asr-on') as HTMLInputElement | null;
+  const box = $('asr-on');
   if (!box) return;
   const engine = asrEngine();
   const busy = engine === 'omni' ? omni.busy : asr.busy;
@@ -572,7 +600,7 @@ function paintAsr() {
 }
 
 export function initAsr() {
-  const box = document.getElementById('asr-on') as HTMLInputElement | null;
+  const box = $('asr-on');
   if (!box) return;
   box.addEventListener('change', () => {
     if (!box.checked) {
@@ -584,7 +612,7 @@ export function initAsr() {
       asrStart();
     }
   });
-  const select = document.getElementById('asr-lang') as HTMLSelectElement | null;
+  const select = $('asr-lang');
   if (select) {
     select.addEventListener('change', () => {
       // One engine runs at a time and a pick may be a large download, so a change
@@ -792,6 +820,12 @@ export function omniStop() {
     }
     omni.url = '';
   }
+  asrStopped(was);
+}
+
+// asrStopped tells the page that the engine is off and repaints its row; both
+// engines end the same way.
+function asrStopped(was) {
   if (was) asrSay({ s: 'off' });
   paintAsr();
   asrNote('');
@@ -803,15 +837,11 @@ export function omniStop() {
 function omniTap(peer) {
   const ctx = state.playCtx;
   if (!omni.on || !omni.worker || !ctx || !peer.audioSrc) return;
-  const have = omni.recs.get(peer.id);
-  if (have && have.src === peer.audioSrc) return;
-  if (have) omniUntap(peer.id);
+  if (!tapReady(omni.recs, peer, omniUntap)) return;
   const id = peer.id;
   const worker = omni.worker;
-  const proc = ctx.createScriptProcessor(4096, 1, 1);
-  proc.onaudioprocess = (event) => {
+  const tap = tapVoice(peer, (block) => {
     if (!omni.on || omni.worker !== worker) return;
-    const block = event.inputBuffer.getChannelData(0);
     // What the tap saw, so a test can tell a silent source from a deaf engine.
     asrStats.blocks++;
     let top = 0;
@@ -827,46 +857,18 @@ function omniTap(peer) {
     } catch {
       /* engine gone */
     }
-  };
-  // The processor only runs when it is wired to an output; the gain of zero
-  // keeps it silent.
-  const sink = ctx.createGain();
-  sink.gain.value = 0;
-  peer.audioSrc.connect(proc);
-  proc.connect(sink);
-  sink.connect(ctx.destination);
-  omni.recs.set(id, { proc, src: peer.audioSrc, sink });
+  });
+  omni.recs.set(id, { proc: tap.proc, src: tap.src, sink: tap.sink });
 }
 
 function omniUntap(id) {
-  const h = omni.recs.get(id);
-  if (!h) return;
-  omni.recs.delete(id);
-  try {
-    h.src.disconnect(h.proc);
-  } catch {
-    /* source already gone */
-  }
-  try {
-    h.proc.disconnect();
-    h.sink.disconnect();
-  } catch {
-    /* already gone */
-  }
-  h.proc.onaudioprocess = null;
+  untapVoice(omni.recs, id);
 }
 
 // omniSync follows the room: a tap for each guest inside, none for a guest who
 // waits or left.
 function omniSync() {
-  if (!omni.on) return;
-  for (const id of [...omni.recs.keys()]) {
-    const peer = state.peers.get(id);
-    if (!peer || peer.waiting) omniUntap(id);
-  }
-  for (const peer of state.peers.values()) {
-    if (!peer.waiting) omniTap(peer);
-  }
+  syncTaps(omni, omniTap, omniUntap);
 }
 
 // omniDown brings one block to mono 16 kHz with a box filter; the engine needs
@@ -890,12 +892,8 @@ function omniDown(input, rate) {
 // vosk engine uses.
 function omniLine(id, text) {
   if (!omni.on) return;
-  const line = text.slice(0, ASR_LINE_MAX);
-  if (!line) return;
   const peer = state.peers.get(id);
-  const who = peer ? peer.name || shortPeer(id) : shortPeer(id);
-  addChatLine(`transcript by ${state.name || 'you'}`, `${who}: ${line}`, Date.now());
-  asrSay({ w: who.slice(0, 64), x: line, ts: Date.now() });
+  sayLine(peer ? peer.name || shortPeer(id) : shortPeer(id), text);
 }
 
 // omniWorkerSource turns the function below into the worker script, with no extra
@@ -911,23 +909,29 @@ function omniWorkerSource(cfg) {
 // word.
 function omniWorker(cfg) {
   const G = self as any;
-  G.Module = {
-    // The wasm and its threads live under /omni/. The base is absolute, as a blob
-    // worker has no useful directory of its own.
-    locateFile: (path) => cfg.base + path,
-    print: (text) => {
-      if (text) console.log('[omni] ' + text);
-    },
-    printErr: (text) => {
-      if (text) console.warn('[omni] ' + text);
-    },
-    onAbort: (why) => G.postMessage({ ev: 'error', text: String(why || 'the engine stopped') }),
-  };
-  // The API layer first, then the emscripten glue that starts the wasm.
-  G.importScripts(cfg.api, cfg.glue);
-  // A wasm thread runs this same script again; the glue owns its port, so nothing
-  // below may run there.
-  if (/^em-pthread/.test(G.name || '')) return;
+
+  // bootWasm mounts the emscripten module, then loads the API layer and the glue
+  // that starts the wasm. A wasm thread runs this same script again; the glue owns
+  // its port, so nothing else may run there and the answer is false.
+  function bootWasm() {
+    G.Module = {
+      // The wasm and its threads live under /omni/. The base is absolute, as a blob
+      // worker has no useful directory of its own.
+      locateFile: (path) => cfg.base + path,
+      print: (text) => {
+        if (text) console.log('[omni] ' + text);
+      },
+      printErr: (text) => {
+        if (text) console.warn('[omni] ' + text);
+      },
+      onAbort: (why) => G.postMessage({ ev: 'error', text: String(why || 'the engine stopped') }),
+    };
+    // The API layer first, then the emscripten glue that starts the wasm.
+    G.importScripts(cfg.api, cfg.glue);
+    return !/^em-pthread/.test(G.name || '');
+  }
+
+  if (!bootWasm()) return;
 
   const RATE = 16000;
   const FRAME = 1600; // 100 ms, the step of the level gate
@@ -970,11 +974,42 @@ function omniWorker(cfg) {
     return `${cfg.base}${cfg.modelName}?part=${index}&m=${encodeURIComponent(cfg.stamp)}`;
   }
 
+  // hashOk checks the bytes against the hash the server lists and drops the cache
+  // when they differ, so a stale model is never mounted.
+  async function hashOk(bytes) {
+    if (!cfg.sha) return true;
+    const sum = await hash(bytes);
+    if (!sum || sum === cfg.sha) return true;
+    try {
+      await G.caches.delete(cfg.cache);
+    } catch {
+      /* not ours */
+    }
+    return false;
+  }
+
+  // readParts fills bytes from the cache parts; a missing or short part is no hit.
+  async function readParts(cache, first, bytes) {
+    const count = Math.ceil(cfg.size / PART);
+    try {
+      for (let i = 0; i < count; i++) {
+        const hit = i === 0 ? first : await cache.match(partKey(i));
+        if (!hit) return false;
+        const body = new Uint8Array(await hit.arrayBuffer());
+        const at = i * PART;
+        if (body.length !== Math.min(PART, cfg.size - at)) return false;
+        bytes.set(body, at);
+      }
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
   // fromCache reads the model out of the browser cache in parts. A missing or
   // short part is no hit; a stale hash drops the cache before the wasm reads it.
   async function fromCache() {
     if (!G.caches || !cfg.size) return null;
-    const count = Math.ceil(cfg.size / PART);
     let cache;
     let first;
     try {
@@ -986,31 +1021,21 @@ function omniWorker(cfg) {
     if (!first) return null;
     post({ ev: 'progress', got: 0, total: cfg.size, cached: true });
     const bytes = new Uint8Array(cfg.size);
+    if (!(await readParts(cache, first, bytes))) return null;
+    if (!(await hashOk(bytes))) return null;
+    post({ ev: 'progress', got: cfg.size, total: cfg.size, cached: true });
+    return bytes;
+  }
+
+  // putPart writes one finished part to the cache; a cache that refuses is dropped
+  // for the rest of the download.
+  async function putPart(cache, index, body) {
     try {
-      for (let i = 0; i < count; i++) {
-        const hit = i === 0 ? first : await cache.match(partKey(i));
-        if (!hit) return null;
-        const body = new Uint8Array(await hit.arrayBuffer());
-        const at = i * PART;
-        if (body.length !== Math.min(PART, cfg.size - at)) return null;
-        bytes.set(body, at);
-      }
+      await cache.put(partKey(index), new Response(body));
+      return cache;
     } catch {
       return null;
     }
-    if (cfg.sha) {
-      const sum = await hash(bytes);
-      if (sum && sum !== cfg.sha) {
-        try {
-          await G.caches.delete(cfg.cache);
-        } catch {
-          /* not ours */
-        }
-        return null;
-      }
-    }
-    post({ ev: 'progress', got: cfg.size, total: cfg.size, cached: true });
-    return bytes;
   }
 
   // fromNetwork downloads the model and writes every finished part to the cache.
@@ -1042,11 +1067,7 @@ function omniWorker(cfg) {
       // Finished parts go at once, so a stopped tab keeps what it paid for.
       while (cache && got - part * PART >= PART) {
         const at = part * PART;
-        try {
-          await cache.put(partKey(part), new Response(bytes.subarray(at, at + PART)));
-        } catch {
-          cache = null;
-        }
+        cache = await putPart(cache, part, bytes.subarray(at, at + PART));
         part++;
       }
     }
@@ -1057,24 +1078,10 @@ function omniWorker(cfg) {
     }
     if (cache && part * PART < cfg.size) {
       const at = part * PART;
-      try {
-        await cache.put(partKey(part), new Response(bytes.subarray(at, cfg.size)));
-      } catch {
-        /* no cache */
-      }
+      await putPart(cache, part, bytes.subarray(at, cfg.size));
     }
     post({ ev: 'progress', got: cfg.size, total: cfg.size, cached: false });
-    if (cfg.sha) {
-      const sum = await hash(bytes);
-      if (sum && sum !== cfg.sha) {
-        try {
-          await G.caches.delete(cfg.cache);
-        } catch {
-          /* not ours */
-        }
-        throw new Error('the model did not match its hash');
-      }
-    }
+    if (!(await hashOk(bytes))) throw new Error('the model did not match its hash');
     return bytes;
   }
 
@@ -1095,22 +1102,23 @@ function omniWorker(cfg) {
     }
   }
 
-  async function start() {
-    const t0 = performance.now();
-    post({ ev: 'status', text: 'starting the engine' });
-    await waitRuntime();
-    post({ ev: 'status', text: 'loading the model' });
-    let bytes = await fromCache();
-    if (!bytes) {
-      post({ ev: 'status', text: 'downloading the model' });
-      bytes = await fromNetwork();
-    }
+  // loadModel answers the model bytes, from the cache when it holds them, else
+  // from the network.
+  async function loadModel() {
+    const bytes = await fromCache();
+    if (bytes) return bytes;
+    post({ ev: 'status', text: 'downloading the model' });
+    return fromNetwork();
+  }
+
+  async function loadTokens() {
     const res = await fetch(cfg.tokensUrl, { cache: 'no-store' });
     if (!res.ok) throw new Error(`the token table answered ${res.status}`);
-    const tokens = new Uint8Array(await res.arrayBuffer());
-    mount(cfg.modelName, bytes);
-    mount(cfg.tokensName, tokens);
-    post({ ev: 'status', text: 'starting the recognizer' });
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  // startRecognizer builds the recognizer over the mounted files.
+  function startRecognizer() {
     const config = {
       featConfig: { sampleRate: RATE, featureDim: 80 },
       modelConfig: {
@@ -1127,6 +1135,19 @@ function omniWorker(cfg) {
     // @ts-expect-error the worker declares this class in its own scope
     rec = new OfflineRecognizer(config, G.Module);
     if (!rec || !rec.handle) throw new Error('the recognizer did not start');
+  }
+
+  async function start() {
+    const t0 = performance.now();
+    post({ ev: 'status', text: 'starting the engine' });
+    await waitRuntime();
+    post({ ev: 'status', text: 'loading the model' });
+    const bytes = await loadModel();
+    const tokens = await loadTokens();
+    mount(cfg.modelName, bytes);
+    mount(cfg.tokensName, tokens);
+    post({ ev: 'status', text: 'starting the recognizer' });
+    startRecognizer();
     post({ ev: 'ready', ms: Math.round(performance.now() - t0) });
     pump();
   }
@@ -1244,10 +1265,14 @@ function omniWorker(cfg) {
     setTimeout(pump, 0);
   }
 
-  G.onmessage = (event) => {
-    const msg = event.data || {};
-    if (msg.cmd === 'audio' && rec && msg.samples) pushAudio(String(msg.id || ''), msg.samples);
-  };
+  // listen takes the audio the page taps and hands each voice to its gate.
+  function listen() {
+    G.onmessage = (event) => {
+      const msg = event.data || {};
+      if (msg.cmd === 'audio' && rec && msg.samples) pushAudio(String(msg.id || ''), msg.samples);
+    };
+  }
 
+  listen();
   start().catch((err) => post({ ev: 'error', text: short(err) }));
 }

@@ -137,12 +137,12 @@ function waitingText() {
 // switch, the chat lock and the peer count.
 export function paintWaiting() {
   document.body.classList.toggle('self-waiting', state.waiting);
-  const banner = document.getElementById('waiting-banner');
+  const banner = $('waiting-banner');
   if (banner) {
     banner.hidden = !state.waiting;
     if (state.waiting) banner.textContent = waitingText();
   }
-  const sw = document.getElementById('waiting-room') as HTMLInputElement | null;
+  const sw = $('waiting-room');
   if (sw) sw.checked = state.waitingRoom;
   // A waiting guest has no chat and offers no files: the room is not theirs yet.
   $('chat-text').disabled = state.waiting;

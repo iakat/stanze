@@ -189,7 +189,9 @@ win().e2eApp = {
 };
 
 // ---------------------------------------------------------------- boot
-function init() {
+
+// restorePrefs the stored choices and the last room come back before any listener is wired.
+function restorePrefs() {
   // A volume kept under a guest name is a list of the people who used this
   // machine, so the purge goes before anything else reads it.
   purgeNamedVolume();
@@ -247,7 +249,10 @@ function init() {
   // The module is warming before the first click, so a failure is visible in
   // the lobby and the join is only a microphone prompt.
   preloadSealed();
+}
 
+// wireJoinCard the join card and the chat form, with the file button and the drop zone.
+function wireJoinCard() {
   $('newid-btn').addEventListener('click', (event) => {
     event.preventDefault();
     suggestRoom();
@@ -303,7 +308,10 @@ function init() {
     const files = drop.dataTransfer ? drop.dataTransfer.files : null;
     for (let i = 0; files && i < files.length; i++) fileOffer(files[i]);
   });
+}
 
+// wireSwitches the switches under the form that keep their choice.
+function wireSwitches() {
   $('noise-live').addEventListener('change', async () => {
     const on = $('noise-live').checked;
     state.noiseWanted = on;
@@ -341,7 +349,10 @@ function init() {
     store('hidevoicetiles', hide ? 1 : 0);
     layoutStage();
   });
+}
 
+// wirePanels the panels, the pickers, the menu bar and the gate button.
+function wirePanels() {
   initLobbyWindow();
   initAsr();
   lookInit();
@@ -380,7 +391,7 @@ function init() {
 
   // The sound switch: on by default, one stored choice for the guest.
   setSounds(load('sounds') !== '0');
-  const soundBox = document.getElementById('sounds');
+  const soundBox = $('sounds');
   if (soundBox) {
     soundBox.addEventListener('change', () => {
       const on = (soundBox as HTMLInputElement).checked;
@@ -392,7 +403,7 @@ function init() {
   // The stats setting reads its rates in bytes. One stored choice for the
   // guest, and an open panel redraws at once instead of waiting for a tick.
   state.statsBytes = load('statsbytes') === '1';
-  const bytesBox = document.getElementById('stats-bytes') as HTMLInputElement | null;
+  const bytesBox = $('stats-bytes');
   if (bytesBox) {
     bytesBox.checked = state.statsBytes;
     bytesBox.addEventListener('change', () => {
@@ -405,7 +416,7 @@ function init() {
   // The waiting room switch is for the admin; the commit is sealed, so no page
   // obeys a sender that holds no role and the server sees nothing. The box
   // follows the room, so it goes back if another admin changed it first.
-  const waitBox = document.getElementById('waiting-room');
+  const waitBox = $('waiting-room');
   if (waitBox) {
     waitBox.addEventListener('change', () => {
       setWaitingRoom((waitBox as HTMLInputElement).checked);
@@ -429,7 +440,10 @@ function init() {
   paintGate();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
+}
 
+// wireStage the stage: spotlight, the phone chrome, the rail list and the key handler.
+function wireStage() {
   // A click on a tile is a spotlight: that guest takes the large area and the
   // others become rail rows. The same click, a click on the empty stage or Esc
   // gives the normal layout back, and a click on a control stays with it.
@@ -517,7 +531,10 @@ function init() {
       lookPark(false);
     }
   });
+}
 
+// wireCallBar the buttons of the call toolbar.
+function wireCallBar() {
   $('share-btn').addEventListener('click', () => {
     if (state.screen) stopShare();
     else startShare();
@@ -556,6 +573,20 @@ function init() {
   // so the options are numbered until a request has succeeded once.
   refreshDevices();
 }
+
+function init() {
+  restorePrefs();
+  wireJoinCard();
+  wireSwitches();
+  wirePanels();
+  wireStage();
+  wireCallBar();
+
+  // The form shows a picker before the first permission: the labels are hidden,
+  // so the options are numbered until a request has succeeded once.
+  refreshDevices();
+}
+
 init();
 
 // The bundle closes over its top level names, and the browser tests read a few

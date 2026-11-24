@@ -3,6 +3,7 @@
 */
 
 import { $ } from './dom.js';
+import { clamp } from './util.js';
 import { state } from './state.js';
 import { micLevelCells } from './audio.js';
 import {
@@ -331,7 +332,7 @@ function levelDb(peak) {
 // levelFraction is one peak as a share of the -60 dB to 0 dB scale, clamped to 0..1.
 function levelFraction(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
-  return Math.max(0, Math.min(1, (db + 60) / 60));
+  return clamp((db + 60) / 60, 0, 1);
 }
 
 // peerLevel is what arrives from one guest, read at the source before the gain;

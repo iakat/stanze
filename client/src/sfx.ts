@@ -2,7 +2,9 @@
  The page's own sound effects.
 */
 
+import { $ } from './dom.js';
 import { state } from './state.js';
+import { disconnectQuietly, stopQuietly } from './util.js';
 
 // ---------------------------------------------------------------- sound effects
 // Four one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
@@ -91,11 +93,7 @@ export function playSfx(name) {
     return;
   }
   if (state.sfxSource) {
-    try {
-      state.sfxSource.stop();
-    } catch {
-      /* already finished */
-    }
+    stopQuietly(state.sfxSource);
     state.sfxSource = null;
   }
   try {
@@ -156,15 +154,11 @@ export function startLost() {
 export function setSounds(on) {
   state.sounds = on;
   document.body.dataset.sounds = on ? 'on' : 'off';
-  const box = document.getElementById('sounds') as HTMLInputElement | null;
+  const box = $('sounds');
   if (box) box.checked = on;
   if (!on) {
     if (state.sfxSource) {
-      try {
-        state.sfxSource.stop();
-      } catch {
-        /* already finished */
-      }
+      stopQuietly(state.sfxSource);
       state.sfxSource = null;
     }
     // Cut the pad but keep the wish for it.
@@ -182,22 +176,10 @@ export function stopLost() {
   const src = state.lostSource;
   state.lostSource = null;
   if (state.lostGain) {
-    try {
-      state.lostGain.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(state.lostGain);
     state.lostGain = null;
   }
   if (!src) return;
-  try {
-    src.stop();
-  } catch {
-    /* already finished */
-  }
-  try {
-    src.disconnect();
-  } catch {
-    /* already gone */
-  }
+  stopQuietly(src);
+  disconnectQuietly(src);
 }

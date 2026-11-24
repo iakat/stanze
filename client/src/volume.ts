@@ -6,6 +6,7 @@ import { state } from './state.js';
 import { load, store } from './prefs.js';
 import { layoutStage, paintRowHand, rowOf } from './tiles.js';
 import { handPlace } from './audio.js';
+import { clamp } from './util.js';
 
 // ---------------------------------------------------------------- volume
 // The volume of one participant is a percent from 0 (silent) to 200. It is kept
@@ -49,7 +50,7 @@ export function storedVolume(peer) {
   const raw = peer && peer.fp ? load(`vol.fp.${peer.fp}`) : '';
   const n = parseInt(raw || (peer ? volCall.get(peer.id) : ''), 10);
   if (!Number.isFinite(n)) return 100;
-  return Math.max(0, Math.min(200, n));
+  return clamp(n, 0, 200);
 }
 
 // saveVolume keeps the percent of one peer: a proven guest by fingerprint on
@@ -93,7 +94,7 @@ export function wireVolume(peer) {
   for (const { range } of volumePairs(peer)) {
     range.addEventListener('input', () => {
       const n = parseInt(range.value, 10);
-      peer.vol = Number.isFinite(n) ? Math.max(0, Math.min(200, n)) : 100;
+      peer.vol = Number.isFinite(n) ? clamp(n, 0, 200) : 100;
       paintVolume(peer);
       saveVolume(peer);
     });

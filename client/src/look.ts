@@ -5,7 +5,7 @@
 import { LOOKS, LOOK_MAX, MASKS, MESH_DIR, MESH_HZ_MAX, MESH_HZ_MIN, MESH_W } from './config.js';
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { detachMedia, say } from './util.js';
+import { clamp, detachMedia, say, stopQuietly, stopTracks } from './util.js';
 import { load, store } from './prefs.js';
 import { paintSelfCam } from './devices.js';
 
@@ -1395,7 +1395,7 @@ function drawDog(ctx, g) {
   // The mouth must be open: the anchor holds the openness for about a second,
   // so a talking mouth does not make the tongue flicker. Openness is a share of
   // the mouth width, so the tongue starts small and grows with the jaw.
-  const open = Math.max(0, Math.min(1, g.tongue));
+  const open = clamp(g.tongue, 0, 1);
   if (open > 0.02) {
     const mx = (g.mouthL[0] + g.mouthR[0]) / 2;
     const my = (g.lip[1] + g.lipLow[1]) / 2;
@@ -1670,13 +1670,7 @@ export async function setFreeze(on) {
   state.freezeTrack = null;
   state.freezeCanvas = null;
   await lookPublish(lookTrack() || state.camTrack);
-  if (old) {
-    try {
-      old.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (old) stopQuietly(old);
   return true;
 }
 
@@ -1727,13 +1721,7 @@ export function lookStop(restore = true) {
     if (p.clock) p.clock.terminate();
     detachMedia(p.video);
     if (p.video.parentNode) p.video.parentNode.removeChild(p.video);
-    for (const t of p.stream.getTracks()) {
-      try {
-        t.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
+    stopTracks(p.stream);
   }
   if (!restore) return;
   const track = state.camTrack;
@@ -1867,7 +1855,7 @@ function customInit() {
       store('cust', JSON.stringify(state.cust));
     });
   }
-  const swap = document.getElementById('cx-swap') as HTMLInputElement | null;
+  const swap = $('cx-swap');
   if (swap) {
     swap.addEventListener('change', () => {
       state.cust.swap = swap.checked;
@@ -1909,7 +1897,7 @@ function paintCustomValue(key) {
 // paintCustomValues puts every knob and the swap box back from the state.
 function paintCustomValues() {
   for (const [, key] of CUSTOM_ROWS) paintCustomValue(key);
-  const swap = document.getElementById('cx-swap') as HTMLInputElement | null;
+  const swap = $('cx-swap');
   if (swap) swap.checked = !!state.cust.swap;
 }
 

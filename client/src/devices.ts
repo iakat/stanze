@@ -5,7 +5,7 @@
 import { QUALITY } from './config.js';
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { detachMedia, isAdmin, joinWords, say } from './util.js';
+import { detachMedia, disconnectQuietly, isAdmin, joinWords, say, stopQuietly } from './util.js';
 import { store } from './prefs.js';
 import { layoutStage, makeTile, ownTile, paintRowDeaf, setLocalTile } from './tiles.js';
 import { applyFlags, paintVolume } from './volume.js';
@@ -528,17 +528,9 @@ async function adoptMic(track) {
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
       await setNoise(state.noiseWanted);
     } else if (prev && prev !== track) {
-      try {
-        state.micSource.disconnect();
-      } catch {
-        /* not connected */
-      }
+      disconnectQuietly(state.micSource);
       if (state.micAnalyser) {
-        try {
-          state.micAnalyser.disconnect();
-        } catch {
-          /* not connected */
-        }
+        disconnectQuietly(state.micAnalyser);
         state.micAnalyser = null;
       }
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
@@ -551,13 +543,7 @@ async function adoptMic(track) {
     state.outStream.addTrack(out);
   }
   publishTrack(out);
-  if (prev && prev !== track) {
-    try {
-      prev.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (prev && prev !== track) stopQuietly(prev);
 }
 
 // setVideoTrack reuses the stream when the same track is attached, so a repaint
@@ -685,13 +671,7 @@ async function adoptCam(track) {
   state.camTrack = track;
   // A new camera hands the live picture back: the frozen frame is stale.
   if (state.freeze) {
-    if (state.freezeTrack) {
-      try {
-        state.freezeTrack.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
+    if (state.freezeTrack) stopQuietly(state.freezeTrack);
     state.freeze = false;
     state.freezeTrack = null;
     state.freezeCanvas = null;
@@ -710,13 +690,7 @@ async function adoptCam(track) {
     // A look or a mask follows the camera it was drawn from.
     await lookRestart();
   }
-  if (prev && prev !== track) {
-    try {
-      prev.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (prev && prev !== track) stopQuietly(prev);
   applyMirror();
 }
 
@@ -796,13 +770,7 @@ export function disableCam(persist = true) {
   state.camTrack = null;
   // A frozen still has no camera behind it any more, so the freeze goes too.
   if (state.freeze) {
-    if (state.freezeTrack) {
-      try {
-        state.freezeTrack.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
+    if (state.freezeTrack) stopQuietly(state.freezeTrack);
     state.freeze = false;
     state.freezeTrack = null;
     state.freezeCanvas = null;
@@ -811,13 +779,7 @@ export function disableCam(persist = true) {
   }
   // The drawn track reads from the camera, so it goes with it.
   lookStop();
-  if (track) {
-    try {
-      track.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (track) stopQuietly(track);
   paintSelfCam(false);
   updateButtons();
   sendState();

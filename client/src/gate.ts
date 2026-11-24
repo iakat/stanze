@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, setAdmins } from './util.js';
+import { clamp, isAdmin, setAdmins } from './util.js';
 import { paintName, paintRowDeaf, rowOf } from './tiles.js';
 import { applyFlags } from './volume.js';
 import { admitPeer, hostMenu, markAdmins, paintWaiting } from './host.js';
@@ -333,7 +333,7 @@ export function sealedOnState(peer, obj) {
   if (obj.hand !== undefined) {
     const was = peer.hand;
     peer.hand = !!obj.hand;
-    peer.handTs = peer.hand ? Math.max(0, Math.min(Number(obj.ts) || 0, Date.now())) : 0;
+    peer.handTs = peer.hand ? clamp(Number(obj.ts) || 0, 0, Date.now()) : 0;
     if (peer.hand !== was) {
       playSfx(peer.hand ? 'pop' : 'bonk');
       // A hand that goes up on a phone brings the frame back, or nobody would

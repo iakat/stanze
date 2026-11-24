@@ -2,7 +2,9 @@
  The lobby window on a desktop.
 */
 
+import { $ } from './dom.js';
 import { load, store } from './prefs.js';
+import { clamp } from './util.js';
 
 // ------------------------------------------------------------- lobby window
 // A desktop window: dragged by its title bar, kept inside the viewport and
@@ -16,8 +18,8 @@ function lobbyPlace(win, x, y) {
   const h = win.offsetHeight;
   const maxX = Math.max(0, document.documentElement.clientWidth - w);
   const maxY = Math.max(0, window.innerHeight - h);
-  const cx = Math.min(Math.max(0, Math.round(x)), maxX);
-  const cy = Math.min(Math.max(0, Math.round(y)), maxY);
+  const cx = clamp(Math.round(x), 0, maxX);
+  const cy = clamp(Math.round(y), 0, maxY);
   win.classList.add('moved');
   win.style.left = `${cx}px`;
   win.style.top = `${cy}px`;
@@ -25,7 +27,7 @@ function lobbyPlace(win, x, y) {
 }
 
 export function initLobbyWindow() {
-  const win = document.getElementById('lobby');
+  const win = $('lobby');
   const bar = win && (win.querySelector('.titlebar') as HTMLElement | null);
   // No title bar means no drag, as on a skin that hides it.
   if (!win || !bar || getComputedStyle(bar).display === 'none') return;
