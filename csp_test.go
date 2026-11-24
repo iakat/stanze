@@ -80,4 +80,7 @@ func TestSecurityHeaders(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
+	if pp := h.Get("Permissions-Policy"); !strings.Contains(pp, "usb=()") || !strings.Contains(pp, "camera=(self)") {
+		t.Errorf("Permissions-Policy = %q", pp)
+	}
 }

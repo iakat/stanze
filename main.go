@@ -176,7 +176,9 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 			// The files are public code and carry nothing of a room, so the
 			// browser may keep them; no-cache makes it ask first, and an
 			// unchanged file is a 304 with no body. A new binary has new tags.
-			h.Set("Cache-Control", "no-cache")
+			if h.Get("Cache-Control") == "" {
+				h.Set("Cache-Control", "no-cache")
+			}
 			h.Set("ETag", tag)
 			if etagMatch(r.Header.Get("If-None-Match"), tag) {
 				w.WriteHeader(http.StatusNotModified)
@@ -202,6 +204,9 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 		if selfHash != "" {
 			w.Header().Set("X-Binary-SHA256", selfHash)
 		}
+		// The page carries the room in the fragment, so a kept copy is a leak on
+		// a shared machine and nothing a reload needs.
+		w.Header().Set("Cache-Control", "no-store")
 		serve("index.html")(w, r)
 	})
 	for _, name := range assetNames() {
@@ -570,7 +575,11 @@ func securityHeaders(next http.Handler, log *slog.Logger, asr bool) http.Handler
 		h.Set("X-Permitted-Cross-Domain-Policies", "none")
 		h.Set("X-XSS-Protection", "0")
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), geolocation=(), interest-cohort=()")
+		h.Set("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), "+
+			"geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), "+
+			"idle-detection=(), xr-spatial-tracking=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=()")
+		h.Set("Origin-Agent-Cluster", "?1")
+		h.Set("X-Robots-Tag", "noindex, nofollow")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Embedder-Policy", "require-corp")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
