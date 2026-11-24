@@ -9,6 +9,20 @@ No database, no external services and no request to a third party at runtime:
 the client font, the emoji set, the sounds and the models all ship inside the
 binary.
 
+## Screenshots
+
+The join card, a two person call with both identities pinned, the stats panel
+and the effects menu. Fake camera and fake microphone, two browsers on the live
+page, so nothing of a real room is in the pictures.
+
+![the join card](media/lobby.png)
+
+![a two person call](media/call.png)
+
+| stats panel | effects menu |
+| --- | --- |
+| ![the stats panel](media/stats.png) | ![the effects menu](media/effects.png) |
+
 ## Features
 
 - **One binary.** The browser client is embedded in the executable. A release
