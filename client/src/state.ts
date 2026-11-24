@@ -45,6 +45,7 @@ export const state = {
   micAnalyser: null, // tap on the microphone input, for the stats level
   meterPeak: 0, // decaying peak, so one tick per second can see a word
   denoise: null,
+  denoiseFeId: 0, // worker lane of the microphone filter when FastEnhancer owns it
   denoiseOn: false,
   noiseWasm: null, // one fetch of the noise model, shared by every node
   feWorker: null, // the worker that holds FastEnhancer, shared by every stream

@@ -175,7 +175,8 @@ async function makeFastEnhancerNode(ctx) {
   return { node, id };
 }
 
-// setNoise switches the microphone between the raw path and the GTCRN path.
+// setNoise switches the microphone between the raw path and the filter path.
+// The filter is FastEnhancer, with GTCRN kept as the fallback.
 // The output of the mixer does not change, so no peer is disturbed.
 export async function setNoise(on) {
   if (!state.micSource || !state.audioCtx) {
@@ -184,15 +185,26 @@ export async function setNoise(on) {
   }
   if (on && !state.denoise) {
     try {
-      // The wasm bytes travel in processorOptions: a worklet can only build a
-      // module from bytes it already holds.
-      state.denoise = await makeDenoiseNode(state.audioCtx);
+      // FastEnhancer is the default outgoing filter, the same engine as the
+      // incoming streams. Its port is transferred to the worker, so the model
+      // and the runtime are fetched once per page.
+      const { node, id } = await makeFastEnhancerNode(state.audioCtx);
+      state.denoise = node;
+      state.denoiseFeId = id;
       state.denoise.connect(state.micGain);
     } catch (err) {
-      console.warn('noise suppression unavailable', err);
-      state.denoise = null;
-      state.denoiseOn = false;
-      return false;
+      console.warn('fastenhancer on the microphone unavailable', err);
+      try {
+        // The wasm bytes travel in processorOptions: a worklet can only build
+        // a module from bytes it already holds.
+        state.denoise = await makeDenoiseNode(state.audioCtx);
+        state.denoise.connect(state.micGain);
+      } catch (err2) {
+        console.warn('noise suppression unavailable', err2);
+        state.denoise = null;
+        state.denoiseOn = false;
+        return false;
+      }
     }
   }
   disconnectQuietly(state.micSource);
