@@ -461,6 +461,8 @@ func folderNames() []string {
 func assetNames() []string {
 	return []string{
 		"index.html", "app.js", "style.css", "favicon.svg",
+		// The commit the page was built from, written by build.sh or the image.
+		"version.txt",
 		// The house typeface: Arial metrics, shipped with the page so every
 		// browser puts the same letters on the same pixels.
 		"lsans.woff2", "lsans-bold.woff2",
