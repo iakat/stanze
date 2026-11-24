@@ -9,8 +9,7 @@ CC=${CC:-clang}
 OPT=${OPT:--O3}
 CFLAGS="--target=wasm32-wasip1 -msimd128 $OPT -D_WASI_EMULATED_MMAN -I$R/include -I$R/src -I$R/src/internal"
 rm -rf "$OUT"; mkdir -p "$OUT"
-SRCS=$(cd "$R" && ls src/*.c src/nn/*.c src/qgemm/*.c src/qgemm/wasm/*.c src/fft/*.c src/winograd/*.c 2>/dev/null \
-  | grep -v 'x86/\|arm/\|fft_avx\|fft_neon\|fft_avx512\|fft_scalar\|qgemm_avx\|qgemm_neon\|qgemm_dotprod\|qgemm_i8mm\|qgemm_scalar\|qgemm_avx512')
+SRCS=$(cd "$R" && ls src/*.c src/nn/*.c src/qgemm/*.c src/qgemm/wasm/*.c src/fft/*.c src/winograd/*.c 2>/dev/null)
 for f in $SRCS; do
   $CC $CFLAGS -c "$R/$f" -o "$OUT/$(echo "$f" | tr '/' '_').o"
 done

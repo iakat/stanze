@@ -13,43 +13,15 @@ option(FE_USE_ACCURATE_POLY  "Use Remez polys in shared 128-bit/NEON transcenden
 option(FE_BUILD_TESTS        "Build test and benchmark runners"          ON)
 include(CTest)
 
-# Target arch detection. Supported deployment matrix is arm64 + x86_64
-# (covering Apple Silicon, modern Android/iOS, MinGW or Clang GNU-driver
-# Windows, Linux desktop and server). The engine ships no scalar runtime tier — see
-# qgemm_dispatch.c.
-if(MSVC)
-    message(FATAL_ERROR
-        "fe currently requires GCC/Clang-style target attributes and per-file "
-        "ISA flags. Use a GNU-style Clang or MinGW toolchain on Windows; "
-        "MSVC/clang-cl is not supported.")
-endif()
+# This tree carries the wasm32 tier only. The ARM and x86 tiers were
+# removed; they live in the upstream project this engine was ported from.
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _proc)
-if(_proc MATCHES "aarch64|arm64|armv8")
-    set(FE_ARCH "arm64")
-elseif(_proc MATCHES "x86_64|amd64|x64")
-    set(FE_ARCH "x86_64")
-elseif(_proc MATCHES "wasm32|wasm")
-    set(FE_ARCH "wasm32")
-else()
-    set(FE_ARCH "unknown")
-endif()
-if(APPLE AND CMAKE_OSX_ARCHITECTURES)
-    list(LENGTH CMAKE_OSX_ARCHITECTURES _osx_n)
-    if(_osx_n EQUAL 1)
-        if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-            set(FE_ARCH "arm64")
-        elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-            set(FE_ARCH "x86_64")
-        endif()
-    endif()
-endif()
-
-if(NOT (FE_ARCH STREQUAL "arm64" OR FE_ARCH STREQUAL "x86_64"
-        OR FE_ARCH STREQUAL "wasm32"))
+if(NOT (_proc MATCHES "wasm32|wasm" OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten"))
     message(FATAL_ERROR
-        "fe supports arm64, x86_64 and wasm32 only. "
+        "fe builds for wasm32 only. "
         "Detected CMAKE_SYSTEM_PROCESSOR='${CMAKE_SYSTEM_PROCESSOR}'.")
 endif()
+set(FE_ARCH "wasm32")
 
 message(STATUS "fe ${PROJECT_VERSION}")
 message(STATUS "  arch     : ${FE_ARCH}")
@@ -117,30 +89,16 @@ if(FE_USE_ACCURATE_POLY)
     add_compile_definitions(FE_USE_ACCURATE_POLY)
 endif()
 
-# Engine library. The arch dispatcher always exists; per-arch kernel
-# directories only contribute on the matching host.
+# Engine library. One tier: wasm32 with SIMD128, which is part of the target.
 file(GLOB FE_SRC_TOP CONFIGURE_DEPENDS src/*.c)
 file(GLOB FE_SRC_NN CONFIGURE_DEPENDS src/nn/*.c)
 file(GLOB FE_SRC_QGEMM CONFIGURE_DEPENDS src/qgemm/*.c)
 file(GLOB FE_SRC_WINO CONFIGURE_DEPENDS src/winograd/*.c)
-# FFT: per-arch tier TUs only (added below). No scalar runtime tier —
-# unsupported architectures fail at configure time; x86 hosts below the
-# AVX2+FMA3+F16C runtime floor fail at fe_init.
+# FFT: the wasm tier TU. There is no scalar runtime tier.
 set(FE_SRC ${FE_SRC_TOP} ${FE_SRC_NN} ${FE_SRC_QGEMM} ${FE_SRC_WINO})
-if(FE_ARCH STREQUAL "arm64")
-    file(GLOB FE_SRC_ARM CONFIGURE_DEPENDS src/qgemm/arm/*.c)
-    list(APPEND FE_SRC ${FE_SRC_ARM}
-                       src/fft/fft_neon.c)
-elseif(FE_ARCH STREQUAL "x86_64")
-    file(GLOB FE_SRC_X86 CONFIGURE_DEPENDS src/qgemm/x86/*.c)
-    list(APPEND FE_SRC ${FE_SRC_X86}
-                       src/fft/fft_avx2.c
-                       src/fft/fft_avx512.c)
-elseif(FE_ARCH STREQUAL "wasm32")
-    file(GLOB FE_SRC_WASM CONFIGURE_DEPENDS src/qgemm/wasm/*.c)
-    list(APPEND FE_SRC ${FE_SRC_WASM}
-                       src/fft/fft_wasm.c)
-endif()
+file(GLOB FE_SRC_WASM CONFIGURE_DEPENDS src/qgemm/wasm/*.c)
+list(APPEND FE_SRC ${FE_SRC_WASM}
+                   src/fft/fft_wasm.c)
 
 add_library(fe STATIC ${FE_SRC})
 target_include_directories(fe
@@ -151,49 +109,6 @@ if(NOT MSVC AND NOT WIN32)
     target_link_libraries(fe PUBLIC m)
 endif()
 target_compile_options(fe PRIVATE ${FE_FLAGS_COMMON})
-
-# Per-file -march flags for each ISA tier. The CPU-detection and dispatcher
-# TUs stay at baseline so they cannot SIGILL on hardware that lacks the
-# very feature they're trying to probe.
-if(FE_ARCH STREQUAL "arm64")
-    set_source_files_properties(src/qgemm/arm/qgemm_dotprod.c PROPERTIES
-        COMPILE_FLAGS "-march=armv8.2-a+dotprod")
-    set_source_files_properties(src/qgemm/arm/qgemm_i8mm.c PROPERTIES
-        COMPILE_FLAGS "-march=armv8.6-a+dotprod+i8mm")
-elseif(FE_ARCH STREQUAL "x86_64")
-    set_source_files_properties(src/qgemm/x86/qgemm_avx2.c PROPERTIES
-        COMPILE_FLAGS "-mavx2 -mfma")
-    set_source_files_properties(src/fft/fft_avx2.c PROPERTIES
-        COMPILE_FLAGS "-mavx2 -mfma")
-    set_source_files_properties(src/qgemm/x86/qgemm_avxvnni.c PROPERTIES
-        COMPILE_FLAGS "-mavx2 -mfma -mavxvnni")
-    set_source_files_properties(src/qgemm/x86/qgemm_avx512vnni.c PROPERTIES
-        COMPILE_FLAGS "-mavx2 -mfma -mavxvnni -mavx512f -mavx512bw -mavx512vl -mavx512vnni")
-    set_source_files_properties(src/fft/fft_avx512.c PROPERTIES
-        COMPILE_FLAGS "-mavx2 -mfma -mavxvnni -mavx512f -mavx512bw -mavx512vl -mavx512vnni")
-    # Every TU that gates SIMD via FE_QGEMM_HAVE_AVX2 must see -mavx2 so the
-    # preprocessor enables the AVX2 paths. Without these flags those blocks
-    # are silently preprocessed-out and the engine falls back to narrower
-    # code inside otherwise-vectorized routines. F16C+FMA are needed for the
-    # fp16 cvt + FMA intrinsics used in the fp16-storage paths.
-    #
-    # When adding a new TU that uses _mm256_* / _mm_cvtph_ps / etc, add it
-    # to this list — otherwise its SIMD code blocks are silently dropped at
-    # preprocess time (the latent bug originally hit on fe_winograd.c).
-    set(FE_X86_AVX2_TUS
-        src/winograd/fe_winograd.c
-        src/qgemm/qgemm_quant.c
-        src/nn/fe_activations.c
-        src/nn/fe_attention.c
-        src/fe_engine.c
-        src/nn/fe_gru.c
-        src/nn/fe_qgemm.c
-        src/nn/fe_sgemm.c
-        src/fe_stft.c
-        src/nn/fe_vec.c)
-    set_source_files_properties(${FE_X86_AVX2_TUS} PROPERTIES
-        COMPILE_FLAGS "-mavx2 -mfma -mf16c")
-endif()
 
 # Test runners (fe_run_file: end-to-end inference; fe_test_cross_tier: bit-id).
 if(FE_BUILD_TESTS)
