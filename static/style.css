@@ -1945,3 +1945,15 @@ body.self-waiting .admit { display: none; }
   opacity: 0;
   pointer-events: none;
 }
+
+/* The running build: the commit the page came from, small in the corner. */
+.buildtag {
+  position: fixed;
+  left: 0.45rem;
+  bottom: 0.15rem;
+  margin: 0;
+  font: 0.65rem/1.2 ui-monospace, monospace;
+  opacity: 0.45;
+  pointer-events: none;
+  z-index: 5;
+}

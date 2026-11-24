@@ -58,6 +58,9 @@ if [ ! -s "$here/static/app.js" ]; then
 	echo "static/app.js is missing; build the client first (drop SKIP_CLIENT)" >&2
 	exit 1
 fi
+# The commit the page reports. GIT_COMMIT overrides; a tree with no git
+# history (a release tarball) writes unknown and the label stays hidden.
+printf '%s\n' "${GIT_COMMIT:-unknown}" > "$here/static/version.txt"
 "$GO" run ./cmd/pack
 
 mkdir -p bin

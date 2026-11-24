@@ -36,6 +36,9 @@ RUN node client/build.mjs
 # which the server embeds. Both steps mirror build.sh and write no timestamps,
 # so the same commit gives the same archive.
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS client
+# The commit the image was built from, shown on the page. Pass it with
+# --build-arg GIT_COMMIT=$(git rev-parse --short HEAD); it defaults to unknown.
+ARG GIT_COMMIT=unknown
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOPATH=/go \
@@ -46,6 +49,7 @@ COPY --from=mods /go/pkg/mod /go/pkg/mod
 COPY . .
 COPY --from=clientbundle /src/static/app.js static/app.js
 RUN GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+RUN printf '%s\n' "${GIT_COMMIT}" > static/version.txt
 RUN go run -trimpath -buildvcs=false ./cmd/pack
 
 # The server is the only target dependent step: trimmed, stripped, no VCS

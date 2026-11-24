@@ -51,6 +51,19 @@
     return document.getElementById(id);
   }
 
+  // src/buildtag.ts
+  function paintBuildTag() {
+    const el2 = document.getElementById("buildtag");
+    if (!el2) return;
+    void fetch("/version.txt").then((res) => res.ok ? res.text() : "").then((text) => {
+      const build = text.trim();
+      if (!build || build === "unknown") return;
+      el2.textContent = "build " + build;
+      el2.hidden = false;
+    }).catch(() => {
+    });
+  }
+
   // src/state.ts
   var CUST_DEFAULTS = {
     head: 100,
@@ -9894,6 +9907,7 @@
       }
     });
     refreshDevices();
+    paintBuildTag();
   }
   function init() {
     restorePrefs();
