@@ -125,6 +125,53 @@ async function makeDenoiseNode(ctx) {
   });
 }
 
+// prefetchNoise starts the download of the incoming noise runtime and its model,
+// so the first stream of a call does not wait for 15 MB. The worker then loads
+// both from the HTTP cache. It is a plain fetch and nothing is kept here.
+export function prefetchNoise() {
+  const warm = (url) =>
+    fetch(url)
+      .then((res) => (res.ok ? res.arrayBuffer() : null))
+      .catch(() => {});
+  void warm('/ort/ort.wasm.min.js');
+  void warm('/ort/ort-wasm-simd-threaded.wasm');
+  void warm('/fastenhancer-s.onnx');
+}
+
+// feWorker starts the one worker that holds FastEnhancer. Every incoming stream
+// that uses it hands over its own node port, so the model is fetched and built
+// once, and every stream keeps its own state in the worker.
+function feWorker() {
+  if (!state.feWorker) {
+    state.feWorker = new Worker(scriptURL('/fastenhancer-worker.js'));
+    state.feWorker.onmessage = (event) => {
+      const msg = event.data || {};
+      if (msg.ev === 'error') say('the noise filter stopped: ' + String(msg.text || 'unknown'));
+    };
+    // The streams ask for the model at call start, so the load does not land on
+    // the first frame of the first talker.
+    state.feWorker.postMessage({ ev: 'warm' });
+  }
+  return state.feWorker;
+}
+
+// makeFastEnhancerNode builds one node for one stream and attaches it to the
+// worker. The node port is transferred, so the worker talks to the audio thread
+// directly and no sample passes through the page.
+async function makeFastEnhancerNode(ctx) {
+  await ctx.audioWorklet.addModule(scriptURL('/fastenhancer-worklet.js'));
+  const node = new AudioWorkletNode(ctx, 'fastenhancer', {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    channelCount: 1,
+    channelCountMode: 'explicit',
+  });
+  const id = ++state.feSeq;
+  feWorker().postMessage({ ev: 'attach', id, port: node.port }, [node.port]);
+  return { node, id };
+}
+
 // setNoise switches the microphone between the raw path and the GTCRN path.
 // The output of the mixer does not change, so no peer is disturbed.
 export async function setNoise(on) {
@@ -242,7 +289,7 @@ export function routeAudio(peer, track) {
   peer.audioSrc.connect(peer.meter);
   // A guest whose noise cancel was asked for before this track existed gets it
   // now, without a second toggle.
-  if (peer.inNoise) void setPeerNoise(peer, true);
+  if (peer.inNoise) void setPeerNoise(peer, true, peer.inEngine || 'fastenhancer');
   resumePlayback();
   // A context still suspended after a resume attempt plays nothing. Say it,
   // because the video looks correct and only the sound is missing.
@@ -254,7 +301,14 @@ export function routeAudio(peer, track) {
 // its nodes can be collected.
 export function dropAudio(peer) {
   if (!peer) return;
-  if (peer.inDenoise) disconnectQuietly(peer.inDenoise);
+  if (peer.inDenoise) {
+    disconnectQuietly(peer.inDenoise);
+    peer.inDenoise = null;
+  }
+  if (peer.feId) {
+    feWorker().postMessage({ ev: 'detach', id: peer.feId });
+    peer.feId = 0;
+  }
   if (peer.audioSrc) {
     disconnectQuietly(peer.audioSrc);
     peer.audioSrc = null;
@@ -294,27 +348,54 @@ function wirePlayNoise(peer) {
   if (peer.meter) peer.audioSrc.connect(peer.meter);
 }
 
-// setPeerNoise turns the local noise cancel of one incoming stream on or off.
-// The processor is built on first use; a browser without Web Audio says so.
-export async function setPeerNoise(peer, on) {
+// setPeerNoise sets the noise cancel of one incoming stream. Three states: off,
+// GTCRN, and FastEnhancer Small. A change of engine rebuilds that one filter and
+// leaves the peer connection alone.
+export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
   if (!peer) return;
-  if (on) {
-    const ctx = state.playCtx || ensurePlayback();
-    if (!ctx) {
-      say('this browser can not cancel noise without Web Audio');
-      return;
-    }
-    if (!peer.inDenoise) {
-      try {
-        peer.inDenoise = await makeDenoiseNode(ctx);
-      } catch (err) {
-        console.warn('noise cancel unavailable', err);
-        say('the local noise cancel is not available in this browser');
-        return;
-      }
-    }
+  const want = on ? engine : 'off';
+  if (want === 'off') {
+    if (!peer.inNoise && !peer.inDenoise) return;
+  } else if (peer.inNoise && peer.inEngine === want && peer.inDenoise) {
+    return;
   }
-  peer.inNoise = on;
+  const ctx = state.playCtx || ensurePlayback();
+  if (want !== 'off' && !ctx) {
+    say('this browser can not cancel noise without Web Audio');
+    return;
+  }
+  if (peer.inDenoise) {
+    disconnectQuietly(peer.inDenoise);
+    peer.inDenoise = null;
+  }
+  if (peer.feId) {
+    feWorker().postMessage({ ev: 'detach', id: peer.feId });
+    peer.feId = 0;
+  }
+  if (want === 'off') {
+    peer.inNoise = false;
+    peer.inEngine = 'off';
+    wirePlayNoise(peer);
+    return;
+  }
+  try {
+    if (want === 'gtcrn') {
+      peer.inDenoise = await makeDenoiseNode(ctx!);
+    } else {
+      const made = await makeFastEnhancerNode(ctx!);
+      peer.inDenoise = made.node;
+      peer.feId = made.id;
+    }
+  } catch (err) {
+    console.warn('noise cancel unavailable', err);
+    peer.inNoise = false;
+    peer.inEngine = 'off';
+    wirePlayNoise(peer);
+    say('the noise cancel is not available in this browser');
+    return;
+  }
+  peer.inNoise = true;
+  peer.inEngine = want;
   wirePlayNoise(peer);
 }
 

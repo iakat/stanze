@@ -30,6 +30,8 @@ export const state = {
   freeze: false, // the outgoing camera picture is locked to one frame
   freezeTrack: null, // the still that carries that frame
   freezeCanvas: null, // the canvas behind the still, kept so it stays live
+  freezeSource: null, // a copy of the frozen picture, drawn into the canvas again
+  freezeTimer: null, // redraws the frozen canvas so late peers get a frame
   freezeVideo: null, // hidden video on the camera, used when no look draws a frame
   micTrack: null,
   outStream: null, // what is sent to peers
@@ -45,6 +47,8 @@ export const state = {
   denoise: null,
   denoiseOn: false,
   noiseWasm: null, // one fetch of the noise model, shared by every node
+  feWorker: null, // the worker that holds FastEnhancer, shared by every stream
+  feSeq: 0, // lane ids of the streams that attach to that worker
   playCtx: null, // the remote audio graph, so a peer can go over 100%
   screen: null, // display stream while sharing
   screenSource: null,

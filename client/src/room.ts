@@ -14,6 +14,7 @@ import { prepareLocal, requestLocal } from './devices.js';
 import {
   ensurePlayback,
   paintHandQueue,
+  prefetchNoise,
   startSpeaking,
   stopSpeaking,
   updateButtons,
@@ -107,6 +108,9 @@ export async function enterRoom(room, pass) {
     startSpeaking();
 
     prepareLocal();
+    // The incoming noise filter downloads 15 MB on first use; start that now,
+    // while the devices and the socket come up, not on the first talker.
+    prefetchNoise();
     if (sealingAvailable()) {
       // Devices are asked for before the signaling socket opens, so the first
       // offer already carries both tracks.

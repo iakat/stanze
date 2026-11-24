@@ -81,8 +81,16 @@ export function wireDots(host) {
       add('remove from room', () => sealedKick(host.dataset.peer));
     }
     const noiseOn = !!(peer && peer.inNoise);
-    add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => {
-      void setPeerNoise(peer, !noiseOn);
+    const noiseEngine = peer ? peer.inEngine : '';
+    const here = (name) => (noiseOn && noiseEngine === name ? ' (on)' : '');
+    add('noise cancel: FastEnhancer' + here('fastenhancer'), () => {
+      void setPeerNoise(peer, true, 'fastenhancer');
+    });
+    add('noise cancel: GTCRN' + here('gtcrn'), () => {
+      void setPeerNoise(peer, true, 'gtcrn');
+    });
+    add('noise cancel: off' + (noiseOn ? '' : ' (on)'), () => {
+      void setPeerNoise(peer, false);
     });
     // The sealed code is a card in the menu, not a banner over the picture.
     if (peer && peer.sas) {
