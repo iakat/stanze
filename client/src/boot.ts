@@ -264,19 +264,14 @@ function wireJoinCard() {
     // playback context here, before the first await, or the join starts with a
     // suspended context and the room stays silent while the video plays.
     ensurePlayback();
-    const room = normalizeRoom($('room').value);
-    if (!room) {
-      // Nothing typed: the suggested id is used.
-      const id = newRoomID();
-      $('room').value = id;
-      enterRoom(id, $('pass').value || '');
-      return;
-    }
+    const box = $('room');
+    // Nothing typed: the suggested id is used.
+    const room = normalizeRoom(box.value) || newRoomID();
     if (!ROOM_RE.test(room)) {
       say('room names use a-z 0-9 . _ - (1 to 64 characters)');
       return;
     }
-    $('room').value = room;
+    box.value = room;
     enterRoom(room, $('pass').value || '');
   });
 
@@ -287,33 +282,32 @@ function wireJoinCard() {
 
   // A file goes into the chat either way: the button opens the picker and a
   // drop on the chat panel does the same without the picker.
-  $('file-btn').addEventListener('click', () => $('file-input').click());
-  $('file-input').addEventListener('change', () => {
-    const input = $('file-input');
-    const files = input.files;
-    const list = [];
-    for (let i = 0; files && i < files.length; i++) list.push(files[i]);
+  const input = $('file-input');
+  $('file-btn').addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const list = Array.from(input.files || []);
     input.value = '';
     for (const file of list) fileOffer(file);
   });
-  $('chat-panel').addEventListener('dragover', (event) => {
+  const panel = $('chat-panel');
+  panel.addEventListener('dragover', (event) => {
     event.preventDefault();
-    $('chat-panel').classList.add('drop');
+    panel.classList.add('drop');
   });
-  $('chat-panel').addEventListener('dragleave', () => $('chat-panel').classList.remove('drop'));
-  $('chat-panel').addEventListener('drop', (event) => {
-    event.preventDefault();
-    $('chat-panel').classList.remove('drop');
+  panel.addEventListener('dragleave', () => panel.classList.remove('drop'));
+  panel.addEventListener('drop', (event) => {
     const drop = event as DragEvent;
-    const files = drop.dataTransfer ? drop.dataTransfer.files : null;
-    for (let i = 0; files && i < files.length; i++) fileOffer(files[i]);
+    drop.preventDefault();
+    panel.classList.remove('drop');
+    for (const file of drop.dataTransfer?.files || []) fileOffer(file);
   });
 }
 
 // wireSwitches the switches under the form that keep their choice.
 function wireSwitches() {
-  $('noise-live').addEventListener('change', async () => {
-    const on = $('noise-live').checked;
+  const noise = $('noise-live');
+  noise.addEventListener('change', async () => {
+    const on = noise.checked;
     state.noiseWanted = on;
     store('noise', on ? 1 : 0);
     $('noise').checked = on;
@@ -322,29 +316,33 @@ function wireSwitches() {
     updateButtons();
   });
 
-  $('mirror').addEventListener('change', () => {
-    state.mirror = $('mirror').checked;
+  const mirror = $('mirror');
+  mirror.addEventListener('change', () => {
+    state.mirror = mirror.checked;
     applyMirror();
   });
 
   // A frozen camera keeps sending the frame it held.
-  $('freeze').addEventListener('change', async () => {
-    const ok = await setFreeze($('freeze').checked);
-    if (!ok) $('freeze').checked = !!state.freeze;
+  const freeze = $('freeze');
+  freeze.addEventListener('change', async () => {
+    const ok = await setFreeze(freeze.checked);
+    if (!ok) freeze.checked = !!state.freeze;
   });
 
   // The own picture leaves the large area and becomes a small preview in the
   // corner of the stage. The choice is kept, like the other switches.
-  $('pip').addEventListener('change', () => {
-    state.selfPip = $('pip').checked;
+  const pip = $('pip');
+  pip.addEventListener('change', () => {
+    state.selfPip = pip.checked;
     store('selfpip', state.selfPip ? 1 : 0);
     layoutStage();
   });
 
   // A guest without a camera can put its own tile away and leave only the rail
   // row. The choice is kept, like the other switches.
-  $('voice-tiles').addEventListener('change', () => {
-    const hide = $('voice-tiles').checked;
+  const voice = $('voice-tiles');
+  voice.addEventListener('change', () => {
+    const hide = voice.checked;
     state.voiceTiles = !hide;
     store('hidevoicetiles', hide ? 1 : 0);
     layoutStage();
