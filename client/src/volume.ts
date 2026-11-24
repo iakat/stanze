@@ -137,7 +137,7 @@ export function applyFlags(tile, mic, cam, admin) {
   if (mic === false) out.push('muted');
   if (cam === false) out.push('no cam');
   if (handOn) out.push(place ? `hand #${place}` : 'hand');
-  box.innerHTML = '';
+  box.replaceChildren();
   for (const text of out) {
     const chip = document.createElement('span');
     chip.textContent = text;

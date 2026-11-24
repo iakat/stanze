@@ -10,6 +10,7 @@ import { layoutStage, ownTile, rowOf } from './tiles.js';
 import { applyFlags, volGain } from './volume.js';
 import { refreshSelf } from './devices.js';
 import { sealedSend, toSealed } from './gate.js';
+import { scriptURL } from './trust.js';
 
 // ------------------------------------------------------------- talking light
 // Every audio source has an RMS tap, and a green light marks the tile of the
@@ -113,7 +114,7 @@ export function noiseWasm() {
 // every incoming stream that wants it own a node, because the filter state
 // belongs to one stream.
 async function makeDenoiseNode(ctx) {
-  const [binary] = await Promise.all([noiseWasm(), ctx.audioWorklet.addModule('/gtcrn-node.js')]);
+  const [binary] = await Promise.all([noiseWasm(), ctx.audioWorklet.addModule(scriptURL('/gtcrn-node.js'))]);
   return new AudioWorkletNode(ctx, 'gtcrn', {
     numberOfInputs: 1,
     numberOfOutputs: 1,

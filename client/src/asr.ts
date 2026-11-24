@@ -371,7 +371,7 @@ function asrLoadLib() {
     const have = (window as any).Vosk;
     if (have) return resolve(have);
     const el = document.createElement('script');
-    el.src = ASR_LIB;
+    el.src = scriptURL(ASR_LIB);
     el.onload = () => {
       const lib = (window as any).Vosk;
       return lib ? resolve(lib) : reject(new Error('the engine did not load'));
@@ -716,7 +716,7 @@ function omniSpawn() {
     stamp: omni.stamp,
   };
   const url = URL.createObjectURL(new Blob([omniWorkerSource(cfg)], { type: 'text/javascript' }));
-  const worker = new Worker(url);
+  const worker = new Worker(scriptURL(url));
   omni.url = url;
   worker.onmessage = (event) => omniOnWorker(event.data || {});
   worker.onerror = (event) => omniFail(event.message || 'the engine stopped');

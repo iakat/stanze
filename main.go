@@ -224,7 +224,7 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/vosk/", voskHandler(cfg.VoskDir))
 	mux.HandleFunc("/omni/", omniHandler(cfg.OmniDir))
 
-	return securityHeaders(mux, srv.log), nil
+	return securityHeaders(mux, srv.log, cfg.VoskDir != "" || cfg.OmniDir != ""), nil
 }
 
 // asset is one served client file with what a response needs, made once at
@@ -518,11 +518,40 @@ func contentType(name string) string {
 	return "application/octet-stream"
 }
 
+// cspPolicy is the policy of the page. It is one document and one policy: a
+// worker inherits the policy of the document that starts it, so a per path
+// header would not reach the transcription engines.
+//
+// Every source is 'self' or a blob of 'self'. There is no third party script,
+// style, font, image, frame or connection: signaling is same origin /ws, and a
+// socket to that host is what 'self' matches. A wide ws: or wss: source would
+// let an injected line open a socket anywhere, so it is not there.
+//
+// 'wasm-unsafe-eval' is always on: the key agreement and the noise filter are
+// wasm modules. 'unsafe-eval' is on only when an operator offers transcription,
+// because the emscripten wrappers of both engines are made with new Function.
+// A deployment without those directories gets no eval at all, and then
+// Trusted Types, which stops a string from reaching a script sink. The two
+// cannot hold together: eval itself is a Trusted Types sink.
+func cspPolicy(asr bool) string {
+	script := "script-src 'self' 'wasm-unsafe-eval'"
+	if asr {
+		script += " 'unsafe-eval'"
+	}
+	policy := "default-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; " +
+		script + "; script-src-attr 'none'; " +
+		"worker-src 'self' blob:; style-src 'self'; style-src-attr 'none'; " +
+		"img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; manifest-src 'self'; " +
+		"connect-src 'self'; " +
+		"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+	if !asr {
+		policy += "; require-trusted-types-for 'script'; trusted-types stanze"
+	}
+	return policy
+}
+
 // securityHeaders keeps the client dependency-free and locked down. Room ids
 // live only in the URL fragment, so no path or query ever carries them.
-// 'unsafe-eval' is there for the optional transcription only: the vosk worker
-// names its emscripten wrappers with new Function, and a worker inherits this
-// policy. Without it the engine stops at the first recognizer.
 //
 // The omnilingual engine is a pthread wasm build and allocates a
 // SharedArrayBuffer, which a page only gets when it is cross-origin isolated:
@@ -531,21 +560,21 @@ func contentType(name string) string {
 // so require-corp costs nothing here; the browser suites still join, seal and
 // play a call with it on. CORP same-origin names the rule on our own answers,
 // so a resource of this page is not embedded elsewhere either.
-func securityHeaders(next http.Handler, log *slog.Logger) http.Handler {
-	const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; " +
-		"media-src 'self' blob:; connect-src 'self' blob: ws: wss:; font-src 'self'; " +
-		"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+func securityHeaders(next http.Handler, log *slog.Logger, asr bool) http.Handler {
+	csp := cspPolicy(asr)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", csp)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Permitted-Cross-Domain-Policies", "none")
+		h.Set("X-XSS-Protection", "0")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), geolocation=(), interest-cohort=()")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Embedder-Policy", "require-corp")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
-		h.Set("Strict-Transport-Security", "max-age=31536000")
+		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
 		if log.Enabled(r.Context(), slog.LevelDebug) {
 			start := time.Now()

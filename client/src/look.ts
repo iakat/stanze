@@ -8,6 +8,7 @@ import { CUST_DEFAULTS, state } from './state.js';
 import { clamp, detachMedia, say, stopQuietly, stopTracks } from './util.js';
 import { load, store } from './prefs.js';
 import { paintSelfCam } from './devices.js';
+import { scriptURL } from './trust.js';
 
 // ---------------------------------------------------------------- camera look
 // lookOn is true when a drawn step is wanted. The camera itself is not touched.
@@ -221,7 +222,7 @@ async function lookStart() {
 // lookClock starts the frame clock of a pipeline. It stops with a parked tab,
 // which draws nothing.
 function lookClock(p) {
-  const clock = new Worker(p.clockURL || drawClockURL(p.fps));
+  const clock = new Worker(scriptURL(p.clockURL || drawClockURL(p.fps)));
   clock.onmessage = () => {
     if (state.lookPipe === p) lookDraw(p);
   };
@@ -2161,6 +2162,16 @@ async function freezeShot() {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   ctx.drawImage(src, 0, 0, w, h);
+  // A second canvas holds the same picture. The live stream draws from it below,
+  // because a captured canvas sends a frame only when something is drawn into it.
+  const held = document.createElement('canvas');
+  held.width = w;
+  held.height = h;
+  const hg = held.getContext('2d');
+  if (hg) hg.drawImage(canvas, 0, 0);
+  state.freezeSource = held;
+  // Zero frames per second: the stream sends a frame only when one is asked
+  // for, and the pulse below asks twice a second.
   const stream = canvas.captureStream(0);
   const track = stream.getVideoTracks()[0];
   if (!track) return null;
@@ -2168,6 +2179,27 @@ async function freezeShot() {
   if ((track as any).requestFrame) (track as any).requestFrame();
   state.freezeCanvas = canvas;
   return track;
+}
+
+// freezePulse draws the held picture into the frozen canvas and asks for a
+// frame, twice a second. A captured canvas sends a frame only when it is asked
+// for, and a frame asked for before a sender exists is dropped with the sender,
+// so a still that is never touched reaches the peers that were connected when
+// it was taken and nobody else. Drawing the same picture again costs nothing
+// and gives every late peer a frame within half a second.
+function freezePulse() {
+  if (state.freezeTimer) clearInterval(state.freezeTimer);
+  state.freezeTimer = setInterval(() => {
+    if (!state.freeze || !state.freezeCanvas || !state.freezeSource) {
+      clearInterval(state.freezeTimer);
+      state.freezeTimer = null;
+      return;
+    }
+    const g = state.freezeCanvas.getContext('2d');
+    if (g) g.drawImage(state.freezeSource, 0, 0);
+    const t = state.freezeTrack as any;
+    if (t && t.requestFrame) t.requestFrame();
+  }, 500);
 }
 
 // setFreeze locks the outgoing camera picture to one frame, and puts the live
@@ -2188,13 +2220,19 @@ export async function setFreeze(on) {
     }
     state.freeze = true;
     state.freezeTrack = track;
+    freezePulse();
     await lookPublish(track);
     return true;
   }
   state.freeze = false;
+  if (state.freezeTimer) {
+    clearInterval(state.freezeTimer);
+    state.freezeTimer = null;
+  }
   const old = state.freezeTrack;
   state.freezeTrack = null;
   state.freezeCanvas = null;
+  state.freezeSource = null;
   await lookPublish(lookTrack() || state.camTrack);
   if (old) stopQuietly(old);
   return true;

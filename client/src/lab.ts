@@ -3,12 +3,13 @@
 */
 
 import { b64e } from './sealed.js';
+import { scriptURL } from './trust.js';
 
 // ---------------------------------------------------------------- lab proof
 // The real path with a wrong receive key: RTP must arrive and decode nothing, then
 // decode once the right key is installed live. Only window.e2eApp calls it.
 export async function runLab() {
-  const worker = new Worker('/e2e-transform.js');
+  const worker = new Worker(scriptURL('/e2e-transform.js'));
   const messages = [];
   worker.onmessage = (event) => messages.push(event.data);
 

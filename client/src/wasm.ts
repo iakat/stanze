@@ -7,6 +7,7 @@ import { state } from './state.js';
 import { BUILD_Q, b64d, b64e, pqModule, sealUtf8, win } from './sealed.js';
 import { deviceNote, ensureIdentity } from './identity.js';
 import { padRoundTripOk } from './gate.js';
+import { scriptURL } from './trust.js';
 
 // ------------------------------------------------------------- wasm loading
 // loadScriptOnce inserts wasm_exec.js once; an existing window.Go skips the fetch.
@@ -14,7 +15,7 @@ function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     if (win().Go) return resolve(null);
     const el = document.createElement('script');
-    el.src = src;
+    el.src = scriptURL(src);
     el.onload = () => resolve(null);
     el.onerror = () => reject(new Error('could not load ' + src));
     document.head.appendChild(el);

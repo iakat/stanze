@@ -4,10 +4,11 @@
 
 import { state } from './state.js';
 import { say } from './util.js';
+import { scriptURL } from './trust.js';
 
 // ------------------------------------------------------------- frame worker
 export function startSealedWorker() {
-  const worker = new Worker('/e2e-transform.js');
+  const worker = new Worker(scriptURL('/e2e-transform.js'));
   worker.onmessage = (event) => {
     const msg = event.data || {};
     if (msg.type === 'stats') {
