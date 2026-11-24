@@ -1,14 +1,12 @@
 /*
- The lab page's proof of the cipher.
+ The in-page proof of the cipher, driven by the browser test.
 */
 
 import { b64e } from './sealed.js';
 
 // ---------------------------------------------------------------- lab proof
-// runLab answers one question with the real code path: an encrypted video
-// stream whose receiver starts with a wrong key. It must receive RTP but decode
-// nothing, and decoding must start only after the right key is installed live.
-// The browser test drives it through window.e2eApp; the UI never calls it.
+// The real path with a wrong receive key: RTP must arrive and decode nothing, then
+// decode once the right key is installed live. Only window.e2eApp calls it.
 export async function runLab() {
   const worker = new Worker('/e2e-transform.js');
   const messages = [];

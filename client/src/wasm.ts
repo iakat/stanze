@@ -9,7 +9,7 @@ import { deviceNote, ensureIdentity } from './identity.js';
 import { padRoundTripOk } from './gate.js';
 
 // ------------------------------------------------------------- wasm loading
-// wasm_exec.js is fetched when the lobby opens, so the join form paints first.
+// loadScriptOnce inserts wasm_exec.js once; an existing window.Go skips the fetch.
 export function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     if (win().Go) return resolve(null);
@@ -55,17 +55,15 @@ export function loadWasmModule() {
   });
 }
 
-// fpShape is the shape of a fingerprint: five groups of four base32 letters,
-// joined by dashes.
+// fpShape is a fingerprint: five groups of four base32 letters, joined by dashes.
 function fpShape(fp) {
   const parts = String(fp || '').split('-');
   if (parts.length !== 5) return false;
   return parts.every((part) => part.length === 4 && /^[a-z2-7]+$/.test(part));
 }
 
-// pqSelfTest runs the handshake twice inside the module and proves that both
-// halves agree and that one side can open what the other seals. It runs once
-// per page and the result is shown in the stats panel.
+// pqSelfTest runs both sides of the handshake in the module and checks that they
+// agree. It runs once per page; the stats panel shows the result.
 export function pqSelfTest() {
   const pq = pqModule();
   const a = JSON.parse(pq.gen());
@@ -169,9 +167,8 @@ export function pqSelfTest() {
       }),
     ),
   );
-  // The identity half: one key signs the transcript, the other does not verify
-  // it, and a tampered message never verifies. The same check runs here, so a
-  // broken bridge shows up in the stats panel before a call starts.
+  // The identity half: the right key verifies the transcript, another key and a
+  // tampered message do not.
   const idOk = JSON.parse(
     pq.idverify(JSON.stringify({ id: k1.pub, msg: off.transcript, sig: helloSig.sig })),
   );
@@ -191,8 +188,8 @@ export function pqSelfTest() {
     ),
   );
   const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
-  // The room passphrase proof: the same passphrase agrees on a key and passes
-  // both confirmations, and a different one agrees on nothing.
+  // The passphrase proof: one passphrase agrees on a key and passes both
+  // confirmations, a different one agrees on nothing.
   const w1 = JSON.parse(pq.spakew(JSON.stringify({ pass: 'a', salt: 'room' }))).w;
   const wBad = (() => {
     const raw = b64d(w1);
@@ -269,9 +266,8 @@ export function pqSelfTest() {
   };
 }
 
-// ensureWasm loads the script, the module and the self test once. A failure is
-// remembered as a failure of that attempt only, so a reload of the page (or a
-// second click) can try again.
+// ensureWasm loads the script, the module and the self test once. A failed
+// attempt is cleared, so the next call can try again.
 export let wasmLoad = null;
 
 export function ensureWasm() {
@@ -305,8 +301,7 @@ export function ensureWasm() {
 }
 
 // preloadSealed warms the module as soon as the lobby opens, so the join itself
-// is only a microphone prompt. A failure stays in the note, and the join says
-// it again.
+// is only a microphone prompt and a failure stays in the note.
 export function preloadSealed() {
   $('sealed-note').hidden = false;
   $('sealed-note').textContent = 'loading the post-quantum module';
