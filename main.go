@@ -229,7 +229,7 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/vosk/", voskHandler(cfg.VoskDir))
 	mux.HandleFunc("/omni/", omniHandler(cfg.OmniDir))
 
-	return securityHeaders(mux, srv.log, cfg.VoskDir != "" || cfg.OmniDir != ""), nil
+	return securityHeaders(mux, srv.log, cfg.VoskDir != "" || cfg.OmniDir != "", cfg.BehindProxy), nil
 }
 
 // asset is one served client file with what a response needs, made once at
@@ -538,7 +538,7 @@ func contentType(name string) string {
 // A deployment without those directories gets no eval at all, and then
 // Trusted Types, which stops a string from reaching a script sink. The two
 // cannot hold together: eval itself is a Trusted Types sink.
-func cspPolicy(asr bool) string {
+func cspPolicy(asr, tlsOnly bool) string {
 	script := "script-src 'self' 'wasm-unsafe-eval'"
 	if asr {
 		script += " 'unsafe-eval'"
@@ -551,6 +551,12 @@ func cspPolicy(asr bool) string {
 		"frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	if !asr {
 		policy += "; require-trusted-types-for 'script'; trusted-types stanze"
+	}
+	// Behind a proxy the public name is https, and a plain http subresource is a
+	// mistake to repair, not to load. A local run over http keeps it off, or the
+	// browser would ask for https on a port that has no certificate.
+	if tlsOnly {
+		policy += "; upgrade-insecure-requests"
 	}
 	return policy
 }
@@ -565,8 +571,8 @@ func cspPolicy(asr bool) string {
 // so require-corp costs nothing here; the browser suites still join, seal and
 // play a call with it on. CORP same-origin names the rule on our own answers,
 // so a resource of this page is not embedded elsewhere either.
-func securityHeaders(next http.Handler, log *slog.Logger, asr bool) http.Handler {
-	csp := cspPolicy(asr)
+func securityHeaders(next http.Handler, log *slog.Logger, asr, tlsOnly bool) http.Handler {
+	csp := cspPolicy(asr, tlsOnly)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", csp)

@@ -12,8 +12,8 @@ import (
 // it the page can have Trusted Types. Both must stay closed in the same way:
 // nothing inline, nothing third party, one origin for everything.
 func TestCSPPolicy(t *testing.T) {
-	strict := cspPolicy(false)
-	eval := cspPolicy(true)
+	strict := cspPolicy(false, true)
+	eval := cspPolicy(true, false)
 
 	for name, policy := range map[string]string{"strict": strict, "eval": eval} {
 		for _, want := range []string{
@@ -42,6 +42,12 @@ func TestCSPPolicy(t *testing.T) {
 	if strings.Contains(strict, "'unsafe-eval'") {
 		t.Error("strict policy carries eval")
 	}
+	if !strings.Contains(strict, "upgrade-insecure-requests") {
+		t.Error("strict policy under a proxy does not upgrade http subresources")
+	}
+	if strings.Contains(eval, "upgrade-insecure-requests") {
+		t.Error("a local http run must not upgrade its own subresources")
+	}
 	if !strings.Contains(strict, "require-trusted-types-for 'script'") || !strings.Contains(strict, "trusted-types stanze") {
 		t.Error("strict policy does not enforce Trusted Types")
 	}
@@ -60,14 +66,14 @@ func TestSecurityHeaders(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	})
 	rec := httptest.NewRecorder()
-	securityHeaders(next, slog.New(slog.DiscardHandler), false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	securityHeaders(next, slog.New(slog.DiscardHandler), false, false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	if rec.Code != http.StatusTeapot {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusTeapot)
 	}
 	h := rec.Header()
 	for name, want := range map[string]string{
-		"Content-Security-Policy":           cspPolicy(false),
+		"Content-Security-Policy":           cspPolicy(false, false),
 		"X-Content-Type-Options":            "nosniff",
 		"X-Frame-Options":                   "DENY",
 		"X-Permitted-Cross-Domain-Policies": "none",
