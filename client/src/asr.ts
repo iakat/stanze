@@ -9,6 +9,7 @@ import { addChatLine } from './chat.js';
 import { shortPeer } from './sealed.js';
 import { disconnectQuietly } from './util.js';
 import { sealedSend, toSealed } from './gate.js';
+import { scriptURL } from './trust.js';
 
 // ------------------------------------------------------------- transcription
 // Optional, off by default, two engines in this tab. Vosk holds one model per

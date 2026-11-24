@@ -54,7 +54,7 @@ export async function runLab() {
   labVideo.muted = true;
   labVideo.autoplay = true;
   labVideo.playsInline = true;
-  labVideo.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+  labVideo.className = 'offstage';
   labVideo.srcObject = sink;
   document.body.appendChild(labVideo);
   labVideo.play().catch(() => {});

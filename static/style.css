@@ -1932,3 +1932,16 @@ body.self-waiting .admit { display: none; }
   background: #ffe36e;
   border: 1px solid #7a5c00;
 }
+
+/* A media element the page uses but never shows: it stays in the document, so
+   the browser decodes it, but it is out of the way and out of the tab order.
+   It is a class, not a style attribute: the policy refuses inline attributes. */
+.offstage {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}

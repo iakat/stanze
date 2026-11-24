@@ -131,8 +131,7 @@ async function lookStart() {
   video.srcObject = new MediaStream([src]);
   // A video element that the page never shows can be treated as unrendered and
   // left undecoded, so it lives off screen instead of outside the document.
-  video.style.cssText =
-    'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+  video.className = 'offstage';
   document.body.appendChild(video);
   try {
     await video.play();
@@ -2137,8 +2136,7 @@ async function freezeShot() {
       const v = document.createElement('video');
       v.muted = true;
       v.playsInline = true;
-      v.style.cssText =
-        'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      v.className = 'offstage';
       document.body.appendChild(v);
       state.freezeVideo = v;
     }
