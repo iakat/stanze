@@ -60,7 +60,7 @@ module in `src` has no row yet.
 | [src/sealed.ts](src/sealed.ts) | 220 | Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair. |
 | [src/frame.ts](src/frame.ts) | 50 | The frame transform worker and its key install. |
 | [src/identity.ts](src/identity.ts) | 415 | The pinned identity of a peer and its fingerprint rows. |
-| [src/wasm.ts](src/wasm.ts) | 324 | Loading the post-quantum module, and its self test. |
+| [src/wasm.ts](src/wasm.ts) | 246 | Loading the post-quantum module, and its self test. |
 | [src/audit.ts](src/audit.ts) | 26 | The wire audit: no passphrase, name, chat line or file name leaves in the clear. |
 | [src/lab.ts](src/lab.ts) | 151 | The in-page proof of the cipher, driven by the browser test. |
 
