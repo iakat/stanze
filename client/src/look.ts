@@ -5,7 +5,7 @@
 import { LOOKS, LOOK_MAX, MASKS, MESH_DIR, MESH_HZ_MAX, MESH_HZ_MIN, MESH_W } from './config.js';
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say } from './util.js';
+import { detachMedia, say } from './util.js';
 import { load, store } from './prefs.js';
 import { paintSelfCam } from './devices.js';
 
@@ -1725,12 +1725,7 @@ export function lookStop(restore = true) {
   if (p) {
     if (p.wake) document.removeEventListener('visibilitychange', p.wake);
     if (p.clock) p.clock.terminate();
-    try {
-      p.video.pause();
-    } catch {
-      /* already paused */
-    }
-    p.video.srcObject = null;
+    detachMedia(p.video);
     if (p.video.parentNode) p.video.parentNode.removeChild(p.video);
     for (const t of p.stream.getTracks()) {
       try {

@@ -5,7 +5,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, say } from './util.js';
+import { detachMedia, isAdmin, say } from './util.js';
 import { layoutStage, ownTile, rowOf } from './tiles.js';
 import { applyFlags, volGain } from './volume.js';
 import { refreshSelf } from './devices.js';
@@ -307,21 +307,11 @@ export function dropAudio(peer) {
     peer.gain = null;
   }
   if (peer.pump) {
-    try {
-      peer.pump.pause();
-    } catch {
-      /* already gone */
-    }
-    peer.pump.srcObject = null;
+    detachMedia(peer.pump);
     peer.pump = null;
   }
   if (peer.audioEl) {
-    try {
-      peer.audioEl.pause();
-    } catch {
-      /* already gone */
-    }
-    peer.audioEl.srcObject = null;
+    detachMedia(peer.audioEl);
     peer.audioEl = null;
   }
 }

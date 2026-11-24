@@ -46,6 +46,17 @@ export function setAdmins(list) {
   for (const id of list || []) state.admins.add(id);
 }
 
+// detachMedia empties a media element and stops it. A pause on an element that
+// is not playing throws in some browsers, which is not an error here.
+export function detachMedia(media: HTMLMediaElement) {
+  try {
+    media.pause();
+  } catch {
+    /* not playing */
+  }
+  media.srcObject = null;
+}
+
 // joinWords renders a short list for the status line ("a, b and c").
 export function joinWords(list) {
   if (list.length <= 1) return list[0] || '';

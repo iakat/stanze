@@ -5,7 +5,7 @@
 import { QUALITY } from './config.js';
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, joinWords, say } from './util.js';
+import { detachMedia, isAdmin, joinWords, say } from './util.js';
 import { store } from './prefs.js';
 import { layoutStage, makeTile, ownTile, paintRowDeaf, setLocalTile } from './tiles.js';
 import { applyFlags, paintVolume } from './volume.js';
@@ -594,12 +594,7 @@ export function paintSelfCam(on) {
     video.play().catch(() => {});
   } else {
     self.classList.remove('playing');
-    try {
-      video.pause();
-    } catch {
-      /* not playing */
-    }
-    video.srcObject = null;
+    detachMedia(video);
   }
   layoutStage();
 }
@@ -627,12 +622,7 @@ export function dropPeerCamera(peer) {
   const video = peer.tile && peer.tile.querySelector('video');
   if (!video) return;
   peer.tile.classList.remove('playing');
-  try {
-    video.pause();
-  } catch {
-    /* not playing */
-  }
-  video.srcObject = null;
+  detachMedia(video);
 }
 
 // paintRemoteVideo applies the deaf state to every guest in the room.
@@ -670,12 +660,7 @@ export function paintPeerScreen(peer) {
   } else if (peer.screenTile) {
     const video = peer.screenTile.querySelector('video');
     peer.screenTile.classList.remove('playing');
-    try {
-      video.pause();
-    } catch {
-      /* not playing */
-    }
-    video.srcObject = null;
+    detachMedia(video);
   }
   layoutStage();
 }
@@ -686,12 +671,7 @@ export function dropPeerScreen(peer) {
   if (!peer.screenTile) return;
   const video = peer.screenTile.querySelector('video');
   peer.screenTile.classList.remove('playing');
-  try {
-    video.pause();
-  } catch {
-    /* not playing */
-  }
-  video.srcObject = null;
+  detachMedia(video);
   peer.screenTile.remove();
   peer.screenTile = null;
   layoutStage();
