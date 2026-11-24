@@ -262,9 +262,9 @@ function sealedProve(peer, msg) {
   });
 }
 
-async function sealedInitiate(peer) {
-  if (!state.identity || !state.idKey || !peer.pub) return;
-  const out = pqCall((json) => pqModule().initiate(json), {
+// sealedPair is the bundle fields both calls name: ours first, then the peer's.
+function sealedPair(peer) {
+  return {
     self: state.self,
     peer: peer.id,
     selfX: state.identity.xpub,
@@ -275,19 +275,46 @@ async function sealedInitiate(peer) {
     peerK: peer.pub.m,
     peerID: peer.pub.id,
     peerSID: peer.pub.sid,
+  };
+}
+
+// sealedSigned signs the transcript and holds the keys the gate proved. An empty
+// answer means the pair is gone or the key cannot sign, and the peer has already
+// heard why while it is still there.
+async function sealedSigned(peer, out) {
+  const sig = await state.idKey.sign(out.transcript);
+  if (!state.peers.has(peer.id) || state.leaving) return '';
+  if (!sig) {
+    sealedRefuse(peer, 'could not sign the handshake');
+    return '';
+  }
+  sealedHoldKeys(peer, out);
+  peer.mySig = sig;
+  return sig;
+}
+
+// sealedSendOk sends the confirmation that names us, so the other side can check
+// us as soon as it has its keys. The same transcript covers both sides.
+function sealedSendOk(peer, out) {
+  peer.sentConfirm = true;
+  sealedSendOpaque(peer.id, {
+    k: 'ok',
+    c: out.confirm,
+    id: state.idKey.pub,
+    sid: state.sid,
+    sig: peer.mySig,
   });
+}
+
+async function sealedInitiate(peer) {
+  if (!state.identity || !state.idKey || !peer.pub) return;
+  const out = pqCall((json) => pqModule().initiate(json), sealedPair(peer));
   if (!out || out.error) {
     sealedRefuse(peer, 'refused the key bundle');
     return;
   }
-  const sig = await state.idKey.sign(out.transcript);
-  if (!state.peers.has(peer.id) || state.leaving) return;
-  if (!sig) {
-    sealedRefuse(peer, 'could not sign the handshake');
-    return;
-  }
-  sealedHoldKeys(peer, out);
-  peer.mySig = sig;
+  const sig = await sealedSigned(peer, out);
+  if (!sig) return;
   sealedSendOpaque(peer.id, {
     k: 'hello',
     epk: out.epk,
@@ -296,16 +323,7 @@ async function sealedInitiate(peer) {
     sid: state.sid,
     sig,
   });
-  // Our own confirmation and signature go out at once, so the responder can
-  // check us as soon as it has its keys. The same transcript covers both sides.
-  peer.sentConfirm = true;
-  sealedSendOpaque(peer.id, {
-    k: 'ok',
-    c: out.confirm,
-    id: state.idKey.pub,
-    sid: state.sid,
-    sig,
-  });
+  sealedSendOk(peer, out);
 }
 
 async function sealedRespond(peer, msg) {
@@ -317,18 +335,9 @@ async function sealedRespond(peer, msg) {
     return;
   }
   const out = pqCall((json) => pqModule().respond(json), {
-    self: state.self,
-    peer: peer.id,
-    selfX: state.identity.xpub,
+    ...sealedPair(peer),
     selfSK: b64e(state.identity.xsk),
-    selfK: state.identity.ek,
     selfDK: b64e(state.identity.dk),
-    selfID: state.idKey.pub,
-    selfSID: state.sid,
-    peerX: peer.pub.x,
-    peerK: peer.pub.m,
-    peerID: peer.pub.id,
-    peerSID: peer.pub.sid,
     epk: msg.epk,
     ct: msg.ct,
     sig: msg.sig || '',
@@ -337,22 +346,8 @@ async function sealedRespond(peer, msg) {
     sealedRefuse(peer, 'refused the hello');
     return;
   }
-  const sig = await state.idKey.sign(out.transcript);
-  if (!state.peers.has(peer.id) || state.leaving) return;
-  if (!sig) {
-    sealedRefuse(peer, 'could not sign the handshake');
-    return;
-  }
-  sealedHoldKeys(peer, out);
-  peer.mySig = sig;
-  peer.sentConfirm = true;
-  sealedSendOpaque(peer.id, {
-    k: 'ok',
-    c: out.confirm,
-    id: state.idKey.pub,
-    sid: state.sid,
-    sig,
-  });
+  if (!(await sealedSigned(peer, out))) return;
+  sealedSendOk(peer, out);
   // The pair is not ready yet: the initiator's own ok has to prove it. That ok
   // may have arrived while this hello was answered, so the hold is drained here.
   sealedDrainCtl(peer);
