@@ -1,0 +1,29 @@
+fe.wasm and fe.q8 are the FastEnhancer Medium speech enhancer: the
+faster-enhancer.c engine compiled to wasm with clang and wasi-sdk, and the
+quantized weights it loads. The loader is in fastenhancer-worker.js.
+
+faster-enhancer.c  MIT License, Copyright (c) 2026 faster-enhancer.c contributors
+FastEnhancer       MIT License, Copyright (c) 2025 AHN Sung Hwan
+                   https://github.com/aask1357/fastenhancer
+
+fe.q8 is a quantized derivative of the FastEnhancer Medium pretrained model.
+The wasm build and the wasm SIMD128 kernels keep the same MIT terms as the
+engine.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -455,7 +455,7 @@ func loadFolder(dir, name string, out map[string][]byte) error {
 
 // folderNames is every static subdirectory the client may load a file from.
 func folderNames() []string {
-	return []string{"facemesh", "miku", "ort"}
+	return []string{"facemesh", "miku"}
 }
 
 func assetNames() []string {
@@ -465,9 +465,10 @@ func assetNames() []string {
 		// browser puts the same letters on the same pixels.
 		"lsans.woff2", "lsans-bold.woff2",
 		"gtcrn.js", "gtcrn-worklet.js", "gtcrn.wasm", workletBundle,
-		// The incoming stream filter: the model, the node and the worker that
-		// runs it. The runtime under /ort is onnxruntime-web, wasm build.
-		"fastenhancer-s.onnx", "fastenhancer-worklet.js", "fastenhancer-worker.js",
+		// The incoming stream filter: the wasm engine, its weights, and the
+		// node and worker that run it.
+		"fe.wasm", "fe.q8", "fe-NOTICE.txt",
+		"fastenhancer-worklet.js", "fastenhancer-worker.js",
 		// The sealed half of the one client: the frame worker and the
 		// WebAssembly build of the key agreement. The old e2e page is gone.
 		"e2e-transform.js", "wasm_exec.js", "pq.wasm",

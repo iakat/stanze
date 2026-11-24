@@ -114,7 +114,10 @@ export function noiseWasm() {
 // every incoming stream that wants it own a node, because the filter state
 // belongs to one stream.
 async function makeDenoiseNode(ctx) {
-  const [binary] = await Promise.all([noiseWasm(), ctx.audioWorklet.addModule(scriptURL('/gtcrn-node.js'))]);
+  const [binary] = await Promise.all([
+    noiseWasm(),
+    ctx.audioWorklet.addModule(scriptURL('/gtcrn-node.js')),
+  ]);
   return new AudioWorkletNode(ctx, 'gtcrn', {
     numberOfInputs: 1,
     numberOfOutputs: 1,
@@ -125,17 +128,17 @@ async function makeDenoiseNode(ctx) {
   });
 }
 
-// prefetchNoise starts the download of the incoming noise runtime and its model,
-// so the first stream of a call does not wait for 15 MB. The worker then loads
-// both from the HTTP cache. It is a plain fetch and nothing is kept here.
+// prefetchNoise starts the download of the incoming noise engine and its
+// weights, so the first stream of a call does not wait for them. The worker
+// then loads both from the HTTP cache. It is a plain fetch and nothing is kept
+// here.
 export function prefetchNoise() {
   const warm = (url) =>
     fetch(url)
       .then((res) => (res.ok ? res.arrayBuffer() : null))
       .catch(() => {});
-  void warm('/ort/ort.wasm.min.js');
-  void warm('/ort/ort-wasm-simd-threaded.wasm');
-  void warm('/fastenhancer-s.onnx');
+  void warm('/fe.wasm');
+  void warm('/fe.q8');
 }
 
 // feWorker starts the one worker that holds FastEnhancer. Every incoming stream
@@ -349,7 +352,7 @@ function wirePlayNoise(peer) {
 }
 
 // setPeerNoise sets the noise cancel of one incoming stream. Three states: off,
-// GTCRN, and FastEnhancer Small. A change of engine rebuilds that one filter and
+// GTCRN, and FastEnhancer Medium. A change of engine rebuilds that one filter and
 // leaves the peer connection alone.
 export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
   if (!peer) return;
