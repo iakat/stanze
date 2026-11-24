@@ -19,7 +19,7 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 603 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/boot.ts](src/boot.ts) | 601 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
 | [src/state.ts](src/state.ts) | 181 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 76 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
@@ -45,10 +45,10 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/media.ts](src/media.ts) | 164 | Camera and screen requests, the performance step, the sender bitrate and frame ceilings. |
-| [src/audio.ts](src/audio.ts) | 455 | The talking light, the remote audio graph and the noise suppression worklet. |
+| [src/audio.ts](src/audio.ts) | 460 | The talking light, the remote audio graph and the noise suppression worklet. |
 | [src/screen.ts](src/screen.ts) | 89 | Screen share: points the screen sender at the display track, never the camera sender. |
 | [src/volume.ts](src/volume.ts) | 149 | Per peer volume, remembered by identity when one is pinned. |
-| [src/sfx.ts](src/sfx.ts) | 185 | The page's own sound effects, decoded once and cached. |
+| [src/sfx.ts](src/sfx.ts) | 178 | The page's own sound effects, decoded once and cached. |
 | [src/clock.ts](src/clock.ts) | 36 | The call clock. |
 | [src/badge.ts](src/badge.ts) | 43 | The relay badge, read from the transport stats. |
 
@@ -56,7 +56,7 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/handshake.ts](src/handshake.ts) | 740 | The post-quantum handshake of a pair. |
+| [src/handshake.ts](src/handshake.ts) | 735 | The post-quantum handshake of a pair. |
 | [src/sealed.ts](src/sealed.ts) | 220 | Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair. |
 | [src/frame.ts](src/frame.ts) | 50 | The frame transform worker and its key install. |
 | [src/identity.ts](src/identity.ts) | 415 | The pinned identity of a peer and its fingerprint rows. |
@@ -71,10 +71,10 @@ module in `src` has no row yet.
 | [src/tiles.ts](src/tiles.ts) | 489 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
 | [src/stats.ts](src/stats.ts) | 955 | The stats panel: media metrics per guest and the wire and crypto counters. |
-| [src/asr.ts](src/asr.ts) | 1278 | Local transcription, one language and many. |
+| [src/asr.ts](src/asr.ts) | 1272 | Local transcription, one language and many. |
 | [src/look.ts](src/look.ts) | 1930 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 815 | The device pickers of the join card and the toolbar. |
-| [src/files.ts](src/files.ts) | 899 | File offers and the data channel that carries the bytes. |
+| [src/devices.ts](src/devices.ts) | 808 | The device pickers of the join card and the toolbar. |
+| [src/files.ts](src/files.ts) | 880 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory
 

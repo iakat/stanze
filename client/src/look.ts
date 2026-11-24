@@ -37,7 +37,7 @@ export function lookTrack() {
 const drawClockURLs = new Map();
 
 function drawClockURL(fps) {
-  const hz = Math.max(MESH_HZ_MIN, Math.min(MESH_HZ_MAX, Math.round(fps) || 30));
+  const hz = clamp(Math.round(fps) || 30, MESH_HZ_MIN, MESH_HZ_MAX);
   if (!drawClockURLs.has(hz)) {
     drawClockURLs.set(
       hz,
@@ -137,7 +137,7 @@ async function lookStart() {
   const settings = src.getSettings ? src.getSettings() : {};
   // The picture and the mesh both run at the camera rate: the camera states
   // its own frame rate, and a step without one is a camera at thirty.
-  const fps = Math.max(MESH_HZ_MIN, Math.min(MESH_HZ_MAX, Math.round(settings.frameRate) || 30));
+  const fps = clamp(Math.round(settings.frameRate) || 30, MESH_HZ_MIN, MESH_HZ_MAX);
   const scale = Math.min(1, LOOK_MAX / Math.max(settings.width || 1280, settings.height || 720));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(2, Math.round((settings.width || 1280) * scale));
@@ -447,7 +447,7 @@ function lookMeshAnchor(p, lm) {
     ) || faceH * 0.35;
   // A share of the mouth width does not change with the distance to the camera,
   // so the tongue grows with the mouth instead of snapping out at a fixed gap.
-  next.tongue = Math.min(1, Math.max(0, (lipGap / mouthW - 0.06) / 0.34));
+  next.tongue = clamp((lipGap / mouthW - 0.06) / 0.34, 0, 1);
   const a = p.anchor;
   const t = performance.now();
   const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
@@ -1028,11 +1028,11 @@ function lookCustom(p, a) {
   // ruler.
   const at = (y) => {
     if (!band) return { y, h: 1 };
-    const s = Math.min(1, Math.max(0, (y - band.y0) / band.ih));
-    const lo = Math.max(0, s - 0.02),
-      hi = Math.min(1, s + 0.02);
+    const s = clamp((y - band.y0) / band.ih, 0, 1);
+    const lo = clamp(s - 0.02, 0, 1),
+      hi = clamp(s + 0.02, 0, 1);
     const h = (bandPut(hi, k) - bandPut(lo, k)) / (hi - lo);
-    return { y: band.y0 + bandPut(s, k) * band.ih, h: Math.max(0.35, Math.min(2.8, h)) };
+    return { y: band.y0 + bandPut(s, k) * band.ih, h: clamp(h, 0.35, 2.8) };
   };
   const g = maskGeo(a, W, H);
   const fL = eyeFrame(g.eyeL),
