@@ -184,6 +184,12 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
+			// A text file is for reading, not for saving: the build stamp is
+			// opened by hand as often as it is fetched, and a default type of
+			// octet-stream would turn that into a download.
+			if strings.HasSuffix(name, ".txt") {
+				h.Set("Content-Disposition", "inline")
+			}
 			h.Set("Content-Type", a.ctype)
 			if gz {
 				h.Set("Content-Encoding", "gzip")
@@ -513,6 +519,8 @@ func contentType(name string) string {
 		return "text/javascript; charset=utf-8"
 	case strings.HasSuffix(name, ".css"):
 		return "text/css; charset=utf-8"
+	case strings.HasSuffix(name, ".txt"):
+		return "text/plain; charset=utf-8"
 	case strings.HasSuffix(name, ".svg"):
 		return "image/svg+xml"
 	case strings.HasSuffix(name, ".woff2"):
