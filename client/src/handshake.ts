@@ -29,6 +29,7 @@ import {
 import { fingerprint, paintPin, pinState, updatePinCount } from './identity.js';
 import { asrAnnounce, asrOnMessage } from './asr.js';
 import {
+  PAD_KEY,
   maybeAdmitHeld,
   roomW,
   sealedAnnounceName,
@@ -602,7 +603,7 @@ function sealedOnApp(peer, b, seq) {
     return;
   }
   peer.seqIn = seq;
-  if (obj.z !== undefined) delete obj.z; // the padding bucket, never content
+  if (obj[PAD_KEY] !== undefined) delete obj[PAD_KEY]; // the padding bucket, never content
   // The proof may pass before the room is open, and a kick as well: a page a
   // member removed must go even if its proof never finished. Anything else
   // waits here, because a peer that ran a handshake can still be a stranger.

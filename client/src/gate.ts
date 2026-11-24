@@ -375,17 +375,27 @@ export function sealedAnnounceName(peer) {
 // A sealed payload is padded to a fixed bucket before sealing, so the ciphertext
 // length stops saying what was sent. The true length rides inside as the filler
 // field and the receiver drops it; the biggest bucket repeats for larger payloads.
+// The filler key is `p` and no frame may use it for content: an older build padded
+// under `z`, which the file offer also used for the size, and the receiver dropped
+// the size with the filler, so no offer ever showed.
+export const PAD_KEY = 'p';
+
 const PAD_BUCKETS = [512, 2048, 8192];
 
 const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
 
+// A frame may not use the filler key for content: the filler is written over it
+// and the receiver drops it, so the field would vanish. The file offer used it
+// for the size and no offer ever showed. This check holds for every frame, now
+// and later, because it sits on the one path every sealed frame takes.
 function padPayload(obj) {
-  const withPad = Object.assign({}, obj, { z: '' }) as any;
+  if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY)) throw new Error('the padding key is reserved');
+  const withPad = Object.assign({}, obj, { [PAD_KEY]: '' }) as any;
   const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
   let target = PAD_BUCKETS.find((n) => n >= bytes);
   if (!target) target = Math.ceil(bytes / PAD_LAST) * PAD_LAST;
   const need = target - bytes;
-  if (need > 0) withPad.z = 'A'.repeat(need);
+  if (need > 0) withPad[PAD_KEY] = 'A'.repeat(need);
   return JSON.stringify(withPad);
 }
 
@@ -393,12 +403,11 @@ function padPayload(obj) {
 // lands on a bucket or a whole multiple of the biggest one. It runs in the
 // post-quantum self test, before a call starts.
 export function padRoundTripOk() {
-  // Fixtures only: two words, a two byte character, and a payload over the
-  // biggest bucket, so the bucket choice and the round trip are both covered.
   const cases = [
     { k: 'name', n: 'abc' },
     { k: 'chat', n: 'a', x: 'hello', ts: 1 },
-    { k: 'chat', n: 'b', x: 'é'.repeat(400) },
+    { k: 'chat', n: 'b', x: '\u00e9'.repeat(400) },
+    { k: 'file', a: 'offer', x: '0123456789abcdef', n: 'probe.bin', z: 4096, m: '' },
     { k: 'asr', n: 'c', x: 'z'.repeat(9000) },
   ];
   for (const c of cases) {
@@ -407,7 +416,7 @@ export function padRoundTripOk() {
     const bytes = sealUtf8.encode(out).length;
     const onBucket = PAD_BUCKETS.includes(bytes) || bytes % PAD_LAST === 0;
     const back = JSON.parse(out);
-    delete back.z;
+    delete back[PAD_KEY];
     if (!onBucket || JSON.stringify(back) !== raw) return false;
   }
   return true;

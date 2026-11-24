@@ -354,15 +354,18 @@ function channelBytes(page) {
     await a.page.setInputFiles('#file-input', { name: cancelName2, mimeType: 'application/octet-stream', buffer: cancelBuf });
     await until(b.page, (n) => [...document.querySelectorAll('#chat-log li.chat-file')].some((li) => li.textContent.includes(n)),
       cancelName2, 20000, 'bob sees the running offer');
-    // Accept and cancel in one step, so the cancel reaches the sender before
-    // the transfer can finish.
+    // Accept and then cancel as soon as the row carries the cancel button. The
+    // accept handler opens the save target first, so the button comes one turn
+    // later and a click in the same call would find no button.
     await b.page.evaluate((n) => {
       const row = [...document.querySelectorAll('#chat-log li.chat-file')].find((li) => li.textContent.includes(n));
-      const accept = [...row.querySelectorAll('button')].find((x) => x.textContent === 'accept');
-      accept.click();
-      const cancel = [...row.querySelectorAll('button')].find((x) => x.textContent === 'cancel');
-      if (cancel) cancel.click();
+      [...row.querySelectorAll('button')].find((x) => x.textContent === 'accept').click();
     }, cancelName2);
+    await until(b.page, (n) => {
+      const row = [...document.querySelectorAll('#chat-log li.chat-file')].find((li) => li.textContent.includes(n));
+      return !!(row && [...row.querySelectorAll('button')].some((x) => x.textContent === 'cancel'));
+    }, cancelName2, 5000, 'bob has the cancel button');
+    await clickRow(b.page, cancelName2, 'cancel');
     await until(b.page, (n) => {
       const row = [...document.querySelectorAll('#chat-log li.chat-file')].find((li) => li.textContent.includes(n));
       return !!(row && /cancelled/.test(row.textContent) && !row.querySelector('a.file-save'));
