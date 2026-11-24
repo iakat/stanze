@@ -194,11 +194,14 @@ appears in a path or a query.
   id, no room fingerprint and no head count: the debug line says that a socket
   joined and nothing about which room or how large it is.
 
-Changing the post-quantum module requires rebuilding the Wasm file:
+Changing the post-quantum module requires rebuilding the Wasm file with `make
+wasm`, which runs:
 
 ```sh
 GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
 ```
+
+`static/pq.wasm` is a build artifact and is not in git, like `static/app.js`.
 
 ## Signaling protocol
 

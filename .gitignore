@@ -5,3 +5,6 @@ client/node_modules/
 
 # built from client/src by `make client` or build.sh
 static/app.js
+
+# built from cmd/pqwasm by `make wasm` or build.sh
+static/pq.wasm

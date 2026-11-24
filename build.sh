@@ -23,6 +23,11 @@ export CGO_ENABLED=0
 [ -n "${GOMODCACHE:-}" ] || export GOMODCACHE="$GOPATH/pkg/mod"
 [ -n "${GOCACHE:-}" ] || export GOCACHE="$(cd "$here/.." && pwd)/tools/gocache"
 
+# The key agreement half of the client is Go built to WebAssembly. It is a
+# build artifact now, so it is not in git; build it before the packer reads
+# static/.
+GOOS=js GOARCH=wasm "$GO" build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+
 # The client is TypeScript under client/, and the bundle it produces is what the
 # page loads. Node and one `npm --prefix client install` are needed for this
 # step; a tree that already carries a built static/app.js can skip it with

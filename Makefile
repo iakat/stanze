@@ -6,16 +6,21 @@ NODE ?= /data/workspace/node/bin
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build client selftest run test typecheck lint deps format readme readme-check smoke sealed check clean
+.PHONY: all build client wasm selftest run test typecheck lint deps format readme readme-check smoke sealed check clean
 
 all: build selftest
 
-build: client
+build: client wasm
 	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/stanze .
 
 # One bundle from the TypeScript tree. The page loads static/app.js.
 client:
 	$(NODE)/node client/build.mjs
+
+# The key agreement half of the client, Go built to WebAssembly. The page
+# loads static/pq.wasm. It is a build artifact and is not in git.
+wasm:
+	CGO_ENABLED=0 GOOS=js GOARCH=wasm $(GO) build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
 
 selftest:
 	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags "-s -w" -o $(BIN)/selftest ./cmd/selftest
