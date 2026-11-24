@@ -282,37 +282,37 @@ function spotlightTile() {
   return null;
 }
 
-// ---------------------------------------------------------------- corners
-// A stage with two pictures puts one guest small in a corner. A corner is two
-// letters, the vertical side first and then the horizontal one, and the own
-// preview gives way to the guest by taking the opposite corner while it is on.
+// ---------------------------------------------------------------- the small preview
+// One small tile: the own picture as a corner preview while "own view small" is
+// on. Its place is two letters, the vertical side first and then the horizontal
+// one, it is dragged with the pointer, and the place is kept in the browser.
+// A two person room is the same code: the preview on, or both pictures side by
+// side with the preview off. There is no special case for the two person room.
 const CORNERS = ['tl', 'tr', 'bl', 'br'];
-
-const OPPOSITE_CORNER = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
-
-const cornerCall = new Map(); // peer id -> corner, this call only
 
 export let cornerDropAt = 0; // when a drag ended, so its click is not a zoom
 
-// peerOfTile is the peer record of one tile, or null for the own tile.
-function peerOfTile(tile) {
-  const id = tile && tile.dataset.peer;
-  return id && state.peers ? state.peers.get(id) || null : null;
-}
-
-// storedCorner reads the kept corner of one guest: on disk under its
-// fingerprint, or for this call only without a key. The default is the bottom
-// right corner, where the own preview also sits.
-function storedCorner(peer) {
-  const raw =
-    peer && peer.fp ? load(`corner.fp.${peer.fp}`) : peer ? cornerCall.get(peer.id) || '' : '';
+// storedSelfCorner reads the kept place of the own preview, bottom right by
+// default, where the preview has always sat.
+function storedSelfCorner() {
+  const raw = load('selfcorner');
   return CORNERS.includes(raw) ? raw : 'br';
 }
 
-function saveCorner(peer, corner) {
-  if (!peer || !CORNERS.includes(corner)) return;
-  cornerCall.set(peer.id, corner);
-  if (peer.fp) store(`corner.fp.${peer.fp}`, corner);
+function saveSelfCorner(corner) {
+  if (!CORNERS.includes(corner)) return;
+  store('selfcorner', corner);
+}
+
+// pairStage says whether the stage holds exactly the own picture and one guest
+// picture: the room where a click on either tile trades the small preview for
+// two pictures side by side, and the other way back.
+export function pairStage() {
+  if (state.spotlight) return false;
+  const self = ownTile();
+  if (!self || !tileHasPicture(self)) return false;
+  const guests = stageTiles().filter((t) => t !== self && !t.dataset.screen && tileHasPicture(t));
+  return guests.length === 1;
 }
 
 // layoutStage picks the tiles that hold the large area and keeps the member
@@ -323,7 +323,6 @@ export function layoutStage() {
   const main = $('stage-main');
   const rail = $('stage-rail');
   const pipBox = $('self-pip');
-  const cornerBox = $('guest-pip');
   if (!main || !rail) return;
   const spot = spotlightTile();
   if (state.spotlight && !spot) state.spotlight = '';
@@ -331,11 +330,12 @@ export function layoutStage() {
   // The own picture is a small preview while the switch is on. The node is
   // moved, not copied, so the preview keeps the own stream and the mirror.
   const pip = !!(self && pipBox && state.selfPip);
-  if (pipBox) pipBox.hidden = !pip;
+  if (pipBox) {
+    pipBox.hidden = !pip;
+    if (pip) pipBox.dataset.corner = storedSelfCorner();
+  }
   if (self && pip && self.parentElement !== pipBox) pipBox.appendChild(self);
   if (self && !pip && self.parentElement !== main) main.appendChild(self);
-  // Two pictures and no spotlight: the later guest sits small in a corner and
-  // the other keeps the whole frame.
   const bigs = [];
   for (const tile of stageTiles()) {
     const inPip = pip && tile === self;
@@ -356,34 +356,17 @@ export function layoutStage() {
       zoom.title = on ? 'back to the grid' : 'enlarge';
     }
   }
-  // The small corner goes to a person, not to a screen: a shared screen needs
-  // the whole frame.
-  const small = !spot && !pip && bigs.length === 2 ? bigs.find((t) => !t.dataset.screen) : null;
-  if (cornerBox) {
-    cornerBox.hidden = !small;
-    for (const tile of stageTiles()) {
-      if (tile !== small && tile.parentElement === cornerBox) main.appendChild(tile);
-    }
-    if (small && small.parentElement !== cornerBox) cornerBox.appendChild(small);
-    if (small) {
-      const corner = storedCorner(peerOfTile(small));
-      cornerBox.dataset.corner = corner;
-      // The own preview gives way to the guest: it takes the opposite corner.
-      if (pip && pipBox) pipBox.dataset.corner = OPPOSITE_CORNER[corner];
-    } else if (pipBox) {
-      pipBox.removeAttribute('data-corner');
-    }
-  }
-  const alone = bigs.length - (small ? 1 : 0) === 1 ? 'yes' : 'no';
+  const alone = bigs.length === 1 ? 'yes' : 'no';
   if (main.dataset.alone !== alone) main.dataset.alone = alone;
-  main.hidden = bigs.length - (small ? 1 : 0) === 0;
+  main.hidden = bigs.length === 0;
 }
 
-// wireCornerDrag lets the small guest tile follow the pointer and snap to the
+// wirePipDrag lets the small preview follow the pointer and snap to the
 // nearest of the four corners. A pointer that stays put does not start a drag,
-// so a click on the tile enlarges that guest.
-export function wireCornerDrag() {
-  const box = $('guest-pip');
+// so a click on the preview keeps its own meaning: it trades the preview for
+// the side by side layout.
+export function wirePipDrag() {
+  const box = $('self-pip');
   const grid = $('grid');
   if (!box || !grid) return;
   let drag = null as any;
@@ -461,9 +444,8 @@ export function wireCornerDrag() {
     const right = rect.left + rect.width / 2 > frame.left + frame.width / 2;
     const bottom = rect.top + rect.height / 2 > frame.top + frame.height / 2;
     const corner = `${bottom ? 'b' : 't'}${right ? 'r' : 'l'}`;
-    saveCorner(peerOfTile(box.querySelector('.tile')), corner);
+    saveSelfCorner(corner);
     box.dataset.corner = corner;
-    if (state.selfPip && $('self-pip')) $('self-pip').dataset.corner = OPPOSITE_CORNER[corner];
     cornerDropAt = Date.now();
   };
   box.addEventListener('pointerup', end);

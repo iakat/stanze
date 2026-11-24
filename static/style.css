@@ -735,7 +735,10 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   background: #000;
   border: 2px solid;
   border-color: var(--panel-hi) var(--edge) var(--edge) var(--panel-hi);
+  cursor: grab;
+  touch-action: none;
 }
+.self-pip.dragging { cursor: grabbing; }
 .self-pip .tile {
   width: 100%;
   height: 100%;
@@ -744,40 +747,12 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   aspect-ratio: auto;
   border-width: 0;
 }
-/* The own preview gives way to a guest corner: when the small guest tile takes
-   a corner, the preview takes the opposite one, so the two never overlap. */
+/* The own preview sits in one of the four corners. It is dragged with the
+   pointer and snaps to the nearest corner, and that place is kept. */
 .self-pip[data-corner="tl"] { left: 8px; top: 8px; right: auto; bottom: auto; }
 .self-pip[data-corner="tr"] { right: 8px; top: 8px; left: auto; bottom: auto; }
 .self-pip[data-corner="bl"] { left: 8px; bottom: 8px; right: auto; top: auto; }
 .self-pip[data-corner="br"] { right: 8px; bottom: 8px; left: auto; top: auto; }
-/* A room with two pictures puts one guest small in a corner and the other one
-   on the whole stage. The small tile is dragged with the pointer and snaps to
-   the nearest corner, and its place is kept for that guest. */
-.guest-pip {
-  position: absolute;
-  z-index: 2;
-  width: clamp(112px, 22%, 208px);
-  aspect-ratio: 4 / 3;
-  background: #000;
-  border: 2px solid;
-  border-color: var(--panel-hi) var(--edge) var(--edge) var(--panel-hi);
-  cursor: grab;
-  touch-action: none;
-}
-.guest-pip[data-corner="tl"] { left: 8px; top: 8px; right: auto; bottom: auto; }
-.guest-pip[data-corner="tr"] { right: 8px; top: 8px; left: auto; bottom: auto; }
-.guest-pip[data-corner="bl"] { left: 8px; bottom: 8px; right: auto; top: auto; }
-.guest-pip[data-corner="br"] { right: 8px; bottom: 8px; left: auto; top: auto; }
-.guest-pip.dragging { cursor: grabbing; }
-.guest-pip .tile {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  max-height: none;
-  aspect-ratio: auto;
-  border-width: 0;
-  cursor: inherit;
-}
 /* One guest alone in the large area fills it, and the picture covers the
    whole frame instead of keeping a fixed ratio with black bars. */
 .stage-main[data-alone="yes"] {

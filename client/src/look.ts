@@ -1270,6 +1270,7 @@ function drawMask(ctx, W, H, which, a) {
   else if (which === 'dog') drawDog(ctx, g);
   else if (which === 'halo') drawHalo(ctx, g);
   else if (which === 'miku') drawMiku(ctx, g);
+  else if (which === 'fawkes') drawFawkes(ctx, g);
   ctx.restore();
 }
 
@@ -1573,7 +1574,7 @@ let wigArt = null;
 let wigTried = false;
 
 // wigLoad reads the drawing into a canvas. It is asked for on the first masked
-// frame and never twice; a missing file leaves the vector fringe in place.
+// frame and never twice. The drawing is the mask: there is one version of it.
 function wigLoad() {
   if (wigTried) return;
   wigTried = true;
@@ -1803,74 +1804,154 @@ function drawMiku(ctx, g) {
   // are the drawing and the drawn face fills its cut-out.
   if (wigArt) ctx.drawImage(wigArt, 0, 0, artW, artH);
   ctx.restore();
-  if (!wigArt) drawMikuFringe(ctx, g);
 }
 
-// drawMikuFringe is the mask without the drawing: a teal fringe along the
-// hairline and one long tail behind each ear, in the same colours. It is what a
-// missing wig file or a blocked image falls back to.
-function drawMikuFringe(ctx, g) {
-  const hair = '#39c5bb';
-  const h = g.hair;
-  if (h.length > 2) {
-    // The crown is hair: a cap from one temple over the head and back along the
-    // hairline, so the drawn face is covered to the fringe while the drawing is
-    // missing or blocked.
-    const a = g.spot(h[0], 0, -0.02);
-    const b = g.spot(h[h.length - 1], 0, -0.02);
-    const crest = g.spot(h[Math.floor(h.length / 2)], 0, -0.62);
-    ctx.fillStyle = hair;
+// drawFawkes wears the Guy Fawkes mask. It is drawn, not a photograph: one
+// white face with the black eye holes, the thin brows, the long smile with a
+// curl at each end, the moustache and the goatee, shaded so the form reads in
+// three dimensions. The mask is rigid, so it is placed once on the face axes
+// and the head carries it: a turn, a lean or a move of the head moves the mask
+// with it. The whole face is covered, so the mask hides the person under it.
+const FAWKES = {
+  white: ['#fdfdfb', '#eeece5', '#c6c3ba'],
+  ink: '#111111',
+  shade: 'rgba(120, 118, 108, 0.28)',
+};
+
+function drawFawkes(ctx, g) {
+  const fw = Math.max(g.fw, 1);
+  const fh = Math.max(g.fh, 1);
+  const mid = [(g.top[0] + g.chin[0]) / 2, (g.top[1] + g.chin[1]) / 2];
+  const ax = g.ax,
+    ay = g.ay;
+  // Local units: one across is the width of the face, one down its height, so
+  // the drawing is measured on the face it covers.
+  ctx.save();
+  ctx.transform(ax[0] * fw, ax[1] * fw, -ay[0] * fh, -ay[1] * fh, mid[0], mid[1]);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  // The outline: a high forehead, wide cheeks and a pointed chin.
+  const shape = () => {
     ctx.beginPath();
-    ctx.moveTo(a[0], a[1]);
-    ctx.quadraticCurveTo(crest[0], crest[1], b[0], b[1]);
-    for (let i = h.length - 1; i >= 0; i--) ctx.lineTo(h[i][0], h[i][1]);
+    ctx.moveTo(0, -0.68);
+    ctx.bezierCurveTo(0.19, -0.66, 0.34, -0.53, 0.38, -0.3);
+    ctx.bezierCurveTo(0.42, -0.08, 0.4, 0.16, 0.31, 0.35);
+    ctx.bezierCurveTo(0.22, 0.52, 0.11, 0.64, 0, 0.7);
+    ctx.bezierCurveTo(-0.11, 0.64, -0.22, 0.52, -0.31, 0.35);
+    ctx.bezierCurveTo(-0.4, 0.16, -0.42, -0.08, -0.38, -0.3);
+    ctx.bezierCurveTo(-0.34, -0.53, -0.19, -0.66, 0, -0.68);
     ctx.closePath();
-    ctx.fill();
-  }
-  if (h.length > 2) {
-    ctx.fillStyle = hair;
-    ctx.beginPath();
-    ctx.moveTo(h[0][0], h[0][1]);
-    for (let i = 1; i < h.length; i++) ctx.lineTo(h[i][0], h[i][1]);
-    // Back along a deeper line, with the points taking turns, so the edge is a
-    // fringe and not a cap.
-    for (let i = h.length - 1; i >= 0; i--) {
-      const p = g.spot(h[i], 0, i % 2 ? -0.16 : -0.1);
-      ctx.lineTo(p[0], p[1]);
-    }
-    ctx.closePath();
-    ctx.fill();
-  }
+  };
+  const skin = ctx.createRadialGradient(0, -0.2, 0.05, 0, -0.05, 0.78);
+  skin.addColorStop(0, FAWKES.white[0]);
+  skin.addColorStop(0.62, FAWKES.white[1]);
+  skin.addColorStop(1, FAWKES.white[2]);
+  shape();
+  ctx.fillStyle = skin;
+  ctx.fill();
+  // The cheeks and the jaw carry a soft shadow, so the flat fill reads as a
+  // moulded face and not as a sticker.
+  ctx.save();
+  shape();
+  ctx.clip();
   for (const side of [-1, 1]) {
-    const base = side < 0 ? g.earL : g.earR;
-    const a = g.spot(base, side * 0.05, 0.04);
-    const b = g.spot(base, -side * 0.05, -0.02);
-    const tip = g.spot(base, side * 0.34, -0.95);
-    const c1 = g.spot(base, side * 0.38, -0.22);
-    const c2 = g.spot(base, side * 0.44, -0.66);
-    const d2 = g.spot(base, side * 0.2, -0.68);
-    const d1 = g.spot(base, side * 0.1, -0.26);
-    ctx.fillStyle = hair;
+    const cx = side * 0.26,
+      cy = 0.06;
+    const cg = ctx.createRadialGradient(cx, cy, 0.02, cx, cy, 0.24);
+    cg.addColorStop(0, FAWKES.shade);
+    cg.addColorStop(1, 'rgba(120, 118, 108, 0)');
+    ctx.fillStyle = cg;
     ctx.beginPath();
-    ctx.moveTo(a[0], a[1]);
-    ctx.bezierCurveTo(c1[0], c1[1], c2[0], c2[1], tip[0], tip[1]);
-    ctx.bezierCurveTo(d2[0], d2[1], d1[0], d1[1], b[0], b[1]);
-    ctx.closePath();
-    ctx.fill();
-    // The tie at the base of the tail.
-    ctx.fillStyle = '#e8455c';
-    ctx.beginPath();
-    const t1 = g.spot(base, side * 0.02, -0.02);
-    const t2 = g.spot(base, side * 0.14, -0.06);
-    const t3 = g.spot(base, side * 0.13, -0.11);
-    const t4 = g.spot(base, side * 0.01, -0.07);
-    ctx.moveTo(t1[0], t1[1]);
-    ctx.lineTo(t2[0], t2[1]);
-    ctx.lineTo(t3[0], t3[1]);
-    ctx.lineTo(t4[0], t4[1]);
-    ctx.closePath();
+    ctx.ellipse(cx, cy, 0.24, 0.3, side * 0.2, 0, Math.PI * 2);
     ctx.fill();
   }
+  const brow = ctx.createLinearGradient(0, -0.5, 0, -0.2);
+  brow.addColorStop(0, 'rgba(120, 118, 108, 0.3)');
+  brow.addColorStop(1, 'rgba(120, 118, 108, 0)');
+  ctx.fillStyle = brow;
+  ctx.fillRect(-0.5, -0.5, 1, 0.3);
+  ctx.restore();
+  // The brows: thin, black and arched over each eye hole.
+  for (const side of [-1, 1]) {
+    ctx.strokeStyle = FAWKES.ink;
+    ctx.lineWidth = 0.022;
+    ctx.beginPath();
+    ctx.moveTo(side * 0.06, -0.28);
+    ctx.quadraticCurveTo(side * 0.17, -0.36, side * 0.29, -0.3);
+    ctx.stroke();
+  }
+  // The eye holes: a wide black almond each, with the rim catching the light.
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.translate(side * 0.16, -0.16);
+    ctx.rotate(side * 0.12);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 0.125, 0.062, 0, 0, Math.PI * 2);
+    ctx.fillStyle = FAWKES.ink;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 0.008;
+    ctx.beginPath();
+    ctx.ellipse(0, -0.006, 0.11, 0.052, 0, Math.PI * 1.05, Math.PI * 1.95);
+    ctx.stroke();
+    ctx.restore();
+  }
+  // The nose: one soft ridge and two small shadows under it.
+  ctx.strokeStyle = 'rgba(130, 128, 118, 0.5)';
+  ctx.lineWidth = 0.018;
+  ctx.beginPath();
+  ctx.moveTo(-0.015, -0.06);
+  ctx.quadraticCurveTo(-0.03, 0.03, -0.01, 0.075);
+  ctx.stroke();
+  for (const side of [-1, 1]) {
+    ctx.fillStyle = 'rgba(110, 108, 100, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(side * 0.045, 0.09, 0.016, 0.01, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // The smile: a long line that turns up into a curl at each end.
+  ctx.strokeStyle = FAWKES.ink;
+  ctx.lineWidth = 0.02;
+  ctx.beginPath();
+  ctx.moveTo(-0.26, 0.2);
+  ctx.bezierCurveTo(-0.1, 0.3, 0.1, 0.3, 0.26, 0.2);
+  ctx.stroke();
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(side * 0.26, 0.2);
+    ctx.bezierCurveTo(side * 0.34, 0.17, side * 0.34, 0.09, side * 0.28, 0.1);
+    ctx.bezierCurveTo(side * 0.25, 0.105, side * 0.25, 0.14, side * 0.28, 0.145);
+    ctx.stroke();
+  }
+  // The moustache: a thin black stroke that lifts its tips, and the goatee: a
+  // small pointed beard under the mouth.
+  ctx.lineWidth = 0.017;
+  ctx.beginPath();
+  ctx.moveTo(-0.19, 0.135);
+  ctx.quadraticCurveTo(-0.07, 0.105, 0, 0.125);
+  ctx.quadraticCurveTo(0.07, 0.105, 0.19, 0.135);
+  ctx.stroke();
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(side * 0.19, 0.135);
+    ctx.quadraticCurveTo(side * 0.235, 0.1, side * 0.2, 0.06);
+    ctx.stroke();
+  }
+  ctx.fillStyle = FAWKES.ink;
+  ctx.beginPath();
+  ctx.moveTo(-0.055, 0.32);
+  ctx.quadraticCurveTo(-0.03, 0.44, 0, 0.52);
+  ctx.quadraticCurveTo(0.03, 0.44, 0.055, 0.32);
+  ctx.quadraticCurveTo(0, 0.36, -0.055, 0.32);
+  ctx.closePath();
+  ctx.fill();
+  // The rim: the edge of the mask, slightly darker, so it reads as a shell over
+  // the face and not as paint on the skin.
+  shape();
+  ctx.strokeStyle = 'rgba(90, 88, 80, 0.4)';
+  ctx.lineWidth = 0.018;
+  ctx.stroke();
+  ctx.restore();
 }
 
 // lookPublish swaps the drawn track into every camera sender and the own

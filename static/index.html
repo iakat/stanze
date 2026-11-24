@@ -96,6 +96,7 @@
       <div id="menu-settings" class="menubar-menu" role="menu" aria-labelledby="menu-settings-btn" hidden>
         <label class="menu-item"><input id="mirror" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">mirror me</span></label>
         <label class="menu-item"><input id="pip" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">own view small</span></label>
+        <button class="menu-item" id="rename-pick" type="button"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">change name</span></button>
         <label class="menu-item"><input id="voice-tiles" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">hide voice-only tiles</span></label>
         <label class="menu-item"><input id="stats-bytes" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">stats in bytes</span></label>
         <div class="menu-sep" role="separator"></div>
@@ -131,6 +132,7 @@
         <label class="menu-item"><input type="checkbox" data-mask="halo"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">halo</span></label>
         <label class="menu-item"><input type="checkbox" data-mask="shades"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">shades</span></label>
         <label class="menu-item"><input type="checkbox" data-mask="miku"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">miku</span></label>
+        <label class="menu-item"><input type="checkbox" data-mask="fawkes"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">guy fawkes</span></label>
         <label class="menu-item"><input type="checkbox" data-mask="potion"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">potion seller</span></label>
         <div class="menu-sep" role="separator"></div>
         <label class="menu-item"><input type="checkbox" data-mask="custom"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">custom</span></label>
@@ -211,7 +213,6 @@
       <section id="grid" class="grid">
         <div id="stage-main" class="stage-main"></div>
         <div id="self-pip" class="self-pip" hidden></div>
-        <div id="guest-pip" class="guest-pip" hidden></div>
       </section>
 
       <aside id="stats-panel" class="stats" hidden aria-label="call statistics">

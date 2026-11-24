@@ -15,7 +15,14 @@ import {
   wireMenuBar,
   wireSubmenus,
 } from './menu.js';
-import { cornerDropAt, layoutStage, setSpotlight, tileId, wireCornerDrag } from './tiles.js';
+import {
+  cornerDropAt,
+  layoutStage,
+  pairStage,
+  setSpotlight,
+  tileId,
+  wirePipDrag,
+} from './tiles.js';
 import { purgeNamedVolume } from './volume.js';
 import { closeMenus } from './host.js';
 import { applyQuality, paintPerf } from './media.js';
@@ -61,7 +68,7 @@ import { paintGate, setGate } from './handshake.js';
 import { pqSelfTest, preloadSealed } from './wasm.js';
 import { asrStats, initAsr } from './asr.js';
 import { initLobbyWindow } from './lobby.js';
-import { sendSealedChat, setWaitingRoom } from './gate.js';
+import { renameSelf, sendSealedChat, setWaitingRoom } from './gate.js';
 import { runLab } from './lab.js';
 import { applyImmersive, phoneQuery, setChrome } from './phone.js';
 
@@ -422,7 +429,7 @@ function wirePanels() {
   }
 
   wireMenuBar();
-  wireCornerDrag();
+  wirePipDrag();
   wireSubmenus();
   // The room passphrase can be set or changed during the call. The new value
   // goes sealed to every pair, and a guest that joins later must know it.
@@ -433,6 +440,16 @@ function wirePanels() {
       const next = window.prompt('room passphrase (leave empty for an open room)', '');
       if (next === null) return;
       setGate(next.trim().slice(0, 256));
+    });
+  }
+  // The name can change after the join: the new one is kept and goes sealed to
+  // every pair that already proved its keys.
+  const renameBtn = document.getElementById('rename-pick');
+  if (renameBtn) {
+    renameBtn.addEventListener('click', () => {
+      const next = window.prompt('your name in this room', state.name || '');
+      if (next === null) return;
+      renameSelf(next);
     });
   }
   paintGate();
@@ -466,6 +483,16 @@ function wireStage() {
       return;
     }
     if (target.closest('.vol, .dots, .menu, .sas, .pin, .admit')) return;
+    // Two pictures and no spotlight: a click on either tile trades the small
+    // own preview for the two pictures side by side, and the other way back.
+    // It is the same switch as the menu item, so one state feeds both.
+    if (pairStage()) {
+      state.selfPip = !state.selfPip;
+      store('selfpip', state.selfPip ? 1 : 0);
+      updateButtons();
+      layoutStage();
+      return;
+    }
     const el = tile as HTMLElement;
     const id = tileId(el);
     if (!id) return;

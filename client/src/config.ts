@@ -53,6 +53,7 @@ export const MASKS = [
   'halo',
   'shades',
   'miku',
+  'fawkes',
   'potion',
   'custom',
 ];

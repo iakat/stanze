@@ -5,7 +5,7 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { clamp, isAdmin, setAdmins } from './util.js';
-import { paintName, paintRowDeaf, rowOf } from './tiles.js';
+import { ownTile, paintName, paintRowDeaf, rowOf } from './tiles.js';
 import { applyFlags } from './volume.js';
 import { admitPeer, hostMenu, markAdmins, paintWaiting } from './host.js';
 import { dropPeerCamera, dropPeerScreen, paintPeerScreen, paintPeerVideo } from './devices.js';
@@ -35,6 +35,7 @@ import {
   updatePinCount,
 } from './identity.js';
 import { canary } from './audit.js';
+import { store } from './prefs.js';
 import { setChrome } from './phone.js';
 
 // ------------------------------------------------------ sealed room control
@@ -345,6 +346,24 @@ export function sealedOnState(peer, obj) {
   if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
   paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
   paintHandQueue();
+}
+
+// renameSelf changes the name of this page after the join. The new name is kept
+// in the browser, the own tile and its row show it at once, and every pair that
+// already proved its keys is told again, so the others read the new name now.
+export function renameSelf(raw) {
+  const name = cleanSealedName(raw);
+  if (!name || name === state.name) return false;
+  state.name = name;
+  store('name', name);
+  const self = ownTile();
+  if (self) paintName(self, name, true);
+  for (const peer of state.peers.values()) {
+    if (!peer.keys) continue;
+    peer.announcedName = '';
+    sealedAnnounceName(peer);
+  }
+  return true;
 }
 
 export function sealedAnnounceName(peer) {

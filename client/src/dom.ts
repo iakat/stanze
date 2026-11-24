@@ -23,7 +23,6 @@ export interface Elements {
   'stage-main': HTMLElement;
   'stage-rail': HTMLElement;
   'self-pip': HTMLElement;
-  'guest-pip': HTMLElement;
   'pin-count': HTMLElement;
   'stats-panel': HTMLElement;
   'stats-graph-box': HTMLElement;
