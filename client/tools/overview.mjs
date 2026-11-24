@@ -45,6 +45,7 @@ if (modes.length !== 1) {
 
 const listed = new Map();
 let stale = 0;
+let orphans = 0;
 
 for (let i = 0; i < lines.length; i += 1) {
   const match = row.exec(lines[i]);
@@ -53,7 +54,7 @@ for (let i = 0; i < lines.length; i += 1) {
   const current = modules.get(name);
   if (current === undefined) {
     console.error(`readme row without a file: src/${name}`);
-    stale += 1;
+    orphans += 1;
     continue;
   }
   listed.set(name, i);
@@ -72,12 +73,12 @@ for (const name of missing) {
   console.error(`not in the readme: src/${name} (${modules.get(name)} lines)`);
 }
 
-const failed = stale > 0 || missing.length > 0;
 if (modes[0] === '--write') {
   writeFileSync(readmePath, lines.join('\n'));
   console.log(`counts written${stale ? `, ${stale} updated` : ', already current'}`);
 }
 
+const failed = missing.length > 0 || orphans > 0 || (modes[0] === '--check' && stale > 0);
 if (failed && missing.length) {
   console.error('write a line for each module above, then run it again');
 }
