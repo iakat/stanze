@@ -1,0 +1,32 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {"name": "fewasm-build", "namespace": "ocbot2"},
+  "spec": {
+    "backoffLimit": 0,
+    "activeDeadlineSeconds": 3600,
+    "template": {
+      "spec": {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "name": "build",
+            "image": "emscripten/emsdk:latest",
+            "command": ["/bin/bash", "-c"],
+            "args": [
+              "set -eu; apt-get update -qq; apt-get install -y -qq git curl ca-certificates >/dev/null; git clone --depth 1 https://github.com/kdrkdrkdr/fastenhancer.c.wasm /w; cd /w; emcc --version | head -1; bash build.sh; ls -l *.js; for f in fastenhancer-worklet.js fe-loader.js; do [ -f $f ] && curl -sS -X PUT --data-binary @$f -o /dev/null -w \"$f %{http_code} %{size_upload}\\n\" http://files-sink.ocbot2.svc.cluster.local:8088/fe-wasm/$f; done"
+            ],
+            "resources": {
+              "requests": {"cpu": "2", "memory": "2Gi"},
+              "limits": {"cpu": "4", "memory": "4Gi"}
+            },
+            "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}],
+            "securityContext": {"allowPrivilegeEscalation": false}
+          }
+        ],
+        "volumes": [{"name": "tmp", "emptyDir": {"sizeLimit": "4Gi"}}]
+      }
+    }
+  }
+}
