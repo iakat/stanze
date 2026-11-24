@@ -5,3 +5,6 @@ bin
 packed
 shots
 static/pq.wasm
+
+# Installed in the clientbundle stage, never from the build context.
+client/node_modules

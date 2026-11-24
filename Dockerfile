@@ -21,6 +21,16 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
+# The TypeScript client is bundled by esbuild into static/app.js; that needs
+# Node and the locked dev dependencies, so it happens in its own stage. The Go
+# stage below only consumes the bundle.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS clientbundle
+WORKDIR /src
+COPY client/package.json client/package-lock.json ./client/
+RUN npm ci --prefix client
+COPY client ./client
+RUN node client/build.mjs
+
 # The client is platform independent, so it is built once in its own stage:
 # build static/pq.wasm from source, then pack static/ into packed/static.tgz,
 # which the server embeds. Both steps mirror build.sh and write no timestamps,
@@ -34,6 +44,7 @@ ENV CGO_ENABLED=0 \
 WORKDIR /src
 COPY --from=mods /go/pkg/mod /go/pkg/mod
 COPY . .
+COPY --from=clientbundle /src/static/app.js static/app.js
 RUN GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
 RUN go run -trimpath -buildvcs=false ./cmd/pack
 
