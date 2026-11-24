@@ -66,6 +66,10 @@ const LM = {
   eyeInnerL: 133,
   eyeOuterR: 263,
   eyeInnerR: 362,
+  lidUpL: 159,
+  lidLoL: 145,
+  lidUpR: 386,
+  lidLoR: 374,
   browL: 105,
   browR: 334,
   hairline: 10,
@@ -428,7 +432,15 @@ function lookMeshAnchor(p, lm) {
     if (y < y0) y0 = y;
     if (y > y1) y1 = y;
   }
-  const next = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0, lm: pts, tongue: 0 };
+  const next = {
+    x: (x0 + x1) / 2,
+    y: (y0 + y1) / 2,
+    w: x1 - x0,
+    h: y1 - y0,
+    lm: pts,
+    tongue: 0,
+    lid: 1,
+  };
   // How far the lips are apart, as a share of the mouth width: the dog tongue
   // reads it, and it falls off over about a second when the mouth closes.
   const faceH =
@@ -448,6 +460,30 @@ function lookMeshAnchor(p, lm) {
   // A share of the mouth width does not change with the distance to the camera,
   // so the tongue grows with the mouth instead of snapping out at a fixed gap.
   next.tongue = clamp((lipGap / mouthW - 0.06) / 0.34, 0, 1);
+  // The lid gap over the eye width is the blink: a share of the face, so it
+  // holds near the camera and far from it. The smaller eye wins, because a
+  // blink on one eye is a wink and the drawn face keeps both eyes together.
+  const lidL = Math.hypot(
+    pts[LM.lidLoL * 2] - pts[LM.lidUpL * 2],
+    pts[LM.lidLoL * 2 + 1] - pts[LM.lidUpL * 2 + 1],
+  );
+  const lidR = Math.hypot(
+    pts[LM.lidLoR * 2] - pts[LM.lidUpR * 2],
+    pts[LM.lidLoR * 2 + 1] - pts[LM.lidUpR * 2 + 1],
+  );
+  const eyeWL =
+    Math.hypot(
+      pts[LM.eyeOuterL * 2] - pts[LM.eyeInnerL * 2],
+      pts[LM.eyeOuterL * 2 + 1] - pts[LM.eyeInnerL * 2 + 1],
+    ) || faceH * 0.18;
+  const eyeWR =
+    Math.hypot(
+      pts[LM.eyeOuterR * 2] - pts[LM.eyeInnerR * 2],
+      pts[LM.eyeOuterR * 2 + 1] - pts[LM.eyeInnerR * 2 + 1],
+    ) || faceH * 0.18;
+  const openL = clamp((lidL / eyeWL - 0.05) / 0.2, 0, 1);
+  const openR = clamp((lidR / eyeWR - 0.05) / 0.2, 0, 1);
+  next.lid = Math.min(openL, openR);
   const a = p.anchor;
   const t = performance.now();
   const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
@@ -468,6 +504,12 @@ function lookMeshAnchor(p, lm) {
   a.w = box[2];
   a.h = box[3];
   a.tongue = Math.max(next.tongue, (a.tongue || 0) * 0.9);
+  // A blink is a fast close and a slower open: the lid follows a close at once
+  // and a wide open eye eases out, so a normal blink is not missed between two
+  // frames and a landmark wobble does not make the eye flicker.
+  const lid = next.lid;
+  if (a.lid == null) a.lid = lid;
+  else a.lid += (lid - a.lid) * (lid < a.lid ? 0.6 : 0.3);
   for (let i = 0; i < pts.length; i++) a.lm[i] = sl[i];
 }
 
@@ -602,6 +644,7 @@ function maskGeo(a, W, H) {
     mouthR: at(LM.mouthR, 0.2, 0.28),
     eyeL: [outerL, innerL],
     eyeR: [innerR, outerR],
+    lid: a.lid != null ? a.lid : 1,
     browL: at(LM.browL, -0.25, -0.24),
     browR: at(LM.browR, 0.25, -0.24),
     templeL: at(LM.templeL, -0.46, -0.16),
@@ -1551,13 +1594,120 @@ function wigLoad() {
   img.src = WIG_URL;
 }
 
-// drawMiku puts the wig on the face, or the vector fringe while the file is on
-// its way. The cut-out is the anchor: it is the width of the face and it runs
-// from a little under the hairline to the chin, so the crown sits on the head
-// and a tail falls past each ear.
+// The colours of the drawn face: one flat skin, one jaw shade, the teal of the
+// hair, a blue green iris and the pink of the cheeks.
+const MIKU = {
+  skin: '#f8dfd3',
+  shade: 'rgba(196, 142, 126, 0.35)',
+  lash: '#123943',
+  iris: ['#7ff0e6', '#0d6a82'],
+  blush: 'rgba(243, 154, 166, 0.5)',
+  mouth: '#93404f',
+  tongue: '#e37a83',
+};
+
+// drawMikuEye draws one drawn eye at x, y with a full width w and a full open
+// height h. open is the lid share the mesh reads, 0 shut and 1 wide: the eye
+// closes with the lid and keeps the same lash line, so a blink reads as a blink
+// and not as a hole in the face.
+function drawMikuEye(ctx, x, y, w, h, open) {
+  const o = clamp(open, 0, 1);
+  const rw = w / 2;
+  const rh = Math.max((h / 2) * (0.16 + 0.84 * o), 0.8);
+  ctx.lineCap = 'round';
+  if (o < 0.14) {
+    // A shut eye is the lid line alone, drawn at the weight of an open lash.
+    ctx.strokeStyle = MIKU.lash;
+    ctx.lineWidth = Math.max(1.8, h * 0.16);
+    ctx.beginPath();
+    ctx.moveTo(x - rw, y);
+    ctx.quadraticCurveTo(x, y + Math.max(1.5, h * 0.2), x + rw, y);
+    ctx.stroke();
+    return;
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(x, y, rw, rh, 0, 0, Math.PI * 2);
+  ctx.clip();
+  // The white of the eye, then the iris: a tall oval, a dark pupil and two
+  // highlights, the usual cel eye.
+  ctx.fillStyle = '#fdfbf8';
+  ctx.fillRect(x - rw, y - rh, w, rh * 2);
+  const ir = Math.min(rw * 0.82, rh * 0.95);
+  const iy = y + rh * 0.08;
+  const ig = ctx.createLinearGradient(x, iy - ir, x, iy + ir);
+  ig.addColorStop(0, MIKU.iris[0]);
+  ig.addColorStop(1, MIKU.iris[1]);
+  ctx.fillStyle = ig;
+  ctx.beginPath();
+  ctx.ellipse(x, iy, ir * 0.9, ir, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#082026';
+  ctx.beginPath();
+  ctx.ellipse(x, iy + ir * 0.05, ir * 0.38, ir * 0.52, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.beginPath();
+  ctx.ellipse(x - ir * 0.3, iy - ir * 0.42, ir * 0.24, ir * 0.3, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x + ir * 0.3, iy + ir * 0.32, ir * 0.12, ir * 0.14, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // The lash line sits on the top of the eye and is the heaviest mark on the
+  // face, so the eye keeps its shape while the lid comes down.
+  ctx.strokeStyle = MIKU.lash;
+  ctx.lineWidth = Math.max(1.8, h * 0.16);
+  ctx.beginPath();
+  ctx.ellipse(x, y, rw * 0.99, rh * 0.99, 0, Math.PI * 1.04, Math.PI * 1.96);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(18, 57, 67, 0.55)';
+  ctx.lineWidth = Math.max(1, h * 0.07);
+  ctx.beginPath();
+  ctx.ellipse(x, y, rw * 0.96, rh * 0.96, 0, Math.PI * 0.06, Math.PI * 0.94);
+  ctx.stroke();
+}
+
+// drawMikuSkin lays the face oval, the jaw shade and the two cheeks. The oval
+// runs from above the hairline to below the chin and past each cheek, so no
+// camera pixel under the mask is left open, and the wig covers its rim.
+function drawMikuSkin(ctx, g, cx, cy) {
+  const rx = Math.max(g.fw * 0.54, 1);
+  const ry = Math.max(g.fh * 0.6, 1);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + g.fh * 0.03, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = MIKU.skin;
+  ctx.fill();
+  const shade = ctx.createRadialGradient(cx, cy + g.fh * 0.05, rx * 0.2, cx, cy + g.fh * 0.05, rx);
+  shade.addColorStop(0, 'rgba(255, 255, 255, 0)');
+  shade.addColorStop(1, MIKU.shade);
+  ctx.fillStyle = shade;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + g.fh * 0.03, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  for (const side of [-1, 1]) {
+    const bx = cx + side * g.fw * 0.26;
+    const by = cy + g.fh * 0.17;
+    const bg = ctx.createRadialGradient(bx, by, 0, bx, by, g.fw * 0.1);
+    bg.addColorStop(0, MIKU.blush);
+    bg.addColorStop(1, 'rgba(243, 154, 166, 0)');
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    ctx.ellipse(bx, by, g.fw * 0.1, g.fw * 0.055, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// drawMiku wears the wig and a drawn face under it, the way a vtuber avatar
+// works: the whole face is covered and the drawn eyes, brows and mouth follow
+// the live face. The eyes blink with the lid the mesh reads, the mouth opens
+// with the jaw, and every feature is placed on its own landmark, so a head that
+// turns, leans or moves takes the face with it. The cut-out of the drawing is
+// the anchor: it is the width of the face and it runs from a little under the
+// hairline to the chin, so the crown sits on the head and a tail falls past
+// each ear.
 function drawMiku(ctx, g) {
   wigLoad();
-  if (!wigArt) return drawMikuFringe(ctx, g);
   const H = WIG_HOLE;
   const top = g.spot(g.top, 0, -0.05);
   const holeW = Math.max(g.fw * 0.98, 1);
@@ -1570,9 +1720,17 @@ function drawMiku(ctx, g) {
   const cy = ((H.y0 + H.y1) / 2) * artH;
   const mid = [(top[0] + g.chin[0]) / 2, (top[1] + g.chin[1]) / 2];
   // Local pixels go across the frame with the face axis and down the face with
-  // the other, so a head that turns or leans carries the wig with it.
+  // the other, so a head that turns or leans carries the whole head with it.
   const ax = g.ax,
     ay = g.ay;
+  // home reads a frame point in the pixels of the drawing, so a feature sits on
+  // the landmark it mimics.
+  const home = (pt) => {
+    const dx = pt[0] - mid[0],
+      dy = pt[1] - mid[1];
+    return [cx + dx * ax[0] + dy * ax[1], cy - (dx * ay[0] + dy * ay[1])];
+  };
+  const at = (p, q) => home([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]);
   ctx.save();
   ctx.imageSmoothingQuality = 'high';
   ctx.transform(
@@ -1583,8 +1741,69 @@ function drawMiku(ctx, g) {
     mid[0] - ax[0] * cx + ay[0] * cy,
     mid[1] - ax[1] * cx + ay[1] * cy,
   );
-  ctx.drawImage(wigArt, 0, 0, artW, artH);
+  drawMikuSkin(ctx, g, cx, cy);
+  // The eyes: drawn over the real ones, a little larger, at the size the mesh
+  // gives and with the lid share it reads. A face on the box anchor has no
+  // mesh, so the eyes stay open and the box sizes them.
+  const eyeLW = Math.max(gap(g.eyeL[0], g.eyeL[1]) * 1.55, g.fw * 0.2);
+  const eyeRW = Math.max(gap(g.eyeR[0], g.eyeR[1]) * 1.55, g.fw * 0.2);
+  const eyeH = Math.max(eyeLW, eyeRW) * 0.78;
+  const lid = g.lid == null ? 1 : g.lid;
+  const [elx, ely] = at(g.eyeL[0], g.eyeL[1]);
+  const [erx, ery] = at(g.eyeR[0], g.eyeR[1]);
+  drawMikuEye(ctx, elx, ely, eyeLW, eyeH, lid);
+  drawMikuEye(ctx, erx, ery, eyeRW, eyeH, lid);
+  // The brows: thin teal arcs over the eyes, lifted by their own landmark, so a
+  // raised brow reads as a raised brow.
+  for (const [brow, eye, w] of [
+    [g.browL, ely, eyeLW],
+    [g.browR, ery, eyeRW],
+  ]) {
+    const [bx, by] = home(brow);
+    const lift = Math.min(by, eye - eyeH * 0.95);
+    ctx.strokeStyle = 'rgba(43, 143, 137, 0.9)';
+    ctx.lineWidth = Math.max(1.4, eyeH * 0.09);
+    ctx.beginPath();
+    ctx.moveTo(bx - w * 0.5, lift + eyeH * 0.1);
+    ctx.quadraticCurveTo(bx, lift - eyeH * 0.16, bx + w * 0.5, lift + eyeH * 0.1);
+    ctx.stroke();
+  }
+  // The nose: one small shade, no more, the way a cel face draws it.
+  const [nx, ny] = home(g.nose);
+  ctx.fillStyle = 'rgba(190, 130, 118, 0.5)';
+  ctx.beginPath();
+  ctx.ellipse(nx, ny + g.fh * 0.02, g.fw * 0.018, g.fw * 0.01, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // The mouth: a small smile when it is shut, an open mouth with a tongue when
+  // the jaw drops, sized from the real mouth so it holds at every distance.
+  const open = clamp(g.tongue, 0, 1);
+  const mw = Math.max(gap(g.mouthL, g.mouthR) * 1.5, g.fw * 0.17);
+  const [mx, my] = home(g.lip);
+  if (open < 0.12) {
+    ctx.strokeStyle = MIKU.mouth;
+    ctx.lineWidth = Math.max(1.6, mw * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(mx - mw * 0.32, my);
+    ctx.quadraticCurveTo(mx, my + mw * 0.14, mx + mw * 0.32, my);
+    ctx.stroke();
+  } else {
+    const mh = mw * (0.2 + 0.8 * open);
+    ctx.fillStyle = MIKU.mouth;
+    ctx.beginPath();
+    ctx.ellipse(mx, my, mw * 0.42, mh * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (open > 0.45) {
+      ctx.fillStyle = MIKU.tongue;
+      ctx.beginPath();
+      ctx.ellipse(mx, my + mh * 0.16, mw * 0.26, mh * 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // The wig goes over the rim of the face oval, so the hairline and the tails
+  // are the drawing and the drawn face fills its cut-out.
+  if (wigArt) ctx.drawImage(wigArt, 0, 0, artW, artH);
   ctx.restore();
+  if (!wigArt) drawMikuFringe(ctx, g);
 }
 
 // drawMikuFringe is the mask without the drawing: a teal fringe along the
@@ -1593,6 +1812,21 @@ function drawMiku(ctx, g) {
 function drawMikuFringe(ctx, g) {
   const hair = '#39c5bb';
   const h = g.hair;
+  if (h.length > 2) {
+    // The crown is hair: a cap from one temple over the head and back along the
+    // hairline, so the drawn face is covered to the fringe while the drawing is
+    // missing or blocked.
+    const a = g.spot(h[0], 0, -0.02);
+    const b = g.spot(h[h.length - 1], 0, -0.02);
+    const crest = g.spot(h[Math.floor(h.length / 2)], 0, -0.62);
+    ctx.fillStyle = hair;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.quadraticCurveTo(crest[0], crest[1], b[0], b[1]);
+    for (let i = h.length - 1; i >= 0; i--) ctx.lineTo(h[i][0], h[i][1]);
+    ctx.closePath();
+    ctx.fill();
+  }
   if (h.length > 2) {
     ctx.fillStyle = hair;
     ctx.beginPath();

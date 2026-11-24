@@ -20,7 +20,7 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/boot.ts](src/boot.ts) | 601 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
-| [src/state.ts](src/state.ts) | 181 | The client state, one object per page. |
+| [src/state.ts](src/state.ts) | 197 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 76 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
 | [src/util.ts](src/util.ts) | 101 | Small helpers that touch nothing but their arguments and storage. |
@@ -72,7 +72,7 @@ module in `src` has no row yet.
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
 | [src/stats.ts](src/stats.ts) | 955 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1272 | Local transcription, one language and many. |
-| [src/look.ts](src/look.ts) | 1930 | The drawn camera: the face mesh, the masks and the custom effect. |
+| [src/look.ts](src/look.ts) | 2266 | The drawn camera: the face mesh, the masks and the custom effect. |
 | [src/devices.ts](src/devices.ts) | 808 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 880 | File offers and the data channel that carries the bytes. |
 
