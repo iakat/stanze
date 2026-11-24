@@ -6,8 +6,8 @@ import { state } from './state.js';
 
 // ---------------------------------------------------------------- sound effects
 // Four one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
-// lost connection chime that loops. Opus first, an mp3 copy for a browser that
-// can not decode it.
+// lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3 copy
+// last for a browser that can not decode either.
 export const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
 
 export const SFX_RATE = 0.35;

@@ -73,7 +73,8 @@ npm --prefix client install   # once, for esbuild
 make build
 ```
 
-The client source is TypeScript under `client/src`, one module per area.
+The client source is TypeScript under `client/src`, one module per area; the
+file-by-file map is in [client/README.md](client/README.md).
 `client/build.mjs` bundles it into `static/app.js` with esbuild, and the build
 does that before packing. The bundle is the file the page loads, so a client
 change is one build and no server change. The bundle is not in the tree: it is
