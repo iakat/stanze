@@ -11,6 +11,10 @@ the markup and runs the lobby and the call. Every other module exports
 functions that the entry, the room layer or another module calls; the state they
 share is the one object in [src/state.ts](src/state.ts).
 
+The line counts below are kept true by [tools/overview.mjs](tools/overview.mjs):
+`make readme` rewrites them, and `make check` fails when one is stale or when a
+module in `src` has no row yet.
+
 ## Entry, state and shared helpers
 
 | File | Lines | What it does |
@@ -81,6 +85,7 @@ share is the one object in [src/state.ts](src/state.ts).
 | [eslint.config.mjs](eslint.config.mjs) | The lint rules: the recommended sets, and the security and HTML sink plugins. |
 | [package.json](package.json) | The dev dependencies, all pinned to exact versions, and the build, check, lint, format and outdated scripts. |
 | [.npmrc](.npmrc) | `save-exact`, so the next installed version is written as a pin. |
+| [tools/overview.mjs](tools/overview.mjs) | Rewrites the counts in this file and names a module that has no row yet. |
 
 ## Checks
 
@@ -90,7 +95,10 @@ make client                   # bundle only
 make typecheck                # tsc over src
 make lint                     # eslint over the tree
 make format                   # prettier
+make readme                   # refresh the line counts above
 make deps                     # dev dependencies behind the registry
 ```
 
-`make check` runs the type check, the lint and the one-browser smoke test.
+`make check` runs the type check, the lint, `readme-check` and the one-browser
+smoke test. `readme-check` fails on a stale count and on a module in `src` that
+has no row here, so a new file cannot slip in unnamed.

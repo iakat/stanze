@@ -6,7 +6,7 @@ NODE ?= /data/workspace/node/bin
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build client selftest run test typecheck lint deps format smoke sealed check clean
+.PHONY: all build client selftest run test typecheck lint deps format readme readme-check smoke sealed check clean
 
 all: build selftest
 
@@ -35,6 +35,15 @@ typecheck:
 lint:
 	PATH=$(NODE):$$PATH client/node_modules/.bin/eslint client
 
+# Refresh the line counts in client/README.md; a module that is missing from
+# the table is named and the target fails.
+readme:
+	PATH=$(NODE):$$PATH $(NODE)/node client/tools/overview.mjs --write
+
+# Fail if a count is stale or a module has no row yet. Runs in `check`.
+readme-check:
+	PATH=$(NODE):$$PATH $(NODE)/node client/tools/overview.mjs --check
+
 # Report dev dependencies that are behind the registry. Versions in
 # client/package.json are exact and take the update from this output.
 deps:
@@ -58,8 +67,9 @@ gate:
 	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
 	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) OUTDIR=$(OUTDIR) $(NODE)/node tools/gate-e2e.js
 
-# What a normal check runs: the types first, then the browser.
-check: typecheck lint smoke
+# What a normal check runs: the types, the lint, the readme table, then the
+# browser.
+check: typecheck lint readme-check smoke
 
 clean:
 	rm -rf $(BIN) packed/static.tgz
