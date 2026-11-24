@@ -699,26 +699,31 @@ async function adoptCam(track) {
   applyMirror();
 }
 
+// openInput asks for one input and adopts the track, so both buttons share one
+// path. It answers false when nothing opened; the reason is already on screen.
+async function openInput(kind) {
+  const got = await askKind(kind, kind === 'video' ? state.camId : state.micId);
+  const track = got.stream ? got.stream.getTracks()[0] : null;
+  if (!track) {
+    say(
+      got.err && got.err.name === 'NotAllowedError'
+        ? `the ${DEVICE_NOUN[kind]} was refused`
+        : `the ${DEVICE_NOUN[kind]} is not available`,
+    );
+    return false;
+  }
+  await (kind === 'video' ? adoptCam(track) : adoptMic(track));
+  refreshDevices();
+  return true;
+}
+
 export async function enableMic() {
   if (!sealingAvailable()) {
     // No transform, no frame: the microphone stays off and says why.
     say('this browser cannot seal media frames, so the microphone stays off');
     return;
   }
-  if (!state.micTrack) {
-    const mic = await askKind('audio', state.micId);
-    const track = mic.stream ? mic.stream.getAudioTracks()[0] : null;
-    if (!track) {
-      say(
-        mic.err && mic.err.name === 'NotAllowedError'
-          ? 'the microphone was refused'
-          : 'the microphone is not available',
-      );
-      return;
-    }
-    await adoptMic(track);
-    refreshDevices();
-  }
+  if (!state.micTrack && !(await openInput('audio'))) return;
   state.mic = true;
   store('mic', 1);
   playSfx('timp');
@@ -744,20 +749,7 @@ export async function enableCam() {
     say('this browser cannot seal media frames, so the camera stays off');
     return;
   }
-  if (!state.camTrack) {
-    const cam = await askKind('video', state.camId);
-    const track = cam.stream ? cam.stream.getVideoTracks()[0] : null;
-    if (!track) {
-      say(
-        cam.err && cam.err.name === 'NotAllowedError'
-          ? 'the camera was refused'
-          : 'the camera is not available',
-      );
-      return;
-    }
-    await adoptCam(track);
-    refreshDevices();
-  }
+  if (!state.camTrack && !(await openInput('video'))) return;
   state.cam = true;
   store('cam', 1);
   if (state.camTrack) state.camTrack.enabled = true;
