@@ -174,20 +174,25 @@ export function resumeAudio() {
 // Remote audio does not play from the video element: one gain node per peer
 // takes it to the output, so 100 percent is unity and 200 a real boost. The
 // context is created on the join click, and a suspended one resumes on a click.
+// newAudioCtx opens one audio context. Older Safari exposes only the prefixed
+// constructor, which the DOM lib omits, so the page asks for both names once.
+export function newAudioCtx(opts?: AudioContextOptions) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  try {
+    return new Ctx(opts);
+  } catch {
+    return null;
+  }
+}
+
 export function ensurePlayback() {
   if (state.playCtx) {
     resumePlayback();
     return state.playCtx;
   }
-  // Older Safari exposes only the prefixed constructor, which the DOM lib omits.
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return null;
-  try {
-    state.playCtx = new Ctx({ latencyHint: 'interactive' });
-  } catch {
-    state.playCtx = null;
-    return null;
-  }
+  state.playCtx = newAudioCtx({ latencyHint: 'interactive' });
+  if (!state.playCtx) return null;
   resumePlayback();
   return state.playCtx;
 }

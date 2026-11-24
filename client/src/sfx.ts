@@ -5,6 +5,7 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { disconnectQuietly, stopQuietly } from './util.js';
+import { newAudioCtx } from './audio.js';
 
 // ---------------------------------------------------------------- sound effects
 // Four one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
@@ -48,15 +49,7 @@ function pickSfxExt() {
 }
 
 export function ensureSfx() {
-  if (state.sfxCtx) return;
-  // Safari exposes only the prefixed constructor, which the DOM lib omits.
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  try {
-    state.sfxCtx = new Ctx();
-  } catch {
-    state.sfxCtx = null;
-  }
+  if (!state.sfxCtx) state.sfxCtx = newAudioCtx();
 }
 
 // preloadSfx decodes the cues once, so a click never waits for a fetch.

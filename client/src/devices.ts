@@ -11,7 +11,14 @@ import { layoutStage, makeTile, ownTile, paintRowDeaf, setLocalTile } from './ti
 import { applyFlags, paintVolume } from './volume.js';
 import { paintWaiting } from './host.js';
 import { MIC_AUDIO, applyQuality, ask, camVideo, capVideoSender } from './media.js';
-import { applyMirror, resumeAudio, sendState, setNoise, updateButtons } from './audio.js';
+import {
+  applyMirror,
+  newAudioCtx,
+  resumeAudio,
+  sendState,
+  setNoise,
+  updateButtons,
+} from './audio.js';
 import { lookRestart, lookStop, lookTrack } from './look.js';
 import { stopShare } from './screen.js';
 import { playSfx } from './sfx.js';
@@ -778,14 +785,8 @@ export function disableCam(persist = true) {
 // buildAudio wires mic -> GTCRN -> gain -> mixer, and the mixer track is what the
 // peers receive. The mixer exists without a microphone so screen audio fits later.
 async function buildAudio() {
-  // Safari exposes only the prefixed constructor, which the DOM lib omits.
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  try {
-    state.audioCtx = new Ctx({ sampleRate: 48000, latencyHint: 'interactive' });
-  } catch {
-    return;
-  }
+  state.audioCtx = newAudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
+  if (!state.audioCtx) return;
   state.mixer = state.audioCtx.createMediaStreamDestination();
   state.micGain = state.audioCtx.createGain();
   state.micGain.connect(state.mixer);
