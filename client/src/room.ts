@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say, setAdmins } from './util.js';
+import { say, setAdmins, stopQuietly, stopTracks } from './util.js';
 import { load, store } from './prefs.js';
 import { menuSet, setHash, suggestRoom } from './menu.js';
 import { setLocalTile } from './tiles.js';
@@ -52,9 +52,8 @@ export async function enterRoom(room, pass) {
   store('path', state.path);
   store('noise', state.noiseWanted ? 1 : 0);
 
-  // The post-quantum module and the frame worker are ready before the stage
-  // appears, so a browser that cannot seal stays in the lobby with a reason
-  // instead of quietly opening an unsealed room.
+  // The post-quantum module loads before the stage appears, so a browser that
+  // cannot seal stays in the lobby with a reason.
   // The join click is the gesture the audio output needs.
   ensurePlayback();
   $('enter-btn').disabled = true;
@@ -67,21 +66,19 @@ export async function enterRoom(room, pass) {
     } catch (err) {
       const why = err && err.message ? err.message : String(err);
       $('sealed-note').textContent = 'the sealed client did not start: ' + why;
-      // No silent fallback: the lobby says what failed and the visitor decides.
+      // No silent fallback to an unsealed room: the lobby says what failed.
       state.room = '';
       say('cannot open a sealed room: ' + why);
       return;
     }
 
-    // The passphrase becomes a scalar before the socket opens, and the plain
-    // text is dropped right after: the join frame carries the room id only,
-    // and the scalar is the only form the proof ever needs.
+    // The passphrase becomes the SPAKE2 scalar before the socket opens; the
+    // join frame carries the room id and no secret.
     $('sealed-note').textContent = 'deriving the room key';
     canary(pass);
     state.w = roomW(pass, room);
-    // The value a guest typed is the gate it starts from. A room that changed
-    // its gate later hands the current value down the sealed pair, so the
-    // typed one is only the first word.
+    // The typed passphrase is the first gate value; an admin change comes
+    // sealed down the pair.
     state.gate = { v: pass, n: 0 };
     paintGate();
     startSealedWorker();
@@ -98,7 +95,7 @@ export async function enterRoom(room, pass) {
 
     $('lobby').hidden = true;
     $('stage').hidden = false;
-    // The call opens on the picture alone, and the frame waits for a tap.
+    // A phone folds the call to the picture; a tap brings the frame back.
     $('stage').classList.remove('chrome');
     applyImmersive();
     $('room-label').textContent = room;
@@ -111,9 +108,8 @@ export async function enterRoom(room, pass) {
 
     prepareLocal();
     if (sealingAvailable()) {
-      // The join click asks for the camera and the microphone. The signaling
-      // socket waits for the answer, so the first offer already carries the
-      // tracks, and preparePeer seals and attaches both before the offer.
+      // Devices are asked for before the signaling socket opens, so the first
+      // offer already carries both tracks.
       try {
         await requestLocal();
       } catch {
@@ -148,13 +144,7 @@ export function leave(message) {
     }
   }
   if (state.screen) {
-    for (const track of state.screen.getTracks()) {
-      try {
-        track.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
+    stopTracks(state.screen);
     state.screen = null;
     if (state.screenTile) {
       state.screenTile.remove();
@@ -162,11 +152,8 @@ export function leave(message) {
     }
   }
   dropPeers();
-  // The sealed worker holds the pair keys; it dies with the call. The module
-  // itself stays loaded, so the next sealed join needs no second download. The
-  // per-call identity is wiped, not just dropped: the X25519 and ML-KEM secret
-  // halves are zeroed in their buffers, and nothing on this page can resume a
-  // call after it ended. The long-term key and the pins survive, by design.
+  // The worker holds the pair keys and dies with the call; the wasm and the
+  // long-term identity stay, only the per-call secrets are zeroed.
   if (state.worker) {
     state.worker.terminate();
     state.worker = null;
@@ -208,20 +195,8 @@ export function leave(message) {
   paintHandQueue();
   updatePinCount();
   $('chat-note').hidden = true;
-  if (state.micTrack) {
-    try {
-      state.micTrack.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
-  if (state.camTrack) {
-    try {
-      state.camTrack.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (state.micTrack) stopQuietly(state.micTrack);
+  if (state.camTrack) stopQuietly(state.camTrack);
   if (state.audioCtx) {
     state.audioCtx.close().catch(() => {});
     state.audioCtx = null;
@@ -277,14 +252,12 @@ export function leave(message) {
   state.peers.clear();
   if ($('chat-log')) $('chat-log').replaceChildren();
   setHash('');
-  // The room field keeps the room the visitor was just in, so another try
-  // needs no retyping.
+  // The room field keeps the last room, so another try needs no retyping.
   if (was) $('room').value = was;
   else suggestRoom();
   if (message) {
     say(message);
-    // The chat log goes with the call, so the lobby says why this page is back
-    // in it. A guest removed by the host must not be left guessing.
+    // The chat log goes with the call, so the lobby says why this page is back in it.
     const note = $('sealed-note');
     if (note) {
       note.hidden = false;

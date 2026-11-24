@@ -15,8 +15,7 @@ export function startSealedWorker() {
       paintFrameCounters();
     } else if (msg.type === 'keys-ok') {
       const waiting = state.keyWait.get(msg.pair);
-      // An import that belongs to an older handshake must not open this gate:
-      // the slot it filled may already hold newer keys.
+      // An older handshake's import must not open this gate: the slot may hold newer keys.
       if (waiting && waiting.gen === msg.gen) {
         state.keyWait.delete(msg.pair);
         waiting.resolve(true);
@@ -25,8 +24,7 @@ export function startSealedWorker() {
       if (state.samples.length < 40) state.samples.push(msg);
     } else if (msg.type === 'error') {
       state.workerErrors.push(msg.msg || 'worker error');
-      // A key import that failed resolves the gate false. The pair says so and
-      // never builds a connection that can only drop frames.
+      // A failed import fails the gate, so the pair builds no connection that drops every frame.
       const waiting = msg.pair && state.keyWait.get(msg.pair);
       if (waiting && (msg.gen === undefined || waiting.gen === msg.gen)) {
         state.keyWait.delete(msg.pair);
@@ -39,7 +37,7 @@ export function startSealedWorker() {
   state.worker = worker;
 }
 
-export function paintFrameCounters() {
+function paintFrameCounters() {
   let enc = 0;
   let dec = 0;
   for (const st of Object.values(state.frames)) {

@@ -50,14 +50,13 @@ import {
 // ------------------------------------------------------------- handshake
 //
 // The bundle carries the per-call keys, the long-term identity and a session id
-// that is fresh on every join. Both sides sign the same transcript and each one
-// checks the other's signature and confirmation tag in one gate, so there is no
-// half-proven pair: the initiator knows who answered, and the responder knows
-// who asked. The keys themselves are still HKDF over the ephemeral secrets
-// alone, and they only reach the worker once that gate has passed.
-// sealedSendPub sends the key bundle. One target sends to that peer, and no
-// target broadcasts it: a page that the server gives no roster has no ids to
-// address, so the room learns of it from this bundle alone.
+// fresh on every join. Both sides sign one transcript and check the other's
+// signature and confirmation tag in one gate, so a pair is proven or not at
+// all; the keys are HKDF over the ephemeral secrets and reach the worker only
+// after that gate.
+// sealedSendPub sends the key bundle to one peer, or broadcasts it: with no
+// roster from the server a page has no ids to address, so the room learns of
+// it from this bundle alone.
 export function sealedSendPub(peer) {
   if (!state.identity || !state.idKey) return;
   const bundle = {
@@ -71,10 +70,9 @@ export function sealedSendPub(peer) {
   else send({ t: 'enc', b: encOpaque(bundle) });
 }
 
-// sealedRefuse closes a pair for good. There is no path that continues without
-// an identity: a relay that strips the fields would otherwise leave a working
-// pair with no authentication at all, which is exactly the downgrade.
-export function sealedRefuse(peer, why) {
+// sealedRefuse closes a pair for good: a relay that strips the identity fields
+// would otherwise leave a working pair with no authentication.
+function sealedRefuse(peer, why) {
   if (!state.peers.has(peer.id)) return;
   state.identityFailures++;
   if (peer.pc) {
@@ -87,12 +85,10 @@ export function sealedRefuse(peer, why) {
   updatePinCount();
 }
 
-// sealedRefusePass is sealedRefuse for a guest that failed the room proof. A
-// wrong passphrase costs one failed handshake. A member also removes the guest
-// from every page: a seat in the room is not the prize for guessing. A guest
-// that was never let in goes back to the lobby with the reason, because no
-// member answers it and the room is not there for it.
-export function sealedRefusePass(peer) {
+// sealedRefusePass is sealedRefuse for a guest that failed the room proof, so a
+// wrong passphrase costs one handshake. A member kicks the guest everywhere; a
+// guest that was never let in goes back to the lobby.
+function sealedRefusePass(peer) {
   sealedRefuse(peer, 'does not know the room passphrase');
   if (state.waiting) {
     // Out of the message handler: the pair state is being torn down here, and
@@ -104,9 +100,8 @@ export function sealedRefusePass(peer) {
   sealedKick(peer.id);
 }
 
-// sealedRestart drops a pair's state so a new handshake can run. The deliberate
-// case is "this device was reset", which re-pins and starts over; the automatic
-// case is a peer that comes back with a fresh session id.
+// sealedRestart drops a pair's state so a new handshake can run: a deliberate
+// "this device was reset", or a peer that comes back with a fresh session id.
 export function sealedRestart(peer, resend) {
   // A restart is a new generation: every key import still in flight belongs to
   // the old one and must not resolve the gate of this one.
@@ -147,10 +142,10 @@ export function sealedRestart(peer, resend) {
   if (resend) sealedSendPub(peer);
 }
 
-// sealedOnPub decides which side initiates: the lower peer id. The other side
-// answers the hello. A duplicate bundle is harmless; a bundle with a new session
-// id is the same guest on a fresh call, so the old pair goes first.
-export function sealedOnPub(peer, msg) {
+// sealedOnPub decides which side initiates: the lower peer id, and the other
+// answers the hello. A bundle with a new session id is the same guest on a fresh
+// call, so the old pair goes first.
+function sealedOnPub(peer, msg) {
   if (peer.pub && peer.pub.sid && msg.sid && peer.pub.sid !== msg.sid) sealedRestart(peer, false);
   peer.pub = { x: msg.x, m: msg.m, id: msg.id || '', sid: msg.sid || '' };
   if (!peer.pub.id || !peer.pub.sid) {
@@ -165,7 +160,7 @@ export function sealedOnPub(peer, msg) {
 
 // sealedProved records that the peer's signature over this transcript checked
 // out. It is the only moment a fingerprint of that peer means anything.
-export function sealedProved(peer) {
+function sealedProved(peer) {
   peer.proven = true;
   peer.fp = fingerprint(peer.pub.id);
   paintPin(peer);
@@ -178,12 +173,10 @@ export function sealedProved(peer) {
 }
 
 // rememberInside keeps the waiting room from locking out a member whose link
-// dropped. A guest that was inside this call under a proven key is remembered
-// here. When the same key comes back and waits, any member lets it in by
-// itself. Only a key proof counts, never a name, so nobody can pose as a member
-// to skip the room. A guest a member removed is put on the refused list, and so
-// is not let back in. The list lives in this tab and ends with the call.
-export function rememberInside(peer) {
+// dropped: a proven key that was inside is let in again without a member. Only
+// a key proof counts, never a name; a kicked key is refused, and the list ends
+// with the call.
+function rememberInside(peer) {
   if (peer.fp && !peer.waiting) state.insideFps.add(peer.fp);
 }
 
@@ -209,9 +202,9 @@ export function wipeIdentity() {
 }
 
 // sealedHoldKeys keeps the agreed pair keys in this page until the peer has
-// proved itself. They are not handed to the worker yet, so no frame of this
-// pair can be opened before the identity is checked.
-export function sealedHoldKeys(peer, out) {
+// proved itself; they reach the worker only after that, so no frame of this pair
+// opens before the identity is checked.
+function sealedHoldKeys(peer, out) {
   wipeKeys(peer);
   peer.keys = {
     sendMedia: b64d(out.keys.sendMedia),
@@ -232,7 +225,7 @@ export function sealedHoldKeys(peer, out) {
 // sealedInstallKeys hands the pair keys to the worker and returns a promise that
 // the import resolves. The connection is built on that promise, so the first
 // frame always meets a key.
-export function sealedInstallKeys(peer) {
+function sealedInstallKeys(peer) {
   peer.keysInstalled = true;
   // The generation rises across the whole page, not per peer: a pair id that
   // comes back in a new peer object still gets a newer number than the worker
@@ -259,7 +252,7 @@ export function sealedInstallKeys(peer) {
 
 // sealedProve runs the one gate the module offers: the peer's identity
 // signature over this transcript and its confirmation tag, both or neither.
-export function sealedProve(peer, msg) {
+function sealedProve(peer, msg) {
   return pqCall((json) => pqModule().proved(json), {
     key: b64e(peer.keys.recvMedia),
     transcript: peer.transcript,
@@ -269,9 +262,9 @@ export function sealedProve(peer, msg) {
   });
 }
 
-export async function sealedInitiate(peer) {
-  if (!state.identity || !state.idKey || !peer.pub) return;
-  const out = pqCall((json) => pqModule().initiate(json), {
+// sealedPair is the bundle fields both calls name: ours first, then the peer's.
+function sealedPair(peer) {
+  return {
     self: state.self,
     peer: peer.id,
     selfX: state.identity.xpub,
@@ -282,19 +275,46 @@ export async function sealedInitiate(peer) {
     peerK: peer.pub.m,
     peerID: peer.pub.id,
     peerSID: peer.pub.sid,
+  };
+}
+
+// sealedSigned signs the transcript and holds the keys the gate proved. An empty
+// answer means the pair is gone or the key cannot sign, and the peer has already
+// heard why while it is still there.
+async function sealedSigned(peer, out) {
+  const sig = await state.idKey.sign(out.transcript);
+  if (!state.peers.has(peer.id) || state.leaving) return '';
+  if (!sig) {
+    sealedRefuse(peer, 'could not sign the handshake');
+    return '';
+  }
+  sealedHoldKeys(peer, out);
+  peer.mySig = sig;
+  return sig;
+}
+
+// sealedSendOk sends the confirmation that names us, so the other side can check
+// us as soon as it has its keys. The same transcript covers both sides.
+function sealedSendOk(peer, out) {
+  peer.sentConfirm = true;
+  sealedSendOpaque(peer.id, {
+    k: 'ok',
+    c: out.confirm,
+    id: state.idKey.pub,
+    sid: state.sid,
+    sig: peer.mySig,
   });
+}
+
+async function sealedInitiate(peer) {
+  if (!state.identity || !state.idKey || !peer.pub) return;
+  const out = pqCall((json) => pqModule().initiate(json), sealedPair(peer));
   if (!out || out.error) {
     sealedRefuse(peer, 'refused the key bundle');
     return;
   }
-  const sig = await state.idKey.sign(out.transcript);
-  if (!state.peers.has(peer.id) || state.leaving) return;
-  if (!sig) {
-    sealedRefuse(peer, 'could not sign the handshake');
-    return;
-  }
-  sealedHoldKeys(peer, out);
-  peer.mySig = sig;
+  const sig = await sealedSigned(peer, out);
+  if (!sig) return;
   sealedSendOpaque(peer.id, {
     k: 'hello',
     epk: out.epk,
@@ -303,19 +323,10 @@ export async function sealedInitiate(peer) {
     sid: state.sid,
     sig,
   });
-  // Our own confirmation and signature go out at once, so the responder can
-  // check us as soon as it has its keys. The same transcript covers both sides.
-  peer.sentConfirm = true;
-  sealedSendOpaque(peer.id, {
-    k: 'ok',
-    c: out.confirm,
-    id: state.idKey.pub,
-    sid: state.sid,
-    sig,
-  });
+  sealedSendOk(peer, out);
 }
 
-export async function sealedRespond(peer, msg) {
+async function sealedRespond(peer, msg) {
   if (!state.identity || !state.idKey || !peer.pub) return;
   // The hello must describe the bundle the peer broadcast. The signature over
   // the transcript would fail anyway; this refusal just names the reason.
@@ -324,18 +335,9 @@ export async function sealedRespond(peer, msg) {
     return;
   }
   const out = pqCall((json) => pqModule().respond(json), {
-    self: state.self,
-    peer: peer.id,
-    selfX: state.identity.xpub,
+    ...sealedPair(peer),
     selfSK: b64e(state.identity.xsk),
-    selfK: state.identity.ek,
     selfDK: b64e(state.identity.dk),
-    selfID: state.idKey.pub,
-    selfSID: state.sid,
-    peerX: peer.pub.x,
-    peerK: peer.pub.m,
-    peerID: peer.pub.id,
-    peerSID: peer.pub.sid,
     epk: msg.epk,
     ct: msg.ct,
     sig: msg.sig || '',
@@ -344,40 +346,23 @@ export async function sealedRespond(peer, msg) {
     sealedRefuse(peer, 'refused the hello');
     return;
   }
-  const sig = await state.idKey.sign(out.transcript);
-  if (!state.peers.has(peer.id) || state.leaving) return;
-  if (!sig) {
-    sealedRefuse(peer, 'could not sign the handshake');
-    return;
-  }
-  sealedHoldKeys(peer, out);
-  peer.mySig = sig;
-  peer.sentConfirm = true;
-  sealedSendOpaque(peer.id, {
-    k: 'ok',
-    c: out.confirm,
-    id: state.idKey.pub,
-    sid: state.sid,
-    sig,
-  });
-  // The pair is not ready yet: the initiator's own ok still has to prove it,
-  // which is the half that used to be missing. That ok may have arrived while
-  // this hello was still being answered, so the hold is drained here.
+  if (!(await sealedSigned(peer, out))) return;
+  sealedSendOk(peer, out);
+  // The pair is not ready yet: the initiator's own ok has to prove it. That ok
+  // may have arrived while this hello was answered, so the hold is drained here.
   sealedDrainCtl(peer);
 }
 
-// sealedOnProof is an `ok` from the peer, on either side. Nothing about the
-// pair is announced as established until this passes: the signature names the
-// peer, the tag shows that both ends hold the same keys, and the pin state
-// decides whether that name is one this browser already trusts.
-export async function sealedOnProof(peer, msg) {
+// sealedOnProof is an `ok` from the peer, on either side. Nothing is announced
+// as established before it passes: the signature names the peer, the tag shows
+// that both ends hold the same keys, and the pin state judges the name.
+async function sealedOnProof(peer, msg) {
   if (!peer.keys || !peer.pub || !peer.transcript) return;
   if (peer.confirmed) return;
   if (msg.id !== peer.pub.id || msg.sid !== peer.pub.sid) {
     // A proof for another session is the old handshake arriving late, not an
-    // attack: the gate below checks the signature over *this* transcript, so
-    // a real mismatch still fails there. Dropping it here would tear down the
-    // fresh pair whenever a rejoin crossed its own tail.
+    // attack: the gate checks the signature over *this* transcript anyway, so a
+    // drop here would tear down a fresh pair that crossed its own tail.
     return;
   }
   const res = sealedProve(peer, msg);
@@ -394,10 +379,9 @@ export async function sealedOnProof(peer, msg) {
   }
   peer.confirmed = true;
   sealedProved(peer);
-  // The pin is the answer to "who", and it is checked before anything is
-  // established. A revoked key that comes back is an alarm, and a label that
-  // already holds another key is the changed state: both close the pair, and
-  // the guest can say that the device was reset.
+  // The pin answers "who" and is checked before anything is established: a
+  // revoked key that comes back and a label that holds another key both close
+  // the pair, and the guest can say the device was reset.
   const pin = pinState(peer);
   if (pin === 'rollback' || pin === 'changed') {
     sealedRefuse(
@@ -414,11 +398,9 @@ export async function sealedOnProof(peer, msg) {
     sealedRefuse(peer, 'was removed from this room');
     return;
   }
-  // The keys go to the worker now: the passphrase proof itself travels sealed,
-  // and a frame that can not be opened would stall the proof. The keys are not
-  // permission, though. Every application frame of this pair waits for the
-  // proof, so a peer that ran the handshake gets no room until it shows the
-  // passphrase.
+  // The keys go to the worker now: the passphrase proof travels sealed, and a
+  // frame that can not be opened would stall it. The keys are not permission:
+  // every application frame of this pair waits for the proof.
   peer.keyPromise = sealedInstallKeys(peer);
   sealedSetE2E(peer, 'ready');
   Promise.resolve(peer.keyPromise).then((ok) => {
@@ -431,16 +413,15 @@ export async function sealedOnProof(peer, msg) {
 // sealedFlushApp replays the sealed frames that arrived before this side had
 // its keys in the worker. They are in socket order, so the pair counters stay
 // in step.
-export function sealedFlushApp(peer) {
+function sealedFlushApp(peer) {
   const held = peer.appPending || [];
   peer.appPending = [];
   for (const msg of held) sealedHandleOpaque(peer.id, encOpaque(msg));
 }
 
-// sealedStartPass proves the room passphrase to this peer. Keys alone bind the
-// two ends of one handshake, and anyone can run a handshake; the proof is what
-// makes the room a room.
-export function sealedStartPass(peer) {
+// sealedStartPass proves the room passphrase to this peer. A handshake binds two
+// ends, but anyone can run one; the proof is what makes the room a room.
+function sealedStartPass(peer) {
   if (!state.w) {
     sealedRefuse(peer, 'this page holds no room key');
     return;
@@ -465,13 +446,13 @@ export function sealedStartPass(peer) {
 
 // sealedDrainPass replays a proof frame that arrived before the exchange it
 // belongs to existed.
-export function sealedDrainPass(peer) {
+function sealedDrainPass(peer) {
   const held = peer.passEarly || [];
   peer.passEarly = [];
   for (const msg of held) sealedOnPassFrame(peer, msg);
 }
 
-export function sealedOnPassFrame(peer, msg) {
+function sealedOnPassFrame(peer, msg) {
   if (!peer.pass) {
     (peer.passEarly = peer.passEarly || []).push(msg);
     return;
@@ -500,7 +481,7 @@ export function sealedOnPassFrame(peer, msg) {
   sealedPassMaybe(peer);
 }
 
-export function sealedPassMaybe(peer) {
+function sealedPassMaybe(peer) {
   if (!peer.pass || peer.pass.done || !peer.pass.finished || !peer.pass.peerOk) return;
   peer.pass.done = true;
   sealedPassDone(peer);
@@ -509,7 +490,7 @@ export function sealedPassMaybe(peer) {
 // sealedPassDone is the point where a pair becomes usable: both ends proved
 // the passphrase, so the frames held behind the proof are released and the
 // connection may start.
-export function sealedPassDone(peer) {
+function sealedPassDone(peer) {
   sealedAnnounceName(peer);
   sealedSendState(peer);
   // Both ends proved the gate, so either may ask which value is current: a
@@ -519,9 +500,8 @@ export function sealedPassDone(peer) {
   sealedSend(peer, { k: 'wait', on: state.wait.on, n: state.wait.n });
   sealedSend(peer, { k: 'claimq' });
   // A held guest says so on the pair: the room can not read the switch from the
-  // server any more, so this is the only way a member learns to let it in. A
-  // guest that is already inside says that instead, because a member may still
-  // hold it from a note that went out before this pair existed.
+  // server, so this is how a member learns to let it in. A guest already inside
+  // says that instead, in case a member still holds it.
   if (state.waiting) sealedSend(peer, { k: 'held' });
   else sealedSend(peer, { k: 'in' });
   // A held guest stays held until a member lets it in. With the switch off, or
@@ -535,11 +515,11 @@ export function sealedPassDone(peer) {
 
 // sealedHoldCtl keeps a handshake frame that arrived before the state it needs.
 // It is replayed in arrival order once the pub or the keys are in place.
-export function sealedHoldCtl(peer, msg) {
+function sealedHoldCtl(peer, msg) {
   if (peer.ctlPending.length < 8) peer.ctlPending.push(msg);
 }
 
-export function sealedDrainCtl(peer) {
+function sealedDrainCtl(peer) {
   if (!peer.ctlPending.length) return;
   const held = peer.ctlPending;
   peer.ctlPending = [];
@@ -608,7 +588,7 @@ export function sealedHandleOpaque(from, b) {
   }
 }
 
-export function sealedOnApp(peer, b, seq) {
+function sealedOnApp(peer, b, seq) {
   const out = pqCall((json) => pqModule().open(json), {
     key: b64e(peer.keys.recvChat),
     aad: b64e(chatAAD(peer.id, seq)),
@@ -623,10 +603,9 @@ export function sealedOnApp(peer, b, seq) {
   }
   peer.seqIn = seq;
   if (obj.z !== undefined) delete obj.z; // the padding bucket, never content
-  // The proof is the only kind that may pass before the room is open, and a
-  // kick as well: a page a member removed must go even if its own proof never
-  // finished. Anything else waits here: a peer that can run a handshake can
-  // still be a stranger, and an offer applied early would build a link to it.
+  // The proof may pass before the room is open, and a kick as well: a page a
+  // member removed must go even if its proof never finished. Anything else
+  // waits here, because a peer that ran a handshake can still be a stranger.
   if (
     obj.k !== 'spake' &&
     obj.k !== 'spakeok' &&
@@ -639,7 +618,7 @@ export function sealedOnApp(peer, b, seq) {
   sealedDispatchApp(peer, obj);
 }
 
-export function sealedDispatchApp(peer, obj) {
+function sealedDispatchApp(peer, obj) {
   if (obj.k === 'sdp') {
     // A sealed description is the only kind this client sends. It arrives after
     // the keys, so no clear offer is ever made or accepted from here.
@@ -711,10 +690,9 @@ export function sealedDispatchApp(peer, obj) {
   }
 }
 
-// sealedOnGate takes a gate value from a pair that already proved the room.
-// The counter orders the changes and a tie goes to the lower peer id, so two
-// admins that change it at the same moment still land on one value everywhere.
-export function sealedOnGate(peer, obj) {
+// sealedOnGate takes a gate value from a pair that already proved the room. The
+// counter orders the changes and a tie goes to the lower peer id.
+function sealedOnGate(peer, obj) {
   // The role is checked here as well as in the menu: the role is a sealed claim
   // now, and a sealed value must follow the same list.
   if (!isAdmin(peer.id)) return;
@@ -730,7 +708,7 @@ export function sealedOnGate(peer, obj) {
 // adoptGate installs a value and derives its scalar again, so the next pair
 // proves the new word. A pair that is already open keeps its keys: the value
 // gates the door, it is not a key schedule.
-export function adoptGate(v, n) {
+function adoptGate(v, n) {
   state.gate = { v, n };
   try {
     state.w = roomW(v, state.room);

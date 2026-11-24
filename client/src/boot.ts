@@ -66,8 +66,7 @@ import { runLab } from './lab.js';
 import { applyImmersive, phoneQuery, setChrome } from './phone.js';
 
 // window.e2eApp is the hook the browser test drives; a person never needs it.
-// It exposes the same shape the old sealed page had, so a test can read the
-// counters of a sealed call from the one client.
+// It exposes the counters of a sealed call from the one client.
 win().e2eApp = {
   get state() {
     return state;
@@ -190,9 +189,11 @@ win().e2eApp = {
 };
 
 // ---------------------------------------------------------------- boot
-export function init() {
-  // Older builds kept a volume under the guest name. That is a list of the
-  // people who used this machine, so it goes before anything else reads it.
+
+// restorePrefs the stored choices and the last room come back before any listener is wired.
+function restorePrefs() {
+  // A volume kept under a guest name is a list of the people who used this
+  // machine, so the purge goes before anything else reads it.
   purgeNamedVolume();
   const fromHash = roomFromHash();
   const last = load('room');
@@ -207,13 +208,12 @@ export function init() {
   if (lastName) $('name').value = lastName;
 
   // The last microphone, camera, path and denoise choice comes back, like the
-  // name. No stored value means on: the join asks for both by default. A
-  // stored off is honoured, and that device is not asked for at all.
+  // name. No stored value means on; a stored off is honoured and not asked for.
   state.mic = load('mic') !== '0';
   state.cam = load('cam') !== '0';
-  // The chosen devices come back like the on and off choices. An id is opaque
-  // and only meaningful inside this browser profile, so a stale one is simply
-  // not found and the system device is used.
+  // The chosen devices come back like the on and off choices. An id is only
+  // meaningful inside this browser profile, so a stale one is not found and the
+  // system device is used.
   state.camId = load('camId').slice(0, 256);
   state.micId = load('micId').slice(0, 256);
   const storedPath = load('path');
@@ -221,13 +221,13 @@ export function init() {
     state.path = storedPath;
     $('path').value = storedPath;
   }
-  // The quality step comes back like the devices, and the picker shows it, so
-  // the first camera request is already the chosen size.
+  // The quality step comes back too, so the first camera request is already the
+  // chosen size.
   const storedQuality = load('quality');
-  if (QUALITY[storedQuality]) state.quality = storedQuality;
+  if (Object.hasOwn(QUALITY, storedQuality)) state.quality = storedQuality;
   // The screen has its own step, kept the same way.
   const storedShare = load('sharequality');
-  if (QUALITY[storedShare]) state.shareQuality = storedShare;
+  if (Object.hasOwn(QUALITY, storedShare)) state.shareQuality = storedShare;
   paintDeviceMenu();
   // The performance step comes back too. No stored value is full quality.
   const storedPerf = parseInt(load('perf'), 10);
@@ -240,9 +240,8 @@ export function init() {
   // left it that way.
   state.selfPip = load('selfpip') === '1';
   $('pip').checked = state.selfPip;
-  // A guest without a camera holds a tile of its own by default, so the switch
-  // is the one that hides those tiles. It comes back on the next visit. The
-  // key before this one stored the opposite meaning and is dropped.
+  // A guest without a camera holds a tile by default, so the switch hides those
+  // tiles. The older key that stored the opposite meaning is dropped.
   state.voiceTiles = load('hidevoicetiles') !== '1';
   $('voice-tiles').checked = !state.voiceTiles;
   localStorage.removeItem('rooms.voicetiles');
@@ -250,7 +249,10 @@ export function init() {
   // The module is warming before the first click, so a failure is visible in
   // the lobby and the join is only a microphone prompt.
   preloadSealed();
+}
 
+// wireJoinCard the join card and the chat form, with the file button and the drop zone.
+function wireJoinCard() {
   $('newid-btn').addEventListener('click', (event) => {
     event.preventDefault();
     suggestRoom();
@@ -262,19 +264,14 @@ export function init() {
     // playback context here, before the first await, or the join starts with a
     // suspended context and the room stays silent while the video plays.
     ensurePlayback();
-    const room = normalizeRoom($('room').value);
-    if (!room) {
-      // Nothing typed: the suggested id is used.
-      const id = newRoomID();
-      $('room').value = id;
-      enterRoom(id, $('pass').value || '');
-      return;
-    }
+    const box = $('room');
+    // Nothing typed: the suggested id is used.
+    const room = normalizeRoom(box.value) || newRoomID();
     if (!ROOM_RE.test(room)) {
       say('room names use a-z 0-9 . _ - (1 to 64 characters)');
       return;
     }
-    $('room').value = room;
+    box.value = room;
     enterRoom(room, $('pass').value || '');
   });
 
@@ -285,30 +282,32 @@ export function init() {
 
   // A file goes into the chat either way: the button opens the picker and a
   // drop on the chat panel does the same without the picker.
-  $('file-btn').addEventListener('click', () => $('file-input').click());
-  $('file-input').addEventListener('change', () => {
-    const input = $('file-input');
-    const files = input.files;
-    const list = [];
-    for (let i = 0; files && i < files.length; i++) list.push(files[i]);
+  const input = $('file-input');
+  $('file-btn').addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const list = Array.from(input.files || []);
     input.value = '';
     for (const file of list) fileOffer(file);
   });
-  $('chat-panel').addEventListener('dragover', (event) => {
+  const panel = $('chat-panel');
+  panel.addEventListener('dragover', (event) => {
     event.preventDefault();
-    $('chat-panel').classList.add('drop');
+    panel.classList.add('drop');
   });
-  $('chat-panel').addEventListener('dragleave', () => $('chat-panel').classList.remove('drop'));
-  $('chat-panel').addEventListener('drop', (event) => {
-    event.preventDefault();
-    $('chat-panel').classList.remove('drop');
+  panel.addEventListener('dragleave', () => panel.classList.remove('drop'));
+  panel.addEventListener('drop', (event) => {
     const drop = event as DragEvent;
-    const files = drop.dataTransfer ? drop.dataTransfer.files : null;
-    for (let i = 0; files && i < files.length; i++) fileOffer(files[i]);
+    drop.preventDefault();
+    panel.classList.remove('drop');
+    for (const file of drop.dataTransfer?.files || []) fileOffer(file);
   });
+}
 
-  $('noise-live').addEventListener('change', async () => {
-    const on = $('noise-live').checked;
+// wireSwitches the switches under the form that keep their choice.
+function wireSwitches() {
+  const noise = $('noise-live');
+  noise.addEventListener('change', async () => {
+    const on = noise.checked;
     state.noiseWanted = on;
     store('noise', on ? 1 : 0);
     $('noise').checked = on;
@@ -317,35 +316,41 @@ export function init() {
     updateButtons();
   });
 
-  $('mirror').addEventListener('change', () => {
-    state.mirror = $('mirror').checked;
+  const mirror = $('mirror');
+  mirror.addEventListener('change', () => {
+    state.mirror = mirror.checked;
     applyMirror();
   });
 
-  // A frozen camera keeps sending the frame it held, so the freeze frame
-  // behaviour is still there for anyone who wants it.
-  $('freeze').addEventListener('change', async () => {
-    const ok = await setFreeze($('freeze').checked);
-    if (!ok) $('freeze').checked = !!state.freeze;
+  // A frozen camera keeps sending the frame it held.
+  const freeze = $('freeze');
+  freeze.addEventListener('change', async () => {
+    const ok = await setFreeze(freeze.checked);
+    if (!ok) freeze.checked = !!state.freeze;
   });
 
   // The own picture leaves the large area and becomes a small preview in the
   // corner of the stage. The choice is kept, like the other switches.
-  $('pip').addEventListener('change', () => {
-    state.selfPip = $('pip').checked;
+  const pip = $('pip');
+  pip.addEventListener('change', () => {
+    state.selfPip = pip.checked;
     store('selfpip', state.selfPip ? 1 : 0);
     layoutStage();
   });
 
   // A guest without a camera can put its own tile away and leave only the rail
   // row. The choice is kept, like the other switches.
-  $('voice-tiles').addEventListener('change', () => {
-    const hide = $('voice-tiles').checked;
+  const voice = $('voice-tiles');
+  voice.addEventListener('change', () => {
+    const hide = voice.checked;
     state.voiceTiles = !hide;
     store('hidevoicetiles', hide ? 1 : 0);
     layoutStage();
   });
+}
 
+// wirePanels the panels, the pickers, the menu bar and the gate button.
+function wirePanels() {
   initLobbyWindow();
   initAsr();
   lookInit();
@@ -384,7 +389,7 @@ export function init() {
 
   // The sound switch: on by default, one stored choice for the guest.
   setSounds(load('sounds') !== '0');
-  const soundBox = document.getElementById('sounds');
+  const soundBox = $('sounds');
   if (soundBox) {
     soundBox.addEventListener('change', () => {
       const on = (soundBox as HTMLInputElement).checked;
@@ -396,7 +401,7 @@ export function init() {
   // The stats setting reads its rates in bytes. One stored choice for the
   // guest, and an open panel redraws at once instead of waiting for a tick.
   state.statsBytes = load('statsbytes') === '1';
-  const bytesBox = document.getElementById('stats-bytes') as HTMLInputElement | null;
+  const bytesBox = $('stats-bytes');
   if (bytesBox) {
     bytesBox.checked = state.statsBytes;
     bytesBox.addEventListener('change', () => {
@@ -409,7 +414,7 @@ export function init() {
   // The waiting room switch is for the admin; the commit is sealed, so no page
   // obeys a sender that holds no role and the server sees nothing. The box
   // follows the room, so it goes back if another admin changed it first.
-  const waitBox = document.getElementById('waiting-room');
+  const waitBox = $('waiting-room');
   if (waitBox) {
     waitBox.addEventListener('change', () => {
       setWaitingRoom((waitBox as HTMLInputElement).checked);
@@ -433,14 +438,15 @@ export function init() {
   paintGate();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
+}
 
-  // A click on a tile is a spotlight: that guest takes the large area alone
-  // and every other guest becomes a rail row. The same click again, a click on
-  // the empty stage, or Esc gives the normal layout back. A click on a control
-  // in the tile stays with that control.
-  // A touch screen has no hover, so the first tap on a picture opens its
-  // controls (volume, code card, enlarge) and a second tap, or the enlarge
-  // button, enlarges it. The controls close on their own after a few seconds.
+// wireStage the stage: spotlight, the phone chrome, the rail list and the key handler.
+function wireStage() {
+  // A click on a tile is a spotlight: that guest takes the large area and the
+  // others become rail rows. The same click, a click on the empty stage or Esc
+  // gives the normal layout back, and a click on a control stays with it.
+  // A touch screen has no hover, so the first tap opens the controls and a
+  // second tap, or the enlarge button, enlarges. Controls close after 5 s.
   const touch = window.matchMedia ? window.matchMedia('(hover: none)') : { matches: false };
   $('grid').addEventListener('click', (event) => {
     // The click that ends a drag of the small tile is not a zoom.
@@ -477,10 +483,9 @@ export function init() {
     }
     setSpotlight(id);
   });
-  // A tap on the picture folds the frame of the app away on a phone, and the
-  // next tap brings it back. A tap on the frame itself never folds it, or no
-  // button of the frame could be used while the frame is open. A desktop has
-  // no immersive class, so nothing here reaches it.
+  // A tap on the picture folds the app frame away on a phone and the next tap
+  // brings it back; a tap on the frame itself never folds it, or no button of
+  // the frame could be used while it is open. A desktop has no immersive class.
   $('stage').addEventListener('click', (event) => {
     if (Date.now() - cornerDropAt < 300) return;
     if (!$('stage').classList.contains('immersive')) return;
@@ -524,7 +529,10 @@ export function init() {
       lookPark(false);
     }
   });
+}
 
+// wireCallBar the buttons of the call toolbar.
+function wireCallBar() {
   $('share-btn').addEventListener('click', () => {
     if (state.screen) stopShare();
     else startShare();
@@ -563,12 +571,25 @@ export function init() {
   // so the options are numbered until a request has succeeded once.
   refreshDevices();
 }
+
+function init() {
+  restorePrefs();
+  wireJoinCard();
+  wireSwitches();
+  wirePanels();
+  wireStage();
+  wireCallBar();
+
+  // The form shows a picker before the first permission: the labels are hidden,
+  // so the options are numbered until a request has succeeded once.
+  refreshDevices();
+}
+
 init();
 
-// A classic script leaves its top level names on the page, and the browser
-// tests read a few of them straight from there. The bundle closes over them,
-// so the same names are put back for the tests; the page itself never reads
-// them.
+// The bundle closes over its top level names, and the browser tests read a few
+// of them from the page, so the same names are put back here. The page itself
+// never reads them.
 Object.assign(globalThis, {
   state,
   disableCam,

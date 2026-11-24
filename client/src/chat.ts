@@ -5,8 +5,8 @@
 import { $ } from './dom.js';
 
 // ---------------------------------------------------------------- chat
-// The room log carries the sealed chat lines of this call. They never leave the
-// browser in the clear, so there is no server history to replay.
+// The sealed chat lines of this call. They never leave the browser in the clear,
+// so there is no server history to replay.
 export const CHAT_MAX = 200;
 
 export function chatTime(ts = null) {
@@ -14,17 +14,15 @@ export function chatTime(ts = null) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-// A posted address becomes a link, http and https only. It is a link and not a
-// preview: nothing is fetched and no picture is loaded until a guest clicks it,
-// because a link that phones home tells the other side who reads the room.
-// The text shown is the address itself, the title says where a click goes
-// (with punycode spelled out for a lookalike name), and the click opens a new
-// tab that gets no referrer and no handle back to this page.
-export const LINK_RE = /https?:\/\/[^\s<>"']+/gi;
+// A posted address becomes a link, http and https only. Nothing is fetched
+// until a guest clicks it, because a link that phones home tells the other side
+// who reads the room. The title shows the real target, punycode included, and
+// the tab gets no referrer and no handle back to this page.
+const LINK_RE = /https?:\/\/[^\s<>"']+/gi;
 
 // splitLink cuts the trailing marks that belong to the sentence and not to the
-// address: a full stop, a comma, a closing bracket without an opening one.
-export function splitLink(raw) {
+// address: punctuation, and a closing bracket without an opening one.
+function splitLink(raw) {
   let url = raw;
   let tail = '';
   for (;;) {
@@ -45,7 +43,7 @@ export function splitLink(raw) {
 // safeLink returns the parsed address when it may become a link, else null. A
 // name with a user part (https://good.example@evil.example) is refused: the
 // text would show one host and a click would go to another.
-export function safeLink(text) {
+function safeLink(text) {
   let u;
   try {
     u = new URL(text);
@@ -58,7 +56,7 @@ export function safeLink(text) {
 }
 
 // linkify returns the text as nodes: plain text, and an anchor for each address.
-export function linkify(text) {
+function linkify(text) {
   const out = document.createDocumentFragment();
   let at = 0;
   for (const m of text.matchAll(LINK_RE)) {

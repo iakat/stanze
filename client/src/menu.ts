@@ -8,19 +8,18 @@ import { state } from './state.js';
 import { newRoomID } from './util.js';
 import { auditWire } from './audit.js';
 
-export const MENUS = [
+const MENUS = [
   ['menu-settings-btn', 'menu-settings'],
   ['menu-effects-btn', 'menu-effects'],
   ['menu-asr-btn', 'menu-asr'],
   ['menu-devices-btn', 'menu-devices'],
 ];
 
-// fitMenu keeps a drop-down inside the window. A menu hangs from its slot to
-// the left, which is right for the left of the bar and wrong for the right: on
-// a narrow screen the last slot would push its panel past the edge. The panel
-// is slid back by the pixels it hangs out, and never past the left edge, so a
-// wrapped bar of two lines still keeps every panel on the glass.
-export function fitMenu(list) {
+// fitMenu keeps a drop-down inside the window. A panel hangs from its slot to
+// the left, which is right on the left of the bar and wrong on the right: the
+// last slot would push its panel past the edge. The panel is slid back by the
+// pixels it hangs out, and never past the left edge.
+function fitMenu(list) {
   if (!(list instanceof HTMLElement)) return;
   const room = document.documentElement.clientWidth;
   list.style.left = '';
@@ -68,7 +67,7 @@ export function menuClose() {
 }
 
 // closeSubmenus puts every nested list of one panel back to closed.
-export function closeSubmenus(panel) {
+function closeSubmenus(panel) {
   if (!panel) return;
   for (const sub of Array.from(panel.querySelectorAll('.menu-sub-list'))) {
     if (sub instanceof HTMLElement) sub.hidden = true;
@@ -77,9 +76,8 @@ export function closeSubmenus(panel) {
     (btn as HTMLElement).setAttribute('aria-expanded', 'false');
 }
 
-// wireSubmenus gives every nested row its list: a hover opens it and closes
-// its siblings, a click toggles it, the right arrow walks in and the left
-// arrow walks back out, the way a Windows menu of the era behaved.
+// wireSubmenus gives every nested row its list: a hover opens it and closes its
+// siblings, a click toggles it, the right arrow walks in and the left arrow out.
 export function wireSubmenus() {
   for (const wrap of Array.from(document.querySelectorAll('.menu-subwrap'))) {
     const btn = wrap.querySelector('.menu-sub') as HTMLElement | null;
@@ -121,9 +119,9 @@ export function wireSubmenus() {
 }
 
 // wireMenuBar gives each entry its behaviour: a click opens its panel and
-// closes the other one, a click inside the panel keeps it open so several
-// switches can be set at once, a click anywhere else or Esc closes it, and the
-// arrow keys walk the rows.
+// closes the others, a click inside the panel keeps it open so several switches
+// can be set at once, a click anywhere else or Esc closes it, and the arrow keys
+// walk the rows.
 export function wireMenuBar() {
   for (const [btnId, listId] of MENUS) {
     const btn = $(btnId);
@@ -200,9 +198,8 @@ export function wsURL() {
 
 export function send(msg) {
   const raw = JSON.stringify(msg);
-  // The audit sees every frame the relay sees, in both directions. It is the
-  // client half of the proof that a room never sends a name or a chat line in
-  // the clear.
+  // The audit sees every frame the relay sees, in both directions: the client
+  // half of the proof that a name or a chat line never goes clear.
   auditWire('out', raw);
   // Every frame follows the join frame of an open socket; one that meets a
   // closed socket names a peer that the close already dropped.

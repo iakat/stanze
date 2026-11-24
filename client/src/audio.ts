@@ -5,27 +5,25 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, say } from './util.js';
+import { detachMedia, disconnectQuietly, isAdmin, say } from './util.js';
 import { layoutStage, ownTile, rowOf } from './tiles.js';
 import { applyFlags, volGain } from './volume.js';
 import { refreshSelf } from './devices.js';
 import { sealedSend, toSealed } from './gate.js';
 
 // ------------------------------------------------------------- talking light
-//
-// Every audio source has a small RMS tap, and a green light marks the tile of
-// the person who speaks. The tap sits before the per peer gain, so a guest
-// turned down to zero still lights up. A short hold keeps the light steady
-// between syllables instead of blinking.
-export const SPEAK_MS = 100;
+// Every audio source has an RMS tap, and a green light marks the tile of the
+// person who speaks. The tap sits before the peer gain, so a guest turned down
+// to zero still lights up; a short hold keeps the light steady between syllables.
+const SPEAK_MS = 100;
 
-export const SPEAK_ON = 0.03;
+const SPEAK_ON = 0.03;
 
-export const SPEAK_HOLD_MS = 400;
+const SPEAK_HOLD_MS = 400;
 
-export const speakBufs = new WeakMap();
+const speakBufs = new WeakMap();
 
-export function analyserLevel(a) {
+function analyserLevel(a) {
   if (!a) return 0;
   let buf = speakBufs.get(a);
   if (!buf || buf.length !== a.fftSize) {
@@ -40,7 +38,7 @@ export function analyserLevel(a) {
 
 // paintSpeaking turns the light on for a level over the threshold and keeps it
 // on for the hold. The last time is kept in the given object.
-export function paintSpeaking(tile, level, hold) {
+function paintSpeaking(tile, level, hold) {
   if (!tile) return;
   const now = performance.now();
   if (level >= SPEAK_ON) hold.last = now;
@@ -86,18 +84,9 @@ export function stopSpeaking() {
   state.ownSpoke = null;
 }
 
-// levelText renders one RMS peak as a percent between -60 dB and full scale,
-// with the dB value beside it, because that is what a phone's meter shows.
-export function levelText(peak) {
-  const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
-  const pct = db > -60 ? Math.round(((db + 60) / 60) * 100) : 0;
-  return db > -90 ? `${pct}% ${Math.round(db)} dB` : '0% silent';
-}
-
 // micLevelCells splits the own input into the four columns of the microphone
-// row: the level in decibels, the share of the scale it fills, and the state
-// word. A peak under -60 dB is below anything a person hears, so it reads as
-// silent rather than as a number.
+// row: decibels, the share of the scale and the state word. A peak under -60 dB
+// is below anything a person hears, so it reads as silent.
 export function micLevelCells(peak) {
   const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
   if (!(db > -60)) return { db: '0 dB', pct: '0 %', state: 'silent' };
@@ -106,22 +95,6 @@ export function micLevelCells(peak) {
     pct: `${Math.round(((db + 60) / 60) * 100)} %`,
     state: 'transmitting',
   };
-}
-
-// micLevelLine reports the local input. A value near zero with a live track
-// points at the graph, not at the device.
-export function micLevelLine() {
-  if (!state.micAnalyser) return 'level none';
-  return `level ${levelText(state.meterPeak)}`;
-}
-
-// inLevelLine reports what arrives from one peer, read at its source node
-// before the gain. A silent line beside a live inbound rate points at the
-// decode or the graph, not at the network; a live line with no sound points
-// after the gain. It returns the level alone, so the caller names the line.
-export function inLevelLine(peer) {
-  if (!peer.audioSrc || !peer.meter) return '';
-  return levelText(peer.meterPeak || 0);
 }
 
 // noiseWasm fetches the model once; every processor builds its module from the
@@ -139,7 +112,7 @@ export function noiseWasm() {
 // makeDenoiseNode builds one GTCRN processor on one context. The microphone and
 // every incoming stream that wants it own a node, because the filter state
 // belongs to one stream.
-export async function makeDenoiseNode(ctx) {
+async function makeDenoiseNode(ctx) {
   const [binary] = await Promise.all([noiseWasm(), ctx.audioWorklet.addModule('/gtcrn-node.js')]);
   return new AudioWorkletNode(ctx, 'gtcrn', {
     numberOfInputs: 1,
@@ -160,9 +133,8 @@ export async function setNoise(on) {
   }
   if (on && !state.denoise) {
     try {
-      // The worklet module gets the wasm bytes from the page: a worklet can
-      // only build a module from bytes it already holds, so the binary comes
-      // over the wire as a file and travels in processorOptions.
+      // The wasm bytes travel in processorOptions: a worklet can only build a
+      // module from bytes it already holds.
       state.denoise = await makeDenoiseNode(state.audioCtx);
       state.denoise.connect(state.micGain);
     } catch (err) {
@@ -172,11 +144,7 @@ export async function setNoise(on) {
       return false;
     }
   }
-  try {
-    state.micSource.disconnect();
-  } catch {
-    /* not connected */
-  }
+  disconnectQuietly(state.micSource);
   if (on) {
     state.micSource.connect(state.denoise);
     state.denoiseOn = true;
@@ -204,28 +172,32 @@ export function resumeAudio() {
 
 // ---------------------------------------------------------------- remote audio
 // Remote audio does not play from the video element: one gain node per peer
-// takes it to the output, so 100 percent is unity and 200 is a real boost.
-// The context is created while the join click is still the last gesture, and a
-// suspended context resumes on the next click.
+// takes it to the output, so 100 percent is unity and 200 a real boost. The
+// context is created on the join click, and a suspended one resumes on a click.
+// newAudioCtx opens one audio context. Older Safari exposes only the prefixed
+// constructor, which the DOM lib omits, so the page asks for both names once.
+export function newAudioCtx(opts?: AudioContextOptions) {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  try {
+    return new Ctx(opts);
+  } catch {
+    return null;
+  }
+}
+
 export function ensurePlayback() {
   if (state.playCtx) {
     resumePlayback();
     return state.playCtx;
   }
-  // Safari still exposes the prefixed constructor, which the DOM lib omits.
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return null;
-  try {
-    state.playCtx = new Ctx({ latencyHint: 'interactive' });
-  } catch {
-    state.playCtx = null;
-    return null;
-  }
+  state.playCtx = newAudioCtx({ latencyHint: 'interactive' });
+  if (!state.playCtx) return null;
   resumePlayback();
   return state.playCtx;
 }
 
-export function resumePlayback() {
+function resumePlayback() {
   const ctx = state.playCtx;
   if (!ctx || ctx.state !== 'suspended') return;
   ctx.resume().catch(() => {
@@ -234,8 +206,8 @@ export function resumePlayback() {
 }
 
 // routeAudio sends one incoming audio track through the gain of its peer. The
-// element path is only used when the browser has no Web Audio; it can not go
-// over 100 percent.
+// element path is only for a browser without Web Audio and can not go over 100
+// percent.
 export function routeAudio(peer, track) {
   const ctx = ensurePlayback();
   if (!ctx) {
@@ -248,9 +220,8 @@ export function routeAudio(peer, track) {
     return;
   }
   dropAudio(peer);
-  // A silent element is the decode sink for the remote track. Chromium does not
-  // always pull the decoder for a source node alone, and then every node reads
-  // zeros while the packets arrive. A muted element adds no sound.
+  // A muted element is the decode sink: Chromium does not always pull the
+  // decoder for a source node alone, and then every node reads zeros.
   const pump = new Audio();
   pump.muted = true;
   pump.volume = 0;
@@ -263,8 +234,8 @@ export function routeAudio(peer, track) {
   peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
   peer.audioSrc.connect(peer.gain);
   peer.gain.connect(ctx.destination);
-  // The talking light reads the source, before the gain, so a guest turned
-  // down to zero still shows that they speak.
+  // The talking light reads the source, before the gain, so a guest turned down
+  // to zero still shows that they speak.
   peer.meter = ctx.createAnalyser();
   peer.meter.fftSize = 1024;
   peer.audioSrc.connect(peer.meter);
@@ -272,8 +243,8 @@ export function routeAudio(peer, track) {
   // now, without a second toggle.
   if (peer.inNoise) void setPeerNoise(peer, true);
   resumePlayback();
-  // A context that is still suspended after a resume attempt plays nothing.
-  // Say it, because the video looks correct and only the sound is missing.
+  // A context still suspended after a resume attempt plays nothing. Say it,
+  // because the video looks correct and only the sound is missing.
   if (ctx.state === 'suspended')
     say('the browser holds the audio output; tap the page once to hear the room');
 }
@@ -282,73 +253,36 @@ export function routeAudio(peer, track) {
 // its nodes can be collected.
 export function dropAudio(peer) {
   if (!peer) return;
-  if (peer.inDenoise) {
-    try {
-      peer.inDenoise.disconnect();
-    } catch {
-      /* already gone */
-    }
-  }
+  if (peer.inDenoise) disconnectQuietly(peer.inDenoise);
   if (peer.audioSrc) {
-    try {
-      peer.audioSrc.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(peer.audioSrc);
     peer.audioSrc = null;
   }
   if (peer.meter) {
-    try {
-      peer.meter.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(peer.meter);
     peer.meter = null;
   }
   if (peer.gain) {
-    try {
-      peer.gain.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(peer.gain);
     peer.gain = null;
   }
   if (peer.pump) {
-    try {
-      peer.pump.pause();
-    } catch {
-      /* already gone */
-    }
-    peer.pump.srcObject = null;
+    detachMedia(peer.pump);
     peer.pump = null;
   }
   if (peer.audioEl) {
-    try {
-      peer.audioEl.pause();
-    } catch {
-      /* already gone */
-    }
-    peer.audioEl.srcObject = null;
+    detachMedia(peer.audioEl);
     peer.audioEl = null;
   }
 }
 
-// wirePlayNoise connects the source of one guest to its gain, through that
-// guest's own noise cancel when it is on. The talking light reads the source
-// directly, so it keeps working on either path.
-export function wirePlayNoise(peer) {
+// wirePlayNoise connects one guest's source to its gain, through that guest's
+// own noise cancel when on. The talking light reads the source either way.
+function wirePlayNoise(peer) {
   if (!peer.audioSrc || !peer.gain) return;
-  try {
-    peer.audioSrc.disconnect();
-  } catch {
-    /* not connected */
-  }
+  disconnectQuietly(peer.audioSrc);
   if (peer.inDenoise) {
-    try {
-      peer.inDenoise.disconnect();
-    } catch {
-      /* not connected */
-    }
+    disconnectQuietly(peer.inDenoise);
   }
   if (peer.inNoise && peer.inDenoise) {
     peer.audioSrc.connect(peer.inDenoise);
@@ -360,8 +294,7 @@ export function wirePlayNoise(peer) {
 }
 
 // setPeerNoise turns the local noise cancel of one incoming stream on or off.
-// The processor is built on the first use of that guest; a browser without Web
-// Audio says so once and keeps the raw audio.
+// The processor is built on first use; a browser without Web Audio says so.
 export async function setPeerNoise(peer, on) {
   if (!peer) return;
   if (on) {
@@ -387,7 +320,7 @@ export async function setPeerNoise(peer, on) {
 // stateFrame is the one sealed message that carries the flags of this guest.
 // It goes to every pair separately, so the server relays an opaque blob and
 // keeps none of the values.
-export function stateFrame() {
+function stateFrame() {
   return {
     k: 'state',
     mic: state.mic,
@@ -396,14 +329,14 @@ export function stateFrame() {
     screen: !!state.screen,
     hand: state.hand,
     ts: state.handTs,
-    // This build reads padded frame sizes, so a peer may round its frames up.
+    // This build reads padded frames, so a peer may round its frame sizes up.
     pad: 1,
   };
 }
 
 // sendState tells the room that the microphone, the camera, the hand or the
-// share changed. Every guest gets its own sealed copy; the own tile is painted
-// here, because no server echoes the flags back any more.
+// share changed. Every guest gets its own sealed copy, and the own tile is
+// painted here, because no server echoes the flags back.
 export function sendState() {
   refreshSelf();
   if (!state.self || state.leaving) return;
@@ -417,9 +350,8 @@ export function sealedSendState(peer) {
   sealedSend(peer, stateFrame());
 }
 
-// setHand raises or lowers the own hand and tells the room. The time of the
-// raise is the queue order, and every guest reads the same one, so the panel
-// agrees without a server that numbers the hands.
+// setHand raises or lowers the own hand and tells the room. The raise time is
+// the queue order and every guest reads it, so no server numbers the hands.
 export function setHand(on) {
   if (state.waiting || state.hand === on) return;
   state.hand = on;
@@ -431,10 +363,9 @@ export function setHand(on) {
   paintHandQueue();
 }
 
-// handRows lists the raised hands in the order every guest agrees on: the time
-// the sender put on the raise, ties broken by peer id. A hand that is still
-// waiting for its flag has no time, so it goes last, never first.
-export function handRows() {
+// handRows lists the raised hands in the order every guest agrees on: sender
+// time, ties by peer id. A hand with no time yet goes last, never first.
+function handRows() {
   const rows = [];
   for (const peer of state.peers.values()) {
     if (peer.hand)
@@ -491,7 +422,7 @@ export function paintHandQueue() {
 // askLower asks one guest to take its own hand down. The request travels
 // sealed to that guest, which lowers the hand and tells the room, so an admin
 // can still clear a queue that nobody follows.
-export function askLower(id) {
+function askLower(id) {
   const peer = state.peers.get(id);
   if (peer) sealedSend(peer, { k: 'lower' });
 }
@@ -499,7 +430,7 @@ export function askLower(id) {
 // setCtrl writes the label of one toolbar button and its pressed state. The
 // drawing sits in its own place left of the label, so only the label text and
 // the pressed state change here.
-export function setCtrl(id, text, on) {
+function setCtrl(id, text, on) {
   const btn = $(id);
   const label = btn.querySelector('span');
   if (label) label.textContent = text;

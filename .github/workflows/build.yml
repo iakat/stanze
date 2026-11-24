@@ -41,10 +41,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # The client is embedded, so it is rebuilt from this commit's source
-      # first, exactly like build.sh does (wasm, then the deterministic pack).
+      # The client is TypeScript and its bundle is not in the tree, so both are
+      # rebuilt from this commit's source first, exactly like build.sh does
+      # (bundle, wasm, then the deterministic pack).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
       - name: client
         run: |
+          npm ci --prefix client
+          node client/build.mjs
           GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
           go run -trimpath -buildvcs=false ./cmd/pack
 

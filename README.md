@@ -9,6 +9,20 @@ No database, no external services and no request to a third party at runtime:
 the client font, the emoji set, the sounds and the models all ship inside the
 binary.
 
+## Screenshots
+
+The join card, a two person call with both identities pinned, the stats panel
+and the effects menu. Fake camera and fake microphone, two browsers on the live
+page, so nothing of a real room is in the pictures.
+
+![the join card](media/lobby.png)
+
+![a two person call](media/call.png)
+
+| stats panel | effects menu |
+| --- | --- |
+| ![the stats panel](media/stats.png) | ![the effects menu](media/effects.png) |
+
 ## Features
 
 - **One binary.** The browser client is embedded in the executable. A release
@@ -55,8 +69,9 @@ which is why the default cap is eight.
 ## Requirements
 
 - Go 1.24 or newer to build.
-- Node 20 or newer and `npm --prefix client install` once, for the client
-  bundle. A tree that already carries a built `static/app.js` skips it with
+- Node 22.13 or newer and `npm --prefix client install` once, for the client
+  bundle. The bundle is built here, it is not stored in the tree; a tree that
+  already carries a fresh `static/app.js` skips the step with
   `SKIP_CLIENT=1 ./build.sh`.
 - A modern browser with `RTCRtpScriptTransform` for a sealed room (Chromium,
   Firefox and Safari current at the time of writing).
@@ -72,10 +87,18 @@ npm --prefix client install   # once, for esbuild
 make build
 ```
 
-The client source is TypeScript under `client/src`, one module per area.
+The client source is TypeScript under `client/src`, one module per area; the
+file-by-file map is in [client/README.md](client/README.md).
 `client/build.mjs` bundles it into `static/app.js` with esbuild, and the build
 does that before packing. The bundle is the file the page loads, so a client
-change is one build and no server change.
+change is one build and no server change. The bundle is not in the tree: it is
+ignored by version control and every checkout builds it.
+
+The client has nine dev dependencies, one set per job: the bundler, the
+checker, the linter with its two rule plugins, and the formatter. Every version
+in `client/package.json` is exact, so an install is one version of each package;
+`make deps` prints the ones behind the registry and the update is a new exact
+version plus `npm --prefix client install`.
 
 The client is packed and embedded as one gzip compressed tar, with sorted names
 and no timestamps, so two builds of one commit produce the same archive.
@@ -185,11 +208,14 @@ appears in a path or a query.
   id, no room fingerprint and no head count: the debug line says that a socket
   joined and nothing about which room or how large it is.
 
-Changing the post-quantum module requires rebuilding the Wasm file:
+Changing the post-quantum module requires rebuilding the Wasm file with `make
+wasm`, which runs:
 
 ```sh
 GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
 ```
+
+`static/pq.wasm` is a build artifact and is not in git, like `static/app.js`.
 
 ## Signaling protocol
 
@@ -255,8 +281,9 @@ PW=/tmp/pw/node_modules/playwright-core ROOMSBASE=http://127.0.0.1:8095 \
 ```
 
 `make` targets: `build`, `client`, `selftest`, `run`, `test` (selftest against
-`ADDR`), `typecheck` (the TypeScript client), `lint`, `format`, `smoke`,
-`sealed`, `check` (typecheck, lint, then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
+`ADDR`), `typecheck` (the TypeScript client), `lint`, `format`, `deps` (client
+dependencies behind the registry), `smoke`, `sealed`, `check` (typecheck, lint,
+then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
 for a one-shot join. With gcc present, `go test -race ./...` also runs.
 
 ## Repository layout

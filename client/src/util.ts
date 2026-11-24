@@ -32,18 +32,60 @@ export function say(text) {
   box.hidden = !text;
 }
 
-// isAdmin answers "does this peer hold the role". It is safe before the first
+// isAdmin answers whether this peer holds the role. Safe before the first
 // `joined` message, when no role is known yet.
 export function isAdmin(id) {
   return !!(id && state.admins && state.admins.has(id));
 }
 
 // setAdmins replaces the role list in place, so every reader of the same set
-// sees the new list. It also rebuilds a missing set instead of throwing.
+// sees the new list. A missing set is rebuilt instead of throwing.
 export function setAdmins(list) {
   if (!(state.admins instanceof Set)) state.admins = new Set();
   state.admins.clear();
   for (const id of list || []) state.admins.add(id);
+}
+
+// detachMedia empties a media element and stops it. A pause on an element that
+// is not playing throws in some browsers, which is not an error here.
+export function detachMedia(media: HTMLMediaElement) {
+  try {
+    media.pause();
+  } catch {
+    /* not playing */
+  }
+  media.srcObject = null;
+}
+
+// clamp keeps a number inside a range.
+export function clamp(n: number, lo: number, hi: number) {
+  return Math.min(Math.max(n, lo), hi);
+}
+
+// stopQuietly stops a track or a source node. A second stop throws in some
+// browsers, which is not an error at teardown.
+export function stopQuietly(node: { stop(): void }) {
+  try {
+    node.stop();
+  } catch {
+    /* already stopped */
+  }
+}
+
+// disconnectQuietly drops a node from its graph. A node that is already out
+// throws, which is not an error at teardown.
+export function disconnectQuietly(node: { disconnect(): void }) {
+  try {
+    node.disconnect();
+  } catch {
+    /* not connected */
+  }
+}
+
+// stopTracks stops every track of a stream, the camera, the microphone or a
+// screen.
+export function stopTracks(stream: MediaStream) {
+  for (const track of stream.getTracks()) stopQuietly(track);
 }
 
 // joinWords renders a short list for the status line ("a, b and c").
@@ -54,7 +96,6 @@ export function joinWords(list) {
 
 // ---------------------------------------------------------------- menu bar
 
-// The menu bar carries one thin entry per drop-down. Both panels are wired by
-// the same code, and only one panel is open at a time, the way a Windows menu
-// bar behaves.
+// The menu bar carries one thin entry per drop-down. Only one panel is open at
+// a time, the way a Windows menu bar behaves.
 /** @type {[keyof Elements, keyof Elements][]} */

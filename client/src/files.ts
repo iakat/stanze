@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { say } from './util.js';
+import { clamp, say } from './util.js';
 import { CHAT_MAX, addChatLine, chatTime } from './chat.js';
 import { b64d, b64e, fileAAD, pqCall, pqModule, shortPeer } from './sealed.js';
 import { canary } from './audit.js';
@@ -12,49 +12,44 @@ import { sealedSend } from './gate.js';
 
 // ------------------------------------------------------------ chat files
 //
-// A file offer is a chat line. The name, the size and the type travel as a
-// sealed `app` frame on the same key and the same AAD shape as chat text, so
-// the server relays an opaque blob and never reads a name or a size.
-//
-// The bytes never touch the signaling socket. They go over one ordered data
-// channel per pair, one sealed frame per chunk, and stay in memory on both
-// sides. The receiver assembles a Blob and shows a link that the guest clicks,
-// so no file is written to disk without that click. Cancel clears the waits,
-// the chunks and the link at once.
+// An offer is a chat line: name, size and type go as a sealed `app` frame on the
+// chat key, so the server never reads them. Bytes use one ordered data channel
+// per pair, one sealed frame per chunk, and a Blob behind a link, never disk.
 export const FILE_LABEL = 'files';
 
 // 16 KiB of plaintext seals to about 22 KiB with the 16 byte tag and base64.
-// The SCTP floor for one message is 64 KiB, which every stack must accept, so
-// a sealed chunk stays well under it on every browser, whatever it reports.
-export const FILE_CHUNK = 16 * 1024;
+// Every stack must accept 64 KiB in one SCTP message, so a chunk stays under it.
+const FILE_CHUNK = 16 * 1024;
 
-// The sender pauses when the channel holds this much and resumes when the low
-// mark fires, so a large file never fills the send buffer of the call.
-export const FILE_BUFFER = 256 * 1024;
+// The sender pauses when the channel holds this much and resumes on the low mark,
+// so a large file never fills the send buffer of the call.
+const FILE_BUFFER = 256 * 1024;
 
-export const FILE_LOW = 64 * 1024;
+const FILE_LOW = 64 * 1024;
 
-export const FILE_OPEN_WAIT = 15000;
+const FILE_OPEN_WAIT = 15000;
 
-// A file name is shown in the chat only, but it comes from another page, so it
-// is cleaned the same way as a sealed guest name.
-export function cleanFileName(raw) {
-  // Control characters and angle brackets are what this removes, so the
-  // expression is allowed to carry them.
+// A transfer in one of these states has ended, so a peer that leaves can not
+// change it again.
+const FILE_DONE = new Set(['done', 'refused', 'cancelled', 'gone']);
+
+// A file name is shown in the chat only, but it comes from another page, so it is
+// cleaned like a sealed guest name.
+function cleanFileName(raw) {
   return String(raw || '')
     .replace(/[\u0000-\u001f\u007f<>]/g, '')
     .trim()
     .slice(0, 64);
 }
 
-export function fileID() {
+function fileID() {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   let out = '';
   for (const b of bytes) out += b.toString(16).padStart(2, '0');
   return out;
 }
 
-export function fileBytes(n) {
+function fileBytes(n) {
   if (!n) return '0 B';
   if (n < 1024) return n + ' B';
   const units = ['kB', 'MB', 'GB'];
@@ -67,20 +62,16 @@ export function fileBytes(n) {
   return (value >= 10 ? value.toFixed(0) : value.toFixed(1)) + ' ' + units[i];
 }
 
-// fileRateText is the speed a guest reads beside a transfer. A rate is bytes
-// over a window, so it starts empty on the first chunk and becomes a number
-// once the window has run. kB/s is 1024 based, like fileBytes, and stays a
-// whole number above ten so the line does not jitter in width.
-export function fileRateText(kbs) {
+// fileRateText is the speed shown beside a transfer, in 1024 based kB/s, whole
+// above ten so the line keeps its width.
+function fileRateText(kbs) {
   if (!kbs || !isFinite(kbs) || kbs <= 0) return '';
   return (kbs >= 10 ? Math.round(kbs) : kbs.toFixed(1)) + ' kB/s';
 }
 
-// fileMarkRate keeps a short window per transfer, so the number is the rate
-// now and not the average since the first byte. The first chunk only starts
-// the window; until it is 500 ms old the line shows the average so far, so a
-// fast transfer still reads a speed before it ends.
-export function fileMarkRate(o, bytes, now) {
+// fileMarkRate keeps a 500 ms window per transfer, so the number is the rate now
+// and not the average. The first chunk shows the average so far.
+function fileMarkRate(o, bytes, now) {
   if (!o.rateT) {
     o.rateT = now;
     o.rateB = bytes;
@@ -95,17 +86,16 @@ export function fileMarkRate(o, bytes, now) {
   o.rateB = bytes;
 }
 
-// fileAverageRate is the one number kept after the transfer ends: the whole
-// file over the whole time it took, so a finished line still says how fast it
-// went.
-export function fileAverageRate(bytes, start, now) {
+// fileAverageRate is the one number kept after the end: the whole file over the
+// whole time it took.
+function fileAverageRate(bytes, start, now) {
   if (!start || !bytes) return '';
   const secs = (now - start) / 1000;
   if (secs < 0.2) return '';
   return fileRateText(bytes / 1024 / secs);
 }
 
-export function fileButton(label, fn) {
+function fileButton(label, fn) {
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = label;
@@ -116,10 +106,9 @@ export function fileButton(label, fn) {
   return button;
 }
 
-// addFileRow draws one offer in the room log, in the same list and with the
-// same time and speaker spans as a chat line. The progress bar is a span, not
-// a native meter, so the old desktop look holds.
-export function addFileRow(who, name, size) {
+// addFileRow draws one offer in the room log with the time and speaker spans of a
+// chat line. The bar is a span, not a native meter, so the row styles it.
+function addFileRow(who, name, size) {
   const log = $('chat-log');
   if (!log) return null;
   const li = document.createElement('li');
@@ -157,14 +146,14 @@ export function addFileRow(who, name, size) {
   return { li, bar, fill, status, acts };
 }
 
-export function fileSetBar(el, show, frac) {
+function fileSetBar(el, show, frac) {
   if (!el) return;
   el.bar.hidden = !show;
-  el.fill.style.width = Math.max(0, Math.min(100, Math.round(frac * 100))) + '%';
+  el.fill.style.width = clamp(Math.round(frac * 100), 0, 100) + '%';
 }
 
-// fileOffer announces one file to every sealed peer of the room. Each peer
-// gets its own state, so one refusal never stops another transfer.
+// fileOffer announces one file to every sealed peer; each peer keeps its own
+// state, so one refusal never stops another transfer.
 export function fileOffer(file) {
   if (!file || !state.self || state.leaving || state.waiting) return;
   const size = Number(file.size);
@@ -193,8 +182,8 @@ export function fileOffer(file) {
   filePaintOut(out);
 }
 
-// fileOnMessage handles the sealed metadata of one offer. The bytes never
-// arrive here; they only use the data channel.
+// fileOnMessage handles the sealed metadata of one offer; bytes only use the data
+// channel.
 export function fileOnMessage(peer, msg) {
   switch (msg.a) {
     case 'offer':
@@ -217,7 +206,7 @@ export function fileOnMessage(peer, msg) {
   }
 }
 
-export function fileOnOffer(peer, msg) {
+function fileOnOffer(peer, msg) {
   const x = String(msg.x || '').slice(0, 32);
   const name = cleanFileName(msg.n);
   const size = Number(msg.z);
@@ -255,21 +244,17 @@ export function fileOnOffer(peer, msg) {
   filePaintIn(rec);
 }
 
-// A big file should not sit in the tab twice. When the browser has the File
-// System Access API the guest picks a place on disk at the accept click and
-// every chunk is written as it arrives, so the page holds one chunk and not
-// the whole file. A browser without it, or an accept the guest sends without
-// the picker, keeps the in-memory path and its save link.
-export function fileDiskWanted() {
+// A big file should not sit in the tab twice: with the File System Access API each
+// chunk is written to the file picked at the accept click, else bytes stay in
+// memory behind a save link.
+function fileDiskWanted() {
   const pick = (window as any).showSaveFilePicker;
   return typeof pick === 'function' && !(window as any).e2eNoPicker;
 }
 
-// fileDiskOpen asks for the place on disk. It returns true when a writer is
-// ready, false when the page must keep the bytes in memory, and null when the
-// guest closed the picker: then the offer stays untouched, as if accept was
-// never pressed.
-export async function fileDiskOpen(rec) {
+// fileDiskOpen asks for the place on disk: true when a writer is ready, false when
+// the bytes must stay in memory, null when the guest closed the picker.
+async function fileDiskOpen(rec) {
   if (!fileDiskWanted()) return false;
   let handle;
   try {
@@ -287,11 +272,9 @@ export async function fileDiskOpen(rec) {
   }
 }
 
-// fileDiskWrite queues one chunk on the writable. The queue keeps the byte
-// order, and a slow disk applies its pressure to the queue instead of the page
-// buffering the whole file. A failed write ends the transfer and removes the
-// partial file.
-export function fileDiskWrite(rec, bytes) {
+// fileDiskWrite queues one chunk on the writable, so a slow disk presses on the
+// queue and not on the page. A failed write cancels the transfer and the file.
+function fileDiskWrite(rec, bytes) {
   const writer = rec.writer;
   if (!writer) return;
   rec.writes = (rec.writes || Promise.resolve())
@@ -304,9 +287,9 @@ export function fileDiskWrite(rec, bytes) {
     });
 }
 
-// fileDiskAbort drops a partial file after a cancel. It waits for the writes
-// that are already queued, so the abort can not land in the middle of one.
-export function fileDiskAbort(rec) {
+// fileDiskAbort drops a partial file after a cancel, behind the writes that are
+// already queued, so the abort can not land in the middle of one.
+function fileDiskAbort(rec) {
   const writer = rec.writer;
   rec.writer = null;
   rec.chunks = [];
@@ -315,15 +298,14 @@ export function fileDiskAbort(rec) {
   rec.writes = pending.then(() => writer.abort()).catch(() => {});
 }
 
-export function fileAccept(rec, button) {
+function fileAccept(rec, button) {
   const peer = state.peers.get(rec.peerId);
   if (!peer || !peer.keys) {
     fileFinishIn(rec, 'gone');
     return;
   }
-  // The picker runs inside the click that accepted, so a browser lets it
-  // open. A closed picker means no accept was sent, and the offer is still
-  // there for a second click.
+  // The picker must run inside the accepting click, or the browser refuses it. A
+  // closed picker sends no accept and the offer stays for a second click.
   return fileDiskOpen(rec).then((ok) => {
     if (ok === null) {
       if (button) button.disabled = false;
@@ -333,7 +315,7 @@ export function fileAccept(rec, button) {
   });
 }
 
-export function fileAcceptGo(rec, peer, disk) {
+function fileAcceptGo(rec, peer, disk) {
   if (disk === null || !state.peers.has(peer.id) || !peer.keys) return;
   rec.status = 'receiving';
   rec.got = 0;
@@ -351,20 +333,20 @@ export function fileAcceptGo(rec, peer, disk) {
   filePaintIn(rec);
 }
 
-export function fileRefuse(rec) {
+function fileRefuse(rec) {
   const peer = state.peers.get(rec.peerId);
   if (peer && peer.keys) sealedSend(peer, { k: 'file', a: 'refuse', x: rec.x });
   fileFinishIn(rec, 'refused');
 }
 
-export function fileCancelIn(rec) {
+function fileCancelIn(rec) {
   const peer = state.peers.get(rec.peerId);
   if (peer && peer.keys) sealedSend(peer, { k: 'file', a: 'cancel', x: rec.x });
   state.fileCancelled++;
   fileFinishIn(rec, 'cancelled');
 }
 
-export function fileCancelOut(out, why = '') {
+function fileCancelOut(out, why = '') {
   if (!out || out.cancelled) return;
   out.cancelled = true;
   state.fileCancelled++;
@@ -374,13 +356,13 @@ export function fileCancelOut(out, why = '') {
     fileStop(st);
     if (st.peer.keys) sealedSend(st.peer, { k: 'file', a: 'cancel', x: out.x, y: why || '' });
   }
-  // The file object is not needed any more, so the page can let it go.
+  // The File is not needed any more, so the page can free it.
   out.file = null;
   filePaintOut(out);
   fileSettle(out);
 }
 
-export function fileCancelPeer(out, st, why) {
+function fileCancelPeer(out, st, why) {
   if (st.status === 'done' || st.status === 'refused' || st.status === 'gone') return;
   st.status = 'cancelled';
   fileStop(st);
@@ -389,7 +371,7 @@ export function fileCancelPeer(out, st, why) {
   fileSettle(out);
 }
 
-export function fileOnAccept(peer, msg) {
+function fileOnAccept(peer, msg) {
   const out = state.files.get(String(msg.x || ''));
   if (!out || out.cancelled) {
     if (peer.keys) sealedSend(peer, { k: 'file', a: 'cancel', x: String(msg.x || '') });
@@ -403,7 +385,7 @@ export function fileOnAccept(peer, msg) {
   filePump(out, st).catch(() => fileCancelPeer(out, st, 'the transfer failed'));
 }
 
-export function fileOnRefuse(peer, msg) {
+function fileOnRefuse(peer, msg) {
   const out = state.files.get(String(msg.x || ''));
   if (!out || out.cancelled) return;
   const st = out.peers.get(peer.id);
@@ -415,11 +397,10 @@ export function fileOnRefuse(peer, msg) {
   fileSettle(out);
 }
 
-export function fileOnCancel(peer, msg) {
+function fileOnCancel(peer, msg) {
   const x = String(msg.x || '');
-  // A cancel from a receiver ends that one outgoing transfer only; the other
-  // accepted peers keep their own bytes. A cancel from the sender ends the
-  // incoming transfer.
+  // A cancel from a receiver ends that one outgoing transfer; the other accepted
+  // peers keep their own bytes. A cancel from the sender ends the incoming one.
   const out = state.files.get(x);
   if (out) {
     const st = out.peers.get(peer.id);
@@ -445,17 +426,16 @@ export function fileOnCancel(peer, msg) {
   fileFinishIn(rec, 'cancelled');
 }
 
-export function fileOnDone(peer, msg) {
+function fileOnDone(peer, msg) {
   const rec = state.filesIn.get(peer.id + '|' + String(msg.x || ''));
   if (!rec || rec.status !== 'receiving') return;
-  // The metadata comes over the WebSocket and the bytes over the data channel,
-  // so the last chunk can arrive after this frame. The byte count decides the
-  // end; a channel that closes or a watchdog ends a transfer that never fills.
+  // Metadata comes over the WebSocket and bytes over the data channel, so the last
+  // chunk can arrive after this frame; the byte count decides the end.
   if (rec.got !== rec.size) return;
   fileFinishIn(rec, 'done');
 }
 
-export function fileOnChunk(peer, raw) {
+function fileOnChunk(peer, raw) {
   if (typeof raw !== 'string') return;
   let frame;
   try {
@@ -467,9 +447,8 @@ export function fileOnChunk(peer, raw) {
   const rec = state.filesIn.get(peer.id + '|' + String(frame.x || ''));
   if (!rec || rec.status !== 'receiving' || !peer.keys) return;
   const q = Number(frame.q);
-  // The channel is ordered, so the next number is the only one that can be
-  // current. A repeat, a gap or a chunk of another transfer is dropped before
-  // it is opened.
+  // The channel is ordered, so only the next number can be current: a repeat, a
+  // gap or a chunk of another transfer is dropped before it is opened.
   if (!Number.isSafeInteger(q) || q !== rec.expect) {
     state.replayDrops++;
     return;
@@ -500,9 +479,9 @@ export function fileOnChunk(peer, raw) {
   if (rec.got === rec.size) fileFinishIn(rec, 'done');
 }
 
-// fileArmIn ends a transfer that stops halfway. Every chunk resets it, so a
-// slow link is fine and a peer that goes silent is not waited on forever.
-export function fileArmIn(rec) {
+// fileArmIn ends a transfer that stops halfway. Every chunk resets it, so a slow
+// link is fine and a silent peer is not waited on forever.
+function fileArmIn(rec) {
   if (rec.timer) clearTimeout(rec.timer);
   rec.timer = setTimeout(() => {
     rec.timer = 0;
@@ -513,11 +492,10 @@ export function fileArmIn(rec) {
   }, 20000);
 }
 
-// filePump sends one accepted offer to one peer. It reads the file in slices,
-// seals each chunk with the chat key of the pair and waits for the channel to
-// drain when the buffer is full. A cancel, a closed channel or a missing peer
-// ends the loop at the next step.
-export async function filePump(out, st) {
+// filePump sends one accepted offer to one peer: read a slice, seal it with the
+// chat key of the pair, wait when the channel is full. A cancel, a closed channel
+// or a missing peer ends the loop at the next step.
+async function filePump(out, st) {
   const peer = st.peer;
   const dc = await fileWaitOpen(peer, st);
   if (!dc || st.dead || out.cancelled || !out.file) return;
@@ -567,9 +545,9 @@ export async function filePump(out, st) {
   fileSettle(out);
 }
 
-// fileWaitOpen resolves with the open channel of the pair, or null when it
-// never opens, closes or the transfer stops. The wait is cleared on cancel.
-export function fileWaitOpen(peer, st) {
+// fileWaitOpen resolves with the open channel of the pair, or null when it never
+// opens, closes or the transfer stops.
+function fileWaitOpen(peer, st) {
   return new Promise<RTCDataChannel | null>((resolve) => {
     let timer = 0;
     let dc: RTCDataChannel | null = null;
@@ -605,9 +583,9 @@ export function fileWaitOpen(peer, st) {
   });
 }
 
-// fileSpace waits while the channel holds more than FILE_BUFFER. The low mark
-// wakes it, and a timer rechecks, so a lost event can not stall the transfer.
-export function fileSpace(dc: RTCDataChannel, st) {
+// fileSpace waits while the channel holds more than FILE_BUFFER. The low mark wakes
+// it and a timer rechecks, so a lost event can not stall the transfer.
+function fileSpace(dc: RTCDataChannel, st) {
   if (dc.readyState !== 'open') return Promise.resolve(false);
   if (dc.bufferedAmount <= FILE_BUFFER) return Promise.resolve(true);
   dc.bufferedAmountLowThreshold = FILE_LOW;
@@ -658,31 +636,30 @@ export function fileBindChannel(peer, dc) {
   }
 }
 
-// fileChannelClosed ends every transfer of a pair whose channel went away. The
-// peer may still be in the room, so the name stays; only the files stop.
-export function fileChannelClosed(peer) {
+// fileChannelClosed ends every transfer of a pair whose channel went away; the
+// guest may stay in the room, so only the files stop.
+function fileOutGone(id) {
   for (const out of state.files.values()) {
-    const st = out.peers.get(peer.id);
-    if (
-      !st ||
-      st.status === 'done' ||
-      st.status === 'refused' ||
-      st.status === 'cancelled' ||
-      st.status === 'gone'
-    )
-      continue;
+    const st = out.peers.get(id);
+    if (!st || FILE_DONE.has(st.status)) continue;
     st.status = 'gone';
     fileStop(st);
     if (!out.cancelled) filePaintOut(out);
     fileSettle(out);
   }
+}
+
+// fileChannelClosed is a data channel that went away under a live peer: the
+// outgoing offers are gone and a half received file is dropped.
+function fileChannelClosed(peer) {
+  fileOutGone(peer.id);
   for (const rec of state.filesIn.values()) {
     if (rec.peerId === peer.id && rec.status === 'receiving') fileFinishIn(rec, 'cancelled');
   }
 }
 
-// fileDropPeer clears the channel listeners and the waits of a peer that
-// leaves. Called from dropPeer and sealedRestart before the connection closes.
+// fileDropPeer clears the channel listeners and the waits of a peer that leaves.
+// dropPeer and sealedRestart call it before the connection closes.
 export function fileDropPeer(peer) {
   const dc = peer.dc;
   peer.dc = null;
@@ -701,41 +678,19 @@ export function fileDropPeer(peer) {
   filePeerGone(peer.id);
 }
 
-export function filePeerGone(id) {
-  for (const out of state.files.values()) {
-    const st = out.peers.get(id);
-    if (!st) continue;
-    if (
-      st.status !== 'done' &&
-      st.status !== 'refused' &&
-      st.status !== 'cancelled' &&
-      st.status !== 'gone'
-    ) {
-      st.status = 'gone';
-      fileStop(st);
-      if (!out.cancelled) filePaintOut(out);
-      fileSettle(out);
-    }
-  }
+function filePeerGone(id) {
+  fileOutGone(id);
   for (const rec of state.filesIn.values()) {
-    if (rec.peerId !== id) continue;
-    if (
-      rec.status === 'done' ||
-      rec.status === 'refused' ||
-      rec.status === 'cancelled' ||
-      rec.status === 'gone'
-    )
-      continue;
-    fileFinishIn(rec, 'gone');
+    if (rec.peerId === id && !FILE_DONE.has(rec.status)) fileFinishIn(rec, 'gone');
   }
 }
 
-export function fileStop(st) {
+function fileStop(st) {
   st.dead = true;
   if (st.wake) st.wake();
 }
 
-export function fileInText(rec) {
+function fileInText(rec) {
   if (rec.status === 'offered') return 'waiting for you';
   if (rec.status === 'receiving') {
     const pct = rec.size ? Math.round((rec.got / rec.size) * 100) : 0;
@@ -753,17 +708,16 @@ export function fileInText(rec) {
   return '';
 }
 
-export function filePaintIn(rec) {
+function filePaintIn(rec) {
   if (!rec.el) return;
   const pct = rec.size ? rec.got / rec.size : 0;
   fileSetBar(rec.el, rec.status === 'receiving', pct);
   rec.el.status.textContent = fileInText(rec);
 }
 
-// fileFinishDisk closes the writable after the last queued chunk. The bytes
-// are on disk with the name the guest chose, so the row carries no save link
-// and the page keeps no byte of the file.
-export function fileFinishDisk(rec) {
+// fileFinishDisk closes the writable after the last queued chunk. The bytes are on
+// disk with the name the guest chose, so the row carries no save link.
+function fileFinishDisk(rec) {
   const writer = rec.writer;
   rec.writer = null;
   rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
@@ -788,7 +742,7 @@ export function fileFinishDisk(rec) {
     });
 }
 
-export function fileFinishIn(rec, status) {
+function fileFinishIn(rec, status) {
   if (rec.timer) {
     clearTimeout(rec.timer);
     rec.timer = 0;
@@ -801,8 +755,8 @@ export function fileFinishIn(rec, status) {
     return;
   }
   if (status === 'done') {
-    // The bytes live in this Blob only. The link hands them to the guest when
-    // the guest clicks it, so nothing is written before that click.
+    // The bytes live in this Blob only. The link hands them over on a click, so
+    // nothing is written before it.
     rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
     const blob = new Blob(rec.chunks, { type: rec.type || 'application/octet-stream' });
     rec.chunks = [];
@@ -825,8 +779,8 @@ export function fileFinishIn(rec, status) {
     state.filesIn.delete(rec.key);
     return;
   }
-  // A refused, cancelled or orphaned transfer keeps no bytes at all, and a
-  // half written file on disk is dropped.
+  // A refused, cancelled or orphaned transfer keeps no bytes, and a half written
+  // file on disk is dropped.
   fileDiskAbort(rec);
   if (rec.url) {
     URL.revokeObjectURL(rec.url);
@@ -840,7 +794,7 @@ export function fileFinishIn(rec, status) {
   state.filesIn.delete(rec.key);
 }
 
-export function filePaintOut(out) {
+function filePaintOut(out) {
   if (!out.el) return;
   const list = [...out.peers.values()];
   const accepted = list.filter((s) => s.status === 'sending' || s.status === 'done');
@@ -887,13 +841,13 @@ export function filePaintOut(out) {
   if (stopped.length) words.push('cancelled ' + stopped.map((s) => s.peer.name).join(', '));
   if (gone.length) words.push('left ' + gone.map((s) => s.peer.name).join(', '));
   out.el.status.textContent = words.join(' | ');
-  // A settled offer keeps no button: there is nothing left to cancel.
+  // A settled offer keeps no button: nothing is left to cancel.
   if (!open) out.el.acts.replaceChildren();
 }
 
-// fileSettle drops the file handle of an offer once no peer can take it any
-// more, so a long call keeps no closed transfers and no file memory.
-export function fileSettle(out) {
+// fileSettle drops the File of an offer once no peer can take it any more, so a
+// long call keeps no closed transfers.
+function fileSettle(out) {
   const list = [...out.peers.values()];
   if (!list.length) return;
   const open = list.some((s) => s.status === 'offered' || s.status === 'sending');

@@ -23,11 +23,9 @@ import {
 } from './gate.js';
 
 // ---------------------------------------------------------------- host control
-// hostMenu returns the menu element of one member, a tile or a rail row. A
-// tile holds its own menu, because nothing scrolls around it. The rail does
-// scroll and is short, so a row hands the work to one popup on the page: the
-// entries would be cut off inside the list. One popup serves every row.
-export let rowMenuEl = null;
+// hostMenu returns the menu element of one member. A tile holds its own menu,
+// a rail row shares one popup on the page, because the scrolling list clips it.
+let rowMenuEl = null;
 
 export function hostMenu(host) {
   if (!host) return null;
@@ -41,10 +39,8 @@ export function hostMenu(host) {
   return rowMenuEl;
 }
 
-// wireDots opens the small menu of one remote member. Every guest sees it; the
-// host commands appear only for the admin, and every page checks the sealed
-// role list again on every notice. It takes the tile or the row of that member,
-// because both carry the peer id.
+// wireDots opens the small menu of one member: every guest gets it, an admin
+// also gets the host entries. The tile and the row both carry the peer id.
 export function wireDots(host) {
   const dots = host.querySelector('.dots');
   const menu = hostMenu(host);
@@ -88,8 +84,7 @@ export function wireDots(host) {
     add('local noise cancel: ' + (noiseOn ? 'on' : 'off'), () => {
       void setPeerNoise(peer, !noiseOn);
     });
-    // The sealed code lives here, not as a banner over the picture: one card,
-    // built by the same function that feeds the stats panel.
+    // The sealed code is a card in the menu, not a banner over the picture.
     if (peer && peer.sas) {
       const card = document.createElement('div');
       card.className = 'sas';
@@ -97,8 +92,7 @@ export function wireDots(host) {
       menu.appendChild(card);
     }
     if (menu.classList.contains('row-menu')) {
-      // The popup sits under the three dots of its row, and above them when
-      // there is no room below, so every entry stays on the screen.
+      // The popup stays under its row and moves up when the screen has no room.
       const r = dots.getBoundingClientRect();
       const width = Math.min(300, window.innerWidth - 16);
       menu.style.left =
@@ -115,8 +109,8 @@ export function wireDots(host) {
   });
 }
 
-// wireAdmit connects the let in button of one remote member. Any guest that is
-// inside may press it; the news goes sealed to that guest and to the room.
+// wireAdmit connects the let in button of one held member. Any guest inside may
+// press it; the admit travels sealed to that guest.
 export function wireAdmit(host) {
   const button = host.querySelector('.admit');
   if (!button) return;
@@ -128,10 +122,9 @@ export function wireAdmit(host) {
   });
 }
 
-// waitingText says to a waiting guest what the room can see and hear. It is
-// built from the real state of the two devices, so it is never wrong about
-// them, and it is shown again whenever one of them changes.
-export function waitingText() {
+// waitingText tells a waiting guest that the room already sees and hears
+// whatever device is on, and how to switch it off.
+function waitingText() {
   const both = state.mic && state.cam;
   const lead = 'You are in the waiting room. ';
   const mid = both
@@ -140,17 +133,16 @@ export function waitingText() {
   return `${lead}${mid}Use the buttons below to turn them off if you do not want that. You can not see or hear the meeting, or chat, until a member lets you in.`;
 }
 
-// paintWaiting draws everything that depends on the waiting room: the notice
-// of a waiting guest, the admin switch, the chat lock and the count in the
-// header. It is cheap and safe to call at any time.
+// paintWaiting draws what depends on the waiting room: the notice, the admin
+// switch, the chat lock and the peer count.
 export function paintWaiting() {
   document.body.classList.toggle('self-waiting', state.waiting);
-  const banner = document.getElementById('waiting-banner');
+  const banner = $('waiting-banner');
   if (banner) {
     banner.hidden = !state.waiting;
     if (state.waiting) banner.textContent = waitingText();
   }
-  const sw = document.getElementById('waiting-room') as HTMLInputElement | null;
+  const sw = $('waiting-room');
   if (sw) sw.checked = state.waitingRoom;
   // A waiting guest has no chat and offers no files: the room is not theirs yet.
   $('chat-text').disabled = state.waiting;
@@ -166,29 +158,26 @@ export function paintWaiting() {
   paintHandQueue();
 }
 
-// admitPeer runs when the room says that a guest is inside now. Our own media
-// goes to that guest from this moment on; before it, nothing of it did.
+// admitPeer runs when a guest is inside now and hands it the media that was
+// held back.
 export function admitPeer(id) {
   if (id === state.self) {
     const wasWaiting = state.waiting;
     state.waiting = false;
-    // A pair may have heard a held note before this page was inside. The news
-    // that the page is in now goes to every pair that already exists, so no
-    // member keeps its picture and its voice back from a page it let in.
+    // Every existing pair learns that this page is inside, so no member keeps
+    // its media back from a page it let in.
     if (wasWaiting) toSealed({ k: 'in' });
-    // With the switch off nobody is held. A pair that still has the flag set
-    // is let in here, so one lost note never costs a call its media.
+    // With the switch off nobody waits; a pair whose admit was lost is let in here.
     if (!state.waitingRoom) admitAllHeld();
-    // The waiting room held every outgoing track back. Now the guest is
-    // inside, so the tracks go to every connection that is already built.
-    // Without this the room hears nothing of a guest it has just let in.
+    // The held tracks go to every connection that is already built, or the room
+    // hears nothing of a guest it has just let in.
     if (state.outStream) {
       for (const peer of state.peers.values()) {
         for (const track of state.outStream.getTracks()) attachTrack(peer, track);
         attachScreen(peer);
       }
     }
-    // The room held our flags back while we waited; now every pair gets them.
+    // The flags were held back too; every pair gets them now.
     sendState();
     paintWaiting();
     playSfx('pop');
@@ -206,16 +195,15 @@ export function admitPeer(id) {
   paintWaiting();
 }
 
-// closeMenus hides every host menu. One listener on the page does it, because
-// a listener per tile was never removed when its tile left.
+// closeMenus hides every open host menu. One listener on the page calls it.
 export function closeMenus() {
   for (const menu of document.querySelectorAll('.menu:not([hidden])')) {
     (menu as HTMLElement).hidden = true;
   }
 }
 
-// markAdmins redraws the host chip on every tile. The member menu is open to
-// every guest, so only the chip and the host commands depend on the role.
+// markAdmins redraws the host chip on every tile and the page level admin flag,
+// and repaints the hand queue.
 export function markAdmins() {
   const mine = isAdmin(state.self);
   document.body.classList.toggle('is-admin', mine);

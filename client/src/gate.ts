@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, setAdmins } from './util.js';
+import { clamp, isAdmin, setAdmins } from './util.js';
 import { paintName, paintRowDeaf, rowOf } from './tiles.js';
 import { applyFlags } from './volume.js';
 import { admitPeer, hostMenu, markAdmins, paintWaiting } from './host.js';
@@ -39,22 +39,20 @@ import { setChrome } from './phone.js';
 
 // ------------------------------------------------------ sealed room control
 //
-// The role, the waiting switch, the let in, the kick and the mute are sealed
-// commits now. Each one travels per pair, so the server relays a blob and
-// learns nothing. A role list and a switch carry a counter: the highest
-// counter wins and the lower peer id breaks a tie, so two pages that act at
-// the same moment still land on one answer.
+// Role, waiting switch, let in, kick and mute are sealed commits, one per pair:
+// the server relays a blob and learns nothing. A role list and a switch carry a
+// counter: the highest wins, the lower peer id breaks a tie.
 // claimText is the exact byte string a role claim signs. The room id binds the
 // claim to this room, and the counter orders two admins that act at once.
-export function claimText(n, admins) {
+function claimText(n, admins) {
   return b64e(sealUtf8.encode(`stanze/claim/1|${state.room}|${n}|${admins.join(',')}`));
 }
 
 // makeClaim signs one role list with the identity this page announced in the
 // handshake, so every page that holds that key can check it.
-export async function makeClaim(n, admins) {
+async function makeClaim(n, admins) {
   if (!state.idKey) return null;
-  let sig = '';
+  let sig;
   try {
     sig = await state.idKey.sign(claimText(n, admins));
   } catch {
@@ -65,7 +63,7 @@ export async function makeClaim(n, admins) {
 
 // adoptClaim installs a checked claim: the role list, its counter and the page
 // that signed it.
-export function adoptClaim(claim) {
+function adoptClaim(claim) {
   state.auth = { n: claim.n, admins: claim.admins.slice(), by: claim.by, sig: claim.sig };
   setAdmins(claim.admins);
   markAdmins();
@@ -116,15 +114,15 @@ export function sealedOnClaim(peer, obj) {
 }
 
 // startAuthSeed gives a room with no member a first admin. A page that hears a
-// claim first keeps it; pages that seed at the same moment agree through the
-// counter and the peer id, so one list survives.
+// claim first keeps it; pages that seed at once agree through the counter and
+// the peer id, so one list survives.
 export function startAuthSeed() {
   if (state.authTimer) clearTimeout(state.authTimer);
   state.authTimer = setTimeout(() => {
     state.authTimer = null;
     if (state.leaving || !state.self) return;
     // A room with nobody else in it has no member to let this page in, so the
-    // first guest takes the room itself. It also seeds the first role.
+    // first guest takes the room and seeds the first role.
     if (!state.peers.size && state.waiting) admitPeer(state.self);
     if (state.auth.n >= 0) return;
     void issueClaim(0, [state.self]);
@@ -132,9 +130,8 @@ export function startAuthSeed() {
 }
 
 // resealOnLeave drops a member that left from the role list. The first admin
-// left in the list signs the new claim, so one page does it and every page
-// lands on the same list. A room with no admin left lets every page offer
-// itself, and the counter and the peer id pick one.
+// left in the list signs the new claim, so one page does it. A room with no
+// admin left lets every page offer itself.
 export function resealOnLeave(id) {
   if (!state.auth.admins.includes(id)) return;
   const rest = state.auth.admins.filter((other) => other !== id);
@@ -182,11 +179,9 @@ export function sealedAdmit(peer) {
   sealedSend(peer, { k: 'admit' });
 }
 
-// admitAllHeld lets every guest that is still outside in. A guest asks only a
-// few times and then goes quiet, so the room must not rely on another ask: the
-// switch going off opens the room at once, and a member never keeps a let in
-// button for a room that is not holding anyone. The admit is idempotent, so
-// every page may send it.
+// admitAllHeld lets every guest still outside in. A guest asks only a few times
+// and then goes quiet, so the room must not rely on another ask. The admit is
+// idempotent, so every page may send it.
 export function admitAllHeld() {
   if (state.waiting) return;
   for (const peer of state.peers.values()) {
@@ -197,8 +192,8 @@ export function admitAllHeld() {
 }
 
 // maybeAdmitHeld runs when a held guest says so. A member with the switch off
-// lets it in, and with no member inside at all the lower id keeps the room and
-// lets the other in, so a room can never stay shut with nobody inside.
+// lets it in; with no member inside, the lower id keeps the room and lets the
+// other in, so a room never stays shut with nobody inside.
 export function maybeAdmitHeld(peer) {
   if (!peer || !peer.waiting) return;
   if (!state.waiting) {
@@ -223,9 +218,8 @@ export function maybeAdmitHeld(peer) {
 }
 
 // askHeldAgain repeats the held note on one pair. It is idempotent on the far
-// side and it stops with the room, so a lost note costs two seconds and not a
-// call. The count is capped so a room that never answers stays quiet.
-export function askHeldAgain(peer) {
+// side and stops with the room; the count is capped so a silent room stays quiet.
+function askHeldAgain(peer) {
   if (!peer || !state.waiting) return;
   if ((peer.heldAsks || 0) >= 6) return;
   peer.heldAsks = (peer.heldAsks || 0) + 1;
@@ -255,18 +249,16 @@ export function sealedOnAdmit(peer) {
   toSealed({ k: 'in' });
 }
 
-// sealedOnIn is a guest whose pair is new telling this page that it is inside.
-// The claim is a hint and not a permission: the room applies its own rule, the
-// same one the held note runs, so a guest that says it is in does not skip a
-// waiting room that is switched on.
+// sealedOnIn is a guest saying it is inside. The claim is a hint, not a
+// permission: the room applies its own waiting rule.
 export function sealedOnIn(peer) {
   if (state.waiting || !peer || !peer.waiting) return;
   maybeAdmitHeld(peer);
 }
 
-// sealedKick removes one peer from every page. Each page drops it and stops
-// answering, so a page that ignores the notice talks to nobody. The identity
-// goes on the list this page refuses, so the same key can not come back.
+// sealedKick removes one peer from every page, so a page that ignores the notice
+// talks to nobody. Its identity goes on the refused list, so the key can not
+// come back.
 export function sealedKick(id) {
   if (!isAdmin(state.self) || !id || id === state.self) return;
   const gone = state.peers.get(id);
@@ -306,9 +298,8 @@ export function sealedOnKick(peer, obj) {
 }
 
 // padsOn tells the frame worker that this pair may round its frame sizes up.
-// The worker only pads a sender that the peer has said it reads, so a call with
-// a client that predates the padding keeps the old sizes on that side.
-export function padsOn(peer) {
+// The worker pads a sender only when the peer has said it reads padding.
+function padsOn(peer) {
   if (!state.worker || !peer || peer.padsOn) return;
   peer.padsOn = true;
   for (const kind of ['audio', 'video']) {
@@ -342,7 +333,7 @@ export function sealedOnState(peer, obj) {
   if (obj.hand !== undefined) {
     const was = peer.hand;
     peer.hand = !!obj.hand;
-    peer.handTs = peer.hand ? Math.max(0, Math.min(Number(obj.ts) || 0, Date.now())) : 0;
+    peer.handTs = peer.hand ? clamp(Number(obj.ts) || 0, 0, Date.now()) : 0;
     if (peer.hand !== was) {
       playSfx(peer.hand ? 'pop' : 'bonk');
       // A hand that goes up on a phone brings the frame back, or nobody would
@@ -362,16 +353,14 @@ export function sealedAnnounceName(peer) {
   sealedSend(peer, { k: 'name', n: state.name });
 }
 
-// A sealed payload is padded to a fixed bucket before it is sealed, so the
-// length of the ciphertext stops saying what was sent: a two word chat line, a
-// name and a file offer all leave as the same size. The true length travels
-// inside as the filler field, and the receiver drops it. Buckets are powers of
-// two and the biggest repeats, so a large payload still lands on a round size.
-export const PAD_BUCKETS = [512, 2048, 8192];
+// A sealed payload is padded to a fixed bucket before sealing, so the ciphertext
+// length stops saying what was sent. The true length rides inside as the filler
+// field and the receiver drops it; the biggest bucket repeats for larger payloads.
+const PAD_BUCKETS = [512, 2048, 8192];
 
-export const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
+const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
 
-export function padPayload(obj) {
+function padPayload(obj) {
   const withPad = Object.assign({}, obj, { z: '' }) as any;
   const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
   let target = PAD_BUCKETS.find((n) => n >= bytes);
@@ -381,10 +370,9 @@ export function padPayload(obj) {
   return JSON.stringify(withPad);
 }
 
-// padRoundTripOk proves the padding is a round trip and that every outgoing
-// size lands on a bucket or a whole multiple of the biggest one. It runs in the
-// post-quantum self test, so a change that breaks the buckets shows up before a
-// call starts.
+// padRoundTripOk proves the padding is a round trip and that every outgoing size
+// lands on a bucket or a whole multiple of the biggest one. It runs in the
+// post-quantum self test, before a call starts.
 export function padRoundTripOk() {
   // Fixtures only: two words, a two byte character, and a payload over the
   // biggest bucket, so the bucket choice and the round trip are both covered.
@@ -407,24 +395,21 @@ export function padRoundTripOk() {
 }
 
 // roomW turns the room passphrase into the SPAKE2 scalar. The count is high on
-// purpose: it is the price of one guess at the passphrase after a dump, and it
-// is paid here, where the passphrase never leaves the page.
+// purpose: it prices one guess after a dump, and it is paid here, where the
+// passphrase never leaves the page.
 export function roomW(pass, room) {
   // An open room has no passphrase, and an empty password would make SPAKE2
-  // prove the same public constant to everyone. That is exactly what an open
-  // room means, so the empty case gets a fixed label and the exchange still
-  // runs: a room with a passphrase is indistinguishable from an open one on
-  // the wire.
+  // prove the same public constant to everyone. The empty case gets a fixed
+  // label, so an open room and a passphrase room look alike on the wire.
   const secret = pass === '' ? '\u0000open room' : pass;
   const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
   if (!out || !out.w) throw new Error('the room key could not be derived');
   return out.w;
 }
 
-// Sealed negotiation. An offer, an answer and a candidate travel inside the
-// pair channel like a name does, so the server relays a blob and never sees a
-// codec, a fingerprint or an address. Both sides only reach this point after
-// the handshake, so the keys are always there.
+// Sealed negotiation: an offer, an answer and a candidate travel inside the pair
+// channel, so the server relays a blob and never sees a codec, a fingerprint or
+// an address. Both sides reach this point only after the handshake.
 export function sealedSendSdp(peer, kind, sdp) {
   if (!peer.keys || !sdp) return;
   sealedSend(peer, { k: 'sdp', d: kind, s: sdp });
@@ -488,9 +473,8 @@ export function sealedSetE2E(peer, status) {
   paintPin(peer);
 }
 
-// refreshCodeCard redraws the sealed card of one host, a tile or a list row,
-// when its menu is open. A closed menu reads the code when it opens; an open
-// one needs a redraw, because the code of a pair can arrive after it opened.
+// refreshCodeCard redraws the sealed card of one host, a tile or a row, while
+// its menu is open: the code of a pair can arrive after it opened.
 export function refreshCodeCard(host, peer) {
   const menu = hostMenu(host);
   if (!menu || menu.hidden) return;
@@ -509,11 +493,9 @@ export function refreshCodeCard(host, peer) {
   card.replaceChildren(...sealedCodePanel(peer));
 }
 
-// paintState is the one place a tile says how far the link is. A ready link is
-// called unverified, in red, until its fingerprint is one this browser pinned.
-// Once it is pinned the words go away: the tile then carries the guest's own
-// label and a green chip, and a second label beside the name says nothing new.
-// A signature alone proves continuity inside the call, which is a weaker claim.
+// paintState is the one place a tile says how far the link is. A ready link
+// reads unverified, in red, until its fingerprint is pinned; then the words go
+// away and the tile carries the guest's label and a green chip.
 export function paintState(peer) {
   if (!peer.tile) return;
   const badge = peer.tile.querySelector('.state');
@@ -536,11 +518,9 @@ export function paintState(peer) {
         : peer.ready || '';
 }
 
-// sealedCodePanel builds the code card of one guest: a small heading, the six
-// OpenMoji drawings, the code in groups of four, and the identity line. The two
-// prove different things and the card keeps them apart: the code proves that
-// this pair shares one secret now, the fingerprint names who the peer is.
-// Neither tells how long the secret will live, which is one call.
+// sealedCodePanel builds the code card of one guest: a heading, the six OpenMoji
+// drawings, the code in groups of four and the identity line. The code proves
+// this pair shares one secret now; the fingerprint names who the peer is.
 export function sealedCodePanel(peer) {
   const code = peer.sas;
   const head = document.createElement('span');
@@ -549,10 +529,8 @@ export function sealedCodePanel(peer) {
   const row = document.createElement('span');
   row.className = 'sas-row';
   for (const [emoji, name, hex] of verifyEmojis(code)) {
-    // Each drawing carries its own name in a card of its own: the six of them
-    // are easy to mix up at a glance, so pointing at one says which it is.
-    // The name is drawn here rather than left to the native title bubble,
-    // because the card lets the pointer through to the tile underneath.
+    // Each drawing carries its name drawn in the card: the six are easy to mix
+    // up, and the card lets the pointer through, so no native title bubble.
     const cell = document.createElement('span');
     cell.className = 'sas-cell';
     const img = document.createElement('img');
@@ -573,7 +551,7 @@ export function sealedCodePanel(peer) {
 }
 
 // sealedIdentityRow is the who of one pair: the pin label and the fingerprint.
-export function sealedIdentityRow(peer) {
+function sealedIdentityRow(peer) {
   const row = document.createElement('span');
   row.className = 'id-row';
   const what = pinState(peer);
@@ -606,7 +584,7 @@ export function sealedIdentityRow(peer) {
   return row;
 }
 
-export function pinButton(text, onclick) {
+function pinButton(text, onclick) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'pin-btn';

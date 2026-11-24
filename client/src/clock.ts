@@ -7,7 +7,7 @@ import { state } from './state.js';
 
 // ---------------------------------------------------------------- call clock
 // clockText renders a duration as h:mm:ss.
-export function clockText(ms) {
+function clockText(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
@@ -15,8 +15,7 @@ export function clockText(ms) {
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-// startCallClock counts from the moment the call UI appears, so the header
-// always shows how long the call has lasted.
+// startCallClock counts from the moment the call UI appears.
 export function startCallClock() {
   stopCallClock();
   state.callStart = Date.now();
@@ -27,7 +26,7 @@ export function startCallClock() {
   }, 1000);
 }
 
-// stopCallClock ends the count and clears the field when the call ends.
+// stopCallClock ends the count and clears the field.
 export function stopCallClock() {
   if (state.callTimer) clearInterval(state.callTimer);
   state.callTimer = null;

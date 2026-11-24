@@ -2,23 +2,24 @@
  The lobby window on a desktop.
 */
 
+import { $ } from './dom.js';
 import { load, store } from './prefs.js';
+import { clamp } from './util.js';
 
 // ------------------------------------------------------------- lobby window
-// The lobby is a desktop window: the guest drags it by the title bar with a
-// mouse, a pen or a finger, it never leaves the viewport, and the place is
-// kept for the guest. The arrow keys move it too, for a guest without a
-// pointer. The call stage is maximised and has no drag.
-export const LOBBY_STEP = 16;
+// A desktop window: dragged by its title bar, kept inside the viewport and
+// remembered. The arrow keys move it too, for a guest without a pointer. The
+// call stage is maximised and has no drag.
+const LOBBY_STEP = 16;
 
 // lobbyPlace puts the window at x, y inside the viewport and returns the place.
-export function lobbyPlace(win, x, y) {
+function lobbyPlace(win, x, y) {
   const w = win.offsetWidth;
   const h = win.offsetHeight;
   const maxX = Math.max(0, document.documentElement.clientWidth - w);
   const maxY = Math.max(0, window.innerHeight - h);
-  const cx = Math.min(Math.max(0, Math.round(x)), maxX);
-  const cy = Math.min(Math.max(0, Math.round(y)), maxY);
+  const cx = clamp(Math.round(x), 0, maxX);
+  const cy = clamp(Math.round(y), 0, maxY);
   win.classList.add('moved');
   win.style.left = `${cx}px`;
   win.style.top = `${cy}px`;
@@ -26,9 +27,9 @@ export function lobbyPlace(win, x, y) {
 }
 
 export function initLobbyWindow() {
-  const win = document.getElementById('lobby');
+  const win = $('lobby');
   const bar = win && (win.querySelector('.titlebar') as HTMLElement | null);
-  // The jitsi skin has no title bar and so no drag.
+  // No title bar means no drag, as on a skin that hides it.
   if (!win || !bar || getComputedStyle(bar).display === 'none') return;
 
   const keep = (pos) => store('lobbypos', JSON.stringify(pos));
@@ -37,7 +38,7 @@ export function initLobbyWindow() {
     return { x: r.left, y: r.top };
   };
 
-  // The kept place, if a valid one is stored. Anything else is ignored.
+  // The kept place, if a valid one is stored.
   try {
     const kept = JSON.parse(load('lobbypos') || 'null');
     if (kept && Number.isFinite(kept.x) && Number.isFinite(kept.y)) lobbyPlace(win, kept.x, kept.y);
@@ -50,7 +51,7 @@ export function initLobbyWindow() {
     if (event.button !== 0 && event.pointerType === 'mouse') return;
     const here = at();
     grab = { id: event.pointerId, dx: event.clientX - here.x, dy: event.clientY - here.y };
-    // The window is fixed from the first grab, at the place it has now.
+    // A fixed window from the first grab, at the place it has now.
     lobbyPlace(win, here.x, here.y);
     win.classList.add('dragging');
     bar.setPointerCapture(event.pointerId);

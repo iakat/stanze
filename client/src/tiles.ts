@@ -10,11 +10,11 @@ import { wireAdmit, wireDots } from './host.js';
 import { updateButtons } from './audio.js';
 
 // ---------------------------------------------------------------- tiles
-// rowOf maps a tile to its row in the list of members. Both nodes live for as
-// long as the tile does, so the map is weak and carries no name of its own.
+// rowOf maps a tile to its row in the member list. Both nodes live as long as
+// the tile, so the map is weak.
 export const rowOf = new WeakMap();
 
-// paintName keeps the small tag and the large centre label in step. The centre
+// paintName keeps the small tag and the large centre label in step: the centre
 // label carries the whole name, so a guest without a camera is not a pair of
 // letters.
 export function paintName(tile, name, local) {
@@ -24,18 +24,16 @@ export function paintName(tile, name, local) {
   paintRowName(rowOf.get(tile), name, local);
 }
 
-// paintRowName keeps the label of a list row in step with the label of its
-// tile. A guest that names itself once the keys are proven shows the name in
-// both places at the same moment.
-export function paintRowName(row, name, local) {
+// paintRowName keeps the label of a list row in step with its tile, so a guest
+// that names itself once the keys are proven shows it in both places at once.
+function paintRowName(row, name, local) {
   if (!row) return;
   row.querySelector('.row-name').textContent = local ? `${name} (you)` : name;
   row.setAttribute('aria-label', local ? `${name}, you` : name);
 }
 
-// paintRowDeaf shows the deafened drawing on the list row of one member. The
-// row is the only place that carries the state: a deaf member hears nothing
-// and sends nothing, and every other member sees that on their list.
+// paintRowDeaf shows the deafened mark on a member row: a deaf member hears and
+// sends nothing, so the row is the only place for it.
 export function paintRowDeaf(row, deaf) {
   if (!row) return;
   const mark = row.querySelector('.row-deaf');
@@ -57,9 +55,47 @@ export function tileId(tile) {
   return id && tile.dataset.screen ? id + ':screen' : id;
 }
 
-// makeTile builds one picture. A screen tile is the second picture of a guest:
-// it has no row and no volume of its own, because the row of the guest already
-// carries both.
+// el builds one element from a tag, its attributes and its children, so no
+// markup is parsed from a string. A true attribute is set with no value.
+function el(
+  tag: string,
+  attrs: Record<string, string | number | boolean> = {},
+  ...kids: (Node | string)[]
+): HTMLElement {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === false || value === null || value === undefined) continue;
+    node.setAttribute(key, value === true ? '' : String(value));
+  }
+  for (const kid of kids) node.append(kid);
+  return node;
+}
+
+// the small pickers that a remote guest carries on its tile and on its row
+function volRange(): HTMLElement {
+  return el('input', {
+    class: 'vol-range',
+    type: 'range',
+    min: 0,
+    max: 200,
+    step: 5,
+    value: 100,
+    'aria-label': 'volume of this participant',
+  });
+}
+function lineButton(): HTMLElement[] {
+  return [
+    el(
+      'button',
+      { class: 'admit', type: 'button', title: 'let this guest into the room' },
+      'let in',
+    ),
+    el('button', { class: 'dots', type: 'button', 'aria-label': 'member actions' }, '\u22ef'),
+  ];
+}
+
+// makeTile builds one picture. A screen tile has no row and no volume of its
+// own, because the row of the guest already carries both.
 export function makeTile(id, name, local = false, screen = false) {
   const tile = document.createElement('div');
   tile.className = 'tile';
@@ -76,22 +112,57 @@ export function makeTile(id, name, local = false, screen = false) {
   // touch screen, after a tap.
   tile.tabIndex = 0;
   tile.setAttribute('role', 'group');
-  tile.innerHTML = `
-    <video autoplay playsinline${local ? ' muted' : ''}></video>
-    <div class="avatar"></div>
-    <span class="ring" aria-hidden="true"></span>
-    ${
-      plain
-        ? ''
-        : `<div class="vol">
-      <img class="vol-ico" src="/openmoji/1F50A.svg" alt="" width="16" height="16">
-      <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
-      <span class="vol-num">100%</span>
-    </div>`
-    }
-    <button class="zoom" type="button" aria-pressed="false" aria-label="enlarge this picture" title="enlarge"></button>
-    <div class="tag"><span class="name"></span><span class="flags"></span><span class="state"></span>${plain ? '' : '<span class="route" title="the media goes through the relay server">relay</span><span class="pin" hidden></span>'}</div>
-    ${plain ? '' : '<button class="admit" type="button" title="let this guest into the room">let in</button><button class="dots" type="button" aria-label="member actions">&#8943;</button><div class="menu" hidden></div>'}`;
+  tile.append(
+    el(
+      'video',
+      local
+        ? { autoplay: true, playsinline: true, muted: true }
+        : { autoplay: true, playsinline: true },
+    ),
+    el('div', { class: 'avatar' }),
+    el('span', { class: 'ring', 'aria-hidden': 'true' }),
+  );
+  if (!plain) {
+    tile.append(
+      el(
+        'div',
+        { class: 'vol' },
+        el('img', { class: 'vol-ico', src: '/openmoji/1F50A.svg', alt: '', width: 16, height: 16 }),
+        volRange(),
+        el('span', { class: 'vol-num' }, '100%'),
+      ),
+    );
+  }
+  tile.append(
+    el('button', {
+      class: 'zoom',
+      type: 'button',
+      'aria-pressed': 'false',
+      'aria-label': 'enlarge this picture',
+      title: 'enlarge',
+    }),
+    el(
+      'div',
+      { class: 'tag' },
+      el('span', { class: 'name' }),
+      el('span', { class: 'flags' }),
+      el('span', { class: 'state' }),
+      ...(plain
+        ? []
+        : [
+            el(
+              'span',
+              { class: 'route', title: 'the media goes through the relay server' },
+              'relay',
+            ),
+            el('span', { class: 'pin', hidden: true }),
+          ]),
+    ),
+  );
+  if (!plain) {
+    tile.append(...lineButton());
+    tile.append(el('div', { class: 'menu', hidden: true }));
+  }
   paintName(tile, name, local && !screen);
   // A remote guest is heard through its own gain node, so the video element
   // only ever carries pictures and stays muted.
@@ -109,11 +180,10 @@ export function makeTile(id, name, local = false, screen = false) {
   return tile;
 }
 
-// makeRow builds the list row of one member. Every member has one, with a
-// picture or without: the picture stays in the large area and the row carries
-// the name, the two lamps and the volume slider. The row is one line and the
-// slider is always open, so a pointer that crosses it never moves the stage.
-export function makeRow(id, name, local = false) {
+// makeRow builds the list row of one member: name, the two lamps and the volume
+// slider. The row is one line and the slider always open, so a pointer that
+// crosses it never moves the stage.
+function makeRow(id, name, local = false) {
   const row = document.createElement('div');
   row.className = 'plist-row';
   if (local) row.dataset.local = 'yes';
@@ -122,15 +192,26 @@ export function makeRow(id, name, local = false) {
   row.dataset.mic = 'on';
   row.tabIndex = 0;
   row.setAttribute('role', 'group');
-  row.innerHTML = `<span class="row-name"></span><span class="row-deaf" hidden><img src="/openmoji/1F507.svg" alt="deafened" title="deafened" width="16" height="16"></span><span class="row-hand" hidden>hand</span>${
-    local
-      ? '<span class="row-you">you</span>'
-      : `
-    <input class="vol-range" type="range" min="0" max="200" step="5" value="100" aria-label="volume of this participant">
-    <span class="vol-num">100%</span>
-    <button class="admit" type="button" title="let this guest into the room">let in</button>
-    <button class="dots" type="button" aria-label="member actions">&#8943;</button>`
-  }`;
+  row.append(
+    el('span', { class: 'row-name' }),
+    el(
+      'span',
+      { class: 'row-deaf', hidden: true },
+      el('img', {
+        src: '/openmoji/1F507.svg',
+        alt: 'deafened',
+        title: 'deafened',
+        width: 16,
+        height: 16,
+      }),
+    ),
+    el('span', { class: 'row-hand', hidden: true }, 'hand'),
+  );
+  if (local) {
+    row.append(el('span', { class: 'row-you' }, 'you'));
+  } else {
+    row.append(volRange(), el('span', { class: 'vol-num' }, '100%'), ...lineButton());
+  }
   paintRowName(row, name, local);
   if (!local) {
     wireDots(row);
@@ -147,7 +228,7 @@ export function makeRow(id, name, local = false) {
 }
 
 // ---------------------------------------------------------------- stage layout
-export let localTile = null; // the own preview tile, made once per room
+let localTile = null; // the own preview tile, made once per room
 // The tile is made in one place and dropped in another, so the two write it
 // through this setter; a plain imported binding cannot be assigned.
 export function setLocalTile(tile) {
@@ -158,11 +239,10 @@ export function ownTile() {
   return localTile && localTile.isConnected ? localTile : null;
 }
 
-// stageTiles is every tile in a stable order: the own preview first, then the
-// guests in the order they joined. The order of the two zones follows it, so a
-// relayout never reshuffles the room. A shared screen is its own tile and stands
-// right after the picture of the guest that shares it.
-export function stageTiles() {
+// stageTiles is every tile in a stable order: the own preview and its screen,
+// then the guests in join order, each guest's screen right after its picture.
+// The zones follow this order, so a relayout never reshuffles the room.
+function stageTiles() {
   const out = [];
   const self = ownTile();
   if (self) out.push(self);
@@ -175,11 +255,10 @@ export function stageTiles() {
 }
 
 // tileHasPicture answers "does this tile show a moving picture now". A camera
-// that is off, a track that the sender muted and a track that stopped all say
-// no, and that guest belongs in the rail as a row. A screen tile needs a
-// decoded frame too: its receiver track exists from the negotiation on, so the
-// live flag alone would show an empty box.
-export function tileHasPicture(tile) {
+// that is off, a muted track and a stopped track all say no, and that guest
+// belongs in the rail. A screen tile needs a decoded frame too: its receiver
+// track exists from the negotiation on.
+function tileHasPicture(tile) {
   if (!tile || tile.classList.contains('camoff')) return false;
   const video = tile.querySelector('video');
   const stream = video && video.srcObject;
@@ -189,9 +268,8 @@ export function tileHasPicture(tile) {
 }
 
 // spotlightTile is the one tile that holds the large area while the spotlight
-// is on. A guest that left takes the spotlight with it, and a screen tile is
-// its own key.
-export function spotlightTile() {
+// is on. A guest that left takes it away; a screen tile is its own key.
+function spotlightTile() {
   if (!state.spotlight) return null;
   if (state.spotlight === 'self') return ownTile();
   const screen = state.spotlight.endsWith(':screen');
@@ -208,46 +286,39 @@ export function spotlightTile() {
 // A stage with two pictures puts one guest small in a corner. A corner is two
 // letters, the vertical side first and then the horizontal one, and the own
 // preview gives way to the guest by taking the opposite corner while it is on.
-export const CORNERS = ['tl', 'tr', 'bl', 'br'];
+const CORNERS = ['tl', 'tr', 'bl', 'br'];
 
-export const OPPOSITE_CORNER = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
+const OPPOSITE_CORNER = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
 
-export const cornerCall = new Map(); // peer id -> corner, this call only
+const cornerCall = new Map(); // peer id -> corner, this call only
 
 export let cornerDropAt = 0; // when a drag ended, so its click is not a zoom
 
 // peerOfTile is the peer record of one tile, or null for the own tile.
-export function peerOfTile(tile) {
+function peerOfTile(tile) {
   const id = tile && tile.dataset.peer;
   return id && state.peers ? state.peers.get(id) || null : null;
 }
 
-// storedCorner reads the kept place of one guest. A guest that proved its key
-// keeps it on the disk under the fingerprint, the same key as its volume; a
-// guest without a key keeps it for this call only. The default is the bottom
+// storedCorner reads the kept corner of one guest: on disk under its
+// fingerprint, or for this call only without a key. The default is the bottom
 // right corner, where the own preview also sits.
-export function storedCorner(peer) {
+function storedCorner(peer) {
   const raw =
     peer && peer.fp ? load(`corner.fp.${peer.fp}`) : peer ? cornerCall.get(peer.id) || '' : '';
   return CORNERS.includes(raw) ? raw : 'br';
 }
 
-export function saveCorner(peer, corner) {
+function saveCorner(peer, corner) {
   if (!peer || !CORNERS.includes(corner)) return;
   cornerCall.set(peer.id, corner);
   if (peer.fp) store(`corner.fp.${peer.fp}`, corner);
 }
 
-// layoutStage picks the tiles that hold the large area and keeps the list of
-// members in step. A tile keeps its node, so its video element keeps its stream
-// and its sliders keep their listener. Without a spotlight, the tiles with a
-// picture take the large area; a tile without one stays out of the frame,
-// because its row in the list already names the guest, unless the voice-only
-// switch is on, which is the default: then it holds a tile with its avatar and
-// its name in the size of a picture tile. A guest that still waits stays in
-// the rail.
-// The list is a block of reserved height that scrolls, so no tile and no row
-// can move the stage.
+// layoutStage picks the tiles that hold the large area and keeps the member
+// list in step. A tile keeps its node, so its video keeps its stream. Without a
+// spotlight the tiles with a picture, or the voice tiles, take the area; a
+// waiting guest stays in the rail, a block of reserved height that scrolls.
 export function layoutStage() {
   const main = $('stage-main');
   const rail = $('stage-rail');
@@ -258,13 +329,13 @@ export function layoutStage() {
   if (state.spotlight && !spot) state.spotlight = '';
   const self = ownTile();
   // The own picture is a small preview while the switch is on. The node is
-  // moved, never copied, so the preview keeps the own stream and the mirror.
+  // moved, not copied, so the preview keeps the own stream and the mirror.
   const pip = !!(self && pipBox && state.selfPip);
   if (pipBox) pipBox.hidden = !pip;
   if (self && pip && self.parentElement !== pipBox) pipBox.appendChild(self);
   if (self && !pip && self.parentElement !== main) main.appendChild(self);
   // Two pictures and no spotlight: the later guest sits small in a corner and
-  // the other one keeps the whole frame. The small tile keeps its node too.
+  // the other keeps the whole frame.
   const bigs = [];
   for (const tile of stageTiles()) {
     const inPip = pip && tile === self;
@@ -308,10 +379,9 @@ export function layoutStage() {
   main.hidden = bigs.length - (small ? 1 : 0) === 0;
 }
 
-// wireCornerDrag lets the small guest tile of a two person stage follow the
-// pointer and snap to the nearest of the four corners when it is let go. A
-// pointer that stays put does not start a drag, so a click on the tile keeps
-// its meaning and enlarges that guest.
+// wireCornerDrag lets the small guest tile follow the pointer and snap to the
+// nearest of the four corners. A pointer that stays put does not start a drag,
+// so a click on the tile enlarges that guest.
 export function wireCornerDrag() {
   const box = $('guest-pip');
   const grid = $('grid');

@@ -1,8 +1,6 @@
 /*
- The one element lookup and the small DOM helpers.
-
- The markup is the single source of truth for the element types: an id that is
- not listed here is a typo, and a listed id hands back the right DOM type.
+ The one element lookup. The Elements interface mirrors the markup, so a listed
+ id hands back the right DOM type and an unlisted one is a typo.
 */
 
 export interface Elements {
@@ -86,6 +84,8 @@ export interface Elements {
   'asr-note': HTMLElement;
   'look-filter': HTMLSelectElement;
   freeze: HTMLInputElement;
+  'stats-bytes': HTMLInputElement;
+  'cx-swap': HTMLInputElement;
 }
 
 export function $<K extends keyof Elements>(id: K): Elements[K];

@@ -1,17 +1,15 @@
 /*
- Constant tables: the quality steps, the camera looks, the mask
- names, the face mesh rate and the room id alphabet.
+ Constant tables: the quality and performance steps, the camera looks, the
+ mask names, the face mesh rate and the room id alphabet.
 */
 
 export const ROOM_RE = /^[a-z0-9._-]{1,64}$/;
 
 export const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 
-// The performance slider trades the picture against bandwidth and compute in
-// four steps. It works on top of the quality step above: step 0 is that step
-// unchanged, the full quality path, and every later step sends fewer pixels
-// from the camera itself, fewer frames and a lower bitrate ceiling. Sound is
-// never touched, so a weak link or a weak machine thins the picture first.
+// The performance slider trades picture against bandwidth and compute in four
+// steps, on top of the quality step: each later step sends fewer pixels from the
+// camera itself, fewer frames and a lower bitrate ceiling. Sound is never touched.
 export const PERF = [
   { name: 'full quality', scale: 1, fps: 0, bits: 1 },
   { name: 'balanced', scale: 0.75, fps: 24, bits: 0.6 },
@@ -27,10 +25,9 @@ export const QUALITY = {
   '2560x1440@30': { w: 2560, h: 1440, fps: 30, max: 6000000 },
 };
 
-// The look of the own camera. A colour step is a canvas filter, and a mask is
-// drawn on the face patch that a small skin tone search finds. Both run in this
-// tab before the frame is sealed: the other side needs nothing, and the camera
-// keeps working, so its light stays on. One choice per guest, off by default.
+// A colour step is a canvas filter, a mask is drawn on the face patch that a
+// small skin tone search finds. Both run in this tab before the frame is sealed:
+// the other side needs nothing and the camera light stays on.
 /** @type {Record<string, string>} */
 
 export const LOOKS = {
@@ -60,21 +57,20 @@ export const MASKS = [
   'custom',
 ];
 
-// The landmarker is three files of this origin: the module, the wasm and the
-// model. Nothing of a face leaves the tab, and no byte comes from outside.
+// The landmarker: module, wasm and model from this origin, so no face leaves
+// the tab and no byte comes from outside.
 export const MESH_DIR = '/facemesh/';
 
-// Its input is a small copy of the frame, wide enough for a mesh and small
-// enough to run on a laptop without dropping the sent picture.
+// A small copy of the frame is the mesh input: wide enough for a mesh, cheap
+// enough to keep the sent picture running on a laptop.
 export const MESH_W = 256;
 
-// The mesh runs on every painted frame, so its rate is the camera rate, and
-// the clock below ticks at that rate as well. A machine that cannot hold it
-// drops a frame instead of queueing one.
+// The mesh runs on every painted frame, so its rate is the camera rate and the
+// clock ticks at that rate too. A slow machine drops a frame instead of queueing.
 export const MESH_HZ_MIN = 5;
 
 export const MESH_HZ_MAX = 60;
 
-// The long side of the canvas. A camera step above this is scaled down before
+// The long side of the look canvas. A larger camera step is scaled down before
 // the look runs, so a filter never costs more pixels than it has to.
 export const LOOK_MAX = 1280;

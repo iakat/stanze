@@ -1,7 +1,6 @@
 /*
- Globals the page loads at run time: the wasm glue of the handshake and of the
- transcriber, the test hook, and the webkit spelling of the audio context. They
- are assigned by the loader, so every one of them is optional.
+ Globals the loader sets at run time: wasm glue, the transcriber, the test hook
+ and the webkit audio context. All optional.
 */
 
 interface Window {

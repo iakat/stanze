@@ -2,42 +2,40 @@
  The page's own sound effects.
 */
 
+import { $ } from './dom.js';
 import { state } from './state.js';
+import { disconnectQuietly, stopQuietly } from './util.js';
+import { newAudioCtx } from './audio.js';
 
 // ---------------------------------------------------------------- sound effects
-// The four cartoon cues come from the Hanna-Barbera sound effects library that
-// is on archive.org. They are stored as 48 kHz mono Opus, which is about 27 kB
-// for all four files together. An mp3 copy stays next to each one for a
-// browser that can not decode Opus.
-//
-// The fifth cue is the lost connection chime: it is synthesized here, so it has
-// no source sample to credit, and it is a seamless loop instead of a one shot.
-export const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
+// Four one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
+// lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3 copy
+// last for a browser that can not decode either.
+const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
 
-export const SFX_RATE = 0.35;
+const SFX_RATE = 0.35;
 
 // The pad sits under the room for as long as the socket is down, so it plays
 // quieter than a one shot cue.
-export const LOST_RATE = 0.2;
+const LOST_RATE = 0.2;
 
-// The lost cue is 8.32 s long and loops the middle 8.0 s of it: two soft
-// chimes four seconds apart, with real silence at the loop point.
-export const LOST_LOOP_START = 0.16;
+// The lost cue loops the middle 8.0 s of the file.
+const LOST_LOOP_START = 0.16;
 
-export const LOST_LOOP_END = 8.16;
+const LOST_LOOP_END = 8.16;
 
 export const sfxCache = new Map();
 
-export let sfxExt = '';
+let sfxExt = '';
 
-// pickSfxExt returns the first container the browser plays. Chrome, Firefox and
-// Edge take WebM; the rest fall back to Ogg, then to mp3.
-export function pickSfxExt() {
+// pickSfxExt returns the first container the browser plays: Ogg Opus, then
+// WebM Opus, then mp3.
+function pickSfxExt() {
   if (sfxExt) return sfxExt;
   const probe = document.createElement('audio');
   const tries = [
-    ['webm', 'audio/webm; codecs=opus'],
     ['ogg', 'audio/ogg; codecs=opus'],
+    ['webm', 'audio/webm; codecs=opus'],
     ['mp3', 'audio/mpeg'],
   ];
   for (const [ext, type] of tries) {
@@ -51,15 +49,7 @@ export function pickSfxExt() {
 }
 
 export function ensureSfx() {
-  if (state.sfxCtx) return;
-  // Safari still exposes the prefixed constructor, which the DOM lib omits.
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  try {
-    state.sfxCtx = new Ctx();
-  } catch {
-    state.sfxCtx = null;
-  }
+  if (!state.sfxCtx) state.sfxCtx = newAudioCtx();
 }
 
 // preloadSfx decodes the cues once, so a click never waits for a fetch.
@@ -96,11 +86,7 @@ export function playSfx(name) {
     return;
   }
   if (state.sfxSource) {
-    try {
-      state.sfxSource.stop();
-    } catch {
-      /* already finished */
-    }
+    stopQuietly(state.sfxSource);
     state.sfxSource = null;
   }
   try {
@@ -121,8 +107,7 @@ export function playSfx(name) {
 }
 
 // startLost loops the waiting chime while the signaling socket is down. A second
-// call while it already plays does nothing, so a chain of reconnect attempts
-// can never stack copies of it.
+// call while it already plays does nothing, so reconnects never stack copies.
 export function startLost() {
   // The wish stays, so a guest who switches the sound back on in the middle of
   // an outage hears the chime from then on.
@@ -137,9 +122,9 @@ export function startLost() {
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.loop = true;
-    // The file carries a little head and tail around the 8.0 s loop, so the
-    // codec padding at the file edges stays outside the loop point: the pad
-    // runs on with no gap and no click.
+    // The file has a little head and tail around the 8.0 s loop, so the codec
+    // padding at the file edges stays outside the loop point: the pad runs on
+    // with no gap and no click.
     if (buffer.duration >= LOST_LOOP_END) {
       src.loopStart = LOST_LOOP_START;
       src.loopEnd = LOST_LOOP_END;
@@ -158,19 +143,15 @@ export function startLost() {
 }
 
 // setSounds is the switch for the four cues and the lost connection chime. Off
-// cuts whatever plays now. The jitsi skin reads the same switch from the body.
+// cuts whatever plays now, and the body carries the state for the stylesheet.
 export function setSounds(on) {
   state.sounds = on;
   document.body.dataset.sounds = on ? 'on' : 'off';
-  const box = document.getElementById('sounds') as HTMLInputElement | null;
+  const box = $('sounds');
   if (box) box.checked = on;
   if (!on) {
     if (state.sfxSource) {
-      try {
-        state.sfxSource.stop();
-      } catch {
-        /* already finished */
-      }
+      stopQuietly(state.sfxSource);
       state.sfxSource = null;
     }
     // Cut the pad but keep the wish for it.
@@ -188,22 +169,10 @@ export function stopLost() {
   const src = state.lostSource;
   state.lostSource = null;
   if (state.lostGain) {
-    try {
-      state.lostGain.disconnect();
-    } catch {
-      /* already gone */
-    }
+    disconnectQuietly(state.lostGain);
     state.lostGain = null;
   }
   if (!src) return;
-  try {
-    src.stop();
-  } catch {
-    /* already finished */
-  }
-  try {
-    src.disconnect();
-  } catch {
-    /* already gone */
-  }
+  stopQuietly(src);
+  disconnectQuietly(src);
 }

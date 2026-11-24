@@ -5,13 +5,20 @@
 import { QUALITY } from './config.js';
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { isAdmin, joinWords, say } from './util.js';
+import { detachMedia, disconnectQuietly, isAdmin, joinWords, say, stopQuietly } from './util.js';
 import { store } from './prefs.js';
 import { layoutStage, makeTile, ownTile, paintRowDeaf, setLocalTile } from './tiles.js';
 import { applyFlags, paintVolume } from './volume.js';
 import { paintWaiting } from './host.js';
 import { MIC_AUDIO, applyQuality, ask, camVideo, capVideoSender } from './media.js';
-import { applyMirror, resumeAudio, sendState, setNoise, updateButtons } from './audio.js';
+import {
+  applyMirror,
+  newAudioCtx,
+  resumeAudio,
+  sendState,
+  setNoise,
+  updateButtons,
+} from './audio.js';
 import { lookRestart, lookStop, lookTrack } from './look.js';
 import { stopShare } from './screen.js';
 import { playSfx } from './sfx.js';
@@ -19,37 +26,33 @@ import { pairLabel, sealingAvailable } from './sealed.js';
 
 // ---------------------------------------------------------------- devices
 //
-// The join form carries one picker per kind, and the toolbar keeps a second pair
-// for a switch during a call. Every picker shows the same list and the choice
-// lives in state.camId and state.micId, so no two pickers can disagree. The
-// browser hides the labels and the ids until the page has permission once:
-// before that the options are numbered, and a stored id stays in its picker as
-// one extra entry, so a reload never loses the camera.
-export const DEVICE_NOUN = { video: 'camera', audio: 'microphone' };
+// Pickers share one list and the choice in state.camId and state.micId, so they
+// can not disagree. Labels and ids need one permission; a stored id stays in its
+// picker as an extra entry until then, so a reload keeps the camera.
+const DEVICE_NOUN = { video: 'camera', audio: 'microphone' };
 
 export function devicePickers(kind) {
   return kind === 'video' ? [$('cam-select')] : [$('mic-select')];
 }
 
-export function deviceList(kind) {
+function deviceList(kind) {
   return kind === 'video' ? state.devCams : state.devMics;
 }
 
-export function chosenDevice(kind) {
+function chosenDevice(kind) {
   return (kind === 'video' ? state.camId : state.micId) || '';
 }
 
-export function setChosenDevice(kind, id) {
+function setChosenDevice(kind, id) {
   if (kind === 'video') state.camId = id;
   else state.micId = id;
   store(kind === 'video' ? 'camId' : 'micId', id);
 }
 
 // paintDeviceSelect rewrites one picker in place. The wanted id keeps its place
-// while the browser still lists it; a list without ids (no permission yet)
-// keeps it as one extra entry; a list with labels that no longer has it drops
-// it, so the next request asks for the system device.
-export function paintDeviceSelect(select, kind, list, wanted) {
+// while the browser lists it; a list without labels keeps it as one extra entry,
+// a labelled list that lacks it falls back to the system device.
+function paintDeviceSelect(select, kind, list, wanted) {
   if (!select) return '';
   const noun = DEVICE_NOUN[kind];
   const seen = new Set();
@@ -64,8 +67,7 @@ export function paintDeviceSelect(select, kind, list, wanted) {
     seen.add(device.deviceId);
     count++;
     const opt = document.createElement('option');
-    // A label needs permission once. Before that the picker counts the
-    // devices, so a guest still sees that there is more than one.
+    // A label needs one permission; without it the picker counts the devices.
     opt.textContent = device.label || `${noun} ${count}`;
     opt.value = device.deviceId;
     frag.appendChild(opt);
@@ -85,10 +87,9 @@ export function paintDeviceSelect(select, kind, list, wanted) {
   return value;
 }
 
-// paintDevices fills every picker from the last enumeration, and a choice that
-// the browser no longer offers is dropped with one line in the status box. The
-// toolbar pickers only appear when a kind has more than one device to offer.
-export function paintDevices() {
+// paintDevices fills every picker from the last enumeration. A choice the
+// enumeration does not carry is dropped with one line in the status box.
+function paintDevices() {
   for (const kind of ['video', 'audio']) {
     const wanted = chosenDevice(kind);
     const list = deviceList(kind);
@@ -104,12 +105,11 @@ export function paintDevices() {
   paintDeviceMenu();
 }
 
-// refreshDevices re-reads the device list and repaints the pickers. It runs at
-// boot, after every successful device request (the labels arrive with the first
-// permission) and on every devicechange.
+// refreshDevices reads the device list and repaints the pickers: at boot, after
+// each device request and on every devicechange. Labels need the first permission.
 export async function refreshDevices() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-  let all = [];
+  let all;
   try {
     all = await navigator.mediaDevices.enumerateDevices();
   } catch {
@@ -121,7 +121,7 @@ export async function refreshDevices() {
 }
 
 // The words of the quality steps, used by both quality lists.
-export const QUALITY_LABEL = {
+const QUALITY_LABEL = {
   '640x360@30': '360p 30',
   '1280x720@30': '720p 30',
   '1920x1080@30': '1080p 30',
@@ -129,9 +129,9 @@ export const QUALITY_LABEL = {
   '2560x1440@30': '1440p 30',
 };
 
-// deviceRows lists the system device, every enumerated device and, before the
-// first permission, the stored id as one extra row, the way the odd select did.
-export function deviceRows(kind) {
+// deviceRows lists the system device, every enumerated device and the stored id
+// as one extra row when the enumeration does not carry it.
+function deviceRows(kind) {
   const noun = DEVICE_NOUN[kind];
   const rows = [{ value: '', label: `system ${noun}` }];
   const seen = new Set();
@@ -147,14 +147,13 @@ export function deviceRows(kind) {
   return rows;
 }
 
-// qualityRows lists every quality step with its words.
-export function qualityRows() {
+function qualityRows() {
   return Object.keys(QUALITY).map((value) => ({ value, label: QUALITY_LABEL[value] || value }));
 }
 
-// paintMenuChoice rewrites one submenu: a button row per choice, a tick on the
-// choice in force, and one callback per row.
-export function paintMenuChoice(list, rows, current, pick) {
+// paintMenuChoice rewrites one submenu: a button row per choice, ticked on the
+// choice in force, with one callback per row.
+function paintMenuChoice(list, rows, current, pick) {
   if (!list) return;
   const frag = document.createDocumentFragment();
   for (const row of rows) {
@@ -175,8 +174,8 @@ export function paintMenuChoice(list, rows, current, pick) {
   list.replaceChildren(frag);
 }
 
-// paintDeviceMenu rebuilds the four lists: microphone, camera, camera quality
-// and screen quality. The tick marks the choice in force.
+// paintDeviceMenu rebuilds the four lists: microphone, camera, camera quality and
+// screen quality, ticked at the choice in force.
 export function paintDeviceMenu() {
   paintMenuChoice($('dev-mic-list'), deviceRows('audio'), state.micId, (value) => {
     onDevicePicked('audio', value);
@@ -199,10 +198,9 @@ export function paintDeviceMenu() {
   });
 }
 
-// constraintsFor builds one request: the chosen device when there is one, the
-// plain ideal request when there is not. facingMode only rides along with a
-// plain camera request, because a deviceId already names the exact lens.
-export function constraintsFor(kind, pick) {
+// constraintsFor builds one request: the chosen device when there is one, else the
+// plain ideal request. Only that one takes facingMode; a deviceId names the lens.
+function constraintsFor(kind, pick) {
   if (kind === 'video') {
     const base = camVideo();
     return pick ? { ...base, deviceId: { exact: pick } } : { ...base, facingMode: 'user' };
@@ -210,10 +208,9 @@ export function constraintsFor(kind, pick) {
   return pick ? { ...MIC_AUDIO, deviceId: { exact: pick } } : { ...MIC_AUDIO };
 }
 
-// askKind opens one kind of device. A stored id the browser can no longer honour
-// (unplugged, or a profile without it) falls back to the plain request once, so
-// a stale choice never blocks a join or a switch.
-export async function askKind(kind, pick) {
+// askKind opens one kind of device. A stored id the browser can not honour falls
+// back to the plain request once, so a stale choice never blocks a join.
+async function askKind(kind, pick) {
   const want = (id) =>
     kind === 'video'
       ? { video: constraintsFor('video', id) }
@@ -235,12 +232,9 @@ export async function askKind(kind, pick) {
   return ask(want(''));
 }
 
-// switchDevice moves one live call to another device. The microphone feeds the
-// mixer, and the mixer track is what the peers receive, so an audio switch
-// touches no sender. The camera replaces the track on the video sender that is
-// already there, so the peers see the new camera without a rejoin; only a call
-// that started with no camera at all adds a sender.
-export async function switchDevice(kind, id) {
+// switchDevice moves one live call to another device: audio rides the mixer the
+// peers already receive, video replaces its track on the sender, so no rejoin.
+async function switchDevice(kind, id) {
   if (!sealingAvailable()) {
     say('this browser cannot seal media frames, so the device stays off');
     return;
@@ -287,11 +281,9 @@ export function onDevicePicked(kind, id) {
   switchDevice(kind, id || '').catch(() => {});
 }
 
-// onDeviceChange reacts to a camera or a microphone that came or went. A device
-// that is still listed keeps its place; one that is gone leaves the picker and
-// the status line says so. A live track that ended is let go, so the flags of
-// the call stay true until a device is chosen again.
-export let devTimer = null;
+// onDeviceChange reacts to a camera or a microphone that came or went. A live
+// track that ended is dropped and the call marks that device off.
+let devTimer = null;
 
 export function onDeviceChange() {
   if (state.camTrack && state.camTrack.readyState === 'ended') {
@@ -319,10 +311,8 @@ export function onDeviceChange() {
   }, 250);
 }
 
-// requestLocal asks for the camera and the microphone when the join button is
-// pressed: one prompt when both are wanted, and the call starts with both on.
-// A refusal or a missing device never stops the join; the devices that did not
-// open stay off and a short status line says which ones.
+// requestLocal asks for the camera and the microphone on join, both in one
+// prompt. A refusal or a missing device never stops the join, it stays off.
 export async function requestLocal() {
   const wantMic = state.mic;
   const wantCam = state.cam;
@@ -357,12 +347,11 @@ export async function requestLocal() {
       both.err &&
       (both.err.name === 'NotAllowedError' || both.err.name === 'SecurityError')
     ) {
-      // The visitor answered the prompt with no. Asking twice would not prompt.
+      // The visitor said no to the prompt; asking again would not prompt.
       refused.push('camera and microphone');
     } else {
-      // One of the two may be missing or busy: ask for each of them alone, so
-      // the other one still starts. A stored device that is gone falls back to
-      // the system device here.
+      // One of the two may be missing or busy: ask for each alone, so the other
+      // starts. A stored device that is unavailable falls back to the system.
       const parts = await Promise.all([
         askKind('audio', state.micId),
         askKind('video', state.camId),
@@ -400,13 +389,12 @@ export async function requestLocal() {
   refreshSelf();
 }
 
-// prepareLocal builds the empty local side: the output stream, the own tile
-// and the buttons. The permission prompt belongs to requestLocal, which runs
-// right after this and fills state.mic and state.cam.
+// prepareLocal builds the empty local side: output stream, own tile and buttons.
+// requestLocal runs right after it and fills in the devices.
 export function prepareLocal() {
   state.outStream = new MediaStream();
-  // The own tile exists even with no camera and no microphone, so the mirror
-  // preview, the name and the mute flags always have a place.
+  // The own tile exists without a camera and a microphone too, so the mirror, the
+  // name and the mute flags always have a place.
   const self = makeTile(state.name, state.name, true);
   setLocalTile(self);
   self.dataset.state = 'connected';
@@ -426,12 +414,8 @@ export function refreshSelf() {
   if (state.waiting) paintWaiting();
 }
 
-// setDeaf closes both directions at once: the microphone and the camera go
-// off, every guest is turned down to zero and no incoming picture is drawn, so
-// nothing is sent and nothing is heard or shown. The stored microphone and
-// camera choices survive, so undeafen gives the guest their devices back, and
-// every volume is where it was before. A screen share ends here: a deafened
-// guest does not keep sending a picture.
+// setDeaf shuts both directions: devices off, guests turned down, no picture
+// drawn, and a share ends. Undeafen gives the devices and every volume back.
 export function setDeaf(on) {
   if (state.deaf === on) return;
   state.deaf = on;
@@ -452,15 +436,13 @@ export function setDeaf(on) {
   sendState();
 }
 
-// sealOne puts the frame transform on one sender or receiver. This is the only
-// install path: it runs once, on a transceiver that already exists, and nothing
-// in it waits for the keys. A setter that throws becomes a stated fault.
-export function sealOne(peer, side, dir, kind) {
+// sealOne puts the frame transform on one sender or receiver. It is the only
+// install path and never waits for keys; a setter that throws becomes a fault.
+function sealOne(peer, side, dir, kind) {
   try {
     side.transform = new RTCRtpScriptTransform(state.worker, {
-      // `from` is the sender of the frames this transform sees: this page on a
-      // sender, the peer on a receiver. The associated data names it, so both
-      // ends build the same bytes and a frame can not be moved or reflected.
+      // `from` names who sends these frames: the page on send, the peer on receive;
+      // the AAD binds it, so a moved or reflected frame can not match.
       pair: pairLabel(peer.id),
       peer: peer.id,
       dir,
@@ -476,11 +458,8 @@ export function sealOne(peer, side, dir, kind) {
   return true;
 }
 
-// preparePeer makes one transceiver per kind, seals both directions of it and
-// puts the live track on its sender. It runs before the offer or the answer
-// leaves, so the first frame always meets a key, a transform and a track. The
-// screen has a transceiver of its own from the start, so a share needs no
-// renegotiation and the camera keeps its sender.
+// preparePeer seals one transceiver per kind both ways and attaches the live track
+// before the offer leaves. Screen has its own, so a share needs no renegotiation.
 export function preparePeer(peer) {
   if (peer.tx) return;
   peer.tx = {};
@@ -508,16 +487,15 @@ export function preparePeer(peer) {
         ? state.screen && state.screen.getVideoTracks()[0]
         : state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
     if (!track) continue;
-    // A guest that waits outside gets none of our media until it is let in.
+    // A waiting guest gets no media until it is let in.
     if (peer.waiting) continue;
     tr.sender.replaceTrack(track).catch(() => {});
     if (kind === 'video') capVideoSender(tr.sender);
   }
 }
 
-// attachTrack points the sender of that kind at a track. The transceiver and
-// its transform already exist, so a track can come and go without a second
-// install path and without a renegotiation.
+// attachTrack points the sender of that kind at a track. Transceiver and transform
+// already exist, so a track change needs no renegotiation.
 export function attachTrack(peer, track) {
   if (peer.sealed === false || peer.waiting) return;
   const tr = peer.tx && peer.tx[track.kind];
@@ -526,8 +504,8 @@ export function attachTrack(peer, track) {
   if (track.kind === 'video') capVideoSender(tr.sender);
 }
 
-// attachScreen puts the live screen track on the screen sender of one peer.
-// Only the screen sender is touched; the camera keeps its own track.
+// attachScreen puts the live screen track on the screen sender of one peer; the
+// camera keeps its own track.
 export function attachScreen(peer) {
   if (peer.sealed === false || peer.waiting) return;
   const tr = peer.tx && peer.tx.screen;
@@ -535,21 +513,18 @@ export function attachScreen(peer) {
   if (tr && track) tr.sender.replaceTrack(track).catch(() => {});
 }
 
-// publishTrack hands one new track to every connection that already has its
-// transceivers. A connection that is still handshaking picks it up in
-// preparePeer.
-export function publishTrack(track) {
+// publishTrack hands one new track to every connection that has transceivers; a
+// connection that is handshaking picks it up in preparePeer.
+function publishTrack(track) {
   if (!track) return;
   for (const peer of state.peers.values()) {
     if (peer.pc) attachTrack(peer, track);
   }
 }
 
-// adoptMic makes one microphone track the live input: it goes through GTCRN
-// and the gain into the mixer, and the mixer track is what peers receive. A
-// second device needs a new source, because a source can not be repointed; the
-// analyser is rebuilt with it and the noise choice of the call is kept.
-export async function adoptMic(track) {
+// adoptMic makes one microphone track the live input: GTCRN and the gain feed the
+// mixer that peers receive. A source can not be repointed, so a switch rebuilds it.
+async function adoptMic(track) {
   if (!track) return;
   const prev = state.micTrack;
   state.micTrack = track;
@@ -560,17 +535,9 @@ export async function adoptMic(track) {
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
       await setNoise(state.noiseWanted);
     } else if (prev && prev !== track) {
-      try {
-        state.micSource.disconnect();
-      } catch {
-        /* not connected */
-      }
+      disconnectQuietly(state.micSource);
       if (state.micAnalyser) {
-        try {
-          state.micAnalyser.disconnect();
-        } catch {
-          /* not connected */
-        }
+        disconnectQuietly(state.micAnalyser);
         state.micAnalyser = null;
       }
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
@@ -583,18 +550,12 @@ export async function adoptMic(track) {
     state.outStream.addTrack(out);
   }
   publishTrack(out);
-  if (prev && prev !== track) {
-    try {
-      prev.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (prev && prev !== track) stopQuietly(prev);
 }
 
-// setVideoTrack reuses the stream when the same track is still attached, so a
-// repaint does not restart the element.
-export function setVideoTrack(video, track) {
+// setVideoTrack reuses the stream when the same track is attached, so a repaint
+// does not restart the element.
+function setVideoTrack(video, track) {
   const stream = video.srcObject;
   if (
     !stream ||
@@ -605,17 +566,16 @@ export function setVideoTrack(video, track) {
   }
 }
 
-// camSource is the picture the own preview shows: the frozen still while the
-// freeze is on, else the drawn track, else the camera.
-export function camSource() {
+// camSource is the own preview picture: the frozen still while the freeze is on,
+// else the drawn track, else the camera.
+function camSource() {
   if (state.freeze && state.freezeTrack && state.freezeTrack.readyState === 'live')
     return state.freezeTrack;
   return lookTrack() || state.camTrack;
 }
 
-// paintSelfCam paints the local preview from the camera state. A disabled
-// track gives black frames, so the element is emptied and the tile leaves the
-// playing state: the centre name is back until the camera works again.
+// paintSelfCam paints the local preview. A disabled track gives black frames, so
+// the element is emptied and the tile leaves the playing state for the name.
 export function paintSelfCam(on) {
   const self = ownTile();
   if (!self) return;
@@ -627,21 +587,13 @@ export function paintSelfCam(on) {
     video.play().catch(() => {});
   } else {
     self.classList.remove('playing');
-    try {
-      video.pause();
-    } catch {
-      /* not playing */
-    }
-    video.srcObject = null;
+    detachMedia(video);
   }
   layoutStage();
 }
 
-// paintPeerVideo shows or hides the incoming picture of one guest. A deafened
-// guest draws no picture at all, so only names remain; the same track goes back
-// when the ears open, so no new negotiation is needed. A camera that its owner
-// turned off mutes the receiver track and leaves its last frame in the element,
-// so a muted track takes the picture down the same way.
+// paintPeerVideo shows or hides one guest picture. A deafened guest draws none,
+// and a muted track takes it down too, though its last frame would stay.
 export function paintPeerVideo(peer) {
   const video = peer.tile && peer.tile.querySelector('video');
   if (!video) return;
@@ -657,50 +609,38 @@ export function paintPeerVideo(peer) {
   layoutStage();
 }
 
-// dropPeerCamera takes the last decoded frame out of the element and lets the
-// tile fall back to its name. The receiver track is kept, so the same track
-// comes back when the camera does, and a sender that only replaces its track
-// with nothing leaves no picture behind.
+// dropPeerCamera empties the element and lets the tile fall back to its name. The
+// receiver track stays, so the same picture comes back with the camera.
 export function dropPeerCamera(peer) {
   const video = peer.tile && peer.tile.querySelector('video');
   if (!video) return;
   peer.tile.classList.remove('playing');
-  try {
-    video.pause();
-  } catch {
-    /* not playing */
-  }
-  video.srcObject = null;
+  detachMedia(video);
 }
 
-// paintRemoteVideo applies the deaf state to every guest already in the room.
-export function paintRemoteVideo() {
+// paintRemoteVideo applies the deaf state to every guest in the room.
+function paintRemoteVideo() {
   for (const peer of state.peers.values()) {
     paintPeerVideo(peer);
     paintPeerScreen(peer);
   }
 }
 
-// makeScreenTile builds the second picture of a guest on its first screen
-// track. It has no row of its own: the list already carries the guest, and the
-// label says which picture it is. The node stays for the pair, so a share that
-// stops and starts again reuses it.
-export function makeScreenTile(peer) {
+// makeScreenTile builds the second picture of a guest on its first screen track.
+// It has no row of its own, and the node stays for the pair so a share reuses it.
+function makeScreenTile(peer) {
   if (peer.screenTile) return peer.screenTile;
   peer.screenTile = makeTile(peer.id, `${peer.name}, screen`, false, true);
   peer.screenTile.dataset.peer = peer.id;
-  // The receiver track of the screen exists from the negotiation on, so the
-  // tile stands in the stage only once its first frame is decoded.
+  // A new frame size lays the stage out again.
   peer.screenTile.querySelector('video').addEventListener('resize', () => layoutStage());
-  // The camera flag stays out of it: this tile is the screen, not the face.
+  // The camera flag stays out: this tile is the screen, not the face.
   applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
   return peer.screenTile;
 }
 
-// paintPeerScreen shows or hides the shared screen of one guest. The tile is
-// built on the first live screen track, so no empty second tile stands in the
-// stage; a track that the sender muted for a stopped share, or that ended,
-// leaves the stage while the same track comes back when the share does.
+// paintPeerScreen shows or hides one guest screen. The tile is built on the first
+// live track, so no empty second tile stands in the stage.
 export function paintPeerScreen(peer) {
   const track = peer.screenTrack;
   if (!track) return;
@@ -713,57 +653,43 @@ export function paintPeerScreen(peer) {
   } else if (peer.screenTile) {
     const video = peer.screenTile.querySelector('video');
     peer.screenTile.classList.remove('playing');
-    try {
-      video.pause();
-    } catch {
-      /* not playing */
-    }
-    video.srcObject = null;
+    detachMedia(video);
   }
   layoutStage();
 }
 
-// dropPeerScreen takes the screen tile of a guest out of the stage and lets go
-// of the frozen last frame. The receiver track itself stays for the pair, so the
-// next share of that guest reuses it and needs no new negotiation.
+// dropPeerScreen removes the tile and its frozen last frame. The receiver track
+// stays for the pair, so the next share reuses it.
 export function dropPeerScreen(peer) {
   if (!peer.screenTile) return;
   const video = peer.screenTile.querySelector('video');
   peer.screenTile.classList.remove('playing');
-  try {
-    video.pause();
-  } catch {
-    /* not playing */
-  }
-  video.srcObject = null;
+  detachMedia(video);
   peer.screenTile.remove();
   peer.screenTile = null;
   layoutStage();
 }
 
-// adoptCam makes one camera track the live video. The camera keeps its own
-// sender while a screen is shared, so the picture goes to the camera sender and
-// the share is not touched. A track that replaces an earlier camera is handed to
-// the video sender that is already there, so a switch needs no renegotiation.
-export async function adoptCam(track) {
+// clearFreeze drops the frozen still and unticks its switch, so the live camera
+// comes back with no stale picture in front of it.
+function clearFreeze() {
+  if (!state.freeze) return;
+  if (state.freezeTrack) stopQuietly(state.freezeTrack);
+  state.freeze = false;
+  state.freezeTrack = null;
+  state.freezeCanvas = null;
+  const box = $('freeze');
+  if (box) box.checked = false;
+}
+
+// adoptCam makes one camera track the live video. The picture goes to the camera
+// sender, never the share, and a switch needs no renegotiation.
+async function adoptCam(track) {
   if (!track) return;
   const prev = state.camTrack;
   state.camTrack = track;
-  // A new camera hands the live picture back: the still was of the old one.
-  if (state.freeze) {
-    if (state.freezeTrack) {
-      try {
-        state.freezeTrack.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
-    state.freeze = false;
-    state.freezeTrack = null;
-    state.freezeCanvas = null;
-    const box = $('freeze');
-    if (box) box.checked = false;
-  }
+  // A new camera hands the live picture back: the frozen frame is stale.
+  clearFreeze();
   track.contentHint = 'motion';
   track.enabled = true;
   paintSelfCam(true);
@@ -776,14 +702,26 @@ export async function adoptCam(track) {
     // A look or a mask follows the camera it was drawn from.
     await lookRestart();
   }
-  if (prev && prev !== track) {
-    try {
-      prev.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (prev && prev !== track) stopQuietly(prev);
   applyMirror();
+}
+
+// openInput asks for one input and adopts the track, so both buttons share one
+// path. It answers false when nothing opened; the reason is already on screen.
+async function openInput(kind) {
+  const got = await askKind(kind, kind === 'video' ? state.camId : state.micId);
+  const track = got.stream ? got.stream.getTracks()[0] : null;
+  if (!track) {
+    say(
+      got.err && got.err.name === 'NotAllowedError'
+        ? `the ${DEVICE_NOUN[kind]} was refused`
+        : `the ${DEVICE_NOUN[kind]} is not available`,
+    );
+    return false;
+  }
+  await (kind === 'video' ? adoptCam(track) : adoptMic(track));
+  refreshDevices();
+  return true;
 }
 
 export async function enableMic() {
@@ -792,20 +730,7 @@ export async function enableMic() {
     say('this browser cannot seal media frames, so the microphone stays off');
     return;
   }
-  if (!state.micTrack) {
-    const mic = await askKind('audio', state.micId);
-    const track = mic.stream ? mic.stream.getAudioTracks()[0] : null;
-    if (!track) {
-      say(
-        mic.err && mic.err.name === 'NotAllowedError'
-          ? 'the microphone was refused'
-          : 'the microphone is not available',
-      );
-      return;
-    }
-    await adoptMic(track);
-    refreshDevices();
-  }
+  if (!state.micTrack && !(await openInput('audio'))) return;
   state.mic = true;
   store('mic', 1);
   playSfx('timp');
@@ -815,9 +740,8 @@ export async function enableMic() {
   sendState();
 }
 
-// disableMic mutes the microphone. A mute that the guest chose is remembered
-// for the next visit; a mute that the host forced is not, or the guest would
-// join muted for ever after one request.
+// disableMic mutes the microphone. A mute the guest chose is remembered, a mute
+// the host forced is not, or the guest joins muted for ever after one request.
 export function disableMic(persist = true) {
   playSfx('hammer');
   state.mic = false;
@@ -832,20 +756,7 @@ export async function enableCam() {
     say('this browser cannot seal media frames, so the camera stays off');
     return;
   }
-  if (!state.camTrack) {
-    const cam = await askKind('video', state.camId);
-    const track = cam.stream ? cam.stream.getVideoTracks()[0] : null;
-    if (!track) {
-      say(
-        cam.err && cam.err.name === 'NotAllowedError'
-          ? 'the camera was refused'
-          : 'the camera is not available',
-      );
-      return;
-    }
-    await adoptCam(track);
-    refreshDevices();
-  }
+  if (!state.camTrack && !(await openInput('video'))) return;
   state.cam = true;
   store('cam', 1);
   if (state.camTrack) state.camTrack.enabled = true;
@@ -857,52 +768,25 @@ export async function enableCam() {
 export function disableCam(persist = true) {
   state.cam = false;
   if (persist) store('cam', 0);
-  // A disabled track keeps the device open, so the camera light stays on. Stop
-  // the track and drop it: enableCam asks the device again, and the video
-  // sender that still holds the old track gets the new one in adoptCam.
+  // A disabled track keeps the device open and its light on. Stop and drop it;
+  // enableCam asks again and adoptCam hands the new track to the sender.
   const track = state.camTrack;
   state.camTrack = null;
   // A frozen still has no camera behind it any more, so the freeze goes too.
-  if (state.freeze) {
-    if (state.freezeTrack) {
-      try {
-        state.freezeTrack.stop();
-      } catch {
-        /* already stopped */
-      }
-    }
-    state.freeze = false;
-    state.freezeTrack = null;
-    state.freezeCanvas = null;
-    const box = $('freeze');
-    if (box) box.checked = false;
-  }
+  clearFreeze();
   // The drawn track reads from the camera, so it goes with it.
   lookStop();
-  if (track) {
-    try {
-      track.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  if (track) stopQuietly(track);
   paintSelfCam(false);
   updateButtons();
   sendState();
 }
 
-// buildAudio wires mic -> (GTCRN) -> gain -> mixer. The mixer track is what
-// the peers receive, and it is created even without a microphone so screen
-// audio can be added later without touching the peer connections.
-export async function buildAudio() {
-  // Safari still exposes the prefixed constructor, which the DOM lib omits.
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  try {
-    state.audioCtx = new Ctx({ sampleRate: 48000, latencyHint: 'interactive' });
-  } catch {
-    return;
-  }
+// buildAudio wires mic -> GTCRN -> gain -> mixer, and the mixer track is what the
+// peers receive. The mixer exists without a microphone so screen audio fits later.
+async function buildAudio() {
+  state.audioCtx = newAudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
+  if (!state.audioCtx) return;
   state.mixer = state.audioCtx.createMediaStreamDestination();
   state.micGain = state.audioCtx.createGain();
   state.micGain.connect(state.mixer);
@@ -914,10 +798,9 @@ export async function buildAudio() {
   resumeAudio();
 }
 
-// startMeter taps the microphone before the gain, on a second branch of the
-// source, so the stats show a live device even while the local mute is on. It
-// does not touch the path to the peers: speakTick reads that tap.
-export function startMeter() {
+// startMeter taps the microphone before the gain on a second branch, so the stats
+// show a live device while the local mute is on. speakTick reads that tap.
+function startMeter() {
   if (!state.audioCtx || !state.micSource || state.micAnalyser) return;
   state.micAnalyser = state.audioCtx.createAnalyser();
   state.micAnalyser.fftSize = 1024;

@@ -2,6 +2,22 @@
  The client state, one object per page.
 */
 
+// CUST_DEFAULTS are the knobs of the custom effect: each a percent of a face
+// measure, so they hold near and far from the camera. 100 is neutral for a size
+// and 0 for a shift or the pinch.
+export const CUST_DEFAULTS = {
+  head: 100,
+  width: 100,
+  eyes: 100,
+  spread: 100,
+  eyey: 0,
+  nose: 100,
+  mouth: 100,
+  mshift: 0,
+  pinch: 0,
+  swap: false,
+};
+
 export const state = {
   ws: null,
   self: null,
@@ -14,13 +30,12 @@ export const state = {
   freeze: false, // the outgoing camera picture is locked to one frame
   freezeTrack: null, // the still that carries that frame
   freezeCanvas: null, // the canvas behind the still, kept so it stays live
-  freezeVideo: null, // one frame of the camera, when no look draws it
+  freezeVideo: null, // hidden video on the camera, used when no look draws a frame
   micTrack: null,
   outStream: null, // what is sent to peers
   lookParked: false, // true while a hidden tab sends the raw camera
-  // The knobs of the custom face effect. Each one is a percent of a face
-  // measure, so the same numbers fit a face far from the camera and near it.
-  cust: { head: 100, eyes: 100, spread: 100, mouth: 100, mshift: 0, swap: false },
+  // Face effect knobs, each a percent of a face measure, so they hold near and far from the camera.
+  cust: { ...CUST_DEFAULTS },
   audioCtx: null, // the microphone graph
   mixer: null,
   micGain: null,
@@ -37,8 +52,8 @@ export const state = {
   mic: false, // live in this call, and the stored choice
   cam: false,
   deaf: false, // this browser plays no sound and sends no microphone
-  micBeforeDeaf: false, // the microphone state to go back to when the ears open
-  camBeforeDeaf: false, // the camera state to go back to when the ears open
+  micBeforeDeaf: false, // the microphone state to restore when deaf mode ends
+  camBeforeDeaf: false, // the camera state to restore when deaf mode ends
   camId: '', // deviceId of the chosen camera, '' = the system device
   micId: '', // the same for the microphone
   devCams: [], // last enumerateDevices() video inputs
@@ -62,8 +77,8 @@ export const state = {
   lookPipe: null, // the canvas pipeline while a look or a mask is on
   lookOut: null, // the canvas video track that peers receive
   lookSrc: null, // the camera track the running pipeline was built from
-  lookGrace: 0, // ms deadline: a pipeline kept after the last effect went off
-  lookGraceMs: 120000, // how long that pipeline is kept, for a test to shorten
+  lookGrace: 0, // when the kept look pipeline goes off, 0 = no grace running
+  lookGraceMs: 120000, // how long that grace lasts, for a test to shorten
   lookSwaps: 0, // sender track swaps made by lookPublish, for a test
   lookTimer: null, // the timer that ends that grace
   noiseWanted: true,
@@ -86,13 +101,12 @@ export const state = {
   ownSpoke: null,
   spotlight: '', // peer id or 'self' while one guest holds the large area
 
-  // Sealed room state, live for the whole call: the worker, the identity and
-  // the frame counters belong to one join and die with it.
+  // Sealed state for one join: the worker, the identity and the counters die with it.
   wasmOk: false, // /pq.wasm loaded and the self test passed once
   wasmTest: null, // the result of that self test, for the stats panel
   identity: null, // our per-call key bundle, wiped in leave
-  idKey: null, // our long-term Ed25519 identity, kept by the browser
-  device: '', // kept, fresh (a reset record) or session (nothing kept)
+  idKey: null, // our long-term Ed25519 identity, kept when the browser allows it
+  device: '', // kept, fresh (stored record would not reopen) or session (nothing kept)
   sid: '', // session id of this call, public, never a secret
   w: '', // SPAKE2 scalar of the room passphrase, never sent
   gate: { v: null, n: 0 }, // the room passphrase the members hold now, with a counter
@@ -111,7 +125,7 @@ export const state = {
   decryptFrames: 0,
   chatSent: 0,
   chatRecv: 0,
-  replayDrops: 0, // a sealed chat or name frame out of order or replayed
+  replayDrops: 0, // a sealed app or file frame out of order or replayed
   fileOffers: 0, // file offers this guest sent
   fileRecv: 0, // file offers this guest received and saved
   fileChunksSent: 0, // sealed chunks that went over a data channel
@@ -122,17 +136,17 @@ export const state = {
   filesIn: new Map(), // peer id and transfer id -> offer this guest received
   fileLinks: new Set<string>(), // blob urls handed to the guest, revoked on leave
   confirmFailures: 0,
-  workerErrors: [], // a red row in the stats panel, never ignored
-  sealFault: '', // why this browser can not seal media, if it can not
+  workerErrors: [], // a red row in the stats panel
+  sealFault: '', // why this browser can not seal media
   wireFrames: 0, // signaling frames inspected by the audit
   wireLeaks: [] as { where: string; canary: string }[], // a canary that appeared on the wire, must stay empty
   clearSignaling: 0, // frames that still carried a clear sdp or candidate
-  canaries: new Set<string>(), // the name and the chat lines that must never leak
+  canaries: new Set<string>(), // the passphrase, names, chat lines and file names that must never leak
   samples: [], // a few frame samples, for the in-page lab proof
 };
 
-// The markup is the single source of truth for the element types: an id that
-// is not listed here is a typo, and a listed id hands back the right DOM type.
+// The markup is the single source of truth for the element types: a listed id
+// hands back the right DOM type, and an unlisted one is a typo.
 /**
  * @typedef {{
  *   lobby: HTMLElement, 'join-form': HTMLFormElement, name: HTMLInputElement,

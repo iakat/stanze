@@ -9,8 +9,8 @@ import { deviceNote, ensureIdentity } from './identity.js';
 import { padRoundTripOk } from './gate.js';
 
 // ------------------------------------------------------------- wasm loading
-// wasm_exec.js is fetched when the lobby opens, so the join form paints first.
-export function loadScriptOnce(src) {
+// loadScriptOnce inserts wasm_exec.js once; an existing window.Go skips the fetch.
+function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     if (win().Go) return resolve(null);
     const el = document.createElement('script');
@@ -21,7 +21,7 @@ export function loadScriptOnce(src) {
   });
 }
 
-export function loadWasmModule() {
+function loadWasmModule() {
   return new Promise((resolve, reject) => {
     const Go = win().Go;
     if (!window.WebAssembly || typeof Go !== 'function')
@@ -55,9 +55,15 @@ export function loadWasmModule() {
   });
 }
 
-// pqSelfTest runs the handshake twice inside the module and proves that both
-// halves agree and that one side can open what the other seals. It runs once
-// per page and the result is shown in the stats panel.
+// fpShape is a fingerprint: five groups of four base32 letters, joined by dashes.
+function fpShape(fp) {
+  const parts = String(fp || '').split('-');
+  if (parts.length !== 5) return false;
+  return parts.every((part) => part.length === 4 && /^[a-z2-7]+$/.test(part));
+}
+
+// pqSelfTest runs both sides of the handshake in the module and checks that they
+// agree. It runs once per page; the stats panel shows the result.
 export function pqSelfTest() {
   const pq = pqModule();
   const a = JSON.parse(pq.gen());
@@ -83,108 +89,55 @@ export function pqSelfTest() {
     ),
   );
   const helloSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k1.seed, msg: off.transcript })));
-  const acc = JSON.parse(
-    pq.respond(
-      JSON.stringify({
-        self: 'b',
-        peer: 'a',
-        selfX: b.xpub,
-        selfSK: b.xsk,
-        selfK: b.ek,
-        selfDK: b.dk,
-        selfID: k2.pub,
-        selfSID: sidB,
-        peerX: a.xpub,
-        peerK: a.ek,
-        peerID: k1.pub,
-        peerSID: sidA,
-        epk: off.epk,
-        ct: off.ct,
-        sig: helloSig.sig,
-      }),
-    ),
-  );
+  // respond answers the hello twice, once with its identity signature and once
+  // without it, which is the downgrade path.
+  const respond = (sig) =>
+    JSON.parse(
+      pq.respond(
+        JSON.stringify({
+          self: 'b',
+          peer: 'a',
+          selfX: b.xpub,
+          selfSK: b.xsk,
+          selfK: b.ek,
+          selfDK: b.dk,
+          selfID: k2.pub,
+          selfSID: sidB,
+          peerX: a.xpub,
+          peerK: a.ek,
+          peerID: k1.pub,
+          peerSID: sidA,
+          epk: off.epk,
+          ct: off.ct,
+          ...(sig ? { sig } : {}),
+        }),
+      ),
+    );
+  const acc = respond(helloSig.sig);
   const okSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k2.seed, msg: acc.transcript })));
   // Both sides pass the same gate: the peer's identity signature and its
   // confirmation tag. A missing signature on either side is refused.
-  const verifyA = JSON.parse(
-    pq.proved(
-      JSON.stringify({
-        key: off.keys.recvMedia,
-        transcript: off.transcript,
-        tag: acc.confirm,
-        id: k2.pub,
-        sig: okSig.sig,
-      }),
-    ),
-  );
-  const verifyB = JSON.parse(
-    pq.proved(
-      JSON.stringify({
-        key: acc.keys.recvMedia,
-        transcript: off.transcript,
-        tag: off.confirm,
-        id: k1.pub,
-        sig: helloSig.sig,
-      }),
-    ),
-  );
-  const verifyNoSig = JSON.parse(
-    pq.proved(
-      JSON.stringify({
-        key: off.keys.recvMedia,
-        transcript: off.transcript,
-        tag: acc.confirm,
-        id: k2.pub,
-        sig: '',
-      }),
-    ),
-  );
+  const proved = (key, tag, id, sig) =>
+    JSON.parse(pq.proved(JSON.stringify({ key, transcript: off.transcript, tag, id, sig })));
+  const verifyA = proved(off.keys.recvMedia, acc.confirm, k2.pub, okSig.sig);
+  const verifyB = proved(acc.keys.recvMedia, off.confirm, k1.pub, helloSig.sig);
+  const verifyNoSig = proved(off.keys.recvMedia, acc.confirm, k2.pub, '');
   const pt = b64e(sealUtf8.encode('sealed hello'));
   const aad = b64e(sealUtf8.encode('pq-e2e v2 chat a|b 1'));
   const sealed = JSON.parse(pq.seal(JSON.stringify({ key: off.keys.sendChat, aad, pt })));
-  const opened = JSON.parse(
-    pq.open(
-      JSON.stringify({
-        key: acc.keys.recvChat,
-        aad,
-        b: sealed.b,
-      }),
-    ),
-  );
-  const wrong = JSON.parse(
-    pq.open(
-      JSON.stringify({
-        key: b64e(crypto.getRandomValues(new Uint8Array(32))),
-        aad,
-        b: sealed.b,
-      }),
-    ),
-  );
-  // The identity half: one key signs the transcript, the other does not verify
-  // it, and a tampered message never verifies. The same check runs here, so a
-  // broken bridge shows up in the stats panel before a call starts.
-  const idOk = JSON.parse(
-    pq.idverify(JSON.stringify({ id: k1.pub, msg: off.transcript, sig: helloSig.sig })),
-  );
-  const idOther = JSON.parse(
-    pq.idverify(JSON.stringify({ id: k2.pub, msg: off.transcript, sig: helloSig.sig })),
-  );
-  const idOk2 = JSON.parse(
-    pq.idverify(JSON.stringify({ id: k2.pub, msg: acc.transcript, sig: okSig.sig })),
-  );
-  const idTampered = JSON.parse(
-    pq.idverify(
-      JSON.stringify({
-        id: k1.pub,
-        msg: b64e(sealUtf8.encode('another transcript')),
-        sig: helloSig.sig,
-      }),
-    ),
-  );
+  const openWith = (key) => JSON.parse(pq.open(JSON.stringify({ key, aad, b: sealed.b })));
+  const opened = openWith(acc.keys.recvChat);
+  const wrong = openWith(b64e(crypto.getRandomValues(new Uint8Array(32))));
+  // The identity half: the right key verifies the transcript, another key and a
+  // tampered message do not.
+  const idV = (id, msg, sig) => JSON.parse(pq.idverify(JSON.stringify({ id, msg, sig })));
+  const idOk = idV(k1.pub, off.transcript, helloSig.sig);
+  const idOther = idV(k2.pub, off.transcript, helloSig.sig);
+  const idOk2 = idV(k2.pub, acc.transcript, okSig.sig);
+  const idTampered = idV(k1.pub, b64e(sealUtf8.encode('another transcript')), helloSig.sig);
   const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
-  // The room passphrase proof: the same passphrase agrees on a key and passes
-  // both confirmations, and a different one agrees on nothing.
+  // The passphrase proof: one passphrase agrees on a key and passes both
+  // confirmations, a different one agrees on nothing.
   const w1 = JSON.parse(pq.spakew(JSON.stringify({ pass: 'a', salt: 'room' }))).w;
   const wBad = (() => {
     const raw = b64d(w1);
@@ -192,26 +145,19 @@ export function pqSelfTest() {
     return b64e(raw);
   })();
   const passRun = (wa, wb) => {
-    const one = JSON.parse(
-      pq.spakestart(
-        JSON.stringify({
-          w: wa,
-          role: 'A',
-          a: b64e(sealUtf8.encode('a')),
-          b: b64e(sealUtf8.encode('b')),
-        }),
-      ),
-    );
-    const two = JSON.parse(
-      pq.spakestart(
-        JSON.stringify({
-          w: wb,
-          role: 'B',
-          a: b64e(sealUtf8.encode('a')),
-          b: b64e(sealUtf8.encode('b')),
-        }),
-      ),
-    );
+    const start = (w, role) =>
+      JSON.parse(
+        pq.spakestart(
+          JSON.stringify({
+            w,
+            role,
+            a: b64e(sealUtf8.encode('a')),
+            b: b64e(sealUtf8.encode('b')),
+          }),
+        ),
+      );
+    const one = start(wa, 'A');
+    const two = start(wb, 'B');
     if (!one.id || !two.id) return { error: true };
     const finA = JSON.parse(pq.spakefinish(JSON.stringify({ id: one.id, msg: two.msg })));
     const finB = JSON.parse(pq.spakefinish(JSON.stringify({ id: two.id, msg: one.msg })));
@@ -225,26 +171,7 @@ export function pqSelfTest() {
   const passGood = passRun(w1, w1);
   const passBad = passRun(w1, wBad);
   // A hello without a signature is refused, which is the downgrade path.
-  const noSig = JSON.parse(
-    pq.respond(
-      JSON.stringify({
-        self: 'b',
-        peer: 'a',
-        selfX: b.xpub,
-        selfSK: b.xsk,
-        selfK: b.ek,
-        selfDK: b.dk,
-        selfID: k2.pub,
-        selfSID: sidB,
-        peerX: a.xpub,
-        peerK: a.ek,
-        peerID: k1.pub,
-        peerSID: sidA,
-        epk: off.epk,
-        ct: off.ct,
-      }),
-    ),
-  );
+  const noSig = respond('');
   return {
     sas: off.keys.sas,
     sasMatch: off.keys.sas === acc.keys.sas,
@@ -255,18 +182,17 @@ export function pqSelfTest() {
     idSign:
       idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
     idUnsigned: !!noSig.error,
-    idFp: /^[a-z2-7]{4}(-[a-z2-7]{4}){4}$/.test(idFp.fp || ''),
+    idFp: fpShape(idFp.fp),
     passGood: !!(passGood.match && passGood.ok),
     passBad: !!(passBad.match === false && passBad.ok === false),
   };
 }
 
-// ensureWasm loads the script, the module and the self test once. A failure is
-// remembered as a failure of that attempt only, so a reload of the page (or a
-// second click) can try again.
-export let wasmLoad = null;
+// ensureWasm loads the script, the module and the self test once. A failed
+// attempt is cleared, so the next call can try again.
+let wasmLoad = null;
 
-export function ensureWasm() {
+function ensureWasm() {
   if (state.wasmOk) return Promise.resolve();
   if (wasmLoad) return wasmLoad;
   wasmLoad = loadScriptOnce('/wasm_exec.js' + BUILD_Q)
@@ -297,8 +223,7 @@ export function ensureWasm() {
 }
 
 // preloadSealed warms the module as soon as the lobby opens, so the join itself
-// is only a microphone prompt. A failure stays in the note, and the join says
-// it again.
+// is only a microphone prompt and a failure stays in the note.
 export function preloadSealed() {
   $('sealed-note').hidden = false;
   $('sealed-note').textContent = 'loading the post-quantum module';

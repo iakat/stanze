@@ -3,7 +3,7 @@
 */
 
 import { state } from './state.js';
-import { say } from './util.js';
+import { disconnectQuietly, say, stopTracks } from './util.js';
 import { layoutStage, makeTile } from './tiles.js';
 import { shareVideo } from './media.js';
 import { resumeAudio, sendState, updateButtons } from './audio.js';
@@ -13,7 +13,7 @@ import { sealingAvailable } from './sealed.js';
 // replaceScreenTrack points the screen sender of every peer at the display
 // track, or at nothing. The camera sender is not touched, so the two pictures
 // travel side by side and a share needs no renegotiation.
-export async function replaceScreenTrack(track) {
+async function replaceScreenTrack(track) {
   for (const peer of state.peers.values()) {
     const tr = peer.tx && peer.tx.screen;
     if (tr && !peer.waiting) await tr.sender.replaceTrack(track || null).catch(() => {});
@@ -52,10 +52,9 @@ export async function startShare() {
     const el = tile.querySelector('video');
     el.srcObject = display;
     el.play().catch(() => {});
-    // A screen tile stands in the stage only while it has a picture, and a
-    // capture on a slow display gives its first frame after this function
-    // returns. The own tile waits for it like a guest's tile does, or the
-    // sharer sees nothing of the screen that everyone else sees.
+    // A capture on a slow display gives its first frame after this function
+    // returns; the own tile waits for it like a guest's, or the sharer sees
+    // nothing of the screen that everyone else sees.
     el.addEventListener('resize', () => layoutStage());
     el.addEventListener('loadedmetadata', () => layoutStage());
     state.screenTile = tile;
@@ -73,19 +72,9 @@ export async function startShare() {
 
 export async function stopShare() {
   if (!state.screen) return;
-  for (const track of state.screen.getTracks()) {
-    try {
-      track.stop();
-    } catch {
-      /* already stopped */
-    }
-  }
+  stopTracks(state.screen);
   if (state.screenSource) {
-    try {
-      state.screenSource.disconnect();
-    } catch {
-      /* not connected */
-    }
+    disconnectQuietly(state.screenSource);
     state.screenSource = null;
   }
   state.screen = null;
