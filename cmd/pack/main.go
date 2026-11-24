@@ -7,12 +7,15 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 )
 
@@ -58,10 +61,19 @@ func main() {
 		fail(err)
 	}
 	tw := tar.NewWriter(zw)
+	// The bundle key is made here, from the bytes that ship: the client files
+	// are hashed and index.html names the hash in its script and style query.
+	// A deploy never needs a key commit, and a browser never keeps a bundle
+	// from a build before it.
+	key := assetKey(*src, names)
+	fmt.Printf("key %s\n", key)
 	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(*src, filepath.FromSlash(name)))
 		if err != nil {
 			fail(err)
+		}
+		if name == "index.html" {
+			data = keyIndex(data, key)
 		}
 		hdr := &tar.Header{
 			Name:     path.Clean(name),
@@ -87,6 +99,31 @@ func main() {
 		fail(err)
 	}
 	fmt.Printf("packed %d files into %s\n", len(names), *out)
+}
+
+// assetKey hashes the client files that a page loads, so the key changes with
+// any of them and a cached page cannot outlive its bundle.
+func assetKey(src string, names []string) string {
+	h := sha256.New()
+	for _, name := range names {
+		if name == "index.html" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(src, filepath.FromSlash(name)))
+		if err != nil {
+			fail(err)
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", name, len(data))
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+var keyPat = regexp.MustCompile(`\?v=[0-9A-Za-z._-]+`)
+
+// keyIndex writes the key into every versioned reference of the page.
+func keyIndex(data []byte, key string) []byte {
+	return keyPat.ReplaceAll(data, []byte("?v="+key))
 }
 
 func fail(err error) {
