@@ -40,6 +40,13 @@ static void fe_set_denormal_flush(void) {
 #endif
 }
 
+/* Frames of silence the engine runs at init to fault its pages in and let
+ * the tier's branches settle. Harmless to the stream (fe_reset follows), so a
+ * tight host may lower it. */
+#ifndef FE_WARMUP_FRAMES
+#  define FE_WARMUP_FRAMES 128
+#endif
+
 static FeWeights g_w;
 static FeState  *g_s = NULL;
 
@@ -100,7 +107,7 @@ int fe_init(const void *weights_blob, int weights_size) {
     float warm_in [FE_FRAME_SIZE];
     float warm_out[FE_FRAME_SIZE];
     memset(warm_in, 0, sizeof(warm_in));
-    for (int i = 0; i < 128; ++i)
+    for (int i = 0; i < FE_WARMUP_FRAMES; ++i)
         fe_process_frame(g_s, &g_w, warm_in, warm_out);
     fe_reset();   /* zero streaming state so warmup doesn't leak           */
     return 0;
