@@ -298,6 +298,13 @@ function callPath(live) {
   return 'mixed: ' + [...words].join(', ');
 }
 
+// worstOf is the largest number one key reaches across the live guests, or null
+// when none of them reports it.
+function worstOf(live, key) {
+  const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
+  return nums.length ? Math.max(...nums) : null;
+}
+
 // callPairs is the call card: the route and its three numbers, then the video and
 // audio rates of the whole call.
 /** @returns {(string | (string | boolean)[][])[][]} */
@@ -305,13 +312,9 @@ function callPath(live) {
 function callPairs(live, total) {
   const out = [];
   const path = callPath(live);
-  const worst = (key) => {
-    const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
-    return nums.length ? Math.max(...nums) : null;
-  };
-  const rtt = worst('rtt');
-  const jitter = worst('jitter');
-  const loss = worst('loss');
+  const rtt = worstOf(live, 'rtt');
+  const jitter = worstOf(live, 'jitter');
+  const loss = worstOf(live, 'loss');
   if (path) out.push(['route ', [routeCell(path)]]);
   if (rtt !== null || jitter !== null || loss !== null) {
     out.push(['link ', tripCells(rtt, jitter, loss), undefined, 'metrics']);
@@ -595,14 +598,10 @@ function statsSummary(live, guestCount) {
 // recordStatsHistory appends one sample of the whole call: what came down, the
 // worst round trip and the worst loss of that second.
 function recordStatsHistory(total, live) {
-  const worst = (key) => {
-    const nums = live.map((s) => s[key]).filter((n) => typeof n === 'number');
-    return nums.length ? Math.max(...nums) : null;
-  };
   state.statHist.push({
     down: total.down.video + total.down.audio,
-    rtt: worst('rtt'),
-    loss: worst('loss'),
+    rtt: worstOf(live, 'rtt'),
+    loss: worstOf(live, 'loss'),
   });
   if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
 }
