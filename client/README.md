@@ -72,7 +72,7 @@ module in `src` has no row yet.
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
 | [src/stats.ts](src/stats.ts) | 955 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1272 | Local transcription, one language and many. |
-| [src/look.ts](src/look.ts) | 2347 | The drawn camera: the face mesh, the masks and the custom effect. |
+| [src/look.ts](src/look.ts) | 2493 | The drawn camera: the face mesh, the masks and the custom effect. |
 | [src/devices.ts](src/devices.ts) | 808 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 880 | File offers and the data channel that carries the bytes. |
 

@@ -440,6 +440,8 @@ function lookMeshAnchor(p, lm) {
     lm: pts,
     tongue: 0,
     lid: 1,
+    gaze: [0, 0, 0, 0],
+    smile: 0,
   };
   // How far the lips are apart, as a share of the mouth width: the dog tongue
   // reads it, and it falls off over about a second when the mouth closes.
@@ -460,6 +462,12 @@ function lookMeshAnchor(p, lm) {
   // A share of the mouth width does not change with the distance to the camera,
   // so the tongue grows with the mouth instead of snapping out at a fixed gap.
   next.tongue = clamp((lipGap / mouthW - 0.06) / 0.34, 0, 1);
+  // Where the real eyes look: the iris centre against the middle of its eye,
+  // in shares of the eye width, so the drawn iris turns with the gaze at any
+  // distance. The two iris centres are matched to the nearer eye, which keeps
+  // the pairing right whatever the mesh calls left and right. The mouth smile
+  // is the corner line against the middle of the lips, in shares of the mouth
+  // width, so a smile lifts the drawn corners and a frown drops them.
   // The lid gap over the eye width is the blink: a share of the face, so it
   // holds near the camera and far from it. The smaller eye wins, because a
   // blink on one eye is a wink and the drawn face keeps both eyes together.
@@ -484,6 +492,24 @@ function lookMeshAnchor(p, lm) {
   const openL = clamp((lidL / eyeWL - 0.05) / 0.2, 0, 1);
   const openR = clamp((lidR / eyeWR - 0.05) / 0.2, 0, 1);
   next.lid = Math.min(openL, openR);
+  const gaze = [0, 0, 0, 0];
+  if (pts.length >= 478 * 2) {
+    const cL = [(pts[LM.eyeOuterL * 2] + pts[LM.eyeInnerL * 2]) / 2, (pts[LM.eyeOuterL * 2 + 1] + pts[LM.eyeInnerL * 2 + 1]) / 2];
+    const cR = [(pts[LM.eyeOuterR * 2] + pts[LM.eyeInnerR * 2]) / 2, (pts[LM.eyeOuterR * 2 + 1] + pts[LM.eyeInnerR * 2 + 1]) / 2];
+    const i0 = [pts[468 * 2], pts[468 * 2 + 1]];
+    const i1 = [pts[473 * 2], pts[473 * 2 + 1]];
+    const d0 = Math.hypot(i0[0] - cL[0], i0[1] - cL[1]) + Math.hypot(i1[0] - cR[0], i1[1] - cR[1]);
+    const d1 = Math.hypot(i0[0] - cR[0], i0[1] - cR[1]) + Math.hypot(i1[0] - cL[0], i1[1] - cL[1]);
+    const [li, ri, cLi, cRi, wLi, wRi] = d0 <= d1
+      ? [i0, i1, cL, cR, eyeWL, eyeWR]
+      : [i1, i0, cR, cL, eyeWR, eyeWL];
+    gaze[0] = clamp((li[0] - cLi[0]) / (wLi || faceH * 0.18), -0.4, 0.4);
+    gaze[1] = clamp((li[1] - cLi[1]) / (wLi || faceH * 0.18), -0.35, 0.35);
+    gaze[2] = clamp((ri[0] - cRi[0]) / (wRi || faceH * 0.18), -0.4, 0.4);
+    gaze[3] = clamp((ri[1] - cRi[1]) / (wRi || faceH * 0.18), -0.35, 0.35);
+  }
+  next.gaze = gaze;
+  next.smile = clamp(((pts[LM.lip * 2 + 1] - (pts[LM.mouthL * 2 + 1] + pts[LM.mouthR * 2 + 1]) / 2) / mouthW) * 1.6, -0.7, 0.7);
   const a = p.anchor;
   const t = performance.now();
   const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
@@ -510,6 +536,12 @@ function lookMeshAnchor(p, lm) {
   const lid = next.lid;
   if (a.lid == null) a.lid = lid;
   else a.lid += (lid - a.lid) * (lid < a.lid ? 0.6 : 0.3);
+  // A gaze is small and the iris is read from a few pixels, so it follows at a
+  // steady pace and never jumps; the smile follows the same way.
+  if (!a.gaze) a.gaze = next.gaze.slice();
+  else for (let i = 0; i < 4; i++) a.gaze[i] += (next.gaze[i] - a.gaze[i]) * 0.4;
+  if (a.smile == null) a.smile = next.smile;
+  else a.smile += (next.smile - a.smile) * 0.35;
   for (let i = 0; i < pts.length; i++) a.lm[i] = sl[i];
 }
 
@@ -660,6 +692,8 @@ function maskGeo(a, W, H) {
       ),
     ),
     tongue: a.tongue || 0,
+    gaze: a.gaze || [0, 0, 0, 0],
+    smile: a.smile || 0,
   };
 }
 
@@ -1605,13 +1639,17 @@ const MIKU = {
   blush: 'rgba(243, 154, 166, 0.5)',
   mouth: '#93404f',
   tongue: '#e37a83',
+  inside: '#45161d',
+  teeth: '#fbf3ef',
 };
 
 // drawMikuEye draws one drawn eye at x, y with a full width w and a full open
 // height h. open is the lid share the mesh reads, 0 shut and 1 wide: the eye
 // closes with the lid and keeps the same lash line, so a blink reads as a blink
-// and not as a hole in the face.
-function drawMikuEye(ctx, x, y, w, h, open) {
+// and not as a hole in the face. gx and gy are the gaze the mesh reads, in
+// shares of an eye: the iris and its highlights move that way inside the white,
+// so the drawn eye looks where the person looks.
+function drawMikuEye(ctx, x, y, w, h, open, gx = 0, gy = 0) {
   const o = clamp(open, 0, 1);
   const rw = w / 2;
   const rh = Math.max((h / 2) * (0.16 + 0.84 * o), 0.8);
@@ -1635,24 +1673,27 @@ function drawMikuEye(ctx, x, y, w, h, open) {
   ctx.fillStyle = '#fdfbf8';
   ctx.fillRect(x - rw, y - rh, w, rh * 2);
   const ir = Math.min(rw * 0.82, rh * 0.95);
-  const iy = y + rh * 0.08;
+  // The iris stays inside the white: the gaze share is capped at the room left
+  // beside it, and the eye clip cuts anything that still reaches the rim.
+  const ix = x + clamp(gx, -1, 1) * Math.max(rw - ir * 0.9, 0) * 0.95;
+  const iy = y + rh * 0.08 + clamp(gy, -1, 1) * Math.max(rh - ir, 0) * 0.9;
   const ig = ctx.createLinearGradient(x, iy - ir, x, iy + ir);
   ig.addColorStop(0, MIKU.iris[0]);
   ig.addColorStop(1, MIKU.iris[1]);
   ctx.fillStyle = ig;
   ctx.beginPath();
-  ctx.ellipse(x, iy, ir * 0.9, ir, 0, 0, Math.PI * 2);
+  ctx.ellipse(ix, iy, ir * 0.9, ir, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = '#082026';
   ctx.beginPath();
-  ctx.ellipse(x, iy + ir * 0.05, ir * 0.38, ir * 0.52, 0, 0, Math.PI * 2);
+  ctx.ellipse(ix, iy + ir * 0.05, ir * 0.38, ir * 0.52, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
   ctx.beginPath();
-  ctx.ellipse(x - ir * 0.3, iy - ir * 0.42, ir * 0.24, ir * 0.3, -0.4, 0, Math.PI * 2);
+  ctx.ellipse(ix - ir * 0.3, iy - ir * 0.42, ir * 0.24, ir * 0.3, -0.4, 0, Math.PI * 2);
   ctx.fill();
   ctx.beginPath();
-  ctx.ellipse(x + ir * 0.3, iy + ir * 0.32, ir * 0.12, ir * 0.14, 0, 0, Math.PI * 2);
+  ctx.ellipse(ix + ir * 0.3, iy + ir * 0.32, ir * 0.12, ir * 0.14, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
   // The lash line sits on the top of the eye and is the heaviest mark on the
@@ -1743,17 +1784,156 @@ function drawMiku(ctx, g) {
     mid[1] - ax[1] * cx + ay[1] * cy,
   );
   drawMikuSkin(ctx, g, cx, cy);
+  // The nose: one small shade, no more, the way a cel face draws it.
+  const [nx, ny] = home(g.nose);
+  ctx.fillStyle = 'rgba(190, 130, 118, 0.5)';
+  ctx.beginPath();
+  ctx.ellipse(nx, ny + g.fh * 0.02, g.fw * 0.018, g.fw * 0.01, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // The mouth is drawn on the real corners, so a smile lifts the drawn corners
+  // and a wide mouth widens it. A shut mouth is a seam with a soft lower lip
+  // under it; an open one is a rounded mouth with a teeth line and a tongue,
+  // and the jaw drop sets how far it opens.
+  const ml = home(g.mouthL);
+  const mr = home(g.mouthR);
+  const mcx = (ml[0] + mr[0]) / 2;
+  const mcy = (ml[1] + mr[1]) / 2;
+  const halfW = Math.max(gap(ml, mr) * 0.56, g.fw * 0.085);
+  const lift = clamp(g.smile, -0.7, 0.7) * halfW * 0.5;
+  const cornerY = mcy - lift;
+  const open = clamp(g.tongue, 0, 1);
+  const lipW = Math.max(1.4, halfW * 0.1);
+  if (open < 0.12) {
+    // The seam, a soft lower lip and one highlight: a shut mouth is no hole.
+    ctx.strokeStyle = MIKU.mouth;
+    ctx.lineWidth = lipW;
+    ctx.beginPath();
+    ctx.moveTo(mcx - halfW, cornerY);
+    ctx.quadraticCurveTo(mcx, mcy + halfW * 0.16, mcx + halfW, cornerY);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(206, 108, 122, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(mcx, mcy + halfW * 0.17, halfW * 0.72, halfW * 0.14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 235, 235, 0.5)';
+    ctx.beginPath();
+    ctx.ellipse(mcx - halfW * 0.18, mcy + halfW * 0.12, halfW * 0.2, halfW * 0.05, -0.1, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const mh = halfW * (0.5 + 1.5 * open);
+    const bottom = mcy + mh * 0.62;
+    ctx.beginPath();
+    ctx.moveTo(mcx - halfW, cornerY);
+    ctx.bezierCurveTo(
+      mcx - halfW * 0.62,
+      cornerY - mh * 0.12,
+      mcx - halfW * 0.2,
+      cornerY - mh * 0.1,
+      mcx,
+      cornerY - mh * 0.06,
+    );
+    ctx.bezierCurveTo(
+      mcx + halfW * 0.2,
+      cornerY - mh * 0.1,
+      mcx + halfW * 0.62,
+      cornerY - mh * 0.12,
+      mcx + halfW,
+      cornerY,
+    );
+    ctx.bezierCurveTo(
+      mcx + halfW * 0.86,
+      bottom - mh * 0.06,
+      mcx + halfW * 0.44,
+      bottom + mh * 0.06,
+      mcx,
+      bottom + mh * 0.06,
+    );
+    ctx.bezierCurveTo(
+      mcx + halfW * 0.44,
+      bottom + mh * 0.06,
+      mcx - halfW * 0.86,
+      bottom - mh * 0.06,
+      mcx - halfW,
+      cornerY,
+    );
+    ctx.closePath();
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = MIKU.inside;
+    ctx.fillRect(mcx - halfW, cornerY - mh, halfW * 2, mh * 3);
+    // The teeth stay on the top lip, shorter as the mouth opens wide, and the
+    // tongue sits on the floor of the mouth, so the mouth reads as a mouth and
+    // not as a pink oval.
+    if (open > 0.22) {
+      ctx.fillStyle = MIKU.teeth;
+      ctx.beginPath();
+      ctx.ellipse(mcx, cornerY - mh * 0.03, halfW * 0.88, mh * (0.16 + 0.08 * (1 - open)), 0, 0, Math.PI);
+      ctx.fill();
+    }
+    if (open > 0.4) {
+      ctx.fillStyle = MIKU.tongue;
+      ctx.beginPath();
+      ctx.ellipse(mcx, bottom + mh * 0.06, halfW * 0.5, mh * (0.1 + 0.16 * open), 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.strokeStyle = MIKU.mouth;
+    ctx.lineWidth = lipW;
+    ctx.beginPath();
+    ctx.moveTo(mcx - halfW, cornerY);
+    ctx.bezierCurveTo(
+      mcx - halfW * 0.9,
+      bottom - mh * 0.04,
+      mcx - halfW * 0.4,
+      bottom + mh * 0.08,
+      mcx,
+      bottom + mh * 0.08,
+    );
+    ctx.bezierCurveTo(
+      mcx + halfW * 0.4,
+      bottom + mh * 0.08,
+      mcx + halfW * 0.9,
+      bottom - mh * 0.04,
+      mcx + halfW,
+      cornerY,
+    );
+    ctx.stroke();
+  }
+  // The wig goes over the rim of the face oval, so the hairline and the tails
+  // are the drawing and the drawn face fills its cut-out.
+  if (wigArt) ctx.drawImage(wigArt, 0, 0, artW, artH);
+  // The eyes and the brows come after the wig: a fringe hangs over the face
+  // and would hide them, and a drawn eye that nobody can see cannot follow a
+  // real one. They stay on the face oval, so no lash line runs onto the hair
+  // outside it.
   // The eyes: drawn over the real ones, a little larger, at the size the mesh
   // gives and with the lid share it reads. A face on the box anchor has no
   // mesh, so the eyes stay open and the box sizes them.
-  const eyeLW = Math.max(gap(g.eyeL[0], g.eyeL[1]) * 1.55, g.fw * 0.2);
-  const eyeRW = Math.max(gap(g.eyeR[0], g.eyeR[1]) * 1.55, g.fw * 0.2);
-  const eyeH = Math.max(eyeLW, eyeRW) * 0.78;
+  const eyeLW = Math.max(gap(g.eyeL[0], g.eyeL[1]) * 1.4, g.fw * 0.19);
+  const eyeRW = Math.max(gap(g.eyeR[0], g.eyeR[1]) * 1.4, g.fw * 0.19);
+  const eyeH = Math.max(eyeLW, eyeRW) * 0.74;
   const lid = g.lid == null ? 1 : g.lid;
   const [elx, ely] = at(g.eyeL[0], g.eyeL[1]);
   const [erx, ery] = at(g.eyeR[0], g.eyeR[1]);
-  drawMikuEye(ctx, elx, ely, eyeLW, eyeH, lid);
-  drawMikuEye(ctx, erx, ery, eyeRW, eyeH, lid);
+  // A soft skin patch under each eye keeps a fringe strand from cutting the
+  // drawn eye in two: the face reads in front of the hair at the eye, and the
+  // patch fades out, so it leaves no edge of its own.
+  for (const [ex, ey, ew, eh] of [
+    [elx, ely, eyeLW, eyeH],
+    [erx, ery, eyeRW, eyeH],
+  ]) {
+    const skin = ctx.createRadialGradient(ex, ey, Math.min(ew, eh) * 0.18, ex, ey, Math.max(ew, eh) * 0.72);
+    skin.addColorStop(0, 'rgba(248, 223, 211, 1)');
+    skin.addColorStop(0.72, 'rgba(248, 223, 211, 0.96)');
+    skin.addColorStop(1, 'rgba(248, 223, 211, 0)');
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.ellipse(ex, ey, ew * 0.72, eh * 0.9, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const gaze = g.gaze || [0, 0, 0, 0];
+  drawMikuEye(ctx, elx, ely, eyeLW, eyeH, lid, gaze[0], gaze[1]);
+  drawMikuEye(ctx, erx, ery, eyeRW, eyeH, lid, gaze[2], gaze[3]);
   // The brows: thin teal arcs over the eyes, lifted by their own landmark, so a
   // raised brow reads as a raised brow.
   for (const [brow, eye, w] of [
@@ -1762,47 +1942,13 @@ function drawMiku(ctx, g) {
   ]) {
     const [bx, by] = home(brow);
     const lift = Math.min(by, eye - eyeH * 0.95);
-    ctx.strokeStyle = 'rgba(43, 143, 137, 0.9)';
+    ctx.strokeStyle = 'rgba(23, 92, 90, 0.95)';
     ctx.lineWidth = Math.max(1.4, eyeH * 0.09);
     ctx.beginPath();
     ctx.moveTo(bx - w * 0.5, lift + eyeH * 0.1);
     ctx.quadraticCurveTo(bx, lift - eyeH * 0.16, bx + w * 0.5, lift + eyeH * 0.1);
     ctx.stroke();
   }
-  // The nose: one small shade, no more, the way a cel face draws it.
-  const [nx, ny] = home(g.nose);
-  ctx.fillStyle = 'rgba(190, 130, 118, 0.5)';
-  ctx.beginPath();
-  ctx.ellipse(nx, ny + g.fh * 0.02, g.fw * 0.018, g.fw * 0.01, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // The mouth: a small smile when it is shut, an open mouth with a tongue when
-  // the jaw drops, sized from the real mouth so it holds at every distance.
-  const open = clamp(g.tongue, 0, 1);
-  const mw = Math.max(gap(g.mouthL, g.mouthR) * 1.5, g.fw * 0.17);
-  const [mx, my] = home(g.lip);
-  if (open < 0.12) {
-    ctx.strokeStyle = MIKU.mouth;
-    ctx.lineWidth = Math.max(1.6, mw * 0.06);
-    ctx.beginPath();
-    ctx.moveTo(mx - mw * 0.32, my);
-    ctx.quadraticCurveTo(mx, my + mw * 0.14, mx + mw * 0.32, my);
-    ctx.stroke();
-  } else {
-    const mh = mw * (0.2 + 0.8 * open);
-    ctx.fillStyle = MIKU.mouth;
-    ctx.beginPath();
-    ctx.ellipse(mx, my, mw * 0.42, mh * 0.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (open > 0.45) {
-      ctx.fillStyle = MIKU.tongue;
-      ctx.beginPath();
-      ctx.ellipse(mx, my + mh * 0.16, mw * 0.26, mh * 0.22, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  // The wig goes over the rim of the face oval, so the hairline and the tails
-  // are the drawing and the drawn face fills its cut-out.
-  if (wigArt) ctx.drawImage(wigArt, 0, 0, artW, artH);
   ctx.restore();
 }
 
