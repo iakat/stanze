@@ -942,7 +942,19 @@ function omniWorker(cfg) {
   const PART = 32 * 1048576; // one browser cache entry per 32 MB
 
   const post = (msg, transfer = []) => G.postMessage(msg, transfer);
+  const progress = (got, cached) => post({ ev: 'progress', got, total: cfg.size, cached });
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // join copies float frames into one buffer of the length the caller counted.
+  const join = (parts, len) => {
+    const all = new Float32Array(len);
+    let at = 0;
+    for (const part of parts) {
+      all.set(part, at);
+      at += part.length;
+    }
+    return all;
+  };
 
   const segs = new Map(); // peer id -> gate and phrase state
   const queue = []; // phrases waiting for the recognizer
@@ -1019,11 +1031,11 @@ function omniWorker(cfg) {
       return null;
     }
     if (!first) return null;
-    post({ ev: 'progress', got: 0, total: cfg.size, cached: true });
+    progress(0, true);
     const bytes = new Uint8Array(cfg.size);
     if (!(await readParts(cache, first, bytes))) return null;
     if (!(await hashOk(bytes))) return null;
-    post({ ev: 'progress', got: cfg.size, total: cfg.size, cached: true });
+    progress(cfg.size, true);
     return bytes;
   }
 
@@ -1062,7 +1074,7 @@ function omniWorker(cfg) {
       got += value.length;
       if (got - lastProgress >= 2097152) {
         lastProgress = got;
-        post({ ev: 'progress', got, total: cfg.size, cached: false });
+        progress(got, false);
       }
       // Finished parts go at once, so a stopped tab keeps what it paid for.
       while (cache && got - part * PART >= PART) {
@@ -1080,7 +1092,7 @@ function omniWorker(cfg) {
       const at = part * PART;
       await putPart(cache, part, bytes.subarray(at, cfg.size));
     }
-    post({ ev: 'progress', got: cfg.size, total: cfg.size, cached: false });
+    progress(cfg.size, false);
     if (!(await hashOk(bytes))) throw new Error('the model did not match its hash');
     return bytes;
   }
@@ -1172,12 +1184,7 @@ function omniWorker(cfg) {
     st.speech = false;
     st.quiet = 0;
     if (len < RATE / 2) return;
-    const all = new Float32Array(len);
-    let at = 0;
-    for (const part of parts) {
-      all.set(part, at);
-      at += part.length;
-    }
+    const all = join(parts, len);
     // The queue is short on purpose: a slow tab drops the oldest phrase.
     queue.push({ id, samples: all });
     if (queue.length > 8) queue.shift();
@@ -1201,15 +1208,15 @@ function omniWorker(cfg) {
     }
     st.samples.push(new Float32Array(f));
     st.len += f.length;
-    st.quiet = loud ? 0 : st.quiet + 1;
-    if (st.quiet >= TAIL || st.len >= MAXLEN) {
-      // The quiet tail goes, it carries no word.
-      while (st.quiet > 0 && st.samples.length > 1) {
-        st.len -= st.samples.pop().length;
-        st.quiet--;
-      }
-      flush(id, st);
+    if (loud) st.quiet = 0;
+    else st.quiet++;
+    if (st.quiet < TAIL && st.len < MAXLEN) return;
+    // The quiet tail goes, it carries no word.
+    while (st.quiet > 0 && st.samples.length > 1) {
+      st.len -= st.samples.pop().length;
+      st.quiet--;
     }
+    flush(id, st);
   }
 
   function pushAudio(id, samples) {
@@ -1218,9 +1225,7 @@ function omniWorker(cfg) {
       st = begin();
       segs.set(id, st);
     }
-    const all = new Float32Array(st.rest.length + samples.length);
-    all.set(st.rest);
-    all.set(samples, st.rest.length);
+    const all = join([st.rest, samples], st.rest.length + samples.length);
     let at = 0;
     for (; all.length - at >= FRAME; at += FRAME) frame(id, st, all.subarray(at, at + FRAME));
     st.rest = all.subarray(at);
@@ -1236,31 +1241,20 @@ function omniWorker(cfg) {
       const stream = rec.createStream();
       stream.acceptWaveform(RATE, job.samples);
       rec.decode(stream);
-      const result = rec.getResult(stream);
-      text = String((result && result.text) || '').trim();
+      text = String((rec.getResult(stream) || {}).text || '').trim();
       stream.free();
     } catch (err) {
-      decoding = false;
       post({ ev: 'error', text: short(err) });
       return;
+    } finally {
+      decoding = false;
     }
-    decoding = false;
     // Every phrase goes to the page, empty or not, so a deaf engine differs from
     // a silent room.
-    post({
-      ev: 'decoded',
-      ms: Math.round(performance.now() - t0),
-      sec: job.samples.length / RATE,
-      len: text.length,
-    });
-    if (text)
-      post({
-        ev: 'line',
-        id: job.id,
-        text,
-        ms: Math.round(performance.now() - t0),
-        sec: job.samples.length / RATE,
-      });
+    const ms = Math.round(performance.now() - t0),
+      sec = job.samples.length / RATE;
+    post({ ev: 'decoded', ms, sec, len: text.length });
+    if (text) post({ ev: 'line', id: job.id, text, ms, sec });
     // One phrase per turn of the event loop, so queued audio is read first.
     setTimeout(pump, 0);
   }
