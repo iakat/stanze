@@ -195,18 +195,22 @@ async function peerStats(peer) {
   return out;
 }
 
+// rateScale puts a bitrate on a k/m scale, in bytes with the byte setting on.
+function rateScale(kbit) {
+  const bytes = state.statsBytes;
+  const n = Math.max(0, kbit) * (bytes ? 125 : 1);
+  const big = n >= (bytes ? 1048576 : 1000);
+  const v = n / (big ? (bytes ? 1048576 : 1000) : bytes ? 1024 : 1);
+  const num = big ? v.toFixed(v >= 10 ? 0 : 1) : Math.round(v).toString();
+  return { num, unit: big ? 'm' : 'k' };
+}
+
 // rateText renders a bitrate as a number and the first letter of its unit; zero
 // returns an empty string, so a cell with nothing to say stays empty.
 function rateText(kbit) {
   if (!(kbit > 0)) return '';
-  // With the byte setting on, the same rate reads in bytes, like a file size.
-  if (state.statsBytes) {
-    const bytes = kbit * 125;
-    if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + 'm';
-    return Math.round(bytes / 1024) + 'k';
-  }
-  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + 'm';
-  return Math.round(kbit) + 'k';
+  const r = rateScale(kbit);
+  return r.num + r.unit;
 }
 
 // msText renders milliseconds as "12 ms"; the unit is spelled out because the
@@ -684,14 +688,9 @@ function statsNote(id, text) {
 
 // rateWords is a bitrate with its unit spelled out, for the line under a graph.
 function rateWords(kbit) {
-  if (state.statsBytes) {
-    const bytes = Math.max(0, kbit) * 125;
-    if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + ' MiB/s';
-    return Math.round(bytes / 1024) + ' KiB/s';
-  }
-  if (!(kbit > 0)) return '0 kbit/s';
-  if (kbit >= 1000) return (kbit / 1000).toFixed(kbit >= 10000 ? 0 : 1) + ' Mbit/s';
-  return Math.round(kbit) + ' kbit/s';
+  const r = rateScale(kbit);
+  const words = state.statsBytes ? ['KiB/s', 'MiB/s'] : ['kbit/s', 'Mbit/s'];
+  return `${r.num} ${words[r.unit === 'm' ? 1 : 0]}`;
 }
 
 // drawStatsGraphs draws the last minute as three graphs: downlink as a filled
