@@ -25,14 +25,14 @@ export const sfxCache = new Map();
 
 export let sfxExt = '';
 
-// pickSfxExt returns the first container the browser plays: WebM, then Ogg,
-// then mp3.
+// pickSfxExt returns the first container the browser plays: Ogg Opus, then
+// WebM Opus, then mp3.
 export function pickSfxExt() {
   if (sfxExt) return sfxExt;
   const probe = document.createElement('audio');
   const tries = [
-    ['webm', 'audio/webm; codecs=opus'],
     ['ogg', 'audio/ogg; codecs=opus'],
+    ['webm', 'audio/webm; codecs=opus'],
     ['mp3', 'audio/mpeg'],
   ];
   for (const [ext, type] of tries) {
