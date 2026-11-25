@@ -10,9 +10,10 @@ type P3 = [number, number, number];
 const EYE_X = 0.152;
 const EYE_Y = 0.045;
 // The fit measures the chin; the shell runs past it, under the jaw and above
-// the hairline, at the crown.
-const CHIN_Y = -0.95;
-const CROWN_Y = 0.95;
+// the hairline, at the crown. The real mask is wide for its height: the rim is
+// one width across the cheekbones and 1.28 widths from the chin to the crown.
+const CHIN_Y = -0.72;
+const CROWN_Y = 0.56;
 const FIT_CHIN_Y = -0.66;
 const NOSE_Y = -0.02;
 
@@ -51,29 +52,41 @@ function ramp(a: number, b: number, v: number) {
 type Seg = [P2, P2, P2, P2];
 
 const RIGHT: Seg[] = [
+  // The chin: a short, sharp taper from a pointed tip to the jaw angle.
   [
     [0, CHIN_Y],
-    [0.07, -0.945],
-    [0.245, -0.83],
-    [0.368, -0.62],
+    [0.1, -0.675],
+    [0.22, -0.6],
+    [0.33, -0.52],
   ],
+  // The jaw angle, then a side that runs almost straight to the temple.
   [
-    [0.368, -0.62],
-    [0.462, -0.46],
-    [0.499, -0.18],
-    [0.5, 0.03],
+    [0.33, -0.52],
+    [0.42, -0.47],
+    [0.47, -0.42],
+    [0.49, -0.3],
   ],
+  // The widest part of the shell is high, over the cheekbones, and the side
+  // holds its width up to the temple, so the shape is a shield with a point.
   [
-    [0.5, 0.03],
-    [0.499, 0.22],
-    [0.455, 0.42],
-    [0.378, 0.56],
+    [0.49, -0.3],
+    [0.505, -0.14],
+    [0.51, 0.08],
+    [0.5, 0.28],
   ],
+  // The corner of the temple: a tight round, then the crown runs flat.
   [
-    [0.378, 0.56],
-    [0.345, 0.74],
-    [0.16, CROWN_Y],
-    [0, CROWN_Y],
+    [0.5, 0.28],
+    [0.49, 0.38],
+    [0.45, 0.44],
+    [0.38, 0.48],
+  ],
+  // A broad crown over the brow, domed just enough to read as a shell.
+  [
+    [0.38, 0.48],
+    [0.28, 0.535],
+    [0.15, 0.57],
+    [0, 0.58],
   ],
 ];
 
@@ -139,7 +152,9 @@ function outlineAt(i: number, seg: number): P2 {
 // ---------------------------------------------------------------- the shell
 // fawkesRho is how far out a model point is, one at the rim of the shell.
 function fawkesRho(x: number, y: number) {
-  return Math.min(1, Math.hypot(x / 0.505, y / 0.95));
+  // The rim is nearer the middle above the eye line than below it, so the two
+  // halves get their own reach and the rim of the shell reads as one.
+  return Math.min(1, Math.hypot(x / 0.505, y / (y > 0 ? 0.6 : 0.8)));
 }
 
 function gauss(d: number) {
@@ -158,7 +173,7 @@ function fawkesHeight(f: Fit, x: number, y: number, rho: number) {
   if (f.form) z = formAt(f.form, x, y);
   else {
     const ax = x / 0.72,
-      by = y / 1.5;
+      by = y / 0.78;
     const r2 = ax * ax + by * by;
     if (r2 < 1) z = 0.09 * Math.sqrt(1 - r2);
   }
@@ -556,7 +571,7 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
         const d = Math.hypot((x - s * EYE_X) / 0.15, (y - EYE_Y) / 0.1);
         a -= 0.3 * ramp(1.7, 0.95, d);
       }
-      a -= 0.14 * ramp(0.74, 1, rho);
+      a -= 0.14 * ramp(0.9, 1, rho);
       ao[at] = Math.max(0.45, a);
     }
   }

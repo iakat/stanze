@@ -570,8 +570,7 @@
   // src/fawkes.ts
   var EYE_X = 0.152;
   var EYE_Y = 0.045;
-  var CHIN_Y = -0.95;
-  var CROWN_Y = 0.95;
+  var CHIN_Y = -0.72;
   var FIT_CHIN_Y = -0.66;
   var NOSE_Y = -0.02;
   var HOLE_A = 0.105;
@@ -594,29 +593,41 @@
     return t * t * (3 - 2 * t);
   }
   var RIGHT = [
+    // The chin: a short, sharp taper from a pointed tip to the jaw angle.
     [
       [0, CHIN_Y],
-      [0.07, -0.945],
-      [0.245, -0.83],
-      [0.368, -0.62]
+      [0.1, -0.675],
+      [0.22, -0.6],
+      [0.33, -0.52]
     ],
+    // The jaw angle, then a side that runs almost straight to the temple.
     [
-      [0.368, -0.62],
-      [0.462, -0.46],
-      [0.499, -0.18],
-      [0.5, 0.03]
+      [0.33, -0.52],
+      [0.42, -0.47],
+      [0.47, -0.42],
+      [0.49, -0.3]
     ],
+    // The widest part of the shell is high, over the cheekbones, and the side
+    // holds its width up to the temple, so the shape is a shield with a point.
     [
-      [0.5, 0.03],
-      [0.499, 0.22],
-      [0.455, 0.42],
-      [0.378, 0.56]
+      [0.49, -0.3],
+      [0.505, -0.14],
+      [0.51, 0.08],
+      [0.5, 0.28]
     ],
+    // The corner of the temple: a tight round, then the crown runs flat.
     [
-      [0.378, 0.56],
-      [0.345, 0.74],
-      [0.16, CROWN_Y],
-      [0, CROWN_Y]
+      [0.5, 0.28],
+      [0.49, 0.38],
+      [0.45, 0.44],
+      [0.38, 0.48]
+    ],
+    // A broad crown over the brow, domed just enough to read as a shell.
+    [
+      [0.38, 0.48],
+      [0.28, 0.535],
+      [0.15, 0.57],
+      [0, 0.58]
     ]
   ];
   function cubic(p0, c1, c2, p1, t) {
@@ -666,7 +677,7 @@
     return OUTLINE[Math.round(i * OUTLINE.length / seg) % OUTLINE.length];
   }
   function fawkesRho(x, y) {
-    return Math.min(1, Math.hypot(x / 0.505, y / 0.95));
+    return Math.min(1, Math.hypot(x / 0.505, y / (y > 0 ? 0.6 : 0.8)));
   }
   function gauss(d) {
     return Math.exp(-d * d);
@@ -676,7 +687,7 @@
     let z = 0;
     if (f.form) z = formAt(f.form, x, y);
     else {
-      const ax = x / 0.72, by = y / 1.5;
+      const ax = x / 0.72, by = y / 0.78;
       const r2 = ax * ax + by * by;
       if (r2 < 1) z = 0.09 * Math.sqrt(1 - r2);
     }
@@ -916,7 +927,7 @@
           const d = Math.hypot((x - s * EYE_X) / 0.15, (y - EYE_Y) / 0.1);
           a -= 0.3 * ramp(1.7, 0.95, d);
         }
-        a -= 0.14 * ramp(0.74, 1, rho);
+        a -= 0.14 * ramp(0.9, 1, rho);
         ao[at] = Math.max(0.45, a);
       }
     }
