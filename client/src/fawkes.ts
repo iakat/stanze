@@ -1,12 +1,7 @@
-/*
- The Guy Fawkes mask, modelled as a shell and rendered on the face.
-*/
-
-// The mask is one rigid white shell with a painted black face. It is built
-// once in model units: across the face in face widths, up the face in face
-// widths too, so a turn or a lean keeps its proportions. The model is fitted to
-// the landmarks of the face it covers, so the eye holes sit on the eyes, the
-// mouth line on the mouth and the chin on the chin, and the head carries it.
+// The Guy Fawkes mask: one rigid white shell with a painted black face, built
+// once in model units, across and up the face in face widths, so a turn or a
+// lean keeps its proportions. The fit puts the eye holes on the eyes, the mouth
+// line on the mouth and the chin on the chin, and the head carries the shell.
 
 type P2 = [number, number];
 type P3 = [number, number, number];
@@ -14,7 +9,11 @@ type P3 = [number, number, number];
 // Model anchors. The eye centres are the fit; the rest is the drawing.
 const EYE_X = 0.152;
 const EYE_Y = 0.045;
-const CHIN_Y = -0.66;
+// The fit measures the chin; the shell runs past it, under the jaw and above
+// the hairline, at the crown.
+const CHIN_Y = -0.95;
+const CROWN_Y = 0.95;
+const FIT_CHIN_Y = -0.66;
 const NOSE_Y = -0.02;
 
 // Eye hole: half width, upper and lower half height, and the angry tilt.
@@ -54,27 +53,27 @@ type Seg = [P2, P2, P2, P2];
 const RIGHT: Seg[] = [
   [
     [0, CHIN_Y],
-    [0.075, -0.668],
-    [0.235, -0.618],
-    [0.35, -0.5],
+    [0.07, -0.945],
+    [0.245, -0.83],
+    [0.368, -0.62],
   ],
   [
-    [0.35, -0.5],
-    [0.452, -0.385],
-    [0.499, -0.16],
+    [0.368, -0.62],
+    [0.462, -0.46],
+    [0.499, -0.18],
     [0.5, 0.03],
   ],
   [
     [0.5, 0.03],
-    [0.499, 0.2],
-    [0.455, 0.37],
-    [0.373, 0.475],
+    [0.499, 0.22],
+    [0.455, 0.42],
+    [0.378, 0.56],
   ],
   [
-    [0.373, 0.475],
-    [0.298, 0.567],
-    [0.158, 0.604],
-    [0, 0.6],
+    [0.378, 0.56],
+    [0.345, 0.74],
+    [0.16, CROWN_Y],
+    [0, CROWN_Y],
   ],
 ];
 
@@ -138,10 +137,9 @@ function outlineAt(i: number, seg: number): P2 {
 }
 
 // ---------------------------------------------------------------- the shell
-// fawkesRho is how far out a model point is, one at the rim: the mask sits on
-// the face at its edge, so the shell is pushed back to nothing there.
+// fawkesRho is how far out a model point is, one at the rim of the shell.
 function fawkesRho(x: number, y: number) {
-  return Math.min(1, Math.hypot(x / 0.505, y / 0.665));
+  return Math.min(1, Math.hypot(x / 0.505, y / 0.95));
 }
 
 function gauss(d: number) {
@@ -153,7 +151,7 @@ function gauss(d: number) {
 // lighting reads all of it, so the form is a shape and not a shading trick.
 function fawkesHeight(x: number, y: number, rho: number) {
   const ax = x / 0.72,
-    by = (y + 0.02) / 0.95;
+    by = y / 1.5;
   const r2 = ax * ax + by * by;
   let z = r2 < 1 ? 0.145 * Math.sqrt(1 - r2) : 0;
 
@@ -182,7 +180,7 @@ function fawkesHeight(x: number, y: number, rho: number) {
     z -= 0.075 * gauss((x - s * EYE_X) / 0.135) * gauss((y - EYE_Y) / 0.085);
   }
   // The chin is a small point under the goatee.
-  z += 0.05 * gauss(x / 0.07) * gauss((y + 0.5) / 0.1);
+  z += 0.05 * gauss(x / 0.07) * gauss((y + 0.56) / 0.12);
   return z * ramp(1, 0.88, rho);
 }
 
@@ -222,7 +220,7 @@ function fawkesFit(g): Fit | null {
   const spanX = Math.abs(dot2([eR[0] - eL[0], eR[1] - eL[1]], ax));
   const down = -dot2([g.chin[0] - o[0], g.chin[1] - o[1]], ay);
   let sx = spanX > 1 ? spanX / (2 * EYE_X) : fw * 1.06;
-  let sy = down > 1 ? down / (EYE_Y - CHIN_Y) : fh * 0.75;
+  let sy = down > 1 ? down / (EYE_Y - FIT_CHIN_Y) : fh * 0.75;
   sx = Math.min(Math.max(sx, fw * 0.9), fw * 1.14);
   sy = Math.min(Math.max(sy, fh * 0.66), fh * 0.88);
 
@@ -734,24 +732,24 @@ function NOSTRIL(s: number): Stroke {
 function CHINLINE(s: number): Stroke {
   return {
     pts: [
-      [s * 0.05, -0.49],
-      [s * 0.076, -0.528],
-      [s * 0.083, -0.572],
+      [s * 0.052, -0.5],
+      [s * 0.08, -0.545],
+      [s * 0.088, -0.6],
     ],
     w: [0.007, 0.008, 0.003],
   };
 }
 
 const GOATEE: P2[] = [
-  [0, -0.478],
-  [0.056, -0.5],
-  [0.072, -0.538],
-  [0.038, -0.578],
-  [0, -0.63],
-  [-0.038, -0.578],
-  [-0.072, -0.538],
-  [-0.056, -0.5],
-  [0, -0.478],
+  [0, -0.492],
+  [0.058, -0.516],
+  [0.076, -0.556],
+  [0.04, -0.6],
+  [0, -0.66],
+  [-0.04, -0.6],
+  [-0.076, -0.556],
+  [-0.058, -0.516],
+  [0, -0.492],
 ];
 
 // ----------------------------------------------------------------- the sheet
