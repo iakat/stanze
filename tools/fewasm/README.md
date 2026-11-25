@@ -1,8 +1,9 @@
 # FastEnhancer wasm tier
 
-A browser build of the FastEnhancer Medium denoiser (`faster-enhancer.c`) that
-replaces the 14.8 MB ONNX Runtime graph with a 305 KB module and a 565 KB
-weight blob.
+A browser build of the FastEnhancer denoiser (`faster-enhancer.c`) that
+replaces the 14.8 MB ONNX Runtime graph with a 150 KB module and a weight blob
+of 121 KB (base), 236 KB (small) or 565 KB (medium). The page runs Small on
+incoming streams.
 
 `engine/` is the upstream C tree with the wasm tier added. The ARM and x86
 kernel files, the native test runners and the offline tools are left out; this
@@ -18,17 +19,19 @@ copy builds for wasm32 only.
 
 ## Build
 
-    CC=/path/to/clang ./build.sh        # writes build/fe.wasm
+    CC=/path/to/clang ./build.sh              # medium, writes build/fe.wasm
+    TIER=small CC=/path/to/clang ./build.sh out   # the tier the page runs
+    TIER=base  CC=/path/to/clang ./build.sh out   # smallest tier
 
 The build needs `clang` with the wasm32 target and `wasi-libc` (tested with
 wasi-sdk). The result is a reactor module: no `_start`, and the host makes the
 two frame buffers with `malloc` and calls `fe_run(in, out)`. The engine keeps
 its streaming state in globals, so one module instance is one stream.
 
-The shipped `static/fe.wasm` is this build with `wasi-sdk` clang and `-O3`:
+The shipped `static/fe.wasm` is the small tier with `wasi-sdk` clang and `-O3`:
 
-    f318a92dfe665d85e83de8667a91df1f97262a3aba821c2f10fc621389fbe563  fe.wasm
-    d6f98e186bee6ed655b52a2edf5f707ccf761c755bb69de8de7f68cad42d7837  fe.q8
+    eecdb111e4296d5a444d3a7916bc9cf7139dc7d67e9fbd4d1266bb9542c222ce  fe.wasm
+    a2cdf08d4ce9e0a63d4e52cd1fddd29b64d2fd5728798135c379d7abcb97c57b  fe.q8
 
 ## State
 
@@ -36,9 +39,11 @@ The shipped `static/fe.wasm` is this build with `wasi-sdk` clang and `-O3`:
   SIMD128 tier is the same arithmetic in the same order.
 - 25 dB SNR against the native engine on the same input. The gap is the int8
   quantisation of the native path itself, not a logic difference.
-- 3.2 ms per frame median, 3.7 ms at the 95th percentile, for 6.67 ms of audio
-  (320 samples at 48 kHz) under Node. Native is 0.57 ms, ONNX Runtime wasm is
-  2.75 ms.
+- 1.4 ms per frame median, 1.9 ms at the 95th percentile, for 10.67 ms of audio
+  (512 samples at 48 kHz) under Node, small tier. Medium is 3.8 ms for 6.67 ms
+  of audio. Native Medium is 0.57 ms, ONNX Runtime wasm 2.75 ms.
+- 32.9 dB SNR against the ONNX model at 512 hop over 800 frames, correlation
+  0.9997, small tier; medium reaches 35 dB at 320 hop.
 - One fixed tier: SIMD128, which every browser that can run the page has. No
   runtime CPU detection.
 - On a phone, keep one instance per stream and drop frames rather than queue

@@ -1,11 +1,11 @@
-// The FastEnhancer node. It cuts the audio of one stream into 320 sample
+// The FastEnhancer node. It cuts the audio of one stream into 512 sample
 // frames and sends each frame to the worker that holds the engine; the answers
 // return on the same port and leave through the output.
 //
 // Every stream owns one node, so every stream keeps its own model state. The
 // node starts after a small prebuffer, and it outputs silence until then. That
 // keeps the start clean and lets a slow frame pass without a click.
-const FRAME = 320;
+const FRAME = 512;
 
 class FastEnhancerProcessor extends AudioWorkletProcessor {
   constructor(options) {

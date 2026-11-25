@@ -379,7 +379,8 @@ function wirePlayNoise(peer) {
 }
 
 // setPeerNoise sets the noise cancel of one incoming stream. Three states: off,
-// GTCRN, and FastEnhancer Medium. A change of engine rebuilds that one filter and
+// GTCRN, and FastEnhancer, the tier the page was built with. A change of engine
+// rebuilds that one filter and
 // leaves the peer connection alone.
 export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
   if (!peer) return;

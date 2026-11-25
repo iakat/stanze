@@ -2,7 +2,7 @@
 // hands it the port of its own node, and frames then cross between the audio
 // thread and this worker, so no sample passes through the page.
 //
-// The engine is FastEnhancer Medium in wasm: 320 sample frames at 48 kHz, one
+// The engine is FastEnhancer Small in wasm: 512 sample frames at 48 kHz, one
 // frame of output per frame of input, and its streaming state (STFT overlap,
 // GRU hidden state, attention window) lives inside the module. One instance is
 // one stream, so a lane builds its own from one shared module compile.

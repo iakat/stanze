@@ -31,14 +31,19 @@ GOOS=js GOARCH=wasm "$GO" build -trimpath -ldflags "-s -w" -o static/pq.wasm ./c
 # The packing filter is a build artifact too. Its own builder needs a clang
 # with the wasm32-wasip1 target; ../tools/wasi-sdk carries one. A tree that
 # already has the module keeps it unless FE_REBUILD=1.
+#
+# The tier is a property of the weights and of the frame size the worklet
+# cuts, so both come from one variable: the incoming streams run Small now.
+FE_TIER="${FE_TIER:-small}"
 if [ ! -s static/fe.wasm ] || [ "${FE_REBUILD:-0}" = "1" ]; then
 	FE_CC="${FE_CC:-$here/../tools/wasi-sdk/bin/clang}"
 	if [ ! -x "$FE_CC" ]; then
 		echo "no wasm clang for the filter; set FE_CC=/path/to/clang" >&2
 		exit 1
 	fi
-	CC="$FE_CC" "$here/tools/fewasm/build.sh" "$here/tools/fewasm/out" >/dev/null
+	TIER="$FE_TIER" CC="$FE_CC" "$here/tools/fewasm/build.sh" "$here/tools/fewasm/out" >/dev/null
 	cp "$here/tools/fewasm/out/fe.wasm" static/fe.wasm
+	cp "$here/tools/fewasm/engine/weights/fe.q8" static/fe.q8
 	rm -rf "$here/tools/fewasm/out"
 	# The builder leaves the debug and name sections in; the page never reads
 	# them and they double the module.
