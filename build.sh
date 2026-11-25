@@ -40,6 +40,10 @@ if [ ! -s static/fe.wasm ] || [ "${FE_REBUILD:-0}" = "1" ]; then
 	CC="$FE_CC" "$here/tools/fewasm/build.sh" "$here/tools/fewasm/out" >/dev/null
 	cp "$here/tools/fewasm/out/fe.wasm" static/fe.wasm
 	rm -rf "$here/tools/fewasm/out"
+	# The builder leaves the debug and name sections in; the page never reads
+	# them and they double the module.
+	FE_STRIP="$(dirname "$FE_CC")/llvm-strip"
+	[ -x "$FE_STRIP" ] && "$FE_STRIP" --strip-all static/fe.wasm
 fi
 
 # The client is TypeScript under client/, and the bundle it produces is what the
