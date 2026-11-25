@@ -146,41 +146,61 @@ function gauss(d: number) {
   return Math.exp(-d * d);
 }
 
-// fawkesHeight is the surface of the mask in model units: a dome, the brow
-// ridges, the nose, the cheekbones, the hollows under them and the chin. The
-// lighting reads all of it, so the form is a shape and not a shading trick.
-function fawkesHeight(x: number, y: number, rho: number) {
-  const ax = x / 0.72,
-    by = y / 1.5;
-  const r2 = ax * ax + by * by;
-  let z = r2 < 1 ? 0.145 * Math.sqrt(1 - r2) : 0;
+// fawkesHeight is the surface of the mask in model units: the surface of the
+// face under it, then the brow ridges, the nose, the cheekbones, the hollows
+// under them and the chin of the shell. The lighting reads all of it, so the
+// form is a shape and not a shading trick.
+function fawkesHeight(f: Fit, x: number, y: number, rho: number) {
+  const face = f.face;
+  // The depth of the mesh is the surface; without a mesh the old dome stands,
+  // low and flat, so a colour test still gets a mask.
+  let z = 0;
+  if (f.form) z = formAt(f.form, x, y);
+  else {
+    const ax = x / 0.72,
+      by = y / 1.5;
+    const r2 = ax * ax + by * by;
+    if (r2 < 1) z = 0.09 * Math.sqrt(1 - r2);
+  }
+  // The ridges hang on the landmarks: a brow that sits high on this face lifts
+  // its ridge, a mouth that sits low drops its smile.
+  const browY = (face.browL[1] + face.browR[1]) / 2;
+  const noseY = face.nose[1];
+  const mouthY = face.lip[1];
 
   // Brow ridges: an arc that rises off the nose and falls to the temple.
   const u = Math.abs(x);
-  if (u > 0.03 && u < 0.38) {
-    const yc = 0.158 + 1.282 * u - 3.16 * u * u;
-    z += 0.078 * gauss((y - yc) / 0.042) * ramp(0.03, 0.09, u) * ramp(0.39, 0.3, u);
+  if (u > 0.03 && u < 0.4) {
+    const yc = browY + 0.86 * (0.158 + 1.282 * u - 3.16 * u * u) - 0.86 * 0.235;
+    z += 0.05 * gauss((y - yc) / 0.045) * ramp(0.03, 0.09, u) * ramp(0.41, 0.32, u);
   }
-  // The nose: a ridge that widens down to the tip, with a round tip.
-  if (y > -0.08 && y < 0.27) {
-    const w = 0.022 + 0.058 * ramp(0.27, -0.05, y);
-    z += 0.175 * gauss(x / w) * ramp(0.27, 0.18, y) * ramp(-0.08, 0.0, y);
-    z += 0.05 * gauss(x / 0.07) * gauss((y + 0.03) / 0.045);
+  // The nose: a ridge that widens down to the tip, with a round tip. It runs
+  // from the bridge to the tip the mesh found, so a short nose gets a short
+  // ridge and a long one keeps its length.
+  const ny0 = noseY + 0.15;
+  const ny1 = noseY - 0.11;
+  if (y > ny1 && y < ny0) {
+    const t = (y - ny1) / (ny0 - ny1);
+    const w = 0.024 + 0.05 * t;
+    z += 0.07 * gauss(x / w) * ramp(0, 0.22, t) * ramp(1, 0.86, t);
+    z += 0.02 * gauss(x / 0.07) * gauss((y - noseY) / 0.05);
     // The wings of the nose, and the crease between them and the cheek.
-    z += 0.022 * gauss((Math.abs(x) - 0.058) / 0.028) * gauss((y + 0.045) / 0.03);
-    z -= 0.018 * gauss((Math.abs(x) - 0.088) / 0.026) * gauss((y + 0.035) / 0.035);
+    z += 0.02 * gauss((Math.abs(x) - 0.06) / 0.03) * gauss((y - ny1 - 0.02) / 0.035);
+    z -= 0.016 * gauss((Math.abs(x) - 0.095) / 0.028) * gauss((y - ny1) / 0.04);
   }
-  // Cheekbones, and the hollows under them.
-  z += 0.03 * gauss((x - 0.29) / 0.17) * gauss(y / 0.14);
-  z += 0.03 * gauss((x + 0.29) / 0.17) * gauss(y / 0.14);
-  z -= 0.028 * gauss((x - 0.25) / 0.13) * gauss((y + 0.21) / 0.12);
-  z -= 0.028 * gauss((x + 0.25) / 0.13) * gauss((y + 0.21) / 0.12);
+  // Cheekbones, and the hollows under them, between the eye line and the mouth.
+  const cheekY = (EYE_Y + mouthY) / 2;
+  z += 0.035 * gauss((x - 0.29) / 0.17) * gauss((y - cheekY) / 0.15);
+  z += 0.035 * gauss((x + 0.29) / 0.17) * gauss((y - cheekY) / 0.15);
+  z -= 0.03 * gauss((x - 0.25) / 0.13) * gauss((y - cheekY + 0.22) / 0.12);
+  z -= 0.03 * gauss((x + 0.25) / 0.13) * gauss((y - cheekY + 0.22) / 0.12);
   // The eye sockets are cut back, so a hole has a wall round it.
   for (const s of [-1, 1]) {
     z -= 0.075 * gauss((x - s * EYE_X) / 0.135) * gauss((y - EYE_Y) / 0.085);
   }
   // The chin is a small point under the goatee.
-  z += 0.05 * gauss(x / 0.07) * gauss((y + 0.56) / 0.12);
+  const chinY = face.chin[1] + 0.1;
+  z += 0.05 * gauss(x / 0.07) * gauss((y - chinY) / 0.12);
   return z * ramp(1, 0.88, rho);
 }
 
@@ -196,7 +216,45 @@ interface Fit {
   sy: number;
   yaw: number;
   pitch: number;
+  face: Face;
+  form: Form | null;
 }
+
+// A Face is where the brows, the nose and the mouth of the face under the mask
+// are, in the units of the shell. The paint and the ridges hang on these
+// points, so they sit on this face and not on an average one.
+interface Face {
+  browL: P2;
+  browR: P2;
+  nose: P2;
+  noseBase: P2;
+  lipTop: P2;
+  lip: P2;
+  lipLow: P2;
+  mouthL: P2;
+  mouthR: P2;
+  chin: P2;
+  eyeLo: P2;
+  eyeLi: P2;
+  eyeRo: P2;
+  eyeRi: P2;
+}
+
+// A Form is the surface of the face under the mask, read from the depth of the
+// mesh points on a coarse grid: a shell that follows the head and is not a dome
+// of one shape for every face. The heights are in the units of the model.
+interface Form {
+  n: number;
+  x0: number;
+  y0: number;
+  dx: number;
+  dy: number;
+  h: Float32Array;
+}
+
+const FORM_N = 16;
+const FORM_X = 0.62;
+const FORM_Y = 1.02;
 
 function dot2(a: P2, b: P2) {
   return a[0] * b[0] + a[1] * b[1];
@@ -242,7 +300,174 @@ function fawkesFit(g): Fit | null {
   // The tilt, from the nose sitting lower on the face when the head looks down.
   const pitch = Math.min(0.3, Math.max(-0.3, (nym - NOSE_Y + 0.03) * 2.2));
 
-  return { ox: o[0], oy: o[1], ax, ay, sx, sy, yaw, pitch };
+  const f: Fit = { ox: o[0], oy: o[1], ax, ay, sx, sy, yaw, pitch, face: null, form: null };
+  f.face = faceOf(f, g);
+  f.form = formOf(f, g);
+  return f;
+}
+
+// flatModel inverts the fit for a frame point, with the face taken as the flat
+// plane of the model. It is the map the landmarks and the depth grid are read
+// with, before there is a surface to lift a point onto.
+function flatModel(f: Fit, px: number, py: number): P2 {
+  const dx = px - f.ox,
+    dy = py - f.oy;
+  const x1 = (dx * f.ax[0] + dy * f.ax[1]) / f.sx;
+  const y1 = (dx * f.ay[0] + dy * f.ay[1]) / f.sy;
+  const cy = Math.cos(f.yaw) || 1,
+    syaw = Math.sin(f.yaw);
+  const cp = Math.cos(f.pitch) || 1,
+    sp = Math.sin(f.pitch);
+  const x = x1 / cy;
+  const y = (y1 + x * syaw * sp) / cp;
+  return [x, y];
+}
+
+// toModel is flatModel with the shell under the point: the depth of the surface
+// is read back into the map, so a point of the paint lands where the mesh put
+// it even on a turned head.
+function toModel(f: Fit, px: number, py: number): P2 {
+  const dx = px - f.ox,
+    dy = py - f.oy;
+  const x1 = (dx * f.ax[0] + dy * f.ax[1]) / f.sx;
+  const y1 = (dx * f.ay[0] + dy * f.ay[1]) / f.sy;
+  const cy = Math.cos(f.yaw) || 1,
+    syaw = Math.sin(f.yaw);
+  const cp = Math.cos(f.pitch) || 1,
+    sp = Math.sin(f.pitch);
+  let x = x1 / cy,
+    y = y1 / cp,
+    z = 0;
+  for (let k = 0; k < 2; k++) {
+    z = fawkesHeight(f, x, y, fawkesRho(x, y));
+    const z1 = -x * syaw + z * cy;
+    x = (x1 - z * syaw) / cy;
+    y = (y1 + z1 * sp) / cp;
+  }
+  return [x, y];
+}
+
+function facePoint(p: P2 | undefined, fallback: P2): P2 {
+  return p ? p : fallback;
+}
+
+// faceOf reads the landmarks of the frame into the face frame. The colour test
+// gives a box and no points; then the model keeps its own proportions, which
+// is what the mask did before there was a mesh.
+function faceOf(f: Fit, g): Face {
+  const to = (p: P2 | undefined, fx: P2) => {
+    const q = facePoint(p, fx);
+    return flatModel(f, q[0], q[1]);
+  };
+  return {
+    browL: to(g.browL, [-0.2, f.oy - 0.23 * f.sy]),
+    browR: to(g.browR, [0.2, f.oy - 0.23 * f.sy]),
+    nose: to(g.nose, [f.ox, f.oy - NOSE_Y * f.sy]),
+    noseBase: to(g.noseBase, [f.ox, f.oy + 0.1 * f.sy]),
+    lipTop: to(g.lipTop, [f.ox, f.oy + 0.24 * f.sy]),
+    lip: to(g.lip, [f.ox, f.oy + 0.28 * f.sy]),
+    lipLow: to(g.lipLow, [f.ox, f.oy + 0.32 * f.sy]),
+    mouthL: to(g.mouthL, [f.ox - 0.2 * f.sx, f.oy + 0.28 * f.sy]),
+    mouthR: to(g.mouthR, [f.ox + 0.2 * f.sx, f.oy + 0.28 * f.sy]),
+    chin: to(g.chin, [f.ox, f.oy - FIT_CHIN_Y * f.sy]),
+    eyeLo: flatModel(f, g.eyeL[0][0], g.eyeL[0][1]),
+    eyeLi: flatModel(f, g.eyeL[1][0], g.eyeL[1][1]),
+    eyeRo: flatModel(f, g.eyeR[1][0], g.eyeR[1][1]),
+    eyeRi: flatModel(f, g.eyeR[0][0], g.eyeR[0][1]),
+  };
+}
+
+// formOf turns the depth of the mesh into the surface of the shell: every point
+// lands on the grid of the model, the front of the face wins a cell, and the
+// empty cells fill in from their neighbours. Only the relief of the face is
+// kept: the place of the head in space is forgotten, so the shell sits on the
+// skin wherever the head is.
+function formOf(f: Fit, g): Form | null {
+  const lm = g.lm,
+    zd = g.z;
+  if (!lm || !zd || lm.length < 468 * 2 || zd.length < 468) return null;
+  const n = FORM_N;
+  const x0 = -FORM_X,
+    y0 = -FORM_Y;
+  const dx = (2 * FORM_X) / n,
+    dy = (2 * FORM_Y) / n;
+  const h = new Float32Array((n + 1) * (n + 1)).fill(NaN);
+  const sz = (f.sx + f.sy) / 2 || 1;
+  let sum = 0;
+  for (let i = 0; i < 468; i++) sum += zd[i];
+  const z0 = sum / 468;
+  for (let i = 0; i < 468; i++) {
+    const p = flatModel(f, lm[i * 2], lm[i * 2 + 1]);
+    if (p[0] < x0 || p[0] > -x0 || p[1] < y0 || p[1] > -y0) continue;
+    const gi = Math.round((p[0] - x0) / dx),
+      gj = Math.round((p[1] - y0) / dy);
+    const k = gj * (n + 1) + gi;
+    const v = (z0 - zd[i]) / sz;
+    if (!(h[k] >= v)) h[k] = v;
+  }
+  // The cells with no point take the mean of the cells around them, so the
+  // grid has a height everywhere the mask reaches.
+  for (let pass = 0; pass < 5; pass++) {
+    const src = Float32Array.from(h);
+    let left = 0;
+    for (let j = 0; j <= n; j++) {
+      for (let i = 0; i <= n; i++) {
+        const k = j * (n + 1) + i;
+        if (!Number.isNaN(src[k])) continue;
+        let sum2 = 0,
+          cnt = 0;
+        for (let dj = -1; dj <= 1; dj++) {
+          for (let di = -1; di <= 1; di++) {
+            const jj = j + dj,
+              ii = i + di;
+            if (jj < 0 || jj > n || ii < 0 || ii > n) continue;
+            const v = src[jj * (n + 1) + ii];
+            if (Number.isNaN(v)) continue;
+            sum2 += v;
+            cnt++;
+          }
+        }
+        if (cnt) h[k] = sum2 / cnt;
+        else left++;
+      }
+    }
+    if (!left) break;
+  }
+  for (let k = 0; k < h.length; k++) if (Number.isNaN(h[k])) h[k] = 0;
+  // Two passes of a light blur take the noise of the landmarker off the depth,
+  // so the shell is a surface and not a lumpy copy of the mesh.
+  for (let pass = 0; pass < 2; pass++) {
+    const src = Float32Array.from(h);
+    for (let j = 1; j < n; j++) {
+      for (let i = 1; i < n; i++) {
+        const k = j * (n + 1) + i;
+        h[k] =
+          (4 * src[k] + src[k - 1] + src[k + 1] + src[k - n - 1] + src[k + n + 1]) / 8;
+      }
+    }
+  }
+  return { n, x0, y0, dx, dy, h };
+}
+
+// formAt reads the surface of the face at a model point; past the grid the face
+// is flat, so the rim of the mask meets the skin.
+function formAt(fo: Form, x: number, y: number) {
+  const fx = (x - fo.x0) / fo.dx,
+    fy = (y - fo.y0) / fo.dy;
+  if (!(fx >= 0 && fy >= 0 && fx <= fo.n && fy <= fo.n)) return 0;
+  const i = Math.min(fo.n - 1, Math.floor(fx)),
+    j = Math.min(fo.n - 1, Math.floor(fy));
+  const u = fx - i,
+    v = fy - j;
+  const k = j * (fo.n + 1) + i;
+  const a = fo.h[k],
+    b = fo.h[k + 1],
+    c = fo.h[k + fo.n + 1],
+    d = fo.h[k + fo.n + 2];
+  const top = a + (b - a) * u,
+    bot = c + (d - c) * u;
+  const z = top + (bot - top) * v;
+  return Number.isFinite(z) ? z : 0;
 }
 
 // project turns a model point into the frame: the head turns about its up
@@ -313,10 +538,10 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
       const b = outlineAt(i, SEG);
       const x = b[0] * rho,
         y = b[1] * rho;
-      const z = fawkesHeight(x, y, rho);
+      const z = fawkesHeight(f, x, y, rho);
       const e = 0.006;
-      const gx = (fawkesHeight(x + e, y, rho) - fawkesHeight(x - e, y, rho)) / (2 * e);
-      const gy = (fawkesHeight(x, y + e, rho) - fawkesHeight(x, y - e, rho)) / (2 * e);
+      const gx = (fawkesHeight(f, x + e, y, rho) - fawkesHeight(f, x - e, y, rho)) / (2 * e);
+      const gy = (fawkesHeight(f, x, y + e, rho) - fawkesHeight(f, x, y - e, rho)) / (2 * e);
       turn(f, -gx, -gy, 1, nv);
       project(f, x, y, z, p);
       const at = k * SEG + i;
@@ -571,7 +796,7 @@ function ribbon(c: CanvasRenderingContext2D, f: Fit, s: Stroke) {
     const w = widthAt(s.w, i / (n - 1));
     const x = spine[i][0],
       y = spine[i][1];
-    const z = fawkesHeight(x, y, fawkesRho(x, y));
+    const z = fawkesHeight(f, x, y, fawkesRho(x, y));
     project(f, x + nx * w, y + ny * w, z, p);
     left.push([p[0], p[1]]);
     project(f, x - nx * w, y - ny * w, z, p);
@@ -588,8 +813,8 @@ function ribbon(c: CanvasRenderingContext2D, f: Fit, s: Stroke) {
 // blend draws one ink shape with the light of the surface under it.
 function inkFill(c: CanvasRenderingContext2D, f: Fit, path: () => void, cx: number, cy: number) {
   const e = 0.01;
-  const gx = (fawkesHeight(cx + e, cy, 0.3) - fawkesHeight(cx - e, cy, 0.3)) / (2 * e);
-  const gy = (fawkesHeight(cx, cy + e, 0.3) - fawkesHeight(cx, cy - e, 0.3)) / (2 * e);
+  const gx = (fawkesHeight(f, cx + e, cy, 0.3) - fawkesHeight(f, cx - e, cy, 0.3)) / (2 * e);
+  const gy = (fawkesHeight(f, cx, cy + e, 0.3) - fawkesHeight(f, cx, cy - e, 0.3)) / (2 * e);
   const nv: number[] = [0, 0, 0];
   const m = Math.hypot(gx, gy, 1);
   turn(f, -gx / m, -gy / m, 1 / m, nv);
@@ -603,7 +828,7 @@ function inkFill(c: CanvasRenderingContext2D, f: Fit, path: () => void, cx: numb
 // radius the socket shadow needs.
 function holeShape(f: Fit, s: number): P3 {
   const p: number[] = [0, 0, 0];
-  const z = fawkesHeight(s * EYE_X, EYE_Y, fawkesRho(s * EYE_X, EYE_Y));
+  const z = fawkesHeight(f, s * EYE_X, EYE_Y, fawkesRho(s * EYE_X, EYE_Y));
   project(f, s * EYE_X, EYE_Y, z, p);
   return [p[0], p[1], HOLE_BL * ((f.sx + f.sy) / 2)];
 }
@@ -620,7 +845,7 @@ function holePoints(f: Fit, s: number, grow: number) {
     const b = Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow;
     const x = s * EYE_X + a * cs - b * sn;
     const y = EYE_Y + a * sn + b * cs;
-    const z = fawkesHeight(x, y, fawkesRho(x, y));
+    const z = fawkesHeight(f, x, y, fawkesRho(x, y));
     project(f, x, y, z, p);
     pts.push([p[0], p[1]]);
   }
@@ -635,34 +860,47 @@ function holePath(c: CanvasRenderingContext2D, f: Fit, s: number, grow = 1) {
   c.closePath();
 }
 
-// The painted face: the brows, the black edge of the eye holes, the moustache,
-// the wide smile with a curl at each end, the goatee and the nostrils.
+// The paint of the mask reads the face under it: the brows sit on the brows,
+// the moustache under the nose, the grin on the mouth and the goatee above the
+// chin, so a long face and a short one both carry a mask that fits.
+function mouthSize(f: Fit) {
+  const half = Math.abs(f.face.mouthR[0] - f.face.mouthL[0]) / 2;
+  return Math.min(Math.max(half || 0.24, 0.17), 0.34);
+}
+
 function paintMask(c: CanvasRenderingContext2D, f: Fit) {
+  const face = f.face;
   for (const s of [-1, 1]) {
     // The black edge round the eye hole, wider at the outer end.
     inkFill(c, f, () => holePath(c, f, s, 1.26), s * EYE_X, EYE_Y);
     // The brow: full over the nose, a fine point at the temple.
-    inkFill(c, f, () => ribbon(c, f, BROW(s)), s * 0.19, 0.21);
+    const br = s < 0 ? face.browL : face.browR;
+    inkFill(c, f, () => ribbon(c, f, BROW(f, s)), br[0], br[1]);
     // The moustache: a full root and a curl that turns up at the end.
-    inkFill(c, f, () => ribbon(c, f, MUS(s)), s * 0.12, -0.28);
+    const mu = MUS(f, s);
+    inkFill(c, f, () => ribbon(c, f, mu), mu.pts[1][0], mu.pts[1][1]);
     // The nostril, a small dark mark under the nose.
-    inkFill(c, f, () => ribbon(c, f, NOSTRIL(s)), s * 0.035, -0.06);
+    const no = NOSTRIL(f, s);
+    inkFill(c, f, () => ribbon(c, f, no), no.pts[1][0], no.pts[1][1]);
   }
   // The smile runs across the whole face, so it is one stroke.
-  inkFill(c, f, () => ribbon(c, f, SMILE), 0, -0.4);
+  const sm = SMILE(f);
+  inkFill(c, f, () => ribbon(c, f, sm), 0, sm.pts[5][1]);
   for (const s of [-1, 1]) {
-    inkFill(c, f, () => ribbon(c, f, CHINLINE(s)), s * 0.085, -0.51);
+    const cl = CHINLINE(f, s);
+    inkFill(c, f, () => ribbon(c, f, cl), cl.pts[1][0], cl.pts[1][1]);
   }
   // The goatee is a filled point under the mouth.
+  const goat = GOATEE(f);
   inkFill(
     c,
     f,
     () => {
-      const pts = catmull(GOATEE, 40);
+      const pts = catmull(goat, 40);
       const p: number[] = [0, 0, 0];
       c.beginPath();
       for (let i = 0; i < pts.length; i++) {
-        const z = fawkesHeight(pts[i][0], pts[i][1], fawkesRho(pts[i][0], pts[i][1]));
+        const z = fawkesHeight(f, pts[i][0], pts[i][1], fawkesRho(pts[i][0], pts[i][1]));
         project(f, pts[i][0], pts[i][1], z, p);
         if (i === 0) c.moveTo(p[0], p[1]);
         else c.lineTo(p[0], p[1]);
@@ -670,87 +908,115 @@ function paintMask(c: CanvasRenderingContext2D, f: Fit) {
       c.closePath();
     },
     0,
-    -0.52,
+    goat[4][1],
   );
 }
 
-function BROW(s: number): Stroke {
+// BROW follows the eye under it and the brow the mesh found: it starts over the
+// inner corner, runs over the eye and falls to the temple.
+function BROW(f: Fit, s: number): Stroke {
+  const eye = s < 0 ? [f.face.eyeLi, f.face.eyeLo] : [f.face.eyeRi, f.face.eyeRo];
+  const brow = s < 0 ? f.face.browL : f.face.browR;
+  const xi = eye[0][0],
+    xo = eye[1][0];
+  const pts: P2[] = [];
+  for (const t of [0, 0.34, 0.68, 1.02, 1.45]) {
+    const x = xi + (xo - xi) * t;
+    const arc = 0.012 * Math.sin(Math.PI * Math.min(t, 1));
+    const y = brow[1] + 0.01 + arc - 0.05 * Math.max(0, t - 1);
+    pts.push([x, y]);
+  }
+  return { pts, w: [0.042, 0.038, 0.028, 0.016, 0.004] };
+}
+
+// MUS sits between the base of the nose and the top lip, and the curl turns up
+// at the corner of the mouth.
+function MUS(f: Fit, s: number): Stroke {
+  const face = f.face;
+  const mh = mouthSize(f);
+  const k = mh / 0.24;
+  const y0 = (face.noseBase[1] + face.lipTop[1]) / 2 + 0.01;
   return {
     pts: [
-      [s * 0.05, 0.202],
-      [s * 0.135, 0.248],
-      [s * 0.225, 0.256],
-      [s * 0.305, 0.235],
-      [s * 0.358, 0.207],
+      [s * 0.008, y0],
+      [s * mh * 0.35, y0 - 0.045],
+      [s * mh * 0.62, y0 - 0.06],
+      [s * mh * 0.85, y0 - 0.05],
+      [s * mh * 0.98, y0 - 0.015],
+      [s * mh * 1.06, y0 + 0.025],
     ],
-    w: [0.041, 0.039, 0.03, 0.017, 0.004],
+    w: [0.034 * k, 0.032 * k, 0.026 * k, 0.018 * k, 0.01 * k, 0.004],
   };
 }
 
-function MUS(s: number): Stroke {
-  return {
-    pts: [
-      [s * 0.006, -0.212],
-      [s * 0.08, -0.244],
-      [s * 0.16, -0.272],
-      [s * 0.228, -0.276],
-      [s * 0.268, -0.252],
-      [s * 0.283, -0.219],
-    ],
-    w: [0.034, 0.033, 0.028, 0.021, 0.012, 0.004],
-  };
+// SMILE is the wide grin: the lowest point on the mouth and the corners lifted.
+function SMILE(f: Fit): Stroke {
+  const mh = mouthSize(f);
+  const cy = f.face.lip[1] + 0.01;
+  const xc = Math.min(0.34, mh * 1.15);
+  const pts: P2[] = [];
+  const w: number[] = [];
+  const base = [0.005, 0.011, 0.014, 0.015, 0.016, 0.016, 0.016, 0.015, 0.014, 0.011, 0.005];
+  const k = mh / 0.24;
+  for (let i = 0; i < 11; i++) {
+    const t = (i / 10) * 2 - 1;
+    const u = Math.min(1, Math.abs(t));
+    pts.push([t * xc, cy + 0.085 * u * u + 0.025 * Math.max(0, u - 0.8) * 5]);
+    w.push(base[i] * k);
+  }
+  return { pts, w };
 }
 
-const SMILE: Stroke = {
-  pts: [
-    [-0.238, -0.336],
-    [-0.272, -0.376],
-    [-0.256, -0.424],
-    [-0.196, -0.45],
-    [-0.1, -0.462],
-    [0, -0.464],
-    [0.1, -0.462],
-    [0.196, -0.45],
-    [0.256, -0.424],
-    [0.272, -0.376],
-    [0.238, -0.336],
-  ],
-  w: [0.005, 0.011, 0.014, 0.015, 0.016, 0.016, 0.016, 0.015, 0.014, 0.011, 0.005],
-};
-
-function NOSTRIL(s: number): Stroke {
+function NOSTRIL(f: Fit, s: number): Stroke {
+  const nb = f.face.noseBase;
   return {
     pts: [
-      [s * 0.022, -0.055],
-      [s * 0.04, -0.062],
-      [s * 0.056, -0.052],
+      [s * 0.024, nb[1] + 0.03],
+      [s * 0.045, nb[1] + 0.018],
+      [s * 0.066, nb[1] + 0.03],
     ],
     w: [0.005, 0.01, 0.004],
   };
 }
 
-function CHINLINE(s: number): Stroke {
+// CHINLINE is the short crease beside the goatee.
+function CHINLINE(f: Fit, s: number): Stroke {
+  const mh = mouthSize(f);
+  const low = f.face.lipLow[1];
   return {
     pts: [
-      [s * 0.052, -0.5],
-      [s * 0.08, -0.545],
-      [s * 0.088, -0.6],
+      [s * mh * 0.3, low - 0.075],
+      [s * mh * 0.34, low - 0.13],
+      [s * mh * 0.36, low - 0.19],
     ],
     w: [0.007, 0.008, 0.003],
   };
 }
 
-const GOATEE: P2[] = [
-  [0, -0.492],
-  [0.058, -0.516],
-  [0.076, -0.556],
-  [0.04, -0.6],
-  [0, -0.66],
-  [-0.04, -0.6],
-  [-0.076, -0.556],
-  [-0.058, -0.516],
-  [0, -0.492],
-];
+// GOATEE hangs from the lower lip to the chin, as wide as a little more than
+// half the mouth.
+function GOATEE(f: Fit): P2[] {
+  const mh = Math.min(mouthSize(f), 0.3);
+  const low = f.face.lipLow[1];
+  const tip = Math.min(f.face.chin[1] + 0.12, low - 0.16);
+  const top = low - 0.09;
+  const h1 = top - (top - tip) * 0.2;
+  const h2 = top - (top - tip) * 0.66;
+  const w0 = mh * 0.24;
+  const w1 = mh * 0.3;
+  const w2 = mh * 0.16;
+  return [
+    [0, top],
+    [w0, top - (top - tip) * 0.06],
+    [w1, h1],
+    [w2, h2],
+    [0, tip],
+    [-w2, h2],
+    [-w1, h1],
+    [-w0, top - (top - tip) * 0.06],
+    [0, top],
+  ];
+}
 
 // ----------------------------------------------------------------- the sheet
 // One offscreen canvas is reused, so a frame does not build a surface for the
@@ -774,3 +1040,6 @@ function sheetOf(w: number, h: number) {
   if (!c || !sc) return null;
   return { canvas: sheetCanvas, c, sc };
 }
+
+// temporary lab handle
+export const __dbg = { fawkesFit, flatModel, fawkesRho, BROW, MUS, SMILE, NOSTRIL, CHINLINE, GOATEE, mouthSize, project, fawkesHeight };

@@ -419,6 +419,10 @@ function oneEuroRun(s, src, t) {
 // the last anchor in place, so the mask does not flick to a corner.
 function lookMeshAnchor(p, lm) {
   const pts = new Float32Array(lm.length * 2);
+  // The depth of every point, beside the place of it: a mask reads it to take
+  // the shape of the face under it. The landmarker puts the head centre at
+  // zero, so only the differences of these numbers are used.
+  const pz = new Float32Array(lm.length);
   let x0 = 1,
     y0 = 1,
     x1 = 0,
@@ -428,6 +432,7 @@ function lookMeshAnchor(p, lm) {
       y = lm[i].y;
     pts[i * 2] = x;
     pts[i * 2 + 1] = y;
+    pz[i] = lm[i].z || 0;
     if (x < x0) x0 = x;
     if (x > x1) x1 = x;
     if (y < y0) y0 = y;
@@ -439,6 +444,7 @@ function lookMeshAnchor(p, lm) {
     w: x1 - x0,
     h: y1 - y0,
     lm: pts,
+    lz: pz,
     tongue: 0,
     lid: 1,
     gaze: [0, 0, 0, 0],
@@ -523,6 +529,7 @@ function lookMeshAnchor(p, lm) {
   const a = p.anchor;
   const t = performance.now();
   const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
+  const sz = oneEuroRun(p.meshZ || (p.meshZ = oneEuroState()), pz, t);
   const box = oneEuroRun(
     p.meshBox || (p.meshBox = oneEuroState()),
     [next.x, next.y, next.w, next.h],
@@ -532,6 +539,7 @@ function lookMeshAnchor(p, lm) {
   // the shape, and a blend with a box would only blur the first mask.
   if (!a || !a.lm || a.lm.length !== pts.length) {
     next.lm = Float32Array.from(sl);
+    next.lz = Float32Array.from(sz);
     p.anchor = next;
     return;
   }
@@ -553,6 +561,8 @@ function lookMeshAnchor(p, lm) {
   if (a.smile == null) a.smile = next.smile;
   else a.smile += (next.smile - a.smile) * 0.35;
   for (let i = 0; i < pts.length; i++) a.lm[i] = sl[i];
+  if (!a.lz || a.lz.length !== sz.length) a.lz = Float32Array.from(sz);
+  else for (let i = 0; i < sz.length; i++) a.lz[i] = sz[i];
 }
 
 // lookAnchor finds the face patch with the classic skin tone test on the small
@@ -637,6 +647,17 @@ function roll(g) {
   return Math.atan2(g.eyeR[1][1] - g.eyeL[0][1], g.eyeR[1][0] - g.eyeL[0][0]);
 }
 
+// depthOf reads the depth of the mesh into pixels, or null when the anchor has
+// no mesh: the landmarker puts z on the same scale as x, so the width of the
+// frame scales it.
+function depthOf(a, lm, W) {
+  const lz = a.lz;
+  if (!lm || !lz || lz.length < 468) return null;
+  const out = new Float32Array(lz.length);
+  for (let i = 0; i < lz.length; i++) out[i] = lz[i] * W;
+  return out;
+}
+
 // maskGeo reads an anchor into pixels. A mesh anchor carries every face point; a
 // skin anchor only a box, so the points are stood in the box and one drawing
 // serves both.
@@ -686,6 +707,8 @@ function maskGeo(a, W, H) {
     mouthR: at(LM.mouthR, 0.2, 0.28),
     eyeL: [outerL, innerL],
     eyeR: [innerR, outerR],
+    // The depth of each point in pixels, on the same scale as its place.
+    z: depthOf(a, lm, W),
     lid: a.lid != null ? a.lid : 1,
     browL: at(LM.browL, -0.25, -0.24),
     browR: at(LM.browR, 0.25, -0.24),

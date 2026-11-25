@@ -570,7 +570,9 @@
   // src/fawkes.ts
   var EYE_X = 0.152;
   var EYE_Y = 0.045;
-  var CHIN_Y = -0.66;
+  var CHIN_Y = -0.95;
+  var CROWN_Y = 0.95;
+  var FIT_CHIN_Y = -0.66;
   var NOSE_Y = -0.02;
   var HOLE_A = 0.105;
   var HOLE_BU = 0.05;
@@ -594,27 +596,27 @@
   var RIGHT = [
     [
       [0, CHIN_Y],
-      [0.075, -0.668],
-      [0.235, -0.618],
-      [0.35, -0.5]
+      [0.07, -0.945],
+      [0.245, -0.83],
+      [0.368, -0.62]
     ],
     [
-      [0.35, -0.5],
-      [0.452, -0.385],
-      [0.499, -0.16],
+      [0.368, -0.62],
+      [0.462, -0.46],
+      [0.499, -0.18],
       [0.5, 0.03]
     ],
     [
       [0.5, 0.03],
-      [0.499, 0.2],
-      [0.455, 0.37],
-      [0.373, 0.475]
+      [0.499, 0.22],
+      [0.455, 0.42],
+      [0.378, 0.56]
     ],
     [
-      [0.373, 0.475],
-      [0.298, 0.567],
-      [0.158, 0.604],
-      [0, 0.6]
+      [0.378, 0.56],
+      [0.345, 0.74],
+      [0.16, CROWN_Y],
+      [0, CROWN_Y]
     ]
   ];
   function cubic(p0, c1, c2, p1, t) {
@@ -664,37 +666,53 @@
     return OUTLINE[Math.round(i * OUTLINE.length / seg) % OUTLINE.length];
   }
   function fawkesRho(x, y) {
-    return Math.min(1, Math.hypot(x / 0.505, y / 0.665));
+    return Math.min(1, Math.hypot(x / 0.505, y / 0.95));
   }
   function gauss(d) {
     return Math.exp(-d * d);
   }
-  function fawkesHeight(x, y, rho) {
-    const ax = x / 0.72, by = (y + 0.02) / 0.95;
-    const r2 = ax * ax + by * by;
-    let z = r2 < 1 ? 0.145 * Math.sqrt(1 - r2) : 0;
+  function fawkesHeight(f, x, y, rho) {
+    const face = f.face;
+    let z = 0;
+    if (f.form) z = formAt(f.form, x, y);
+    else {
+      const ax = x / 0.72, by = y / 1.5;
+      const r2 = ax * ax + by * by;
+      if (r2 < 1) z = 0.09 * Math.sqrt(1 - r2);
+    }
+    const browY = (face.browL[1] + face.browR[1]) / 2;
+    const noseY = face.nose[1];
+    const mouthY = face.lip[1];
     const u = Math.abs(x);
-    if (u > 0.03 && u < 0.38) {
-      const yc = 0.158 + 1.282 * u - 3.16 * u * u;
-      z += 0.078 * gauss((y - yc) / 0.042) * ramp(0.03, 0.09, u) * ramp(0.39, 0.3, u);
+    if (u > 0.03 && u < 0.4) {
+      const yc = browY + 0.86 * (0.158 + 1.282 * u - 3.16 * u * u) - 0.86 * 0.235;
+      z += 0.05 * gauss((y - yc) / 0.045) * ramp(0.03, 0.09, u) * ramp(0.41, 0.32, u);
     }
-    if (y > -0.08 && y < 0.27) {
-      const w = 0.022 + 0.058 * ramp(0.27, -0.05, y);
-      z += 0.175 * gauss(x / w) * ramp(0.27, 0.18, y) * ramp(-0.08, 0, y);
-      z += 0.05 * gauss(x / 0.07) * gauss((y + 0.03) / 0.045);
-      z += 0.022 * gauss((Math.abs(x) - 0.058) / 0.028) * gauss((y + 0.045) / 0.03);
-      z -= 0.018 * gauss((Math.abs(x) - 0.088) / 0.026) * gauss((y + 0.035) / 0.035);
+    const ny0 = noseY + 0.15;
+    const ny1 = noseY - 0.11;
+    if (y > ny1 && y < ny0) {
+      const t = (y - ny1) / (ny0 - ny1);
+      const w = 0.024 + 0.05 * t;
+      z += 0.07 * gauss(x / w) * ramp(0, 0.22, t) * ramp(1, 0.86, t);
+      z += 0.02 * gauss(x / 0.07) * gauss((y - noseY) / 0.05);
+      z += 0.02 * gauss((Math.abs(x) - 0.06) / 0.03) * gauss((y - ny1 - 0.02) / 0.035);
+      z -= 0.016 * gauss((Math.abs(x) - 0.095) / 0.028) * gauss((y - ny1) / 0.04);
     }
-    z += 0.03 * gauss((x - 0.29) / 0.17) * gauss(y / 0.14);
-    z += 0.03 * gauss((x + 0.29) / 0.17) * gauss(y / 0.14);
-    z -= 0.028 * gauss((x - 0.25) / 0.13) * gauss((y + 0.21) / 0.12);
-    z -= 0.028 * gauss((x + 0.25) / 0.13) * gauss((y + 0.21) / 0.12);
+    const cheekY = (EYE_Y + mouthY) / 2;
+    z += 0.035 * gauss((x - 0.29) / 0.17) * gauss((y - cheekY) / 0.15);
+    z += 0.035 * gauss((x + 0.29) / 0.17) * gauss((y - cheekY) / 0.15);
+    z -= 0.03 * gauss((x - 0.25) / 0.13) * gauss((y - cheekY + 0.22) / 0.12);
+    z -= 0.03 * gauss((x + 0.25) / 0.13) * gauss((y - cheekY + 0.22) / 0.12);
     for (const s of [-1, 1]) {
       z -= 0.075 * gauss((x - s * EYE_X) / 0.135) * gauss((y - EYE_Y) / 0.085);
     }
-    z += 0.05 * gauss(x / 0.07) * gauss((y + 0.5) / 0.1);
+    const chinY = face.chin[1] + 0.1;
+    z += 0.05 * gauss(x / 0.07) * gauss((y - chinY) / 0.12);
     return z * ramp(1, 0.88, rho);
   }
+  var FORM_N = 16;
+  var FORM_X = 0.62;
+  var FORM_Y = 1.02;
   function dot2(a, b) {
     return a[0] * b[0] + a[1] * b[1];
   }
@@ -713,7 +731,7 @@
     const spanX = Math.abs(dot2([eR[0] - eL[0], eR[1] - eL[1]], ax));
     const down = -dot2([g.chin[0] - o[0], g.chin[1] - o[1]], ay);
     let sx = spanX > 1 ? spanX / (2 * EYE_X) : fw * 1.06;
-    let sy = down > 1 ? down / (EYE_Y - CHIN_Y) : fh * 0.75;
+    let sy = down > 1 ? down / (EYE_Y - FIT_CHIN_Y) : fh * 0.75;
     sx = Math.min(Math.max(sx, fw * 0.9), fw * 1.14);
     sy = Math.min(Math.max(sy, fh * 0.66), fh * 0.88);
     const rel = [(g.nose ? g.nose[0] : o[0]) - o[0], (g.nose ? g.nose[1] : o[1]) - o[1]];
@@ -729,7 +747,111 @@
     const asym = dl + dr > 1 ? (dr - dl) / (dl + dr) : 0;
     const yaw = Math.min(0.6, Math.max(-0.6, 0.55 * yawNose - 0.75 * asym));
     const pitch = Math.min(0.3, Math.max(-0.3, (nym - NOSE_Y + 0.03) * 2.2));
-    return { ox: o[0], oy: o[1], ax, ay, sx, sy, yaw, pitch };
+    const f = { ox: o[0], oy: o[1], ax, ay, sx, sy, yaw, pitch, face: null, form: null };
+    f.face = faceOf(f, g);
+    f.form = formOf(f, g);
+    return f;
+  }
+  function flatModel(f, px, py) {
+    const dx = px - f.ox, dy = py - f.oy;
+    const x1 = (dx * f.ax[0] + dy * f.ax[1]) / f.sx;
+    const y1 = (dx * f.ay[0] + dy * f.ay[1]) / f.sy;
+    const cy = Math.cos(f.yaw) || 1, syaw = Math.sin(f.yaw);
+    const cp = Math.cos(f.pitch) || 1, sp = Math.sin(f.pitch);
+    const x = x1 / cy;
+    const y = (y1 + x * syaw * sp) / cp;
+    return [x, y];
+  }
+  function facePoint(p, fallback) {
+    return p ? p : fallback;
+  }
+  function faceOf(f, g) {
+    const to = (p, fx) => {
+      const q = facePoint(p, fx);
+      return flatModel(f, q[0], q[1]);
+    };
+    return {
+      browL: to(g.browL, [-0.2, f.oy - 0.23 * f.sy]),
+      browR: to(g.browR, [0.2, f.oy - 0.23 * f.sy]),
+      nose: to(g.nose, [f.ox, f.oy - NOSE_Y * f.sy]),
+      noseBase: to(g.noseBase, [f.ox, f.oy + 0.1 * f.sy]),
+      lipTop: to(g.lipTop, [f.ox, f.oy + 0.24 * f.sy]),
+      lip: to(g.lip, [f.ox, f.oy + 0.28 * f.sy]),
+      lipLow: to(g.lipLow, [f.ox, f.oy + 0.32 * f.sy]),
+      mouthL: to(g.mouthL, [f.ox - 0.2 * f.sx, f.oy + 0.28 * f.sy]),
+      mouthR: to(g.mouthR, [f.ox + 0.2 * f.sx, f.oy + 0.28 * f.sy]),
+      chin: to(g.chin, [f.ox, f.oy - FIT_CHIN_Y * f.sy]),
+      eyeLo: flatModel(f, g.eyeL[0][0], g.eyeL[0][1]),
+      eyeLi: flatModel(f, g.eyeL[1][0], g.eyeL[1][1]),
+      eyeRo: flatModel(f, g.eyeR[1][0], g.eyeR[1][1]),
+      eyeRi: flatModel(f, g.eyeR[0][0], g.eyeR[0][1])
+    };
+  }
+  function formOf(f, g) {
+    const lm = g.lm, zd = g.z;
+    if (!lm || !zd || lm.length < 468 * 2 || zd.length < 468) return null;
+    const n = FORM_N;
+    const x0 = -FORM_X, y0 = -FORM_Y;
+    const dx = 2 * FORM_X / n, dy = 2 * FORM_Y / n;
+    const h = new Float32Array((n + 1) * (n + 1)).fill(NaN);
+    const sz = (f.sx + f.sy) / 2 || 1;
+    let sum = 0;
+    for (let i = 0; i < 468; i++) sum += zd[i];
+    const z0 = sum / 468;
+    for (let i = 0; i < 468; i++) {
+      const p = flatModel(f, lm[i * 2], lm[i * 2 + 1]);
+      if (p[0] < x0 || p[0] > -x0 || p[1] < y0 || p[1] > -y0) continue;
+      const gi = Math.round((p[0] - x0) / dx), gj = Math.round((p[1] - y0) / dy);
+      const k = gj * (n + 1) + gi;
+      const v = (z0 - zd[i]) / sz;
+      if (!(h[k] >= v)) h[k] = v;
+    }
+    for (let pass = 0; pass < 5; pass++) {
+      const src = Float32Array.from(h);
+      let left = 0;
+      for (let j = 0; j <= n; j++) {
+        for (let i = 0; i <= n; i++) {
+          const k = j * (n + 1) + i;
+          if (!Number.isNaN(src[k])) continue;
+          let sum2 = 0, cnt = 0;
+          for (let dj = -1; dj <= 1; dj++) {
+            for (let di = -1; di <= 1; di++) {
+              const jj = j + dj, ii = i + di;
+              if (jj < 0 || jj > n || ii < 0 || ii > n) continue;
+              const v = src[jj * (n + 1) + ii];
+              if (Number.isNaN(v)) continue;
+              sum2 += v;
+              cnt++;
+            }
+          }
+          if (cnt) h[k] = sum2 / cnt;
+          else left++;
+        }
+      }
+      if (!left) break;
+    }
+    for (let k = 0; k < h.length; k++) if (Number.isNaN(h[k])) h[k] = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      const src = Float32Array.from(h);
+      for (let j = 1; j < n; j++) {
+        for (let i = 1; i < n; i++) {
+          const k = j * (n + 1) + i;
+          h[k] = (4 * src[k] + src[k - 1] + src[k + 1] + src[k - n - 1] + src[k + n + 1]) / 8;
+        }
+      }
+    }
+    return { n, x0, y0, dx, dy, h };
+  }
+  function formAt(fo, x, y) {
+    const fx = (x - fo.x0) / fo.dx, fy = (y - fo.y0) / fo.dy;
+    if (!(fx >= 0 && fy >= 0 && fx <= fo.n && fy <= fo.n)) return 0;
+    const i = Math.min(fo.n - 1, Math.floor(fx)), j = Math.min(fo.n - 1, Math.floor(fy));
+    const u = fx - i, v = fy - j;
+    const k = j * (fo.n + 1) + i;
+    const a = fo.h[k], b = fo.h[k + 1], c = fo.h[k + fo.n + 1], d = fo.h[k + fo.n + 2];
+    const top = a + (b - a) * u, bot = c + (d - c) * u;
+    const z = top + (bot - top) * v;
+    return Number.isFinite(z) ? z : 0;
   }
   var CAM = 3.2;
   function project(f, x, y, z, out) {
@@ -777,10 +899,10 @@
       for (let i = 0; i < SEG; i++) {
         const b = outlineAt(i, SEG);
         const x = b[0] * rho, y = b[1] * rho;
-        const z = fawkesHeight(x, y, rho);
+        const z = fawkesHeight(f, x, y, rho);
         const e = 6e-3;
-        const gx = (fawkesHeight(x + e, y, rho) - fawkesHeight(x - e, y, rho)) / (2 * e);
-        const gy = (fawkesHeight(x, y + e, rho) - fawkesHeight(x, y - e, rho)) / (2 * e);
+        const gx = (fawkesHeight(f, x + e, y, rho) - fawkesHeight(f, x - e, y, rho)) / (2 * e);
+        const gy = (fawkesHeight(f, x, y + e, rho) - fawkesHeight(f, x, y - e, rho)) / (2 * e);
         turn(f, -gx, -gy, 1, nv);
         project(f, x, y, z, p);
         const at = k * SEG + i;
@@ -966,7 +1088,7 @@
       const nx = -ty / m, ny = tx / m;
       const w = widthAt(s.w, i / (n - 1));
       const x = spine[i][0], y = spine[i][1];
-      const z = fawkesHeight(x, y, fawkesRho(x, y));
+      const z = fawkesHeight(f, x, y, fawkesRho(x, y));
       project(f, x + nx * w, y + ny * w, z, p);
       left.push([p[0], p[1]]);
       project(f, x - nx * w, y - ny * w, z, p);
@@ -981,8 +1103,8 @@
   }
   function inkFill(c, f, path, cx, cy) {
     const e = 0.01;
-    const gx = (fawkesHeight(cx + e, cy, 0.3) - fawkesHeight(cx - e, cy, 0.3)) / (2 * e);
-    const gy = (fawkesHeight(cx, cy + e, 0.3) - fawkesHeight(cx, cy - e, 0.3)) / (2 * e);
+    const gx = (fawkesHeight(f, cx + e, cy, 0.3) - fawkesHeight(f, cx - e, cy, 0.3)) / (2 * e);
+    const gy = (fawkesHeight(f, cx, cy + e, 0.3) - fawkesHeight(f, cx, cy - e, 0.3)) / (2 * e);
     const nv = [0, 0, 0];
     const m = Math.hypot(gx, gy, 1);
     turn(f, -gx / m, -gy / m, 1 / m, nv);
@@ -993,7 +1115,7 @@
   }
   function holeShape(f, s) {
     const p = [0, 0, 0];
-    const z = fawkesHeight(s * EYE_X, EYE_Y, fawkesRho(s * EYE_X, EYE_Y));
+    const z = fawkesHeight(f, s * EYE_X, EYE_Y, fawkesRho(s * EYE_X, EYE_Y));
     project(f, s * EYE_X, EYE_Y, z, p);
     return [p[0], p[1], HOLE_BL * ((f.sx + f.sy) / 2)];
   }
@@ -1007,7 +1129,7 @@
       const b = Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow;
       const x = s * EYE_X + a * cs - b * sn;
       const y = EYE_Y + a * sn + b * cs;
-      const z = fawkesHeight(x, y, fawkesRho(x, y));
+      const z = fawkesHeight(f, x, y, fawkesRho(x, y));
       project(f, x, y, z, p);
       pts.push([p[0], p[1]]);
     }
@@ -1020,26 +1142,37 @@
     for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
     c.closePath();
   }
+  function mouthSize(f) {
+    const half = Math.abs(f.face.mouthR[0] - f.face.mouthL[0]) / 2;
+    return Math.min(Math.max(half || 0.24, 0.17), 0.34);
+  }
   function paintMask(c, f) {
+    const face = f.face;
     for (const s of [-1, 1]) {
       inkFill(c, f, () => holePath(c, f, s, 1.26), s * EYE_X, EYE_Y);
-      inkFill(c, f, () => ribbon(c, f, BROW(s)), s * 0.19, 0.21);
-      inkFill(c, f, () => ribbon(c, f, MUS(s)), s * 0.12, -0.28);
-      inkFill(c, f, () => ribbon(c, f, NOSTRIL(s)), s * 0.035, -0.06);
+      const br = s < 0 ? face.browL : face.browR;
+      inkFill(c, f, () => ribbon(c, f, BROW(f, s)), br[0], br[1]);
+      const mu = MUS(f, s);
+      inkFill(c, f, () => ribbon(c, f, mu), mu.pts[1][0], mu.pts[1][1]);
+      const no = NOSTRIL(f, s);
+      inkFill(c, f, () => ribbon(c, f, no), no.pts[1][0], no.pts[1][1]);
     }
-    inkFill(c, f, () => ribbon(c, f, SMILE), 0, -0.4);
+    const sm = SMILE(f);
+    inkFill(c, f, () => ribbon(c, f, sm), 0, sm.pts[5][1]);
     for (const s of [-1, 1]) {
-      inkFill(c, f, () => ribbon(c, f, CHINLINE(s)), s * 0.085, -0.51);
+      const cl = CHINLINE(f, s);
+      inkFill(c, f, () => ribbon(c, f, cl), cl.pts[1][0], cl.pts[1][1]);
     }
+    const goat = GOATEE(f);
     inkFill(
       c,
       f,
       () => {
-        const pts = catmull(GOATEE, 40);
+        const pts = catmull(goat, 40);
         const p = [0, 0, 0];
         c.beginPath();
         for (let i = 0; i < pts.length; i++) {
-          const z = fawkesHeight(pts[i][0], pts[i][1], fawkesRho(pts[i][0], pts[i][1]));
+          const z = fawkesHeight(f, pts[i][0], pts[i][1], fawkesRho(pts[i][0], pts[i][1]));
           project(f, pts[i][0], pts[i][1], z, p);
           if (i === 0) c.moveTo(p[0], p[1]);
           else c.lineTo(p[0], p[1]);
@@ -1047,81 +1180,100 @@
         c.closePath();
       },
       0,
-      -0.52
+      goat[4][1]
     );
   }
-  function BROW(s) {
+  function BROW(f, s) {
+    const eye = s < 0 ? [f.face.eyeLi, f.face.eyeLo] : [f.face.eyeRi, f.face.eyeRo];
+    const brow = s < 0 ? f.face.browL : f.face.browR;
+    const xi = eye[0][0], xo = eye[1][0];
+    const pts = [];
+    for (const t of [0, 0.34, 0.68, 1.02, 1.45]) {
+      const x = xi + (xo - xi) * t;
+      const arc = 0.012 * Math.sin(Math.PI * Math.min(t, 1));
+      const y = brow[1] + 0.01 + arc - 0.05 * Math.max(0, t - 1);
+      pts.push([x, y]);
+    }
+    return { pts, w: [0.042, 0.038, 0.028, 0.016, 4e-3] };
+  }
+  function MUS(f, s) {
+    const face = f.face;
+    const mh = mouthSize(f);
+    const k = mh / 0.24;
+    const y0 = (face.noseBase[1] + face.lipTop[1]) / 2 + 0.01;
     return {
       pts: [
-        [s * 0.05, 0.202],
-        [s * 0.135, 0.248],
-        [s * 0.225, 0.256],
-        [s * 0.305, 0.235],
-        [s * 0.358, 0.207]
+        [s * 8e-3, y0],
+        [s * mh * 0.35, y0 - 0.045],
+        [s * mh * 0.62, y0 - 0.06],
+        [s * mh * 0.85, y0 - 0.05],
+        [s * mh * 0.98, y0 - 0.015],
+        [s * mh * 1.06, y0 + 0.025]
       ],
-      w: [0.041, 0.039, 0.03, 0.017, 4e-3]
+      w: [0.034 * k, 0.032 * k, 0.026 * k, 0.018 * k, 0.01 * k, 4e-3]
     };
   }
-  function MUS(s) {
-    return {
-      pts: [
-        [s * 6e-3, -0.212],
-        [s * 0.08, -0.244],
-        [s * 0.16, -0.272],
-        [s * 0.228, -0.276],
-        [s * 0.268, -0.252],
-        [s * 0.283, -0.219]
-      ],
-      w: [0.034, 0.033, 0.028, 0.021, 0.012, 4e-3]
-    };
+  function SMILE(f) {
+    const mh = mouthSize(f);
+    const cy = f.face.lip[1] + 0.01;
+    const xc = Math.min(0.34, mh * 1.15);
+    const pts = [];
+    const w = [];
+    const base = [5e-3, 0.011, 0.014, 0.015, 0.016, 0.016, 0.016, 0.015, 0.014, 0.011, 5e-3];
+    const k = mh / 0.24;
+    for (let i = 0; i < 11; i++) {
+      const t = i / 10 * 2 - 1;
+      const u = Math.min(1, Math.abs(t));
+      pts.push([t * xc, cy + 0.085 * u * u + 0.025 * Math.max(0, u - 0.8) * 5]);
+      w.push(base[i] * k);
+    }
+    return { pts, w };
   }
-  var SMILE = {
-    pts: [
-      [-0.238, -0.336],
-      [-0.272, -0.376],
-      [-0.256, -0.424],
-      [-0.196, -0.45],
-      [-0.1, -0.462],
-      [0, -0.464],
-      [0.1, -0.462],
-      [0.196, -0.45],
-      [0.256, -0.424],
-      [0.272, -0.376],
-      [0.238, -0.336]
-    ],
-    w: [5e-3, 0.011, 0.014, 0.015, 0.016, 0.016, 0.016, 0.015, 0.014, 0.011, 5e-3]
-  };
-  function NOSTRIL(s) {
+  function NOSTRIL(f, s) {
+    const nb = f.face.noseBase;
     return {
       pts: [
-        [s * 0.022, -0.055],
-        [s * 0.04, -0.062],
-        [s * 0.056, -0.052]
+        [s * 0.024, nb[1] + 0.03],
+        [s * 0.045, nb[1] + 0.018],
+        [s * 0.066, nb[1] + 0.03]
       ],
       w: [5e-3, 0.01, 4e-3]
     };
   }
-  function CHINLINE(s) {
+  function CHINLINE(f, s) {
+    const mh = mouthSize(f);
+    const low = f.face.lipLow[1];
     return {
       pts: [
-        [s * 0.05, -0.49],
-        [s * 0.076, -0.528],
-        [s * 0.083, -0.572]
+        [s * mh * 0.3, low - 0.075],
+        [s * mh * 0.34, low - 0.13],
+        [s * mh * 0.36, low - 0.19]
       ],
       w: [7e-3, 8e-3, 3e-3]
     };
   }
-  var GOATEE = [
-    [0, -0.478],
-    [0.056, -0.5],
-    [0.072, -0.538],
-    [0.038, -0.578],
-    [0, -0.63],
-    [-0.038, -0.578],
-    [-0.072, -0.538],
-    [-0.056, -0.5],
-    [0, -0.478]
-  ];
+  function GOATEE(f) {
+    const mh = Math.min(mouthSize(f), 0.3);
+    const low = f.face.lipLow[1];
+    const tip = Math.min(f.face.chin[1] + 0.12, low - 0.16);
+    const top = low - 0.09;
+    const h1 = top - (top - tip) * 0.2;
+    const h2 = top - (top - tip) * 0.66;
+    const w0 = mh * 0.24;
+    const w1 = mh * 0.3;
+    const w2 = mh * 0.16;
+    return [
+      [0, top],
+      [w0, top - (top - tip) * 0.06],
+      [w1, h1],
+      [w2, h2],
+      [0, tip],
+      [-w2, h2],
+      [-w1, h1],
+      [-w0, top - (top - tip) * 0.06],
+      [0, top]
+    ];
+  }
   var sheetCanvas = null;
   var shellCanvas = null;
   function sheetOf(w, h) {
@@ -1433,11 +1585,13 @@
   }
   function lookMeshAnchor(p, lm) {
     const pts = new Float32Array(lm.length * 2);
+    const pz = new Float32Array(lm.length);
     let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
     for (let i = 0; i < lm.length; i++) {
       const x = lm[i].x, y = lm[i].y;
       pts[i * 2] = x;
       pts[i * 2 + 1] = y;
+      pz[i] = lm[i].z || 0;
       if (x < x0) x0 = x;
       if (x > x1) x1 = x;
       if (y < y0) y0 = y;
@@ -1449,6 +1603,7 @@
       w: x1 - x0,
       h: y1 - y0,
       lm: pts,
+      lz: pz,
       tongue: 0,
       lid: 1,
       gaze: [0, 0, 0, 0],
@@ -1515,6 +1670,7 @@
     const a = p.anchor;
     const t = performance.now();
     const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
+    const sz = oneEuroRun(p.meshZ || (p.meshZ = oneEuroState()), pz, t);
     const box = oneEuroRun(
       p.meshBox || (p.meshBox = oneEuroState()),
       [next.x, next.y, next.w, next.h],
@@ -1522,6 +1678,7 @@
     );
     if (!a || !a.lm || a.lm.length !== pts.length) {
       next.lm = Float32Array.from(sl);
+      next.lz = Float32Array.from(sz);
       p.anchor = next;
       return;
     }
@@ -1538,6 +1695,8 @@
     if (a.smile == null) a.smile = next.smile;
     else a.smile += (next.smile - a.smile) * 0.35;
     for (let i = 0; i < pts.length; i++) a.lm[i] = sl[i];
+    if (!a.lz || a.lz.length !== sz.length) a.lz = Float32Array.from(sz);
+    else for (let i = 0; i < sz.length; i++) a.lz[i] = sz[i];
   }
   function lookAnchor(p) {
     try {
@@ -1601,6 +1760,13 @@
   function roll(g) {
     return Math.atan2(g.eyeR[1][1] - g.eyeL[0][1], g.eyeR[1][0] - g.eyeL[0][0]);
   }
+  function depthOf(a, lm, W) {
+    const lz = a.lz;
+    if (!lm || !lz || lz.length < 468) return null;
+    const out = new Float32Array(lz.length);
+    for (let i = 0; i < lz.length; i++) out[i] = lz[i] * W;
+    return out;
+  }
   function maskGeo(a, W, H) {
     const cx = a.x * W;
     const cy = a.y * H;
@@ -1641,6 +1807,8 @@
       mouthR: at(LM.mouthR, 0.2, 0.28),
       eyeL: [outerL, innerL],
       eyeR: [innerR, outerR],
+      // The depth of each point in pixels, on the same scale as its place.
+      z: depthOf(a, lm, W),
       lid: a.lid != null ? a.lid : 1,
       browL: at(LM.browL, -0.25, -0.24),
       browR: at(LM.browR, 0.25, -0.24),
