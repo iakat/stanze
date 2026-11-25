@@ -576,7 +576,7 @@
   var HOLE_A = 0.105;
   var HOLE_BU = 0.05;
   var HOLE_BL = 0.06;
-  var HOLE_TILT = 0.15;
+  var HOLE_TILT = 0.2;
   var LX = -0.56;
   var LY = 0.44;
   var LZ = 0.7;
@@ -697,15 +697,15 @@
       const yc = browY + 0.86 * (0.158 + 1.282 * u - 3.16 * u * u) - 0.86 * 0.235;
       z += 0.05 * gauss((y - yc) / 0.045) * ramp(0.03, 0.09, u) * ramp(0.41, 0.32, u);
     }
-    const ny0 = noseY + 0.15;
-    const ny1 = noseY - 0.11;
+    const ny0 = (face.browL[1] + face.browR[1]) / 2 - 0.03;
+    const ny1 = noseY - 0.015;
     if (y > ny1 && y < ny0) {
       const t = (y - ny1) / (ny0 - ny1);
-      const w = 0.024 + 0.05 * t;
-      z += 0.07 * gauss(x / w) * ramp(0, 0.22, t) * ramp(1, 0.86, t);
-      z += 0.02 * gauss(x / 0.07) * gauss((y - noseY) / 0.05);
-      z += 0.02 * gauss((Math.abs(x) - 0.06) / 0.03) * gauss((y - ny1 - 0.02) / 0.035);
-      z -= 0.016 * gauss((Math.abs(x) - 0.095) / 0.028) * gauss((y - ny1) / 0.04);
+      const w = 0.018 + 0.055 * t;
+      z += 0.14 * gauss(x / w) * ramp(0, 0.18, t) * ramp(1, 0.88, t);
+      z += 0.05 * gauss(x / 0.08) * gauss((y - ny1) / 0.05);
+      z += 0.034 * gauss((Math.abs(x) - 0.068) / 0.03) * gauss((y - ny1 - 0.02) / 0.035);
+      z -= 0.038 * gauss((Math.abs(x) - 0.105) / 0.026) * gauss((y - ny1) / 0.038);
     }
     const cheekY = (EYE_Y + mouthY) / 2;
     z += 0.035 * gauss((x - 0.29) / 0.17) * gauss((y - cheekY) / 0.15);
@@ -896,7 +896,7 @@
   function drawFawkes(ctx, W, H, g) {
     const f = fawkesFit(g);
     if (!f) return;
-    const SEG = 60, RING = 26;
+    const SEG = 90, RING = 34;
     const xs = new Float32Array((RING + 1) * SEG);
     const ys = new Float32Array((RING + 1) * SEG);
     const vn = new Array((RING + 1) * SEG * 3);
@@ -926,7 +926,10 @@
           a -= 0.3 * ramp(1.7, 0.95, d);
         }
         a -= 0.14 * ramp(0.9, 1, rho);
-        ao[at] = Math.max(0.45, a);
+        const noseY = f.face.nose[1];
+        a -= 0.16 * gauss((Math.abs(x) - 0.1) / 0.032) * gauss((y - noseY) / 0.14);
+        a -= 0.06 * gauss((Math.abs(x) - 0.12) / 0.09) * gauss((y - (f.face.browL[1] - 0.01)) / 0.04);
+        ao[at] = Math.max(0.42, a);
       }
     }
     let bx = Infinity, by = Infinity, bx2 = -Infinity, by2 = -Infinity;
@@ -1066,9 +1069,9 @@
     const ndl = nx * LX + ny * LY + nz * LZ;
     const diff = Math.max(0, ndl);
     const ndh = Math.max(0, nx * HX + ny * HY + nz * HZ);
-    const spec = Math.pow(ndh, 40) * 1.05;
-    const rim = Math.pow(clamp01(1 - nz), 3) * 0.3;
-    const lit = (0.17 + 1 * diff) * a;
+    const spec = Math.pow(ndh, 60) * 0.55;
+    const rim = Math.pow(clamp01(1 - nz), 3) * 0.24;
+    const lit = (0.17 + 0.9 * diff) * a;
     const r = Math.min(255, Math.round(255 * (SHELL[0] * lit + spec + rim * 0.55)));
     const g = Math.min(255, Math.round(255 * (SHELL[1] * lit + spec + rim * 0.62)));
     const b = Math.min(255, Math.round(255 * (SHELL[2] * lit + spec + rim * 0.78)));
@@ -1147,7 +1150,9 @@
     for (let i = 0; i < 32; i++) {
       const th = i / 32 * Math.PI * 2;
       const a = Math.cos(th) * HOLE_A * grow;
-      const b = Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow;
+      const inward = Math.max(0, -s * Math.cos(th));
+      const taper = 1 - 0.62 * inward * inward;
+      const b = Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow * taper;
       const x = s * EYE_X + a * cs - b * sn;
       const y = EYE_Y + a * sn + b * cs;
       const z = fawkesHeight(f, x, y, fawkesRho(x, y));
@@ -1229,9 +1234,9 @@
         [s * mh * 0.62, y0 - 0.06],
         [s * mh * 0.85, y0 - 0.05],
         [s * mh * 0.98, y0 - 0.015],
-        [s * mh * 1.06, y0 + 0.025]
+        [s * mh * 1.12, y0 + 0.055]
       ],
-      w: [0.034 * k, 0.032 * k, 0.026 * k, 0.018 * k, 0.01 * k, 4e-3]
+      w: [0.038 * k, 0.036 * k, 0.03 * k, 0.021 * k, 0.011 * k, 3e-3]
     };
   }
   function SMILE(f) {
@@ -1240,7 +1245,7 @@
     const xc = Math.min(0.34, mh * 1.15);
     const pts = [];
     const w = [];
-    const base = [5e-3, 0.011, 0.014, 0.015, 0.016, 0.016, 0.016, 0.015, 0.014, 0.011, 5e-3];
+    const base = [4e-3, 8e-3, 0.01, 0.011, 0.012, 0.012, 0.012, 0.011, 0.01, 8e-3, 4e-3];
     const k = mh / 0.24;
     for (let i = 0; i < 11; i++) {
       const t = i / 10 * 2 - 1;

@@ -21,7 +21,7 @@ const NOSE_Y = -0.02;
 const HOLE_A = 0.105;
 const HOLE_BU = 0.05;
 const HOLE_BL = 0.06;
-const HOLE_TILT = 0.15;
+const HOLE_TILT = 0.2;
 
 // A light from the upper left of the frame, in front of the mask: the usual
 // window light a webcam sees. The eye is on the camera axis.
@@ -192,16 +192,18 @@ function fawkesHeight(f: Fit, x: number, y: number, rho: number) {
   // The nose: a ridge that widens down to the tip, with a round tip. It runs
   // from the bridge to the tip the mesh found, so a short nose gets a short
   // ridge and a long one keeps its length.
-  const ny0 = noseY + 0.15;
-  const ny1 = noseY - 0.11;
+  // The ridge runs from the brow, between the eyes, down to the tip over the
+  // moustache, so it fills the bare stretch of the mask.
+  const ny0 = (face.browL[1] + face.browR[1]) / 2 - 0.03;
+  const ny1 = noseY - 0.015;
   if (y > ny1 && y < ny0) {
     const t = (y - ny1) / (ny0 - ny1);
-    const w = 0.024 + 0.05 * t;
-    z += 0.07 * gauss(x / w) * ramp(0, 0.22, t) * ramp(1, 0.86, t);
-    z += 0.02 * gauss(x / 0.07) * gauss((y - noseY) / 0.05);
+    const w = 0.018 + 0.055 * t;
+    z += 0.14 * gauss(x / w) * ramp(0, 0.18, t) * ramp(1, 0.88, t);
+    z += 0.05 * gauss(x / 0.08) * gauss((y - ny1) / 0.05);
     // The wings of the nose, and the crease between them and the cheek.
-    z += 0.02 * gauss((Math.abs(x) - 0.06) / 0.03) * gauss((y - ny1 - 0.02) / 0.035);
-    z -= 0.016 * gauss((Math.abs(x) - 0.095) / 0.028) * gauss((y - ny1) / 0.04);
+    z += 0.034 * gauss((Math.abs(x) - 0.068) / 0.03) * gauss((y - ny1 - 0.02) / 0.035);
+    z -= 0.038 * gauss((Math.abs(x) - 0.105) / 0.026) * gauss((y - ny1) / 0.038);
   }
   // Cheekbones, and the hollows under them, between the eye line and the mouth.
   const cheekY = (EYE_Y + mouthY) / 2;
@@ -536,8 +538,8 @@ function inkColour(nx: number, ny: number, nz: number) {
 export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, g) {
   const f = fawkesFit(g);
   if (!f) return;
-  const SEG = 60,
-    RING = 26;
+  const SEG = 90,
+    RING = 34;
   const xs = new Float32Array((RING + 1) * SEG);
   const ys = new Float32Array((RING + 1) * SEG);
   const vn: number[] = new Array((RING + 1) * SEG * 3);
@@ -572,7 +574,13 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
         a -= 0.3 * ramp(1.7, 0.95, d);
       }
       a -= 0.14 * ramp(0.9, 1, rho);
-      ao[at] = Math.max(0.45, a);
+      // The flanks of the nose and the fold under the brow hold shade, so the
+      // nose reads on white plastic even when the light is flat.
+      const noseY = f.face.nose[1];
+      a -= 0.16 * gauss((Math.abs(x) - 0.1) / 0.032) * gauss((y - noseY) / 0.14);
+      a -= 0.06 * gauss((Math.abs(x) - 0.12) / 0.09) *
+        gauss((y - (f.face.browL[1] - 0.01)) / 0.04);
+      ao[at] = Math.max(0.42, a);
     }
   }
 
@@ -751,9 +759,11 @@ function shellColour(nx: number, ny: number, nz: number, a: number) {
   const ndl = nx * LX + ny * LY + nz * LZ;
   const diff = Math.max(0, ndl);
   const ndh = Math.max(0, nx * HX + ny * HY + nz * HZ);
-  const spec = Math.pow(ndh, 40) * 1.05;
-  const rim = Math.pow(clamp01(1 - nz), 3) * 0.3;
-  const lit = (0.17 + 1.0 * diff) * a;
+  const spec = Math.pow(ndh, 60) * 0.55;
+  const rim = Math.pow(clamp01(1 - nz), 3) * 0.24;
+  // The light is kept off the top of the scale, so the curve of the shell and
+  // the ridge of the nose stay visible and the white does not clip.
+  const lit = (0.17 + 0.9 * diff) * a;
   const r = Math.min(255, Math.round(255 * (SHELL[0] * lit + spec + rim * 0.55)));
   const g = Math.min(255, Math.round(255 * (SHELL[1] * lit + spec + rim * 0.62)));
   const b = Math.min(255, Math.round(255 * (SHELL[2] * lit + spec + rim * 0.78)));
@@ -872,7 +882,12 @@ function holePoints(f: Fit, s: number, grow: number) {
   for (let i = 0; i < 32; i++) {
     const th = (i / 32) * Math.PI * 2;
     const a = Math.cos(th) * HOLE_A * grow;
-    const b = Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow;
+    // The hole is a teardrop: full at the outer corner, drawn to a point at the
+    // nose, so the look is the mask's and not a pair of soft ovals.
+    const inward = Math.max(0, (-s * Math.cos(th)));
+    const taper = 1 - 0.62 * inward * inward;
+    const b =
+      Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow * taper;
     const x = s * EYE_X + a * cs - b * sn;
     const y = EYE_Y + a * sn + b * cs;
     const z = fawkesHeight(f, x, y, fawkesRho(x, y));
@@ -973,9 +988,9 @@ function MUS(f: Fit, s: number): Stroke {
       [s * mh * 0.62, y0 - 0.06],
       [s * mh * 0.85, y0 - 0.05],
       [s * mh * 0.98, y0 - 0.015],
-      [s * mh * 1.06, y0 + 0.025],
+      [s * mh * 1.12, y0 + 0.055],
     ],
-    w: [0.034 * k, 0.032 * k, 0.026 * k, 0.018 * k, 0.01 * k, 0.004],
+    w: [0.038 * k, 0.036 * k, 0.03 * k, 0.021 * k, 0.011 * k, 0.003],
   };
 }
 
@@ -986,7 +1001,7 @@ function SMILE(f: Fit): Stroke {
   const xc = Math.min(0.34, mh * 1.15);
   const pts: P2[] = [];
   const w: number[] = [];
-  const base = [0.005, 0.011, 0.014, 0.015, 0.016, 0.016, 0.016, 0.015, 0.014, 0.011, 0.005];
+  const base = [0.004, 0.008, 0.01, 0.011, 0.012, 0.012, 0.012, 0.011, 0.01, 0.008, 0.004];
   const k = mh / 0.24;
   for (let i = 0; i < 11; i++) {
     const t = (i / 10) * 2 - 1;
