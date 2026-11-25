@@ -567,6 +567,580 @@
     return policy ? policy.createScriptURL(url) : url;
   }
 
+  // src/fawkes.ts
+  var EYE_X = 0.152;
+  var EYE_Y = 0.045;
+  var CHIN_Y = -0.66;
+  var NOSE_Y = -0.02;
+  var HOLE_A = 0.105;
+  var HOLE_BU = 0.05;
+  var HOLE_BL = 0.06;
+  var HOLE_TILT = 0.15;
+  var LX = -0.56;
+  var LY = 0.44;
+  var LZ = 0.7;
+  var HN = Math.hypot(LX, LY, LZ + 1);
+  var HX = LX / HN;
+  var HY = LY / HN;
+  var HZ = (LZ + 1) / HN;
+  var SHELL = [0.968, 0.958, 0.918];
+  function clamp01(v) {
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+  function ramp(a, b, v) {
+    const t = clamp01((v - a) / (b - a));
+    return t * t * (3 - 2 * t);
+  }
+  var RIGHT = [
+    [
+      [0, CHIN_Y],
+      [0.075, -0.668],
+      [0.235, -0.618],
+      [0.35, -0.5]
+    ],
+    [
+      [0.35, -0.5],
+      [0.452, -0.385],
+      [0.499, -0.16],
+      [0.5, 0.03]
+    ],
+    [
+      [0.5, 0.03],
+      [0.499, 0.2],
+      [0.455, 0.37],
+      [0.373, 0.475]
+    ],
+    [
+      [0.373, 0.475],
+      [0.298, 0.567],
+      [0.158, 0.604],
+      [0, 0.6]
+    ]
+  ];
+  function cubic(p0, c1, c2, p1, t) {
+    const u = 1 - t;
+    const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+    return [
+      a * p0[0] + b * c1[0] + c * c2[0] + d * p1[0],
+      a * p0[1] + b * c1[1] + c * c2[1] + d * p1[1]
+    ];
+  }
+  function outlineRaw() {
+    const pts = [];
+    for (const s of RIGHT) {
+      for (let i = 0; i < 14; i++) pts.push(cubic(s[0], s[1], s[2], s[3], i / 14));
+    }
+    for (let i = RIGHT.length - 1; i >= 0; i--) {
+      const s = RIGHT[i];
+      for (let k = 13; k > 0; k--) {
+        const p = cubic(s[0], s[1], s[2], s[3], k / 14);
+        pts.push([-p[0], p[1]]);
+      }
+    }
+    return pts;
+  }
+  function resample(src, n) {
+    const acc = [0];
+    let total = 0;
+    for (let i = 0; i < src.length; i++) {
+      const a = src[i], b = src[(i + 1) % src.length];
+      total += Math.hypot(b[0] - a[0], b[1] - a[1]);
+      acc.push(total);
+    }
+    const out = [];
+    let k = 0;
+    for (let i = 0; i < n; i++) {
+      const want = total * i / n;
+      while (k < acc.length - 2 && acc[k + 1] < want) k++;
+      const a = src[k % src.length], b = src[(k + 1) % src.length];
+      const seg = acc[k + 1] - acc[k] || 1;
+      const t = (want - acc[k]) / seg;
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+    return out;
+  }
+  var OUTLINE = resample(outlineRaw(), 96);
+  function outlineAt(i, seg) {
+    return OUTLINE[Math.round(i * OUTLINE.length / seg) % OUTLINE.length];
+  }
+  function fawkesRho(x, y) {
+    return Math.min(1, Math.hypot(x / 0.505, y / 0.665));
+  }
+  function gauss(d) {
+    return Math.exp(-d * d);
+  }
+  function fawkesHeight(x, y, rho) {
+    const ax = x / 0.72, by = (y + 0.02) / 0.95;
+    const r2 = ax * ax + by * by;
+    let z = r2 < 1 ? 0.145 * Math.sqrt(1 - r2) : 0;
+    const u = Math.abs(x);
+    if (u > 0.03 && u < 0.38) {
+      const yc = 0.158 + 1.282 * u - 3.16 * u * u;
+      z += 0.078 * gauss((y - yc) / 0.042) * ramp(0.03, 0.09, u) * ramp(0.39, 0.3, u);
+    }
+    if (y > -0.08 && y < 0.27) {
+      const w = 0.022 + 0.058 * ramp(0.27, -0.05, y);
+      z += 0.175 * gauss(x / w) * ramp(0.27, 0.18, y) * ramp(-0.08, 0, y);
+      z += 0.05 * gauss(x / 0.07) * gauss((y + 0.03) / 0.045);
+      z += 0.022 * gauss((Math.abs(x) - 0.058) / 0.028) * gauss((y + 0.045) / 0.03);
+      z -= 0.018 * gauss((Math.abs(x) - 0.088) / 0.026) * gauss((y + 0.035) / 0.035);
+    }
+    z += 0.03 * gauss((x - 0.29) / 0.17) * gauss(y / 0.14);
+    z += 0.03 * gauss((x + 0.29) / 0.17) * gauss(y / 0.14);
+    z -= 0.028 * gauss((x - 0.25) / 0.13) * gauss((y + 0.21) / 0.12);
+    z -= 0.028 * gauss((x + 0.25) / 0.13) * gauss((y + 0.21) / 0.12);
+    for (const s of [-1, 1]) {
+      z -= 0.075 * gauss((x - s * EYE_X) / 0.135) * gauss((y - EYE_Y) / 0.085);
+    }
+    z += 0.05 * gauss(x / 0.07) * gauss((y + 0.5) / 0.1);
+    return z * ramp(1, 0.88, rho);
+  }
+  function dot2(a, b) {
+    return a[0] * b[0] + a[1] * b[1];
+  }
+  function mid(a, b) {
+    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  }
+  function fawkesFit(g) {
+    if (!g || !g.eyeL || !g.eyeR || !g.chin || !g.top) return null;
+    const ax = g.ax || [1, 0];
+    const ay = g.ay || [0, -1];
+    const eL = mid(g.eyeL[0], g.eyeL[1]);
+    const eR = mid(g.eyeR[0], g.eyeR[1]);
+    const o = mid(eL, eR);
+    const fw = Math.max(g.fw || 0, 1);
+    const fh = Math.max(g.fh || 0, 1);
+    const spanX = Math.abs(dot2([eR[0] - eL[0], eR[1] - eL[1]], ax));
+    const down = -dot2([g.chin[0] - o[0], g.chin[1] - o[1]], ay);
+    let sx = spanX > 1 ? spanX / (2 * EYE_X) : fw * 1.06;
+    let sy = down > 1 ? down / (EYE_Y - CHIN_Y) : fh * 0.75;
+    sx = Math.min(Math.max(sx, fw * 0.9), fw * 1.14);
+    sy = Math.min(Math.max(sy, fh * 0.66), fh * 0.88);
+    const rel = [(g.nose ? g.nose[0] : o[0]) - o[0], (g.nose ? g.nose[1] : o[1]) - o[1]];
+    const nxm = dot2(rel, ax) / sx;
+    const nym = dot2(rel, ay) / sy;
+    const yawNose = Math.asin(Math.min(0.92, Math.max(-0.92, nxm / 0.3)));
+    const oL = [g.eyeL[0][0] - o[0], g.eyeL[0][1] - o[1]];
+    const oR = [g.eyeR[1][0] - o[0], g.eyeR[1][1] - o[1]];
+    const oLx = dot2(oL, ax);
+    const oRx = dot2(oR, ax);
+    const nAx = dot2(rel, ax);
+    const dl = Math.abs(nAx - oLx), dr = Math.abs(oRx - nAx);
+    const asym = dl + dr > 1 ? (dr - dl) / (dl + dr) : 0;
+    const yaw = Math.min(0.6, Math.max(-0.6, 0.55 * yawNose - 0.75 * asym));
+    const pitch = Math.min(0.3, Math.max(-0.3, (nym - NOSE_Y + 0.03) * 2.2));
+    return { ox: o[0], oy: o[1], ax, ay, sx, sy, yaw, pitch };
+  }
+  var CAM = 3.2;
+  function project(f, x, y, z, out) {
+    const cy = Math.cos(f.yaw), syaw = Math.sin(f.yaw);
+    const cp = Math.cos(f.pitch), sp = Math.sin(f.pitch);
+    const x1 = x * cy + z * syaw;
+    const z1 = -x * syaw + z * cy;
+    const y1 = y * cp - z1 * sp;
+    const z2 = y * sp + z1 * cp;
+    const k = CAM / (CAM - z2);
+    out[0] = f.ox + (f.ax[0] * x1 * f.sx + f.ay[0] * y1 * f.sy) * k;
+    out[1] = f.oy + (f.ax[1] * x1 * f.sx + f.ay[1] * y1 * f.sy) * k;
+    out[2] = z2;
+  }
+  function turn(f, nx, ny, nz, out) {
+    const cy = Math.cos(f.yaw), syaw = Math.sin(f.yaw);
+    const cp = Math.cos(f.pitch), sp = Math.sin(f.pitch);
+    const x1 = nx * cy + nz * syaw;
+    const z1 = -nx * syaw + nz * cy;
+    const y1 = ny * cp - z1 * sp;
+    const z2 = ny * sp + z1 * cp;
+    const m = Math.hypot(x1, y1, z2) || 1;
+    out[0] = x1 / m;
+    out[1] = y1 / m;
+    out[2] = z2 / m;
+  }
+  function inkColour(nx, ny, nz) {
+    const ndl = nx * LX + ny * LY + nz * LZ;
+    const lit = 0.55 + 0.45 * Math.max(0, ndl);
+    const r = Math.round(13 * lit + 3), g = Math.round(14 * lit + 3), b = Math.round(18 * lit + 5);
+    return `rgb(${r},${g},${b})`;
+  }
+  function drawFawkes(ctx, W, H, g) {
+    const f = fawkesFit(g);
+    if (!f) return;
+    const SEG = 60, RING = 26;
+    const xs = new Float32Array((RING + 1) * SEG);
+    const ys = new Float32Array((RING + 1) * SEG);
+    const vn = new Array((RING + 1) * SEG * 3);
+    const ao = new Float32Array((RING + 1) * SEG);
+    const p = [0, 0, 0];
+    const nv = [0, 0, 0];
+    for (let k = 0; k <= RING; k++) {
+      const rho = Math.pow(k / RING, 1.15);
+      for (let i = 0; i < SEG; i++) {
+        const b = outlineAt(i, SEG);
+        const x = b[0] * rho, y = b[1] * rho;
+        const z = fawkesHeight(x, y, rho);
+        const e = 6e-3;
+        const gx = (fawkesHeight(x + e, y, rho) - fawkesHeight(x - e, y, rho)) / (2 * e);
+        const gy = (fawkesHeight(x, y + e, rho) - fawkesHeight(x, y - e, rho)) / (2 * e);
+        turn(f, -gx, -gy, 1, nv);
+        project(f, x, y, z, p);
+        const at = k * SEG + i;
+        xs[at] = p[0];
+        ys[at] = p[1];
+        vn[at * 3] = nv[0];
+        vn[at * 3 + 1] = nv[1];
+        vn[at * 3 + 2] = nv[2];
+        let a = 1;
+        for (const s of [-1, 1]) {
+          const d = Math.hypot((x - s * EYE_X) / 0.15, (y - EYE_Y) / 0.1);
+          a -= 0.3 * ramp(1.7, 0.95, d);
+        }
+        a -= 0.14 * ramp(0.74, 1, rho);
+        ao[at] = Math.max(0.45, a);
+      }
+    }
+    let bx = Infinity, by = Infinity, bx2 = -Infinity, by2 = -Infinity;
+    for (let i = 0; i < xs.length; i++) {
+      if (xs[i] < bx) bx = xs[i];
+      if (xs[i] > bx2) bx2 = xs[i];
+      if (ys[i] < by) by = ys[i];
+      if (ys[i] > by2) by2 = ys[i];
+    }
+    const pad = Math.max(6, f.sx * 0.08);
+    bx = Math.max(-pad, Math.floor(bx - pad));
+    by = Math.max(-pad, Math.floor(by - pad));
+    bx2 = Math.min(W + pad, Math.ceil(bx2 + pad));
+    by2 = Math.min(H + pad, Math.ceil(by2 + pad));
+    const sw = Math.max(2, Math.min(1400, Math.round(bx2 - bx)));
+    const sh = Math.max(2, Math.min(1400, Math.round(by2 - by)));
+    const sheet = sheetOf(sw, sh);
+    if (!sheet) return;
+    const c = sheet.c;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, sw, sh);
+    const sc = sheet.sc;
+    sc.setTransform(1, 0, 0, 1, 0, 0);
+    sc.clearRect(0, 0, sw, sh);
+    sc.setTransform(1, 0, 0, 1, -bx, -by);
+    sc.lineJoin = "round";
+    sc.lineCap = "round";
+    c.setTransform(1, 0, 0, 1, -bx, -by);
+    c.lineJoin = "round";
+    c.lineCap = "round";
+    const tri = [];
+    for (let k = 0; k < RING; k++) {
+      for (let i = 0; i < SEG; i++) {
+        const i2 = (i + 1) % SEG;
+        const a0 = k * SEG + i, a1 = k * SEG + i2, a2 = (k + 1) * SEG + i2, a3 = (k + 1) * SEG + i;
+        let nx = 0, ny = 0, nz = 0, av = 0;
+        for (const q of [a0, a1, a2, a3]) {
+          nx += vn[q * 3];
+          ny += vn[q * 3 + 1];
+          nz += vn[q * 3 + 2];
+          av += ao[q];
+        }
+        const m = Math.hypot(nx, ny, nz) || 1;
+        nx /= m;
+        ny /= m;
+        nz /= m;
+        av /= 4;
+        const cx = (xs[a0] + xs[a1] + xs[a2] + xs[a3]) / 4;
+        const cyy = (ys[a0] + ys[a1] + ys[a2] + ys[a3]) / 4;
+        sc.fillStyle = shellColour(nx, ny, nz, av);
+        sc.beginPath();
+        for (const q of [a0, a1, a2, a3]) {
+          const dx = xs[q] - cx, dy = ys[q] - cyy;
+          const d = Math.hypot(dx, dy) || 1;
+          tri.push(xs[q] + dx / d * 0.5, ys[q] + dy / d * 0.5);
+        }
+        sc.moveTo(tri[0], tri[1]);
+        sc.lineTo(tri[2], tri[3]);
+        sc.lineTo(tri[4], tri[5]);
+        sc.lineTo(tri[6], tri[7]);
+        sc.closePath();
+        sc.fill();
+        tri.length = 0;
+      }
+    }
+    c.save();
+    c.beginPath();
+    for (let i = 0; i < SEG; i++) {
+      const at = RING * SEG + i;
+      if (i === 0) c.moveTo(xs[at], ys[at]);
+      else c.lineTo(xs[at], ys[at]);
+    }
+    c.closePath();
+    c.clip();
+    c.filter = `blur(${Math.max(0.6, f.sx * 35e-4)}px)`;
+    c.drawImage(sc.canvas, 0, 0, sw, sh, bx, by, sw, sh);
+    c.filter = "none";
+    c.restore();
+    c.save();
+    c.beginPath();
+    for (let i = 0; i < SEG; i++) {
+      const at = RING * SEG + i;
+      if (i === 0) c.moveTo(xs[at], ys[at]);
+      else c.lineTo(xs[at], ys[at]);
+    }
+    c.closePath();
+    c.clip();
+    paintMask(c, f);
+    c.restore();
+    c.globalCompositeOperation = "destination-out";
+    for (const s of [-1, 1]) {
+      holePath(c, f, s);
+      c.fillStyle = "#000";
+      c.fill();
+    }
+    c.globalCompositeOperation = "source-over";
+    for (const s of [-1, 1]) {
+      c.save();
+      c.strokeStyle = "rgba(10, 11, 14, 0.55)";
+      c.lineWidth = Math.max(1, f.sx * 8e-3);
+      holePath(c, f, s);
+      c.stroke();
+      c.restore();
+    }
+    ctx.save();
+    for (const s of [-1, 1]) {
+      const q = holeShape(f, s);
+      const cx = q[0], cyy = q[1], rr = q[2];
+      const grad = ctx.createRadialGradient(cx, cyy, rr * 0.25, cx, cyy, rr * 1.75);
+      grad.addColorStop(0, "rgba(4, 6, 10, 0.55)");
+      grad.addColorStop(1, "rgba(4, 6, 10, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cyy, rr * 1.75, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowColor = "rgba(3, 5, 9, 0.5)";
+    ctx.shadowBlur = Math.max(4, f.sx * 0.06);
+    ctx.shadowOffsetX = f.sx * 0.02;
+    ctx.shadowOffsetY = f.sy * 0.035;
+    ctx.drawImage(sheet.canvas, 0, 0, sw, sh, bx, by, sw, sh);
+    ctx.restore();
+  }
+  function shellColour(nx, ny, nz, a) {
+    const ndl = nx * LX + ny * LY + nz * LZ;
+    const diff = Math.max(0, ndl);
+    const ndh = Math.max(0, nx * HX + ny * HY + nz * HZ);
+    const spec = Math.pow(ndh, 40) * 1.05;
+    const rim = Math.pow(clamp01(1 - nz), 3) * 0.3;
+    const lit = (0.17 + 1 * diff) * a;
+    const r = Math.min(255, Math.round(255 * (SHELL[0] * lit + spec + rim * 0.55)));
+    const g = Math.min(255, Math.round(255 * (SHELL[1] * lit + spec + rim * 0.62)));
+    const b = Math.min(255, Math.round(255 * (SHELL[2] * lit + spec + rim * 0.78)));
+    return `rgb(${r},${g},${b})`;
+  }
+  function catmull(pts, n) {
+    const out = [];
+    const m = pts.length;
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1) * (m - 1);
+      const i0 = Math.min(m - 2, Math.floor(t));
+      const u = t - i0;
+      const p0 = pts[Math.max(0, i0 - 1)], p1 = pts[i0], p2 = pts[i0 + 1], p3 = pts[Math.min(m - 1, i0 + 2)];
+      const u2 = u * u, u3 = u2 * u;
+      out.push([
+        0.5 * (2 * p1[0] + (-p0[0] + p2[0]) * u + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * u2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * u3),
+        0.5 * (2 * p1[1] + (-p0[1] + p2[1]) * u + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * u2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * u3)
+      ]);
+    }
+    return out;
+  }
+  function widthAt(w, t) {
+    if (w.length === 1) return w[0];
+    const x = t * (w.length - 1);
+    const i = Math.min(w.length - 2, Math.floor(x));
+    const u = x - i;
+    return w[i] * (1 - u) + w[i + 1] * u;
+  }
+  function ribbon(c, f, s) {
+    const n = Math.max(8, Math.ceil(s.pts.length * 6));
+    const spine = catmull(s.pts, n);
+    const left = [], right = [];
+    const p = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      const a = spine[Math.max(0, i - 1)], b = spine[Math.min(n - 1, i + 1)];
+      const tx = b[0] - a[0], ty = b[1] - a[1];
+      const m = Math.hypot(tx, ty) || 1;
+      const nx = -ty / m, ny = tx / m;
+      const w = widthAt(s.w, i / (n - 1));
+      const x = spine[i][0], y = spine[i][1];
+      const z = fawkesHeight(x, y, fawkesRho(x, y));
+      project(f, x + nx * w, y + ny * w, z, p);
+      left.push([p[0], p[1]]);
+      project(f, x - nx * w, y - ny * w, z, p);
+      right.push([p[0], p[1]]);
+    }
+    c.beginPath();
+    c.moveTo(left[0][0], left[0][1]);
+    for (let i = 1; i < n; i++) c.lineTo(left[i][0], left[i][1]);
+    for (let i = n - 1; i >= 0; i--) c.lineTo(right[i][0], right[i][1]);
+    c.closePath();
+    c.fill();
+  }
+  function inkFill(c, f, path, cx, cy) {
+    const e = 0.01;
+    const gx = (fawkesHeight(cx + e, cy, 0.3) - fawkesHeight(cx - e, cy, 0.3)) / (2 * e);
+    const gy = (fawkesHeight(cx, cy + e, 0.3) - fawkesHeight(cx, cy - e, 0.3)) / (2 * e);
+    const nv = [0, 0, 0];
+    const m = Math.hypot(gx, gy, 1);
+    turn(f, -gx / m, -gy / m, 1 / m, nv);
+    c.fillStyle = inkColour(nv[0], nv[1], nv[2]);
+    c.beginPath();
+    path();
+    c.fill();
+  }
+  function holeShape(f, s) {
+    const p = [0, 0, 0];
+    const z = fawkesHeight(s * EYE_X, EYE_Y, fawkesRho(s * EYE_X, EYE_Y));
+    project(f, s * EYE_X, EYE_Y, z, p);
+    return [p[0], p[1], HOLE_BL * ((f.sx + f.sy) / 2)];
+  }
+  function holePoints(f, s, grow) {
+    const pts = [];
+    const p = [0, 0, 0];
+    const cs = Math.cos(s * HOLE_TILT), sn = Math.sin(s * HOLE_TILT);
+    for (let i = 0; i < 32; i++) {
+      const th = i / 32 * Math.PI * 2;
+      const a = Math.cos(th) * HOLE_A * grow;
+      const b = Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow;
+      const x = s * EYE_X + a * cs - b * sn;
+      const y = EYE_Y + a * sn + b * cs;
+      const z = fawkesHeight(x, y, fawkesRho(x, y));
+      project(f, x, y, z, p);
+      pts.push([p[0], p[1]]);
+    }
+    return pts;
+  }
+  function holePath(c, f, s, grow = 1) {
+    const pts = holePoints(f, s, grow);
+    c.beginPath();
+    c.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
+    c.closePath();
+  }
+  function paintMask(c, f) {
+    for (const s of [-1, 1]) {
+      inkFill(c, f, () => holePath(c, f, s, 1.26), s * EYE_X, EYE_Y);
+      inkFill(c, f, () => ribbon(c, f, BROW(s)), s * 0.19, 0.21);
+      inkFill(c, f, () => ribbon(c, f, MUS(s)), s * 0.12, -0.28);
+      inkFill(c, f, () => ribbon(c, f, NOSTRIL(s)), s * 0.035, -0.06);
+    }
+    inkFill(c, f, () => ribbon(c, f, SMILE), 0, -0.4);
+    for (const s of [-1, 1]) {
+      inkFill(c, f, () => ribbon(c, f, CHINLINE(s)), s * 0.085, -0.51);
+    }
+    inkFill(
+      c,
+      f,
+      () => {
+        const pts = catmull(GOATEE, 40);
+        const p = [0, 0, 0];
+        c.beginPath();
+        for (let i = 0; i < pts.length; i++) {
+          const z = fawkesHeight(pts[i][0], pts[i][1], fawkesRho(pts[i][0], pts[i][1]));
+          project(f, pts[i][0], pts[i][1], z, p);
+          if (i === 0) c.moveTo(p[0], p[1]);
+          else c.lineTo(p[0], p[1]);
+        }
+        c.closePath();
+      },
+      0,
+      -0.52
+    );
+  }
+  function BROW(s) {
+    return {
+      pts: [
+        [s * 0.05, 0.202],
+        [s * 0.135, 0.248],
+        [s * 0.225, 0.256],
+        [s * 0.305, 0.235],
+        [s * 0.358, 0.207]
+      ],
+      w: [0.041, 0.039, 0.03, 0.017, 4e-3]
+    };
+  }
+  function MUS(s) {
+    return {
+      pts: [
+        [s * 6e-3, -0.212],
+        [s * 0.08, -0.244],
+        [s * 0.16, -0.272],
+        [s * 0.228, -0.276],
+        [s * 0.268, -0.252],
+        [s * 0.283, -0.219]
+      ],
+      w: [0.034, 0.033, 0.028, 0.021, 0.012, 4e-3]
+    };
+  }
+  var SMILE = {
+    pts: [
+      [-0.238, -0.336],
+      [-0.272, -0.376],
+      [-0.256, -0.424],
+      [-0.196, -0.45],
+      [-0.1, -0.462],
+      [0, -0.464],
+      [0.1, -0.462],
+      [0.196, -0.45],
+      [0.256, -0.424],
+      [0.272, -0.376],
+      [0.238, -0.336]
+    ],
+    w: [5e-3, 0.011, 0.014, 0.015, 0.016, 0.016, 0.016, 0.015, 0.014, 0.011, 5e-3]
+  };
+  function NOSTRIL(s) {
+    return {
+      pts: [
+        [s * 0.022, -0.055],
+        [s * 0.04, -0.062],
+        [s * 0.056, -0.052]
+      ],
+      w: [5e-3, 0.01, 4e-3]
+    };
+  }
+  function CHINLINE(s) {
+    return {
+      pts: [
+        [s * 0.05, -0.49],
+        [s * 0.076, -0.528],
+        [s * 0.083, -0.572]
+      ],
+      w: [7e-3, 8e-3, 3e-3]
+    };
+  }
+  var GOATEE = [
+    [0, -0.478],
+    [0.056, -0.5],
+    [0.072, -0.538],
+    [0.038, -0.578],
+    [0, -0.63],
+    [-0.038, -0.578],
+    [-0.072, -0.538],
+    [-0.056, -0.5],
+    [0, -0.478]
+  ];
+  var sheetCanvas = null;
+  var shellCanvas = null;
+  function sheetOf(w, h) {
+    if (!sheetCanvas || !shellCanvas) {
+      sheetCanvas = sheetCanvas || document.createElement("canvas");
+      shellCanvas = shellCanvas || document.createElement("canvas");
+    }
+    if (sheetCanvas.width < w || sheetCanvas.height < h) {
+      sheetCanvas.width = Math.max(sheetCanvas.width, w);
+      sheetCanvas.height = Math.max(sheetCanvas.height, h);
+      shellCanvas.width = sheetCanvas.width;
+      shellCanvas.height = sheetCanvas.height;
+    }
+    const c = sheetCanvas.getContext("2d");
+    const sc = shellCanvas.getContext("2d");
+    if (!c || !sc) return null;
+    return { canvas: sheetCanvas, c, sc };
+  }
+
   // src/look.ts
   function lookOn() {
     return state.look && state.look !== "none" || state.masks.length > 0;
@@ -914,8 +1488,14 @@
     next.lid = Math.min(openL, openR);
     const gaze = [0, 0, 0, 0];
     if (pts.length >= 478 * 2) {
-      const cL = [(pts[LM.eyeOuterL * 2] + pts[LM.eyeInnerL * 2]) / 2, (pts[LM.eyeOuterL * 2 + 1] + pts[LM.eyeInnerL * 2 + 1]) / 2];
-      const cR = [(pts[LM.eyeOuterR * 2] + pts[LM.eyeInnerR * 2]) / 2, (pts[LM.eyeOuterR * 2 + 1] + pts[LM.eyeInnerR * 2 + 1]) / 2];
+      const cL = [
+        (pts[LM.eyeOuterL * 2] + pts[LM.eyeInnerL * 2]) / 2,
+        (pts[LM.eyeOuterL * 2 + 1] + pts[LM.eyeInnerL * 2 + 1]) / 2
+      ];
+      const cR = [
+        (pts[LM.eyeOuterR * 2] + pts[LM.eyeInnerR * 2]) / 2,
+        (pts[LM.eyeOuterR * 2 + 1] + pts[LM.eyeInnerR * 2 + 1]) / 2
+      ];
       const i0 = [pts[468 * 2], pts[468 * 2 + 1]];
       const i1 = [pts[473 * 2], pts[473 * 2 + 1]];
       const d0 = Math.hypot(i0[0] - cL[0], i0[1] - cL[1]) + Math.hypot(i1[0] - cR[0], i1[1] - cR[1]);
@@ -927,7 +1507,11 @@
       gaze[3] = clamp((ri[1] - cRi[1]) / (wRi || faceH * 0.18), -0.35, 0.35);
     }
     next.gaze = gaze;
-    next.smile = clamp((pts[LM.lip * 2 + 1] - (pts[LM.mouthL * 2 + 1] + pts[LM.mouthR * 2 + 1]) / 2) / mouthW * 1.6, -0.7, 0.7);
+    next.smile = clamp(
+      (pts[LM.lip * 2 + 1] - (pts[LM.mouthL * 2 + 1] + pts[LM.mouthR * 2 + 1]) / 2) / mouthW * 1.6,
+      -0.7,
+      0.7
+    );
     const a = p.anchor;
     const t = performance.now();
     const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
@@ -1259,8 +1843,8 @@
     const overlap = 1.5 / Math.min(rx, ry);
     for (let j = 0; j < WARP_RINGS; j++) {
       const t1 = 1 - j / WARP_RINGS, t0 = 1 - (j + 1) / WARP_RINGS;
-      const mid = (t0 + t1) / 2;
-      const f = (1 - mid) * (1 - mid);
+      const mid2 = (t0 + t1) / 2;
+      const f = (1 - mid2) * (1 - mid2);
       const mx = 1 + (kx - 1) * f, my = 1 + (ky - 1) * f;
       if (Math.abs(mx - 1) < 4e-3 && Math.abs(my - 1) < 4e-3) continue;
       ctx.save();
@@ -1490,7 +2074,7 @@
     else if (which === "dog") drawDog(ctx, g);
     else if (which === "halo") drawHalo(ctx, g);
     else if (which === "miku") drawMiku(ctx, g);
-    else if (which === "fawkes") drawFawkes(ctx, g);
+    else if (which === "fawkes") drawFawkes(ctx, W, H, g);
     ctx.restore();
   }
   function eyeFrame(e) {
@@ -1862,10 +2446,10 @@
     const artH = holeH / (H.y1 - H.y0);
     const cx = (H.x0 + H.x1) / 2 * artW;
     const cy = (H.y0 + H.y1) / 2 * artH;
-    const mid = [(top[0] + g.chin[0]) / 2, (top[1] + g.chin[1]) / 2];
+    const mid2 = [(top[0] + g.chin[0]) / 2, (top[1] + g.chin[1]) / 2];
     const ax = g.ax, ay = g.ay;
     const home = (pt) => {
-      const dx = pt[0] - mid[0], dy = pt[1] - mid[1];
+      const dx = pt[0] - mid2[0], dy = pt[1] - mid2[1];
       return [cx + dx * ax[0] + dy * ax[1], cy - (dx * ay[0] + dy * ay[1])];
     };
     const at = (p, q) => home([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]);
@@ -1876,8 +2460,8 @@
       ax[1],
       -ay[0],
       -ay[1],
-      mid[0] - ax[0] * cx + ay[0] * cy,
-      mid[1] - ax[1] * cx + ay[1] * cy
+      mid2[0] - ax[0] * cx + ay[0] * cy,
+      mid2[1] - ax[1] * cx + ay[1] * cy
     );
     drawMikuSkin(ctx, g, cx, cy);
     const [nx, ny] = home(g.nose);
@@ -1907,7 +2491,15 @@
       ctx.fill();
       ctx.fillStyle = "rgba(255, 235, 235, 0.5)";
       ctx.beginPath();
-      ctx.ellipse(mcx - halfW * 0.18, mcy + halfW * 0.12, halfW * 0.2, halfW * 0.05, -0.1, 0, Math.PI * 2);
+      ctx.ellipse(
+        mcx - halfW * 0.18,
+        mcy + halfW * 0.12,
+        halfW * 0.2,
+        halfW * 0.05,
+        -0.1,
+        0,
+        Math.PI * 2
+      );
       ctx.fill();
     } else {
       const mh = halfW * (0.5 + 1.5 * open);
@@ -1954,13 +2546,29 @@
       if (open > 0.22) {
         ctx.fillStyle = MIKU.teeth;
         ctx.beginPath();
-        ctx.ellipse(mcx, cornerY - mh * 0.03, halfW * 0.88, mh * (0.16 + 0.08 * (1 - open)), 0, 0, Math.PI);
+        ctx.ellipse(
+          mcx,
+          cornerY - mh * 0.03,
+          halfW * 0.88,
+          mh * (0.16 + 0.08 * (1 - open)),
+          0,
+          0,
+          Math.PI
+        );
         ctx.fill();
       }
       if (open > 0.4) {
         ctx.fillStyle = MIKU.tongue;
         ctx.beginPath();
-        ctx.ellipse(mcx, bottom + mh * 0.06, halfW * 0.5, mh * (0.1 + 0.16 * open), 0, 0, Math.PI * 2);
+        ctx.ellipse(
+          mcx,
+          bottom + mh * 0.06,
+          halfW * 0.5,
+          mh * (0.1 + 0.16 * open),
+          0,
+          0,
+          Math.PI * 2
+        );
         ctx.fill();
       }
       ctx.restore();
@@ -1997,7 +2605,14 @@
       [elx, ely, eyeLW, eyeH],
       [erx, ery, eyeRW, eyeH]
     ]) {
-      const skin = ctx.createRadialGradient(ex, ey, Math.min(ew, eh) * 0.18, ex, ey, Math.max(ew, eh) * 0.72);
+      const skin = ctx.createRadialGradient(
+        ex,
+        ey,
+        Math.min(ew, eh) * 0.18,
+        ex,
+        ey,
+        Math.max(ew, eh) * 0.72
+      );
       skin.addColorStop(0, "rgba(248, 223, 211, 1)");
       skin.addColorStop(0.72, "rgba(248, 223, 211, 0.96)");
       skin.addColorStop(1, "rgba(248, 223, 211, 0)");
@@ -2022,131 +2637,6 @@
       ctx.quadraticCurveTo(bx, lift2 - eyeH * 0.16, bx + w * 0.5, lift2 + eyeH * 0.1);
       ctx.stroke();
     }
-    ctx.restore();
-  }
-  var FAWKES = {
-    white: ["#fdfdfb", "#eeece5", "#c6c3ba"],
-    ink: "#111111",
-    shade: "rgba(120, 118, 108, 0.28)"
-  };
-  function drawFawkes(ctx, g) {
-    const fw = Math.max(g.fw, 1);
-    const fh = Math.max(g.fh, 1);
-    const mid = [(g.top[0] + g.chin[0]) / 2, (g.top[1] + g.chin[1]) / 2];
-    const ax = g.ax, ay = g.ay;
-    ctx.save();
-    ctx.transform(ax[0] * fw, ax[1] * fw, -ay[0] * fh, -ay[1] * fh, mid[0], mid[1]);
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    const shape = () => {
-      ctx.beginPath();
-      ctx.moveTo(0, -0.68);
-      ctx.bezierCurveTo(0.19, -0.66, 0.34, -0.53, 0.38, -0.3);
-      ctx.bezierCurveTo(0.42, -0.08, 0.4, 0.16, 0.31, 0.35);
-      ctx.bezierCurveTo(0.22, 0.52, 0.11, 0.64, 0, 0.7);
-      ctx.bezierCurveTo(-0.11, 0.64, -0.22, 0.52, -0.31, 0.35);
-      ctx.bezierCurveTo(-0.4, 0.16, -0.42, -0.08, -0.38, -0.3);
-      ctx.bezierCurveTo(-0.34, -0.53, -0.19, -0.66, 0, -0.68);
-      ctx.closePath();
-    };
-    const skin = ctx.createRadialGradient(0, -0.2, 0.05, 0, -0.05, 0.78);
-    skin.addColorStop(0, FAWKES.white[0]);
-    skin.addColorStop(0.62, FAWKES.white[1]);
-    skin.addColorStop(1, FAWKES.white[2]);
-    shape();
-    ctx.fillStyle = skin;
-    ctx.fill();
-    ctx.save();
-    shape();
-    ctx.clip();
-    for (const side of [-1, 1]) {
-      const cx = side * 0.26, cy = 0.06;
-      const cg = ctx.createRadialGradient(cx, cy, 0.02, cx, cy, 0.24);
-      cg.addColorStop(0, FAWKES.shade);
-      cg.addColorStop(1, "rgba(120, 118, 108, 0)");
-      ctx.fillStyle = cg;
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, 0.24, 0.3, side * 0.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    const brow = ctx.createLinearGradient(0, -0.5, 0, -0.2);
-    brow.addColorStop(0, "rgba(120, 118, 108, 0.3)");
-    brow.addColorStop(1, "rgba(120, 118, 108, 0)");
-    ctx.fillStyle = brow;
-    ctx.fillRect(-0.5, -0.5, 1, 0.3);
-    ctx.restore();
-    for (const side of [-1, 1]) {
-      ctx.strokeStyle = FAWKES.ink;
-      ctx.lineWidth = 0.022;
-      ctx.beginPath();
-      ctx.moveTo(side * 0.06, -0.28);
-      ctx.quadraticCurveTo(side * 0.17, -0.36, side * 0.29, -0.3);
-      ctx.stroke();
-    }
-    for (const side of [-1, 1]) {
-      ctx.save();
-      ctx.translate(side * 0.16, -0.16);
-      ctx.rotate(side * 0.12);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 0.125, 0.062, 0, 0, Math.PI * 2);
-      ctx.fillStyle = FAWKES.ink;
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
-      ctx.lineWidth = 8e-3;
-      ctx.beginPath();
-      ctx.ellipse(0, -6e-3, 0.11, 0.052, 0, Math.PI * 1.05, Math.PI * 1.95);
-      ctx.stroke();
-      ctx.restore();
-    }
-    ctx.strokeStyle = "rgba(130, 128, 118, 0.5)";
-    ctx.lineWidth = 0.018;
-    ctx.beginPath();
-    ctx.moveTo(-0.015, -0.06);
-    ctx.quadraticCurveTo(-0.03, 0.03, -0.01, 0.075);
-    ctx.stroke();
-    for (const side of [-1, 1]) {
-      ctx.fillStyle = "rgba(110, 108, 100, 0.45)";
-      ctx.beginPath();
-      ctx.ellipse(side * 0.045, 0.09, 0.016, 0.01, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.strokeStyle = FAWKES.ink;
-    ctx.lineWidth = 0.02;
-    ctx.beginPath();
-    ctx.moveTo(-0.26, 0.2);
-    ctx.bezierCurveTo(-0.1, 0.3, 0.1, 0.3, 0.26, 0.2);
-    ctx.stroke();
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(side * 0.26, 0.2);
-      ctx.bezierCurveTo(side * 0.34, 0.17, side * 0.34, 0.09, side * 0.28, 0.1);
-      ctx.bezierCurveTo(side * 0.25, 0.105, side * 0.25, 0.14, side * 0.28, 0.145);
-      ctx.stroke();
-    }
-    ctx.lineWidth = 0.017;
-    ctx.beginPath();
-    ctx.moveTo(-0.19, 0.135);
-    ctx.quadraticCurveTo(-0.07, 0.105, 0, 0.125);
-    ctx.quadraticCurveTo(0.07, 0.105, 0.19, 0.135);
-    ctx.stroke();
-    for (const side of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(side * 0.19, 0.135);
-      ctx.quadraticCurveTo(side * 0.235, 0.1, side * 0.2, 0.06);
-      ctx.stroke();
-    }
-    ctx.fillStyle = FAWKES.ink;
-    ctx.beginPath();
-    ctx.moveTo(-0.055, 0.32);
-    ctx.quadraticCurveTo(-0.03, 0.44, 0, 0.52);
-    ctx.quadraticCurveTo(0.03, 0.44, 0.055, 0.32);
-    ctx.quadraticCurveTo(0, 0.36, -0.055, 0.32);
-    ctx.closePath();
-    ctx.fill();
-    shape();
-    ctx.strokeStyle = "rgba(90, 88, 80, 0.4)";
-    ctx.lineWidth = 0.018;
-    ctx.stroke();
     ctx.restore();
   }
   async function lookPublish(track) {
@@ -6018,6 +6508,12 @@
   async function issueClaim(n, admins) {
     const unique = [...new Set(admins)].filter((id) => /^[0-9a-f]{12}$/.test(String(id || "")));
     if (!unique.length) return false;
+    if (n === 0) {
+      if (state.auth.n >= 0) return false;
+    } else {
+      if (state.auth.n < 0 || n !== state.auth.n + 1) return false;
+      if (!state.admins.has(state.self)) return false;
+    }
     const claim = await makeClaim(n, unique);
     if (!claim || state.leaving) return false;
     adoptClaim({ ...claim, by: state.self });
@@ -6041,11 +6537,14 @@
       sig: obj.sig
     });
     if (!res || !res.ok) return;
-    if (n < state.auth.n) return;
-    if (n === state.auth.n) {
-      if (obj.admins.join(",") === state.auth.admins.join(",")) return;
-      if (String(peer.id) >= String(state.auth.by)) return;
+    if (state.auth.n < 0) {
+      if (n !== 0) return;
+      adoptClaim({ ...obj, by: peer.id });
+      return;
     }
+    if (n !== state.auth.n + 1) return;
+    if (!state.admins.has(peer.id)) return;
+    if (obj.admins.join(",") === state.auth.admins.join(",")) return;
     adoptClaim({ ...obj, by: peer.id });
   }
   function startAuthSeed() {
@@ -8858,8 +9357,8 @@
   function waitingText() {
     const both = state.mic && state.cam;
     const lead = "You are in the waiting room. ";
-    const mid = both ? "Your camera and your microphone are on, and every member of the meeting can see and hear you right now, before you are let in. " : `Your camera is ${state.cam ? "on" : "off"} and your microphone is ${state.mic ? "on" : "off"}. Every member of the meeting can see and hear whatever is on, before you are let in. `;
-    return `${lead}${mid}Use the buttons below to turn them off if you do not want that. You can not see or hear the meeting, or chat, until a member lets you in.`;
+    const mid2 = both ? "Your camera and your microphone are on, and every member of the meeting can see and hear you right now, before you are let in. " : `Your camera is ${state.cam ? "on" : "off"} and your microphone is ${state.mic ? "on" : "off"}. Every member of the meeting can see and hear whatever is on, before you are let in. `;
+    return `${lead}${mid2}Use the buttons below to turn them off if you do not want that. You can not see or hear the meeting, or chat, until a member lets you in.`;
   }
   function paintWaiting() {
     document.body.classList.toggle("self-waiting", state.waiting);

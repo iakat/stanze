@@ -19,11 +19,13 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 628 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
-| [src/state.ts](src/state.ts) | 197 | The client state, one object per page. |
+| [src/boot.ts](src/boot.ts) | 632 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/state.ts](src/state.ts) | 202 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 77 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
+| [src/trust.ts](src/trust.ts) | 37 | Script addresses under Trusted Types: the worker and worklet URLs. |
 | [src/util.ts](src/util.ts) | 101 | Small helpers that touch nothing but their arguments and storage. |
+| [src/buildtag.ts](src/buildtag.ts) | 18 | The build label in the corner, read from `/version.txt`. |
 | [src/dom.ts](src/dom.ts) | 94 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
 | [src/globals.d.ts](src/globals.d.ts) | 20 | Optional globals the loader sets at run time: the wasm glue, the transcriber, the test hook. |
 
@@ -31,11 +33,11 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/room.ts](src/room.ts) | 267 | Create, join, wait, leave, and the lobby that drives them. |
+| [src/room.ts](src/room.ts) | 271 | Create, join, wait, leave, and the lobby that drives them. |
 | [src/signaling.ts](src/signaling.ts) | 186 | The websocket frames, both directions. |
-| [src/peers.ts](src/peers.ts) | 331 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
-| [src/gate.ts](src/gate.ts) | 613 | The room gate: the passphrase, the member list and the sealed claims. |
-| [src/host.ts](src/host.ts) | 227 | The host controls in the call panel: waiting room, let in, member menus. |
+| [src/peers.ts](src/peers.ts) | 333 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
+| [src/gate.ts](src/gate.ts) | 643 | The room gate: the passphrase, the member list and the sealed claims. |
+| [src/host.ts](src/host.ts) | 235 | The host controls in the call panel: waiting room, let in, member menus. |
 | [src/lobby.ts](src/lobby.ts) | 91 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
 | [src/menu.ts](src/menu.ts) | 207 | The drop-down menu bar. |
 | [src/phone.ts](src/phone.ts) | 37 | The phone frame: the stylesheet folds the app frame away and a tap brings it back. |
@@ -45,7 +47,7 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/media.ts](src/media.ts) | 164 | Camera and screen requests, the performance step, the sender bitrate and frame ceilings. |
-| [src/audio.ts](src/audio.ts) | 460 | The talking light, the remote audio graph and the noise suppression worklet. |
+| [src/audio.ts](src/audio.ts) | 557 | The talking light, the remote audio graph and the noise suppression worklet. |
 | [src/screen.ts](src/screen.ts) | 89 | Screen share: points the screen sender at the display track, never the camera sender. |
 | [src/volume.ts](src/volume.ts) | 149 | Per peer volume, remembered by identity when one is pinned. |
 | [src/sfx.ts](src/sfx.ts) | 178 | The page's own sound effects, decoded once and cached. |
@@ -56,13 +58,13 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/handshake.ts](src/handshake.ts) | 735 | The post-quantum handshake of a pair. |
+| [src/handshake.ts](src/handshake.ts) | 736 | The post-quantum handshake of a pair. |
 | [src/sealed.ts](src/sealed.ts) | 220 | Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair. |
-| [src/frame.ts](src/frame.ts) | 50 | The frame transform worker and its key install. |
+| [src/frame.ts](src/frame.ts) | 51 | The frame transform worker and its key install. |
 | [src/identity.ts](src/identity.ts) | 415 | The pinned identity of a peer and its fingerprint rows. |
-| [src/wasm.ts](src/wasm.ts) | 246 | Loading the post-quantum module, and its self test. |
+| [src/wasm.ts](src/wasm.ts) | 247 | Loading the post-quantum module, and its self test. |
 | [src/audit.ts](src/audit.ts) | 26 | The wire audit: no passphrase, name, chat line or file name leaves in the clear. |
-| [src/lab.ts](src/lab.ts) | 151 | The in-page proof of the cipher, driven by the browser test. |
+| [src/lab.ts](src/lab.ts) | 152 | The in-page proof of the cipher, driven by the browser test. |
 
 ## Stage, transcript and effects
 
@@ -71,8 +73,9 @@ module in `src` has no row yet.
 | [src/tiles.ts](src/tiles.ts) | 471 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
 | [src/stats.ts](src/stats.ts) | 955 | The stats panel: media metrics per guest and the wire and crypto counters. |
-| [src/asr.ts](src/asr.ts) | 1272 | Local transcription, one language and many. |
-| [src/look.ts](src/look.ts) | 2493 | The drawn camera: the face mesh, the masks and the custom effect. |
+| [src/asr.ts](src/asr.ts) | 1273 | Local transcription, one language and many. |
+| [src/fawkes.ts](src/fawkes.ts) | 778 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |
+| [src/look.ts](src/look.ts) | 2422 | The drawn camera: the face mesh, the masks and the custom effect. |
 | [src/devices.ts](src/devices.ts) | 808 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 880 | File offers and the data channel that carries the bytes. |
 

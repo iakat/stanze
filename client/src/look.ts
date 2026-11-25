@@ -9,6 +9,7 @@ import { clamp, detachMedia, say, stopQuietly, stopTracks } from './util.js';
 import { load, store } from './prefs.js';
 import { paintSelfCam } from './devices.js';
 import { scriptURL } from './trust.js';
+import { drawFawkes } from './fawkes.js';
 
 // ---------------------------------------------------------------- camera look
 // lookOn is true when a drawn step is wanted. The camera itself is not touched.
@@ -494,22 +495,31 @@ function lookMeshAnchor(p, lm) {
   next.lid = Math.min(openL, openR);
   const gaze = [0, 0, 0, 0];
   if (pts.length >= 478 * 2) {
-    const cL = [(pts[LM.eyeOuterL * 2] + pts[LM.eyeInnerL * 2]) / 2, (pts[LM.eyeOuterL * 2 + 1] + pts[LM.eyeInnerL * 2 + 1]) / 2];
-    const cR = [(pts[LM.eyeOuterR * 2] + pts[LM.eyeInnerR * 2]) / 2, (pts[LM.eyeOuterR * 2 + 1] + pts[LM.eyeInnerR * 2 + 1]) / 2];
+    const cL = [
+      (pts[LM.eyeOuterL * 2] + pts[LM.eyeInnerL * 2]) / 2,
+      (pts[LM.eyeOuterL * 2 + 1] + pts[LM.eyeInnerL * 2 + 1]) / 2,
+    ];
+    const cR = [
+      (pts[LM.eyeOuterR * 2] + pts[LM.eyeInnerR * 2]) / 2,
+      (pts[LM.eyeOuterR * 2 + 1] + pts[LM.eyeInnerR * 2 + 1]) / 2,
+    ];
     const i0 = [pts[468 * 2], pts[468 * 2 + 1]];
     const i1 = [pts[473 * 2], pts[473 * 2 + 1]];
     const d0 = Math.hypot(i0[0] - cL[0], i0[1] - cL[1]) + Math.hypot(i1[0] - cR[0], i1[1] - cR[1]);
     const d1 = Math.hypot(i0[0] - cR[0], i0[1] - cR[1]) + Math.hypot(i1[0] - cL[0], i1[1] - cL[1]);
-    const [li, ri, cLi, cRi, wLi, wRi] = d0 <= d1
-      ? [i0, i1, cL, cR, eyeWL, eyeWR]
-      : [i1, i0, cR, cL, eyeWR, eyeWL];
+    const [li, ri, cLi, cRi, wLi, wRi] =
+      d0 <= d1 ? [i0, i1, cL, cR, eyeWL, eyeWR] : [i1, i0, cR, cL, eyeWR, eyeWL];
     gaze[0] = clamp((li[0] - cLi[0]) / (wLi || faceH * 0.18), -0.4, 0.4);
     gaze[1] = clamp((li[1] - cLi[1]) / (wLi || faceH * 0.18), -0.35, 0.35);
     gaze[2] = clamp((ri[0] - cRi[0]) / (wRi || faceH * 0.18), -0.4, 0.4);
     gaze[3] = clamp((ri[1] - cRi[1]) / (wRi || faceH * 0.18), -0.35, 0.35);
   }
   next.gaze = gaze;
-  next.smile = clamp(((pts[LM.lip * 2 + 1] - (pts[LM.mouthL * 2 + 1] + pts[LM.mouthR * 2 + 1]) / 2) / mouthW) * 1.6, -0.7, 0.7);
+  next.smile = clamp(
+    ((pts[LM.lip * 2 + 1] - (pts[LM.mouthL * 2 + 1] + pts[LM.mouthR * 2 + 1]) / 2) / mouthW) * 1.6,
+    -0.7,
+    0.7,
+  );
   const a = p.anchor;
   const t = performance.now();
   const sl = oneEuroRun(p.meshLm || (p.meshLm = oneEuroState()), pts, t);
@@ -1304,7 +1314,7 @@ function drawMask(ctx, W, H, which, a) {
   else if (which === 'dog') drawDog(ctx, g);
   else if (which === 'halo') drawHalo(ctx, g);
   else if (which === 'miku') drawMiku(ctx, g);
-  else if (which === 'fawkes') drawFawkes(ctx, g);
+  else if (which === 'fawkes') drawFawkes(ctx, W, H, g);
   ctx.restore();
 }
 
@@ -1817,7 +1827,15 @@ function drawMiku(ctx, g) {
     ctx.fill();
     ctx.fillStyle = 'rgba(255, 235, 235, 0.5)';
     ctx.beginPath();
-    ctx.ellipse(mcx - halfW * 0.18, mcy + halfW * 0.12, halfW * 0.2, halfW * 0.05, -0.1, 0, Math.PI * 2);
+    ctx.ellipse(
+      mcx - halfW * 0.18,
+      mcy + halfW * 0.12,
+      halfW * 0.2,
+      halfW * 0.05,
+      -0.1,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
   } else {
     const mh = halfW * (0.5 + 1.5 * open);
@@ -1867,13 +1885,29 @@ function drawMiku(ctx, g) {
     if (open > 0.22) {
       ctx.fillStyle = MIKU.teeth;
       ctx.beginPath();
-      ctx.ellipse(mcx, cornerY - mh * 0.03, halfW * 0.88, mh * (0.16 + 0.08 * (1 - open)), 0, 0, Math.PI);
+      ctx.ellipse(
+        mcx,
+        cornerY - mh * 0.03,
+        halfW * 0.88,
+        mh * (0.16 + 0.08 * (1 - open)),
+        0,
+        0,
+        Math.PI,
+      );
       ctx.fill();
     }
     if (open > 0.4) {
       ctx.fillStyle = MIKU.tongue;
       ctx.beginPath();
-      ctx.ellipse(mcx, bottom + mh * 0.06, halfW * 0.5, mh * (0.1 + 0.16 * open), 0, 0, Math.PI * 2);
+      ctx.ellipse(
+        mcx,
+        bottom + mh * 0.06,
+        halfW * 0.5,
+        mh * (0.1 + 0.16 * open),
+        0,
+        0,
+        Math.PI * 2,
+      );
       ctx.fill();
     }
     ctx.restore();
@@ -1922,7 +1956,14 @@ function drawMiku(ctx, g) {
     [elx, ely, eyeLW, eyeH],
     [erx, ery, eyeRW, eyeH],
   ]) {
-    const skin = ctx.createRadialGradient(ex, ey, Math.min(ew, eh) * 0.18, ex, ey, Math.max(ew, eh) * 0.72);
+    const skin = ctx.createRadialGradient(
+      ex,
+      ey,
+      Math.min(ew, eh) * 0.18,
+      ex,
+      ey,
+      Math.max(ew, eh) * 0.72,
+    );
     skin.addColorStop(0, 'rgba(248, 223, 211, 1)');
     skin.addColorStop(0.72, 'rgba(248, 223, 211, 0.96)');
     skin.addColorStop(1, 'rgba(248, 223, 211, 0)');
@@ -1949,154 +1990,6 @@ function drawMiku(ctx, g) {
     ctx.quadraticCurveTo(bx, lift - eyeH * 0.16, bx + w * 0.5, lift + eyeH * 0.1);
     ctx.stroke();
   }
-  ctx.restore();
-}
-
-// drawFawkes wears the Guy Fawkes mask. It is drawn, not a photograph: one
-// white face with the black eye holes, the thin brows, the long smile with a
-// curl at each end, the moustache and the goatee, shaded so the form reads in
-// three dimensions. The mask is rigid, so it is placed once on the face axes
-// and the head carries it: a turn, a lean or a move of the head moves the mask
-// with it. The whole face is covered, so the mask hides the person under it.
-const FAWKES = {
-  white: ['#fdfdfb', '#eeece5', '#c6c3ba'],
-  ink: '#111111',
-  shade: 'rgba(120, 118, 108, 0.28)',
-};
-
-function drawFawkes(ctx, g) {
-  const fw = Math.max(g.fw, 1);
-  const fh = Math.max(g.fh, 1);
-  const mid = [(g.top[0] + g.chin[0]) / 2, (g.top[1] + g.chin[1]) / 2];
-  const ax = g.ax,
-    ay = g.ay;
-  // Local units: one across is the width of the face, one down its height, so
-  // the drawing is measured on the face it covers.
-  ctx.save();
-  ctx.transform(ax[0] * fw, ax[1] * fw, -ay[0] * fh, -ay[1] * fh, mid[0], mid[1]);
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  // The outline: a high forehead, wide cheeks and a pointed chin.
-  const shape = () => {
-    ctx.beginPath();
-    ctx.moveTo(0, -0.68);
-    ctx.bezierCurveTo(0.19, -0.66, 0.34, -0.53, 0.38, -0.3);
-    ctx.bezierCurveTo(0.42, -0.08, 0.4, 0.16, 0.31, 0.35);
-    ctx.bezierCurveTo(0.22, 0.52, 0.11, 0.64, 0, 0.7);
-    ctx.bezierCurveTo(-0.11, 0.64, -0.22, 0.52, -0.31, 0.35);
-    ctx.bezierCurveTo(-0.4, 0.16, -0.42, -0.08, -0.38, -0.3);
-    ctx.bezierCurveTo(-0.34, -0.53, -0.19, -0.66, 0, -0.68);
-    ctx.closePath();
-  };
-  const skin = ctx.createRadialGradient(0, -0.2, 0.05, 0, -0.05, 0.78);
-  skin.addColorStop(0, FAWKES.white[0]);
-  skin.addColorStop(0.62, FAWKES.white[1]);
-  skin.addColorStop(1, FAWKES.white[2]);
-  shape();
-  ctx.fillStyle = skin;
-  ctx.fill();
-  // The cheeks and the jaw carry a soft shadow, so the flat fill reads as a
-  // moulded face and not as a sticker.
-  ctx.save();
-  shape();
-  ctx.clip();
-  for (const side of [-1, 1]) {
-    const cx = side * 0.26,
-      cy = 0.06;
-    const cg = ctx.createRadialGradient(cx, cy, 0.02, cx, cy, 0.24);
-    cg.addColorStop(0, FAWKES.shade);
-    cg.addColorStop(1, 'rgba(120, 118, 108, 0)');
-    ctx.fillStyle = cg;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, 0.24, 0.3, side * 0.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  const brow = ctx.createLinearGradient(0, -0.5, 0, -0.2);
-  brow.addColorStop(0, 'rgba(120, 118, 108, 0.3)');
-  brow.addColorStop(1, 'rgba(120, 118, 108, 0)');
-  ctx.fillStyle = brow;
-  ctx.fillRect(-0.5, -0.5, 1, 0.3);
-  ctx.restore();
-  // The brows: thin, black and arched over each eye hole.
-  for (const side of [-1, 1]) {
-    ctx.strokeStyle = FAWKES.ink;
-    ctx.lineWidth = 0.022;
-    ctx.beginPath();
-    ctx.moveTo(side * 0.06, -0.28);
-    ctx.quadraticCurveTo(side * 0.17, -0.36, side * 0.29, -0.3);
-    ctx.stroke();
-  }
-  // The eye holes: a wide black almond each, with the rim catching the light.
-  for (const side of [-1, 1]) {
-    ctx.save();
-    ctx.translate(side * 0.16, -0.16);
-    ctx.rotate(side * 0.12);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 0.125, 0.062, 0, 0, Math.PI * 2);
-    ctx.fillStyle = FAWKES.ink;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
-    ctx.lineWidth = 0.008;
-    ctx.beginPath();
-    ctx.ellipse(0, -0.006, 0.11, 0.052, 0, Math.PI * 1.05, Math.PI * 1.95);
-    ctx.stroke();
-    ctx.restore();
-  }
-  // The nose: one soft ridge and two small shadows under it.
-  ctx.strokeStyle = 'rgba(130, 128, 118, 0.5)';
-  ctx.lineWidth = 0.018;
-  ctx.beginPath();
-  ctx.moveTo(-0.015, -0.06);
-  ctx.quadraticCurveTo(-0.03, 0.03, -0.01, 0.075);
-  ctx.stroke();
-  for (const side of [-1, 1]) {
-    ctx.fillStyle = 'rgba(110, 108, 100, 0.45)';
-    ctx.beginPath();
-    ctx.ellipse(side * 0.045, 0.09, 0.016, 0.01, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // The smile: a long line that turns up into a curl at each end.
-  ctx.strokeStyle = FAWKES.ink;
-  ctx.lineWidth = 0.02;
-  ctx.beginPath();
-  ctx.moveTo(-0.26, 0.2);
-  ctx.bezierCurveTo(-0.1, 0.3, 0.1, 0.3, 0.26, 0.2);
-  ctx.stroke();
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(side * 0.26, 0.2);
-    ctx.bezierCurveTo(side * 0.34, 0.17, side * 0.34, 0.09, side * 0.28, 0.1);
-    ctx.bezierCurveTo(side * 0.25, 0.105, side * 0.25, 0.14, side * 0.28, 0.145);
-    ctx.stroke();
-  }
-  // The moustache: a thin black stroke that lifts its tips, and the goatee: a
-  // small pointed beard under the mouth.
-  ctx.lineWidth = 0.017;
-  ctx.beginPath();
-  ctx.moveTo(-0.19, 0.135);
-  ctx.quadraticCurveTo(-0.07, 0.105, 0, 0.125);
-  ctx.quadraticCurveTo(0.07, 0.105, 0.19, 0.135);
-  ctx.stroke();
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(side * 0.19, 0.135);
-    ctx.quadraticCurveTo(side * 0.235, 0.1, side * 0.2, 0.06);
-    ctx.stroke();
-  }
-  ctx.fillStyle = FAWKES.ink;
-  ctx.beginPath();
-  ctx.moveTo(-0.055, 0.32);
-  ctx.quadraticCurveTo(-0.03, 0.44, 0, 0.52);
-  ctx.quadraticCurveTo(0.03, 0.44, 0.055, 0.32);
-  ctx.quadraticCurveTo(0, 0.36, -0.055, 0.32);
-  ctx.closePath();
-  ctx.fill();
-  // The rim: the edge of the mask, slightly darker, so it reads as a shell over
-  // the face and not as paint on the skin.
-  shape();
-  ctx.strokeStyle = 'rgba(90, 88, 80, 0.4)';
-  ctx.lineWidth = 0.018;
-  ctx.stroke();
   ctx.restore();
 }
 
