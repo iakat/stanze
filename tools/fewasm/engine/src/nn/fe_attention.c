@@ -37,7 +37,9 @@ static void pack_all_heads_int8(
     const int NR = FE_QGEMM_NR_LOCAL;
     const int HD_K = FE_HEAD_DIM_PAD_K;
     const int HD_V = FE_HEAD_DIM_PAD_V;
-    const int K_blocks_n = F2 / NR;
+    /* F2 need not be a multiple of NR (Base is 36): the last K block is
+     * partially filled, and the GEMM's N%8 tail reads it lane by lane. */
+    const int K_blocks_n = (F2 + NR - 1) / NR;
     const int K_g_count  = HD_K / 4;
     const int V_blocks_n = HD_V / NR;
 
@@ -271,7 +273,8 @@ void fe_mhsa(FeAttention *a, FeLinear *fc,
     FE_TIME("attn_2_pack", pack_all_heads_int8(qkv_q, freq, NH, HD, C3, Qq, Kpq, Vpq));
 
     const size_t Q_head_stride = (size_t)freq * HD_K;
-    const size_t K_head_stride = (size_t)(freq / FE_QGEMM_NR_LOCAL)
+    const size_t K_head_stride = (size_t)((freq + FE_QGEMM_NR_LOCAL - 1)
+                                          / FE_QGEMM_NR_LOCAL)
                                * (HD_K / 4) * FE_QGEMM_NR_LOCAL * 4;
     const size_t V_head_stride = (size_t)(HD_V / FE_QGEMM_NR_LOCAL)
                                * (freq / 4) * FE_QGEMM_NR_LOCAL * 4;

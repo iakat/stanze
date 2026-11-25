@@ -13,7 +13,12 @@
 
 #include <stdint.h>
 #include <assert.h>
-#include "fe_config_medium.h"
+#include "fe_config.h"
+
+/* K pack blocks per head: F2 rounded up to the 8-lane weight block. Equal
+ * to F2/NR for the Medium and Small sizes; Base (F2=36) needs the fifth
+ * half-filled block. */
+#define FE_KPACK_BLOCKS  ((FE_F2 + 7) / 8)
 
 #ifdef __cplusplus
 extern "C" {
@@ -85,7 +90,7 @@ typedef struct {
 
 			int8_t qkv_q       [FE_F2 * 3 * FE_C2];
 			int8_t attn_Qq     [FE_NUM_HEADS * FE_F2 * FE_HEAD_DIM_PAD_K];
-			int8_t attn_Kpq    [FE_NUM_HEADS * FE_F2 * FE_HEAD_DIM_PAD_K];
+			int8_t attn_Kpq    [FE_NUM_HEADS * FE_KPACK_BLOCKS * FE_HEAD_DIM_PAD_K * 8];
 			int8_t attn_Vpq    [FE_NUM_HEADS * FE_F2 * FE_HEAD_DIM_PAD_V];
 			int8_t attn_scoresq[FE_F2 * FE_F2];
 		};

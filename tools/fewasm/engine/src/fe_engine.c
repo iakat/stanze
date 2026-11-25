@@ -50,17 +50,19 @@ static inline void apply_freq_linear_FCin(FeLinear *lin,
  * identity. Arrays compile out when FE_ENABLE_PROFILE is off.
  */
 #define UNUSED __attribute__((unused))
-static const char *NM_ENC_K3 [FE_ENC_BLOCKS] UNUSED = {
+/* Fixed at the largest tier's block counts so one table serves every size;
+ * only the first FE_*_BLOCKS entries are ever indexed. */
+static const char *NM_ENC_K3 [3] UNUSED = {
     "enc_b0_k3", "enc_b1_k3", "enc_b2_k3" };
-static const char *NM_DEC_1X1[FE_DEC_BLOCKS] UNUSED = {
+static const char *NM_DEC_1X1[3] UNUSED = {
     "dec_b0_1x1", "dec_b1_1x1", "dec_b2_1x1" };
-static const char *NM_DEC_K3 [FE_DEC_BLOCKS] UNUSED = {
+static const char *NM_DEC_K3 [3] UNUSED = {
     "dec_b0_k3", "dec_b1_k3", "dec_b2_k3" };
-static const char *NM_RF_GRU [FE_RF_BLOCKS]  UNUSED = {
+static const char *NM_RF_GRU [4]  UNUSED = {
     "rf_b0_gru", "rf_b1_gru", "rf_b2_gru", "rf_b3_gru" };
-static const char *NM_RF_FC  [FE_RF_BLOCKS]  UNUSED = {
+static const char *NM_RF_FC  [4]  UNUSED = {
     "rf_b0_fc",  "rf_b1_fc",  "rf_b2_fc",  "rf_b3_fc"  };
-static const char *NM_RF_ATTN[FE_RF_BLOCKS]  UNUSED = {
+static const char *NM_RF_ATTN[4]  UNUSED = {
     "rf_b0_attn","rf_b1_attn","rf_b2_attn","rf_b3_attn" };
 
 void fe_process_frame(FeState *s, FeWeights *w,

@@ -3,7 +3,7 @@
 #define FE_INTERNAL_H
 
 #include <stdint.h>
-#include "fe_config_medium.h"
+#include "fe_config.h"
 #include "fe_weights.h"
 #include "fe_state.h"
 

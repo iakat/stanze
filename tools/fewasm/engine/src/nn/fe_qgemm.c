@@ -23,7 +23,7 @@
 #include "fe_qgemm.h"
 #include "fe_simd.h"
 #include "fe_fp16.h"
-#include "fe_config_medium.h"
+#include "fe_config.h"
 #include "qgemm/qgemm_arch.h"
 #include "qgemm/qgemm_simd_post.inl"
 #include "qgemm/qgemm_dispatch.h"
@@ -33,8 +33,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Worst-case N: attention QKV proj at 3*C2 bounds all callers. */
-#define FE_QGEMM_MAX_N (3 * FE_C2)
+/* Worst-case N: attention QKV proj at 3*C2 and the RNNFormer post-net
+ * linear at F1 (which is wider than 3*C2 on the Base tier: 128 > 108). */
+#define FE_QGEMM_MAX_N ((3 * FE_C2) > FE_F1 ? (3 * FE_C2) : FE_F1)
 
 /* File-static dequant scratch (engine is single-threaded). */
 static float g_combined_scale[FE_QGEMM_MAX_N];

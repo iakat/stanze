@@ -30,7 +30,7 @@
 #include "fe_simd.h"
 #include "fe_fp16.h"
 #include "fe_profile.h"
-#include "fe_config_medium.h"
+#include "fe_config.h"
 #include "qgemm/qgemm_arch.h"
 #include "qgemm/qgemm_simd_post.inl"
 #include "qgemm/qgemm_dispatch.h"

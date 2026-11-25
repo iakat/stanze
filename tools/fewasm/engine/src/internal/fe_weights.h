@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "fe_config_medium.h"
+#include "fe_config.h"
 #include "fe_calib.h"
 
 #ifdef __cplusplus
