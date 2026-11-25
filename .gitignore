@@ -8,3 +8,6 @@ static/app.js
 
 # built from cmd/pqwasm by `make wasm` or build.sh
 static/pq.wasm
+
+# built from tools/fewasm by `make fe` or build.sh
+static/fe.wasm
