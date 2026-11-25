@@ -75,6 +75,16 @@ function adoptClaim(claim) {
 export async function issueClaim(n, admins) {
   const unique = [...new Set(admins)].filter((id) => /^[0-9a-f]{12}$/.test(String(id || '')));
   if (!unique.length) return false;
+  // Only a step beyond the claim this page holds is issued, and only by an
+  // admin of that step. A room that has lost every admin can not mint one:
+  // that is a known limit of claim/1, not something this patch hides. Step 0
+  // is the seed of a room with no claim yet.
+  if (n === 0) {
+    if (state.auth.n >= 0) return false;
+  } else {
+    if (state.auth.n < 0 || n !== state.auth.n + 1) return false;
+    if (!state.admins.has(state.self)) return false;
+  }
   const claim = await makeClaim(n, unique);
   if (!claim || state.leaving) return false;
   adoptClaim({ ...claim, by: state.self });
@@ -90,7 +100,11 @@ export function sealedSendClaim(peer) {
 }
 
 // sealedOnClaim checks one claim: the sender signs for its own announced
-// identity, names itself in the list, and the counter decides.
+// identity, names itself in the list, and — the part that matters — a claim
+// only takes effect if it is the next step after the one this page already
+// holds, and the page that signed is an admin in that previous step. A guest
+// can still sign one and name itself; it is ignored, because its own signature
+// is not an admin's. One admin signs the next step, and only that step.
 export function sealedOnClaim(peer, obj) {
   if (!peer.proven || !peer.pub || !peer.pub.id) return;
   const n = Number(obj.n);
@@ -104,13 +118,20 @@ export function sealedOnClaim(peer, obj) {
     sig: obj.sig,
   });
   if (!res || !res.ok) return;
-  if (n < state.auth.n) return;
-  if (n === state.auth.n) {
-    // Two pages hold the same counter: the lower signer id wins, so both sides
-    // land on one list and a page never flips between two answers.
-    if (obj.admins.join(',') === state.auth.admins.join(',')) return;
-    if (String(peer.id) >= String(state.auth.by)) return;
+
+  if (state.auth.n < 0) {
+    // No claim on this page yet: nothing to check a step against, so a seed
+    // (step 0) is the trust root for this call, exactly as before.
+    if (n !== 0) return;
+    adoptClaim({ ...obj, by: peer.id });
+    return;
   }
+  // Steps only ever go forward by one, and only an admin of the previous step
+  // may sign the next one. The role list is never empty, so this is a real
+  // boundary and not a formality.
+  if (n !== state.auth.n + 1) return;
+  if (!state.admins.has(peer.id)) return;
+  if (obj.admins.join(',') === state.auth.admins.join(',')) return;
   adoptClaim({ ...obj, by: peer.id });
 }
 
