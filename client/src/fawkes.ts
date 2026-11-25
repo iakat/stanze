@@ -12,7 +12,7 @@ const EYE_Y = 0.045;
 // The fit measures the chin; the shell runs past it, under the jaw and above
 // the hairline, at the crown. The real mask is wide for its height: the rim is
 // one width across the cheekbones and 1.28 widths from the chin to the crown.
-const CHIN_Y = -0.72;
+const CHIN_Y = -0.8;
 const CROWN_Y = 0.56;
 const FIT_CHIN_Y = -0.66;
 const NOSE_Y = -0.02;
@@ -34,6 +34,8 @@ const HX = LX / HN,
   HZ = (LZ + 1) / HN;
 
 const SHELL: P3 = [0.968, 0.958, 0.918];
+// How far the middle of the shell stands out from the plane of its rim.
+const SHELL_DEPTH = 0.26;
 
 function clamp01(v: number) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -169,14 +171,11 @@ function fawkesHeight(f: Fit, x: number, y: number, rho: number) {
   const face = f.face;
   // The depth of the mesh is the surface; without a mesh the old dome stands,
   // low and flat, so a colour test still gets a mask.
-  let z = 0;
-  if (f.form) z = formAt(f.form, x, y);
-  else {
-    const ax = x / 0.72,
-      by = y / 0.78;
-    const r2 = ax * ax + by * by;
-    if (r2 < 1) z = 0.09 * Math.sqrt(1 - r2);
-  }
+  // The shell is a dome of its own depth, so a turn shows its curve even
+  // without a mesh, and the mesh only adds the face where it stands out.
+  const dome = SHELL_DEPTH * Math.sqrt(Math.max(0, 1 - rho * rho));
+  let z = dome;
+  if (f.form) z = Math.max(dome, formAt(f.form, x, y));
   // The ridges hang on the landmarks: a brow that sits high on this face lifts
   // its ridge, a mouth that sits low drops its smile.
   const browY = (face.browL[1] + face.browR[1]) / 2;
@@ -267,7 +266,7 @@ interface Form {
   h: Float32Array;
 }
 
-const FORM_N = 16;
+const FORM_N = 28;
 const FORM_X = 0.62;
 const FORM_Y = 1.02;
 
@@ -451,7 +450,7 @@ function formOf(f: Fit, g): Form | null {
   for (let k = 0; k < h.length; k++) if (Number.isNaN(h[k])) h[k] = 0;
   // Two passes of a light blur take the noise of the landmarker off the depth,
   // so the shell is a surface and not a lumpy copy of the mesh.
-  for (let pass = 0; pass < 2; pass++) {
+  for (let pass = 0; pass < 1; pass++) {
     const src = Float32Array.from(h);
     for (let j = 1; j < n; j++) {
       for (let i = 1; i < n; i++) {
@@ -728,6 +727,21 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
   ctx.shadowOffsetY = f.sy * 0.035;
   ctx.drawImage(sheet.canvas, 0, 0, sw, sh, bx, by, sw, sh);
   ctx.restore();
+
+  // A readout for the live page: add ?fawkesdebug to the address, and the mask
+  // tells the turn it has and whether the mesh gave it a surface.
+  if (typeof location !== 'undefined' && /[?&]fawkesdebug/.test(location.search)) {
+    const mesh = f.form ? 'mesh' : 'dome';
+    ctx.save();
+    ctx.font = `600 ${Math.max(11, Math.round(f.sx * 0.05))}px monospace`;
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillText(
+      `yaw ${(f.yaw * 57.3).toFixed(0)}  pitch ${(f.pitch * 57.3).toFixed(0)}  ${mesh}  depth ${SHELL_DEPTH.toFixed(2)}`,
+      Math.max(4, Math.round(f.ox - f.sx * 1.1)),
+      Math.max(14, Math.round(f.oy + f.sy * 1.15)),
+    );
+    ctx.restore();
+  }
 }
 
 // shellColour is the light of one quad: a soft ambient, the diffuse of the

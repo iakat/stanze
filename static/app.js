@@ -570,7 +570,7 @@
   // src/fawkes.ts
   var EYE_X = 0.152;
   var EYE_Y = 0.045;
-  var CHIN_Y = -0.72;
+  var CHIN_Y = -0.8;
   var FIT_CHIN_Y = -0.66;
   var NOSE_Y = -0.02;
   var HOLE_A = 0.105;
@@ -585,6 +585,7 @@
   var HY = LY / HN;
   var HZ = (LZ + 1) / HN;
   var SHELL = [0.968, 0.958, 0.918];
+  var SHELL_DEPTH = 0.26;
   function clamp01(v) {
     return v < 0 ? 0 : v > 1 ? 1 : v;
   }
@@ -684,13 +685,9 @@
   }
   function fawkesHeight(f, x, y, rho) {
     const face = f.face;
-    let z = 0;
-    if (f.form) z = formAt(f.form, x, y);
-    else {
-      const ax = x / 0.72, by = y / 0.78;
-      const r2 = ax * ax + by * by;
-      if (r2 < 1) z = 0.09 * Math.sqrt(1 - r2);
-    }
+    const dome = SHELL_DEPTH * Math.sqrt(Math.max(0, 1 - rho * rho));
+    let z = dome;
+    if (f.form) z = Math.max(dome, formAt(f.form, x, y));
     const browY = (face.browL[1] + face.browR[1]) / 2;
     const noseY = face.nose[1];
     const mouthY = face.lip[1];
@@ -721,7 +718,7 @@
     z += 0.05 * gauss(x / 0.07) * gauss((y - chinY) / 0.12);
     return z * ramp(1, 0.88, rho);
   }
-  var FORM_N = 16;
+  var FORM_N = 28;
   var FORM_X = 0.62;
   var FORM_Y = 1.02;
   function dot2(a, b) {
@@ -842,7 +839,7 @@
       if (!left) break;
     }
     for (let k = 0; k < h.length; k++) if (Number.isNaN(h[k])) h[k] = 0;
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < 1; pass++) {
       const src = Float32Array.from(h);
       for (let j = 1; j < n; j++) {
         for (let i = 1; i < n; i++) {
@@ -1051,6 +1048,18 @@
     ctx.shadowOffsetY = f.sy * 0.035;
     ctx.drawImage(sheet.canvas, 0, 0, sw, sh, bx, by, sw, sh);
     ctx.restore();
+    if (typeof location !== "undefined" && /[?&]fawkesdebug/.test(location.search)) {
+      const mesh = f.form ? "mesh" : "dome";
+      ctx.save();
+      ctx.font = `600 ${Math.max(11, Math.round(f.sx * 0.05))}px monospace`;
+      ctx.fillStyle = "rgba(0,0,0,0.72)";
+      ctx.fillText(
+        `yaw ${(f.yaw * 57.3).toFixed(0)}  pitch ${(f.pitch * 57.3).toFixed(0)}  ${mesh}  depth ${SHELL_DEPTH.toFixed(2)}`,
+        Math.max(4, Math.round(f.ox - f.sx * 1.1)),
+        Math.max(14, Math.round(f.oy + f.sy * 1.15))
+      );
+      ctx.restore();
+    }
   }
   function shellColour(nx, ny, nz, a) {
     const ndl = nx * LX + ny * LY + nz * LZ;
