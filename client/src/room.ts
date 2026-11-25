@@ -108,8 +108,8 @@ export async function enterRoom(room, pass) {
     startSpeaking();
 
     prepareLocal();
-    // The incoming noise filter downloads 15 MB on first use; start that now,
-    // while the devices and the socket come up, not on the first talker.
+    // The optional FastEnhancer model is fetched now, while the devices and the
+    // socket come up, so picking that model later does not wait on it.
     prefetchNoise();
     if (sealingAvailable()) {
       // Devices are asked for before the signaling socket opens, so the first
@@ -221,6 +221,7 @@ export function leave(message) {
   state.micSource = null;
   state.denoise = null;
   state.denoiseOn = false;
+  state.denoiseEngine = 'off';
   state.micAnalyser = null;
   state.meterPeak = 0;
   stopSpeaking();

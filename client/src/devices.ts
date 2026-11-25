@@ -533,7 +533,7 @@ async function adoptMic(track) {
   if (state.audioCtx) {
     if (!state.micSource) {
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
-      await setNoise(state.noiseWanted);
+      await setNoise(state.noiseWanted, state.noiseEngine);
     } else if (prev && prev !== track) {
       disconnectQuietly(state.micSource);
       if (state.micAnalyser) {
@@ -541,7 +541,7 @@ async function adoptMic(track) {
         state.micAnalyser = null;
       }
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
-      await setNoise(state.denoiseOn);
+      await setNoise(state.denoiseOn, state.denoiseEngine);
     }
   }
   startMeter();
@@ -792,7 +792,7 @@ async function buildAudio() {
   state.micGain.connect(state.mixer);
   if (state.micTrack && !state.micSource) {
     state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([state.micTrack]));
-    await setNoise(state.noiseWanted);
+    await setNoise(state.noiseWanted, state.noiseEngine);
   }
   startMeter();
   resumeAudio();

@@ -349,6 +349,14 @@ function peerLevel(peer) {
   return levelDb(peer.meterPeak || 0);
 }
 
+// noiseText names the two filters one guest reports: the one on its microphone
+// and the one it runs on this pair's incoming stream. Empty until a state frame
+// carries them, so an older guest adds no row.
+function noiseText(out, down) {
+  if (!out && !down) return '';
+  return `out ${out || '?'}, in ${down || '?'}`;
+}
+
 // ownPairs is the own card: the identity key, then the camera, microphone and
 // audio output. The sound row shows only when the context needs a tap.
 /** @returns {(string | (string | boolean)[][])[][]} */
@@ -392,6 +400,7 @@ function ownPairs(total) {
     false,
     level ? levelFraction(state.meterPeak) : 0,
   ]);
+  out.push(['filter ', `out ${state.denoiseOn ? state.denoiseEngine : 'off'}`]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
   if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);
@@ -426,6 +435,8 @@ function peerPairs(peer, s) {
       AUDIO_ICON,
       [['', '', peerLevel(peer)], rateCell('up', s.up.audio), rateCell('down', s.down.audio)],
     ]);
+    const noise = noiseText(peer.outFilter, peer.inFilter);
+    if (noise) out.push(['filter ', noise]);
   }
   // One room code is named once on the code card below, not on every guest.
   if (peer.sas && sealedRoomCodes().size > 1)

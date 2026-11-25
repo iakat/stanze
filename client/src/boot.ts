@@ -244,6 +244,9 @@ function restorePrefs() {
   state.noiseWanted = load('noise') !== '0';
   $('noise').checked = state.noiseWanted;
   $('noise-live').checked = state.noiseWanted;
+  // The model of the outgoing filter is its own choice; no stored value is GTCRN.
+  state.noiseEngine = load('noiseengine') === 'fastenhancer' ? 'fastenhancer' : 'gtcrn';
+  $('noise-engine').value = state.noiseEngine;
   // The own picture stays a small preview in the next visit too, if the guest
   // left it that way.
   state.selfPip = load('selfpip') === '1';
@@ -321,6 +324,18 @@ function wireSwitches() {
     $('noise').checked = on;
     const applied = await setNoise(on);
     if (applied !== on) say('noise suppression is not available');
+    updateButtons();
+  });
+
+  // The model row belongs to the outgoing filter alone. A filter that is on is
+  // rebuilt on the other engine; an off one keeps the choice for the next on.
+  const engine = $('noise-engine');
+  engine.addEventListener('change', async () => {
+    const model = engine.value === 'fastenhancer' ? 'fastenhancer' : 'gtcrn';
+    state.noiseEngine = model;
+    store('noiseengine', model);
+    if (state.denoiseOn && !(await setNoise(true, model)))
+      say('noise suppression is not available');
     updateButtons();
   });
 

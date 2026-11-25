@@ -63,9 +63,11 @@ export function ensurePeer(id) {
     meter: null, // tap on the incoming audio, for the talking light
     meterPeak: 0, // decaying peak of that tap, so one stats tick sees a word
     inDenoise: null, // local noise cancel of this incoming stream
-    inNoise: true, // that noise cancel is asked for, on by default
-    inEngine: 'fastenhancer', // which engine that noise cancel uses
+    inNoise: false, // that noise cancel is asked for, off unless a guest asks
+    inEngine: 'off', // which engine that noise cancel uses
     feId: 0, // the lane of this stream in the FastEnhancer worker, 0 = none
+    outFilter: '', // the filter the guest reports on its microphone
+    inFilter: '', // the filter the guest reports on this pair's incoming stream
     spoke: null, // last time this peer was heard, for the hold
 
     statLast: new Map(),

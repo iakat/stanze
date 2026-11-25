@@ -47,6 +47,7 @@ export const state = {
   denoise: null,
   denoiseFeId: 0, // worker lane of the microphone filter when FastEnhancer owns it
   denoiseOn: false,
+  denoiseEngine: 'off', // the filter on the microphone now, 'off' on the raw path
   noiseWasm: null, // one fetch of the noise model, shared by every node
   feWorker: null, // the worker that holds FastEnhancer, shared by every stream
   feSeq: 0, // lane ids of the streams that attach to that worker
@@ -86,7 +87,8 @@ export const state = {
   lookGraceMs: 120000, // how long that grace lasts, for a test to shorten
   lookSwaps: 0, // sender track swaps made by lookPublish, for a test
   lookTimer: null, // the timer that ends that grace
-  noiseWanted: true,
+  noiseWanted: true, // the microphone filter is on
+  noiseEngine: 'gtcrn', // the model that filter uses, the incoming side is not touched
   leaving: false,
   reconnectTimer: null,
   reconnectDelay: 500,

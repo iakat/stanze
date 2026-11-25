@@ -9,7 +9,7 @@ import { detachMedia, disconnectQuietly, isAdmin, say } from './util.js';
 import { layoutStage, ownTile, rowOf } from './tiles.js';
 import { applyFlags, volGain } from './volume.js';
 import { refreshSelf } from './devices.js';
-import { sealedSend, toSealed } from './gate.js';
+import { sealedSend } from './gate.js';
 import { scriptURL } from './trust.js';
 
 // ------------------------------------------------------------- talking light
@@ -128,10 +128,10 @@ async function makeDenoiseNode(ctx) {
   });
 }
 
-// prefetchNoise starts the download of the incoming noise engine and its
-// weights, so the first stream of a call does not wait for them. The worker
-// then loads both from the HTTP cache. It is a plain fetch and nothing is kept
-// here.
+// prefetchNoise starts the download of the FastEnhancer engine and its weights,
+// so a switch to that model or an incoming filter of that kind does not wait for
+// them. The worker then loads both from the HTTP cache. It is a plain fetch and
+// nothing is kept here.
 export function prefetchNoise() {
   const warm = (url) =>
     fetch(url)
@@ -175,46 +175,60 @@ async function makeFastEnhancerNode(ctx) {
   return { node, id };
 }
 
-// setNoise switches the microphone between the raw path and the filter path.
-// The filter is FastEnhancer, with GTCRN kept as the fallback.
-// The output of the mixer does not change, so no peer is disturbed.
-export async function setNoise(on) {
+// dropMicFilter takes the microphone filter out of the graph and drops its
+// worker lane, so a change of model builds the next one from a clean state.
+function dropMicFilter() {
+  if (state.denoise) disconnectQuietly(state.denoise);
+  if (state.denoiseFeId) {
+    feWorker().postMessage({ ev: 'detach', id: state.denoiseFeId });
+    state.denoiseFeId = 0;
+  }
+  state.denoise = null;
+  state.denoiseEngine = 'off';
+}
+
+// setNoise switches the microphone between the raw path and one of the two
+// filters; the choice of model is kept for the next switch on. Only the
+// microphone graph changes, so the incoming streams and the mixer stay as they
+// are.
+export async function setNoise(on, engine = state.noiseEngine) {
   if (!state.micSource || !state.audioCtx) {
     state.denoiseOn = false;
     return false;
   }
-  if (on && !state.denoise) {
+  const want = on ? (engine === 'fastenhancer' ? 'fastenhancer' : 'gtcrn') : 'off';
+  if (want !== 'off' && state.denoise && state.denoiseEngine !== want) dropMicFilter();
+  if (want !== 'off' && !state.denoise) {
     try {
-      // FastEnhancer is the default outgoing filter, the same engine as the
-      // incoming streams. Its port is transferred to the worker, so the model
-      // and the runtime are fetched once per page.
-      const { node, id } = await makeFastEnhancerNode(state.audioCtx);
-      state.denoise = node;
-      state.denoiseFeId = id;
-      state.denoise.connect(state.micGain);
-    } catch (err) {
-      console.warn('fastenhancer on the microphone unavailable', err);
-      try {
+      if (want === 'gtcrn') {
         // The wasm bytes travel in processorOptions: a worklet can only build
         // a module from bytes it already holds.
         state.denoise = await makeDenoiseNode(state.audioCtx);
-        state.denoise.connect(state.micGain);
-      } catch (err2) {
-        console.warn('noise suppression unavailable', err2);
-        state.denoise = null;
-        state.denoiseOn = false;
-        return false;
+      } else {
+        // FastEnhancer keeps its model and runtime in the worker, and its port
+        // is transferred, so no sample passes through the page.
+        const { node, id } = await makeFastEnhancerNode(state.audioCtx);
+        state.denoise = node;
+        state.denoiseFeId = id;
       }
+      state.denoise.connect(state.micGain);
+      state.denoiseEngine = want;
+    } catch (err) {
+      console.warn('noise suppression unavailable', err);
+      dropMicFilter();
+      state.denoiseOn = false;
+      return false;
     }
   }
   disconnectQuietly(state.micSource);
-  if (on) {
-    state.micSource.connect(state.denoise);
-    state.denoiseOn = true;
-  } else {
+  if (want === 'off') {
     state.micSource.connect(state.micGain);
     state.denoiseOn = false;
+  } else {
+    state.micSource.connect(state.denoise);
+    state.denoiseOn = true;
   }
+  sendState();
   return state.denoiseOn;
 }
 
@@ -304,7 +318,8 @@ export function routeAudio(peer, track) {
   peer.audioSrc.connect(peer.meter);
   // A guest whose noise cancel was asked for before this track existed gets it
   // now, without a second toggle.
-  if (peer.inNoise) void setPeerNoise(peer, true, peer.inEngine || 'fastenhancer');
+  if (peer.inNoise)
+    void setPeerNoise(peer, true, peer.inEngine === 'gtcrn' ? 'gtcrn' : 'fastenhancer');
   resumePlayback();
   // A context still suspended after a resume attempt plays nothing. Say it,
   // because the video looks correct and only the sound is missing.
@@ -391,6 +406,7 @@ export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
     peer.inNoise = false;
     peer.inEngine = 'off';
     wirePlayNoise(peer);
+    sendState();
     return;
   }
   try {
@@ -406,18 +422,21 @@ export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
     peer.inNoise = false;
     peer.inEngine = 'off';
     wirePlayNoise(peer);
+    sendState();
     say('the noise cancel is not available in this browser');
     return;
   }
   peer.inNoise = true;
   peer.inEngine = want;
   wirePlayNoise(peer);
+  sendState();
 }
 
 // stateFrame is the one sealed message that carries the flags of this guest.
 // It goes to every pair separately, so the server relays an opaque blob and
-// keeps none of the values.
-function stateFrame() {
+// keeps none of the values. The noise filters are per side: the microphone one
+// is the same for the room, the incoming one is a choice about this pair.
+function stateFrame(peer) {
   return {
     k: 'state',
     mic: state.mic,
@@ -428,6 +447,8 @@ function stateFrame() {
     ts: state.handTs,
     // This build reads padded frames, so a peer may round its frame sizes up.
     pad: 1,
+    outFilter: state.denoiseOn ? state.denoiseEngine : 'off',
+    inFilter: peer && peer.inNoise ? peer.inEngine : 'off',
   };
 }
 
@@ -437,14 +458,17 @@ function stateFrame() {
 export function sendState() {
   refreshSelf();
   if (!state.self || state.leaving) return;
-  toSealed(stateFrame());
+  for (const peer of state.peers.values()) {
+    if (!peer.keys || peer.waiting) continue;
+    sealedSend(peer, stateFrame(peer));
+  }
 }
 
 // sealedSendState hands the current flags to one pair that has just proved the
 // passphrase, so a guest that joins later still learns the toggles.
 export function sealedSendState(peer) {
   if (!peer.keys || peer.waiting) return;
-  sealedSend(peer, stateFrame());
+  sealedSend(peer, stateFrame(peer));
 }
 
 // setHand raises or lowers the own hand and tells the room. The raise time is
@@ -545,8 +569,9 @@ export function updateButtons() {
   $('pip').checked = state.selfPip;
   $('voice-tiles').checked = !state.voiceTiles;
   // Without a microphone the switch still shows what the next microphone will
-  // get, which is the stored choice.
+  // get, which is the stored choice. The model row follows that choice.
   $('noise-live').checked = state.micSource ? state.denoiseOn : state.noiseWanted;
+  $('noise-engine').value = state.noiseEngine;
 }
 
 export function applyMirror() {

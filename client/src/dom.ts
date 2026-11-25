@@ -61,6 +61,7 @@ export interface Elements {
   'menu-effects-btn': HTMLButtonElement;
   'menu-effects': HTMLElement;
   'noise-live': HTMLInputElement;
+  'noise-engine': HTMLSelectElement;
   'stage-error': HTMLElement;
   'cam-select': HTMLSelectElement;
   'mic-select': HTMLSelectElement;

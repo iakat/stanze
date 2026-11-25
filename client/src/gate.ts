@@ -329,6 +329,12 @@ function padsOn(peer) {
   }
 }
 
+// filterName narrows a reported noise model to the names this page uses, so a
+// value off the wire reaches the stats panel as one of three words or nothing.
+function filterName(value) {
+  return value === 'gtcrn' || value === 'fastenhancer' || value === 'off' ? value : '';
+}
+
 // sealedOnState paints the flags one guest sent over its sealed pair. The
 // queue order is the sender's own time, so no server numbers it; a time from
 // the future is clamped to now instead of trusted.
@@ -344,6 +350,10 @@ export function sealedOnState(peer, obj) {
     else dropPeerCamera(peer);
   }
   if (obj.deaf !== undefined) peer.deaf = !!obj.deaf;
+  // The two noise models the guest reports: its microphone filter and the one
+  // it runs on the stream this pair sends to it. An older guest sends neither.
+  if (obj.outFilter !== undefined) peer.outFilter = filterName(obj.outFilter);
+  if (obj.inFilter !== undefined) peer.inFilter = filterName(obj.inFilter);
   if (obj.screen !== undefined) {
     peer.screenShared = !!obj.screen;
     // A share that stops must leave the stage, not stand there frozen on its

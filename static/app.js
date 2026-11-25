@@ -119,6 +119,8 @@
     denoiseFeId: 0,
     // worker lane of the microphone filter when FastEnhancer owns it
     denoiseOn: false,
+    denoiseEngine: "off",
+    // the filter on the microphone now, 'off' on the raw path
     noiseWasm: null,
     // one fetch of the noise model, shared by every node
     feWorker: null,
@@ -193,6 +195,9 @@
     lookTimer: null,
     // the timer that ends that grace
     noiseWanted: true,
+    // the microphone filter is on
+    noiseEngine: "gtcrn",
+    // the model that filter uses, the incoming side is not touched
     leaving: false,
     reconnectTimer: null,
     reconnectDelay: 500,
@@ -5771,6 +5776,10 @@
     if (!peer.audioSrc || !peer.meter) return "";
     return levelDb(peer.meterPeak || 0);
   }
+  function noiseText(out, down) {
+    if (!out && !down) return "";
+    return `out ${out || "?"}, in ${down || "?"}`;
+  }
   function ownPairs(total) {
     const out = [];
     if (state.idKey) out.push(["key ", state.idKey.fp, void 0, "mono"]);
@@ -5803,6 +5812,7 @@
       false,
       level ? levelFraction(state.meterPeak) : 0
     ]);
+    out.push(["filter ", `out ${state.denoiseOn ? state.denoiseEngine : "off"}`]);
     const ctx = state.playCtx;
     const play = ctx ? ctx.state : "none";
     if (play !== "running") out.push(["sound ", `${play}, tap the page once`, false]);
@@ -5830,6 +5840,8 @@
         AUDIO_ICON,
         [["", "", peerLevel(peer)], rateCell("up", s.up.audio), rateCell("down", s.down.audio)]
       ]);
+      const noise = noiseText(peer.outFilter, peer.inFilter);
+      if (noise) out.push(["filter ", noise]);
     }
     if (peer.sas && sealedRoomCodes().size > 1)
       out.push(["code ", verifyText(peer.sas), void 0, true]);
@@ -6666,6 +6678,7 @@
     state.micSource = null;
     state.denoise = null;
     state.denoiseOn = false;
+    state.denoiseEngine = "off";
     state.micAnalyser = null;
     state.meterPeak = 0;
     stopSpeaking();
@@ -6910,6 +6923,9 @@
       state.worker.postMessage({ type: "pad", pair: pairLabel(peer.id), kind, on: true });
     }
   }
+  function filterName(value) {
+    return value === "gtcrn" || value === "fastenhancer" || value === "off" ? value : "";
+  }
   function sealedOnState(peer, obj) {
     if (obj.pad) padsOn(peer);
     if (obj.mic !== void 0) peer.mic = !!obj.mic;
@@ -6919,6 +6935,8 @@
       else dropPeerCamera(peer);
     }
     if (obj.deaf !== void 0) peer.deaf = !!obj.deaf;
+    if (obj.outFilter !== void 0) peer.outFilter = filterName(obj.outFilter);
+    if (obj.inFilter !== void 0) peer.inFilter = filterName(obj.inFilter);
     if (obj.screen !== void 0) {
       peer.screenShared = !!obj.screen;
       if (peer.screenShared) paintPeerScreen(peer);
@@ -7936,12 +7954,16 @@
       // decaying peak of that tap, so one stats tick sees a word
       inDenoise: null,
       // local noise cancel of this incoming stream
-      inNoise: true,
-      // that noise cancel is asked for, on by default
-      inEngine: "fastenhancer",
+      inNoise: false,
+      // that noise cancel is asked for, off unless a guest asks
+      inEngine: "off",
       // which engine that noise cancel uses
       feId: 0,
       // the lane of this stream in the FastEnhancer worker, 0 = none
+      outFilter: "",
+      // the filter the guest reports on its microphone
+      inFilter: "",
+      // the filter the guest reports on this pair's incoming stream
       spoke: null,
       // last time this peer was heard, for the hold
       statLast: /* @__PURE__ */ new Map(),
@@ -8762,7 +8784,7 @@
     if (state.audioCtx) {
       if (!state.micSource) {
         state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
-        await setNoise(state.noiseWanted);
+        await setNoise(state.noiseWanted, state.noiseEngine);
       } else if (prev && prev !== track) {
         disconnectQuietly(state.micSource);
         if (state.micAnalyser) {
@@ -8770,7 +8792,7 @@
           state.micAnalyser = null;
         }
         state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([track]));
-        await setNoise(state.denoiseOn);
+        await setNoise(state.denoiseOn, state.denoiseEngine);
       }
     }
     startMeter();
@@ -8965,7 +8987,7 @@
     state.micGain.connect(state.mixer);
     if (state.micTrack && !state.micSource) {
       state.micSource = state.audioCtx.createMediaStreamSource(new MediaStream([state.micTrack]));
-      await setNoise(state.noiseWanted);
+      await setNoise(state.noiseWanted, state.noiseEngine);
     }
     startMeter();
     resumeAudio();
@@ -9090,38 +9112,49 @@
     feWorker().postMessage({ ev: "attach", id, port: node.port }, [node.port]);
     return { node, id };
   }
-  async function setNoise(on) {
+  function dropMicFilter() {
+    if (state.denoise) disconnectQuietly(state.denoise);
+    if (state.denoiseFeId) {
+      feWorker().postMessage({ ev: "detach", id: state.denoiseFeId });
+      state.denoiseFeId = 0;
+    }
+    state.denoise = null;
+    state.denoiseEngine = "off";
+  }
+  async function setNoise(on, engine = state.noiseEngine) {
     if (!state.micSource || !state.audioCtx) {
       state.denoiseOn = false;
       return false;
     }
-    if (on && !state.denoise) {
+    const want = on ? engine === "fastenhancer" ? "fastenhancer" : "gtcrn" : "off";
+    if (want !== "off" && state.denoise && state.denoiseEngine !== want) dropMicFilter();
+    if (want !== "off" && !state.denoise) {
       try {
-        const { node, id } = await makeFastEnhancerNode(state.audioCtx);
-        state.denoise = node;
-        state.denoiseFeId = id;
-        state.denoise.connect(state.micGain);
-      } catch (err) {
-        console.warn("fastenhancer on the microphone unavailable", err);
-        try {
+        if (want === "gtcrn") {
           state.denoise = await makeDenoiseNode(state.audioCtx);
-          state.denoise.connect(state.micGain);
-        } catch (err2) {
-          console.warn("noise suppression unavailable", err2);
-          state.denoise = null;
-          state.denoiseOn = false;
-          return false;
+        } else {
+          const { node, id } = await makeFastEnhancerNode(state.audioCtx);
+          state.denoise = node;
+          state.denoiseFeId = id;
         }
+        state.denoise.connect(state.micGain);
+        state.denoiseEngine = want;
+      } catch (err) {
+        console.warn("noise suppression unavailable", err);
+        dropMicFilter();
+        state.denoiseOn = false;
+        return false;
       }
     }
     disconnectQuietly(state.micSource);
-    if (on) {
-      state.micSource.connect(state.denoise);
-      state.denoiseOn = true;
-    } else {
+    if (want === "off") {
       state.micSource.connect(state.micGain);
       state.denoiseOn = false;
+    } else {
+      state.micSource.connect(state.denoise);
+      state.denoiseOn = true;
     }
+    sendState();
     return state.denoiseOn;
   }
   function resumeAudio() {
@@ -9194,7 +9227,8 @@
     peer.meter = ctx.createAnalyser();
     peer.meter.fftSize = 1024;
     peer.audioSrc.connect(peer.meter);
-    if (peer.inNoise) void setPeerNoise(peer, true, peer.inEngine || "fastenhancer");
+    if (peer.inNoise)
+      void setPeerNoise(peer, true, peer.inEngine === "gtcrn" ? "gtcrn" : "fastenhancer");
     resumePlayback();
     if (ctx.state === "suspended")
       say("the browser holds the audio output; tap the page once to hear the room");
@@ -9269,6 +9303,7 @@
       peer.inNoise = false;
       peer.inEngine = "off";
       wirePlayNoise(peer);
+      sendState();
       return;
     }
     try {
@@ -9284,14 +9319,16 @@
       peer.inNoise = false;
       peer.inEngine = "off";
       wirePlayNoise(peer);
+      sendState();
       say("the noise cancel is not available in this browser");
       return;
     }
     peer.inNoise = true;
     peer.inEngine = want;
     wirePlayNoise(peer);
+    sendState();
   }
-  function stateFrame() {
+  function stateFrame(peer) {
     return {
       k: "state",
       mic: state.mic,
@@ -9301,17 +9338,22 @@
       hand: state.hand,
       ts: state.handTs,
       // This build reads padded frames, so a peer may round its frame sizes up.
-      pad: 1
+      pad: 1,
+      outFilter: state.denoiseOn ? state.denoiseEngine : "off",
+      inFilter: peer && peer.inNoise ? peer.inEngine : "off"
     };
   }
   function sendState() {
     refreshSelf();
     if (!state.self || state.leaving) return;
-    toSealed(stateFrame());
+    for (const peer of state.peers.values()) {
+      if (!peer.keys || peer.waiting) continue;
+      sealedSend(peer, stateFrame(peer));
+    }
   }
   function sealedSendState(peer) {
     if (!peer.keys || peer.waiting) return;
-    sealedSend(peer, stateFrame());
+    sealedSend(peer, stateFrame(peer));
   }
   function setHand(on) {
     if (state.waiting || state.hand === on) return;
@@ -9390,6 +9432,7 @@
     $("pip").checked = state.selfPip;
     $("voice-tiles").checked = !state.voiceTiles;
     $("noise-live").checked = state.micSource ? state.denoiseOn : state.noiseWanted;
+    $("noise-engine").value = state.noiseEngine;
   }
   function applyMirror() {
     const tile = ownTile();
@@ -10371,6 +10414,8 @@
     state.noiseWanted = load("noise") !== "0";
     $("noise").checked = state.noiseWanted;
     $("noise-live").checked = state.noiseWanted;
+    state.noiseEngine = load("noiseengine") === "fastenhancer" ? "fastenhancer" : "gtcrn";
+    $("noise-engine").value = state.noiseEngine;
     state.selfPip = load("selfpip") === "1";
     $("pip").checked = state.selfPip;
     state.voiceTiles = load("hidevoicetiles") !== "1";
@@ -10428,6 +10473,15 @@
       $("noise").checked = on;
       const applied = await setNoise(on);
       if (applied !== on) say("noise suppression is not available");
+      updateButtons();
+    });
+    const engine = $("noise-engine");
+    engine.addEventListener("change", async () => {
+      const model = engine.value === "fastenhancer" ? "fastenhancer" : "gtcrn";
+      state.noiseEngine = model;
+      store("noiseengine", model);
+      if (state.denoiseOn && !await setNoise(true, model))
+        say("noise suppression is not available");
       updateButtons();
     });
     const mirror = $("mirror");
