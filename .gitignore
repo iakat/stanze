@@ -11,3 +11,6 @@ static/pq.wasm
 
 # built from tools/fewasm by `make fe` or build.sh
 static/fe.wasm
+
+# scratch dir of tools/fewasm/build.sh
+tools/fewasm/out/

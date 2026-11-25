@@ -28,6 +28,20 @@ export CGO_ENABLED=0
 # static/.
 GOOS=js GOARCH=wasm "$GO" build -trimpath -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
 
+# The packing filter is a build artifact too. Its own builder needs a clang
+# with the wasm32-wasip1 target; ../tools/wasi-sdk carries one. A tree that
+# already has the module keeps it unless FE_REBUILD=1.
+if [ ! -s static/fe.wasm ] || [ "${FE_REBUILD:-0}" = "1" ]; then
+	FE_CC="${FE_CC:-$here/../tools/wasi-sdk/bin/clang}"
+	if [ ! -x "$FE_CC" ]; then
+		echo "no wasm clang for the filter; set FE_CC=/path/to/clang" >&2
+		exit 1
+	fi
+	CC="$FE_CC" "$here/tools/fewasm/build.sh" "$here/tools/fewasm/out" >/dev/null
+	cp "$here/tools/fewasm/out/fe.wasm" static/fe.wasm
+	rm -rf "$here/tools/fewasm/out"
+fi
+
 # The client is TypeScript under client/, and the bundle it produces is what the
 # page loads. Node and one `npm --prefix client install` are needed for this
 # step; a tree that already carries a built static/app.js can skip it with
