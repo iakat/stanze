@@ -169,11 +169,12 @@ static void fft_wasm_real_post_forward(const float *Z_re, const float *Z_im,
     }
 }
 
-/* Real-FFT pre-process (inverse): rebuild 512 complex bins from 513. */
+/* Real-FFT pre-process (inverse): rebuild 512 complex bins; the split
+ * spectrum has no Nyquist bin (fe_istft zeroes it), so X[512] == 0. */
 static void fft_wasm_real_pre_inverse(const float *in_re, const float *in_im,
                                       float *Z_re, float *Z_im) {
-    Z_re[0] = in_re[0] + in_re[FE_FFT_HALF];
-    Z_im[0] = in_re[0] - in_re[FE_FFT_HALF];
+    Z_re[0] = in_re[0];
+    Z_im[0] = in_re[0];
 
     for (int k = 1; k < FE_FFT_HALF; ++k) {
         const float xk_r = in_re[k],               xk_i = in_im[k];
