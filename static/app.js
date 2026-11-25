@@ -594,31 +594,32 @@
     return t * t * (3 - 2 * t);
   }
   var RIGHT = [
-    // The chin: a short, sharp taper from a pointed tip to the jaw angle.
+    // The chin: a narrow round bottom, not a spike, with the jaw already wide.
     [
       [0, CHIN_Y],
-      [0.1, -0.675],
-      [0.22, -0.6],
-      [0.33, -0.52]
+      [0.07, -0.795],
+      [0.16, -0.735],
+      [0.3, -0.62]
     ],
-    // The jaw angle, then a side that runs almost straight to the temple.
+    // The jaw swells outward to the cheekbone, so the lower edge is convex and
+    // the cheek lines bow away from the middle, not toward it.
     [
-      [0.33, -0.52],
-      [0.42, -0.47],
-      [0.47, -0.42],
-      [0.49, -0.3]
+      [0.3, -0.62],
+      [0.42, -0.55],
+      [0.48, -0.45],
+      [0.5, -0.3]
     ],
     // The widest part of the shell is high, over the cheekbones, and the side
-    // holds its width up to the temple, so the shape is a shield with a point.
+    // holds its width up to the temple, so the shape is a shield, not a cone.
     [
-      [0.49, -0.3],
+      [0.5, -0.3],
       [0.505, -0.14],
       [0.51, 0.08],
-      [0.5, 0.28]
+      [0.5, 0.22]
     ],
     // The corner of the temple: a tight round, then the crown runs flat.
     [
-      [0.5, 0.28],
+      [0.5, 0.22],
       [0.49, 0.38],
       [0.45, 0.44],
       [0.38, 0.48]
