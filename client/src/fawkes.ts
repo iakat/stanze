@@ -36,6 +36,8 @@ const HX = LX / HN,
 const SHELL: P3 = [0.968, 0.958, 0.918];
 // How far the middle of the shell stands out from the plane of its rim.
 const SHELL_DEPTH = 0.26;
+// The share of the frame size the shading sheet is drawn at.
+const SHEET_SCALE = 0.55;
 
 function clamp01(v: number) {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -538,8 +540,8 @@ function inkColour(nx: number, ny: number, nz: number) {
 export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, g) {
   const f = fawkesFit(g);
   if (!f) return;
-  const SEG = 90,
-    RING = 34;
+  const SEG = 72,
+    RING = 26;
   const xs = new Float32Array((RING + 1) * SEG);
   const ys = new Float32Array((RING + 1) * SEG);
   const vn: number[] = new Array((RING + 1) * SEG * 3);
@@ -604,18 +606,23 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
   const sw = Math.max(2, Math.min(1400, Math.round(bx2 - bx)));
   const sh = Math.max(2, Math.min(1400, Math.round(by2 - by)));
 
-  const sheet = sheetOf(sw, sh);
+  // The shell is shaded on a sheet at a share of the frame size and scaled up
+  // with smoothing, so the fills cost less and no facet shows.
+  const S = SHEET_SCALE;
+  const sheet = sheetOf(Math.ceil(sw * S), Math.ceil(sh * S));
   if (!sheet) return;
   const c = sheet.c;
+  const sws = Math.ceil(sw * S),
+    shs = Math.ceil(sh * S);
   c.setTransform(1, 0, 0, 1, 0, 0);
-  c.clearRect(0, 0, sw, sh);
+  c.clearRect(0, 0, sws, shs);
   const sc = sheet.sc;
   sc.setTransform(1, 0, 0, 1, 0, 0);
-  sc.clearRect(0, 0, sw, sh);
-  sc.setTransform(1, 0, 0, 1, -bx, -by);
+  sc.clearRect(0, 0, sws, shs);
+  sc.setTransform(S, 0, 0, S, -bx * S, -by * S);
   sc.lineJoin = 'round';
   sc.lineCap = 'round';
-  c.setTransform(1, 0, 0, 1, -bx, -by);
+  c.setTransform(S, 0, 0, S, -bx * S, -by * S);
   c.lineJoin = 'round';
   c.lineCap = 'round';
 
@@ -677,9 +684,19 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
   }
   c.closePath();
   c.clip();
-  c.filter = `blur(${Math.max(0.6, f.sx * 0.0035)}px)`;
-  c.drawImage(sc.canvas, 0, 0, sw, sh, bx, by, sw, sh);
-  c.filter = 'none';
+  // Two passes through a smaller canvas: the downscale averages the quads and
+  // the upscale puts the picture back without a facet in it.
+  const sm = smoothOf(Math.max(2, Math.round(sws * 0.3)), Math.max(2, Math.round(shs * 0.3)));
+  if (sm) {
+    sm.c.drawImage(sc.canvas, 0, 0, sws, shs, 0, 0, sm.w, sm.h);
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(sm.canvas, 0, 0, sm.w, sm.h, bx, by, sw, sh);
+  } else {
+    c.imageSmoothingEnabled = true;
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(sc.canvas, 0, 0, sws, shs, bx, by, sw, sh);
+  }
   c.restore();
 
   // The paint is clipped to the shell and laid on the surface: a point of the
@@ -730,11 +747,21 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
     ctx.arc(cx, cyy, rr * 1.75, 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.shadowColor = 'rgba(3, 5, 9, 0.5)';
-  ctx.shadowBlur = Math.max(4, f.sx * 0.06);
-  ctx.shadowOffsetX = f.sx * 0.02;
-  ctx.shadowOffsetY = f.sy * 0.035;
-  ctx.drawImage(sheet.canvas, 0, 0, sw, sh, bx, by, sw, sh);
+  // One soft blob stands in for the shadow of the sheet: a blurred copy of the
+  // whole image every frame costs more than the mask itself.
+  const shx = bx + (bx2 - bx) / 2 + f.sx * 0.03;
+  const shy = by + (by2 - by) / 2 + f.sy * 0.05;
+  const shr = Math.max(bx2 - bx, by2 - by) * 0.56;
+  const sg = ctx.createRadialGradient(shx, shy, shr * 0.35, shx, shy, shr);
+  sg.addColorStop(0, 'rgba(3, 5, 9, 0.42)');
+  sg.addColorStop(1, 'rgba(3, 5, 9, 0)');
+  ctx.fillStyle = sg;
+  ctx.beginPath();
+  ctx.arc(shx, shy, shr, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(sheet.canvas, 0, 0, sws, shs, bx, by, sw, sh);
   ctx.restore();
 
   // A readout for the live page: add ?fawkesdebug to the address, and the mask
@@ -820,7 +847,7 @@ function widthAt(w: number[], t: number) {
 // ribbon lays a tapered stroke on the surface: both edges of the brush are
 // lifted onto the height field and projected, so it wraps and foreshortens.
 function ribbon(c: CanvasRenderingContext2D, f: Fit, s: Stroke) {
-  const n = Math.max(8, Math.ceil(s.pts.length * 6));
+  const n = Math.max(8, Math.ceil(s.pts.length * 4));
   const spine = catmull(s.pts, n);
   const left: P2[] = [],
     right: P2[] = [];
@@ -1068,6 +1095,24 @@ function GOATEE(f: Fit): P2[] {
 // mask every time it moves.
 let sheetCanvas: HTMLCanvasElement | null = null;
 let shellCanvas: HTMLCanvasElement | null = null;
+let smoothCanvas: HTMLCanvasElement | null = null;
+
+// smoothOf is the small copy the sheet is blurred through: a downscale into it
+// and an upscale out of it is a cheap blur that hides the quads.
+function smoothOf(w: number, h: number) {
+  smoothCanvas = smoothCanvas || document.createElement('canvas');
+  if (smoothCanvas.width < w || smoothCanvas.height < h) {
+    smoothCanvas.width = Math.max(smoothCanvas.width, w);
+    smoothCanvas.height = Math.max(smoothCanvas.height, h);
+  }
+  const c = smoothCanvas.getContext('2d');
+  if (!c) return null;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, w, h);
+  c.imageSmoothingEnabled = true;
+  c.imageSmoothingQuality = 'high';
+  return { c, canvas: smoothCanvas, w, h };
+}
 
 function sheetOf(w: number, h: number) {
   if (!sheetCanvas || !shellCanvas) {
