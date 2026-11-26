@@ -118,9 +118,45 @@ function walkLayers(list: any[], tiles: any[], objects: any[]) {
       walkLayers(layer.layers, tiles, objects);
       continue;
     }
-    if (layer.type === 'tilelayer' && Array.isArray(layer.data)) tiles.push(layer);
+    if (layer.type === 'tilelayer' && (Array.isArray(layer.data) || typeof layer.data === 'string')) tiles.push(layer);
     if (layer.type === 'objectgroup' && Array.isArray(layer.objects)) objects.push(layer);
   }
+}
+
+// layerData is the gid array of one tile layer. Tiled saves a layer as a list
+// of gids or, which is its default, as base64 of gzip, zlib or raw bytes; both
+// forms are read, and a layer whose bytes do not open is empty rather than a
+// failed join.
+async function layerData(layer: any): Promise<number[]> {
+  if (Array.isArray(layer.data)) return layer.data;
+  const raw = typeof layer.data === 'string' ? layer.data : '';
+  const enc = String(layer.encoding || 'base64');
+  const comp = String(layer.compression || '');
+  if (!raw || enc !== 'base64') return [];
+  let plain: Uint8Array;
+  try {
+    const bin = atob(raw);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    plain = comp ? await inflate(bytes, comp) : bytes;
+  } catch {
+    return [];
+  }
+  const out: number[] = [];
+  for (let i = 0; i + 3 < plain.length; i += 4) {
+    out.push((plain[i] | (plain[i + 1] << 8) | (plain[i + 2] << 16) | (plain[i + 3] << 24)) >>> 0);
+  }
+  return out;
+}
+
+// inflate opens the bytes of a compressed layer with the browser's own
+// decompressor. An unknown compression throws, and the layer reads empty.
+async function inflate(bytes: Uint8Array, comp: string): Promise<Uint8Array> {
+  if (comp !== 'gzip' && comp !== 'zlib') throw new Error('compression ' + comp);
+  const DS = (globalThis as any).DecompressionStream;
+  if (!DS) throw new Error('no decompressor');
+  const stream = new Blob([bytes as any]).stream().pipeThrough(new DS(comp === 'gzip' ? 'gzip' : 'deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 // polygonRects rasterises a Tiled polygon into axis aligned rows of one tile
@@ -211,12 +247,16 @@ function spawn(
   return { x: Math.round(tw * 1.5), y: Math.round(th * 1.5) };
 }
 
-// mapPath is the one room to one map rule of §5: the default office is
-// map.json and any other room needs a file of its own. A missing room map is a
-// hard error, never a fallback: two rooms on one map leak a position.
+// mapPath is the one room to one map rule of §5: a room with a map of its own
+// gets it, and every other room walks the default office, the way a WorkAdventure
+// deployment serves its one world to every room. A map is geometry and zones;
+// it carries no guest and no position, so two rooms on one map leak nothing.
 export function mapPath(room: string): string {
   return room === '' ? '/world/map.json' : '/world/maps/' + room + '.json';
 }
+
+// DEFAULT_MAP is the map of a room that ships none.
+const DEFAULT_MAP = '/world/map.json';
 
 // atlasFrames reads the shipped atlas.json: a named rectangle per tile, which
 // is how a map whose gids are named cells is drawn. It answers an empty map
@@ -246,7 +286,9 @@ async function atlasFrames(signal?: AbortSignal): Promise<{ image: string; frame
 export async function loadWorld(room: string, signal?: AbortSignal): Promise<World> {
   if (!ROOM_RE.test(room)) throw new Error('bad room name');
   const base = '/world/';
-  const map = await loadJSON(mapPath(room), signal);
+  const own = mapPath(room);
+  let map = await loadJSON(own, signal, own !== DEFAULT_MAP);
+  if (!map && own !== DEFAULT_MAP) map = await loadJSON(DEFAULT_MAP, signal);
   if (!map || typeof map !== 'object') throw new Error('no map for ' + room);
   const width = Math.max(1, Math.floor(Number(map.width)) || 1);
   const height = Math.max(1, Math.floor(Number(map.height)) || 1);
@@ -291,8 +333,30 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     return found;
   };
 
-  const sets: TileSet[] = [];
+  // An external tileset is the normal Tiled authoring: the map names a .tsj or
+  // a .tsx and the tiles live in that file. It is read here so the map draws
+  // whatever an author saved, and a file that does not load leaves the map a
+  // floor of nothing rather than a failed join.
+  const tilesets: any[] = [];
   for (const raw of Array.isArray(map.tilesets) ? map.tilesets : []) {
+    if (raw && raw.source) {
+      const src = String(raw.source);
+      const path = src.startsWith('/') ? src : base + src.replace(/^\.\//, '');
+      const body = await loadJSON(path, signal, true);
+      if (body && typeof body === 'object') {
+        // The image of the file is a path beside it, never beside the map.
+        const here = path.slice(0, path.lastIndexOf('/') + 1);
+        const pic = typeof body.image === 'string' ? body.image : '';
+        const abs = !pic ? '' : pic.startsWith('/') ? pic : here + pic.replace(/^\.\//, '');
+        tilesets.push({ ...body, firstgid: raw.firstgid, image: abs });
+      }
+      continue;
+    }
+    tilesets.push(raw);
+  }
+
+  const sets: TileSet[] = [];
+  for (const raw of tilesets) {
     if (!raw || !raw.image) continue;
     const firstgid = Math.floor(Number(raw.firstgid));
     if (!Number.isSafeInteger(firstgid) || firstgid < 1) continue;
@@ -303,7 +367,9 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       tileHeight: Math.max(1, Math.floor(Number(raw.tileheight)) || th),
       margin: Math.max(0, Math.floor(Number(raw.margin)) || 0),
       spacing: Math.max(0, Math.floor(Number(raw.spacing)) || 0),
-      image: await image(String(raw.image)),
+      // A tileset image is a path beside its own file, so an external file
+      // keeps the folder it came from.
+      image: await image(raw.image ? String(raw.image) : ''),
     });
   }
 
@@ -317,7 +383,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // The collides property is declared on a tileset tile, as a property or as
   // the newer class of the same name.
   const flags = new Set<number>();
-  for (const set of Array.isArray(map.tilesets) ? map.tilesets : []) {
+  for (const set of tilesets) {
     const firstgid = Math.floor(Number(set && set.firstgid)) || 1;
     for (const tile of (set && Array.isArray(set.tiles) && set.tiles) || []) {
       if (!tile) continue;
@@ -347,8 +413,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // on any layer collides when its tileset tile says so.
   const blocked = new Uint8Array(width * height);
 
-  const paint = (target: CanvasRenderingContext2D, layer: any) => {
-    const data: number[] = layer.data;
+  const paint = (target: CanvasRenderingContext2D, layer: any, data: number[]) => {
     const opacity = layer.opacity === undefined ? 1 : Number(layer.opacity);
     const alpha = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
     const cells = Math.min(data.length, width * height);
@@ -375,7 +440,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   };
 
   for (const layer of tiles) {
-    const data: number[] = layer.data;
+    const data = await layerData(layer);
     const wall = isWallLayer(layer);
     const cells = Math.min(data.length, width * height);
     for (let i = 0; i < cells; i++) {
@@ -386,7 +451,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     // A hidden layer collides like a shown one: it is the usual way a map
     // keeps an invisible collision layer.
     if (layer.visible === false) continue;
-    paint(wall ? wctx : fctx, layer);
+    paint(wall ? wctx : fctx, layer, data);
   }
 
   const grid = new ZoneGrid(zones);
@@ -611,6 +676,45 @@ function typing(event: KeyboardEvent): boolean {
   return TYPING.has(target.tagName) || !!target.isContentEditable;
 }
 
+// makePad builds the touch pad over a canvas: a cross of four arrow buttons,
+// shown only on a screen without a hover, each holding its key while pressed.
+// A tap that starts on a button never reaches the canvas, so a tap on the map
+// itself stays a tap.
+function makePad(host: HTMLElement, hold: (key: string, down: boolean) => void): HTMLElement | null {
+  const box = document.createElement('div');
+  box.className = 'world-pad';
+  box.setAttribute('aria-label', 'walk');
+  const arrows: [string, string, string][] = [
+    ['up', 'ArrowUp', '↑'],
+    ['left', 'ArrowLeft', '←'],
+    ['right', 'ArrowRight', '→'],
+    ['down', 'ArrowDown', '↓'],
+  ];
+  for (const [name, key, face] of arrows) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'world-pad-key world-pad-' + name;
+    b.textContent = face;
+    b.setAttribute('aria-label', 'walk ' + name);
+    const press = (event: PointerEvent) => {
+      event.preventDefault();
+      b.setPointerCapture(event.pointerId);
+      hold(key, true);
+    };
+    const release = () => hold(key, false);
+    b.addEventListener('pointerdown', press);
+    b.addEventListener('pointerup', release);
+    b.addEventListener('pointercancel', release);
+    b.addEventListener('lostpointercapture', release);
+    box.appendChild(b);
+  }
+  const parent = host.parentElement;
+  if (!parent) return null;
+  parent.classList.add('has-pad');
+  parent.appendChild(box);
+  return box;
+}
+
 // WorldView draws the map and the avatars on one canvas: one pre-blitted floor,
 // a window of it, the avatars sorted by their feet, and every pixel on a whole
 // step of the map pixel. A hidden page draws no frame at all.
@@ -632,6 +736,9 @@ export class WorldView {
   private camX = 0;
   private camY = 0;
   private last = 0;
+  // pad is the four arrow buttons a touch screen walks with; a mouse never
+  // sees it.
+  private pad: HTMLElement | null = null;
   private onKeyDown = (event: KeyboardEvent) => this.key(event, true);
   private onKeyUp = (event: KeyboardEvent) => this.key(event, false);
 
@@ -646,6 +753,7 @@ export class WorldView {
     canvas.setAttribute('aria-label', 'the world of this room, walk with the arrow keys or w a s d');
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    this.pad = makePad(canvas, (key, down) => this.touch(key, down));
     if (typeof ResizeObserver === 'function') {
       const observe = new ResizeObserver(() => {
         this.dirty = true;
@@ -653,6 +761,18 @@ export class WorldView {
       observe.observe(canvas);
     }
     this.raf = requestAnimationFrame((t) => this.tick(t));
+  }
+
+  // touch is one arrow button of the pad: it holds the same key a finger on a
+  // keyboard would, so the walker needs no second path.
+  private touch(key: string, down: boolean) {
+    if (!KEYS.has(key)) return;
+    if (down) {
+      if (document.visibilityState === 'visible') this.held.add(key);
+    } else {
+      this.held.delete(key);
+    }
+    this.dirty = true;
   }
 
   // keys is the set of keys held now, for the walker of this page.
@@ -665,6 +785,8 @@ export class WorldView {
     this.raf = 0;
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    if (this.pad && this.pad.parentNode) this.pad.parentNode.removeChild(this.pad);
+    this.pad = null;
     this.avatars.clear();
     this.held.clear();
   }
