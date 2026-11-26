@@ -3,13 +3,17 @@
 
  The rule is WorkAdventure's: a named area decides first. Two guests in the same
  meeting room talk at any distance, a guest over the capacity of an area has no
- company in it, and a silent area is no talk at all. Without an area it is the
- bubble radius around the guest, and a radius a little wider only keeps a pair
- from flapping on the edge. Nothing else connects anybody: there is no room wide
- stream and no hidden subscription.
+ company in it, and a silent area is no talk at all. Without a shared area it is
+ the conversation bubble around the guest. Nothing else connects anybody:
+ there is no room wide stream and no hidden subscription.
 */
 
 export type Point = { x: number; y: number };
+
+// BUBBLE is the radius of a conversation with no area in it: WorkAdventure's
+// own conversation bubble, so two guests beside each other talk wherever they
+// stand, inside a room or on open ground.
+export const BUBBLE = 96;
 
 // Who is where, in the terms the rule needs: the place, the areas the guest
 // stands in with the radius each of them asks for, and the area that is full
@@ -21,7 +25,7 @@ export type Guest = {
 };
 
 // order is one pair's answer.
-export type Pair = { on: boolean; why: 'meeting' | 'near' | 'silent' | 'full' | 'far' };
+export type Pair = { on: boolean; why: 'meeting' | 'near' | 'bubble' | 'silent' | 'full' | 'far' };
 
 function dist2(a: Point, b: Point): number {
   const dx = a.x - b.x;
@@ -48,7 +52,7 @@ export function judge(mine: Guest, them: Guest): Pair {
     if (a.kind === 'silent') continue;
     if (dist2(mine.at, them.at) <= a.proximity * a.proximity) return { on: true, why: 'near' };
   }
-  return { on: false, why: 'far' };
+  return dist2(mine.at, them.at) <= BUBBLE * BUBBLE ? { on: true, why: 'bubble' } : { on: false, why: 'far' };
 }
 
 // Proximity holds one page's conversation set, and the one word the presence
