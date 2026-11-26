@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,10 +219,15 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	for _, name := range assetNames() {
 		mux.Handle("/"+name, serve(name))
 	}
-	// The drawings of the short code, the landmarker and the art a mask wears
-	// are their own folders. The map holds only the listed names, so any other
-	// path under a folder is still a 404 and nothing comes from outside.
-	for _, name := range append(folderNames(), "openmoji") {
+	// The drawings of the short code, the landmarker, the art a mask wears and
+	// the sound cues are their own folders. The map holds only the listed
+	// names, so any other path under a folder is still a 404 and nothing comes
+	// from outside another folder in the archive.
+	routes := folderNames()
+	if !slices.Contains(routes, "openmoji") {
+		routes = append(routes, "openmoji")
+	}
+	for _, name := range routes {
 		mux.HandleFunc("/"+name+"/", func(w http.ResponseWriter, r *http.Request) {
 			serve(strings.TrimPrefix(r.URL.Path, "/"))(w, r)
 		})
@@ -459,9 +465,11 @@ func loadFolder(dir, name string, out map[string][]byte) error {
 	return nil
 }
 
-// folderNames is every static subdirectory the client may load a file from.
+// folderNames is every static subdirectory the client may load a file from:
+// the landmarker, the drawing a mask wears and the sound cues. The short code
+// drawings are the fourth, read by a glob of their own.
 func folderNames() []string {
-	return []string{"facemesh", "miku"}
+	return []string{"facemesh", "miku", "sfx"}
 }
 
 func assetNames() []string {
