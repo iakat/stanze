@@ -39,17 +39,38 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS client
 # The commit the image was built from, shown on the page. Pass it with
 # --build-arg GIT_COMMIT=$(git rev-parse --short HEAD); it defaults to unknown.
 ARG GIT_COMMIT=unknown
+# The incoming filter is one compile per tier, so the tier is a build argument
+# and the small one is the default, as in build.sh. The weights follow the tier:
+# fe.q8 in the engine tree and the frame size the worklet cuts are one property.
+ARG FE_TIER=small
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOPATH=/go \
     GOMODCACHE=/go/pkg/mod \
     GOCACHE=/go/cache
+# Alpine has no wasm target and no wasm-ld: build-base and lld give the first
+# two, and the C sources are plain C11 with simd128 vector extensions.
+RUN apk add --no-cache build-base lld file
 WORKDIR /src
 COPY --from=mods /go/pkg/mod /go/pkg/mod
 COPY . .
 COPY --from=clientbundle /src/static/app.js static/app.js
 RUN GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+# The filter module and its weights are built here, not taken from the tree:
+# they are build artifacts, so a context without them (a clean clone, a CI
+# checkout without the local toolchain) still gives a complete image. The check
+# is the point of the step: a page that asks for /fe.wasm and gets nothing has
+# no incoming filter at all, so the build fails here rather than at the user.
+RUN TIER="${FE_TIER}" CC=clang tools/fewasm/build.sh /fe \
+ && test -s /fe/fe.wasm \
+ && cp /fe/fe.wasm static/fe.wasm \
+ && test -s tools/fewasm/engine/weights/fe.q8 \
+ && cp tools/fewasm/engine/weights/fe.q8 static/fe.q8 \
+ && rm -rf /fe
 RUN printf '%s\n' "${GIT_COMMIT}" > static/version.txt
+# Nothing below may ship a page whose filter files are missing or empty: the
+# packer would happily pack whatever is in static/, so this is the last gate.
+RUN test -s static/fe.wasm && test -s static/fe.q8
 RUN go run -trimpath -buildvcs=false ./cmd/pack
 
 # The server is the only target dependent step: trimmed, stripped, no VCS

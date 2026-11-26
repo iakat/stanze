@@ -46,6 +46,18 @@ func main() {
 	if len(names) == 0 {
 		fail(fmt.Errorf("no files under %s", *src))
 	}
+	// The page fetches these at run time and a missing one is a broken feature
+	// only the browser notices, so the packer refuses to ship without them.
+	for _, must := range []string{"fe.wasm", "fe.q8"} {
+		p := filepath.Join(*src, filepath.FromSlash(must))
+		st, err := os.Stat(p)
+		if err != nil {
+			fail(fmt.Errorf("%s is missing: build the filter first (build.sh or tools/fewasm/build.sh)", p))
+		}
+		if st.Size() == 0 {
+			fail(fmt.Errorf("%s is empty: build the filter first (build.sh or tools/fewasm/build.sh)", p))
+		}
+	}
 
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
 		fail(err)

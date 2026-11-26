@@ -16,6 +16,9 @@ permissions:
 
 env:
   CGO_ENABLED: "0"
+  # The container image is published under this version on every run that
+  # pushes. Bump it when the image changes in a way a puller should see.
+  RELEASE_TAG: "0.0.1"
 
 jobs:
   binaries:
@@ -122,6 +125,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # RELEASE_TAG is the version this build advertises. A pushed tag wins;
+      # otherwise a manual run carries the constant below, so the published
+      # image is always reachable under one fixed name on main too.
       - uses: docker/metadata-action@v5
         id: meta
         with:
@@ -131,6 +137,7 @@ jobs:
             type=ref,event=pr
             type=ref,event=tag
             type=sha,format=short
+            type=raw,value=${{ env.RELEASE_TAG }},enable=${{ github.event_name != 'pull_request' }}
 
       # The builder runs on the runner's own platform and Go cross compiles
       # into the target, so no qemu is needed for the arm64 half.
@@ -162,6 +169,7 @@ jobs:
             type=ref,event=pr
             type=ref,event=tag
             type=sha,format=short
+            type=raw,value=${{ env.RELEASE_TAG }},enable=${{ github.event_name != 'pull_request' }}
 
       - name: build v4
         if: github.event_name != 'pull_request'
