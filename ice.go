@@ -21,6 +21,9 @@ import (
 // STUN is answered by the embedded relay itself (see stunMux); TURN is offered
 // with a fresh ephemeral credential derived from the shared secret, so the
 // relay can be used as a fallback. Neither needs a third party.
+//
+// A URL must name a real port, or a browser refuses the whole list, so nothing
+// is offered while the relay is not running or its port is not known yet.
 func iceServersFor(cfg *Config) ([]iceServer, error) {
 	var out []iceServer
 	if len(cfg.StunURLs) > 0 {
@@ -46,6 +49,24 @@ func iceServersFor(cfg *Config) ([]iceServer, error) {
 	urls = append(urls, cfg.TurnURLs...)
 	out = append(out, iceServer{URLs: urls, Username: user, Credential: pass})
 	return out, nil
+}
+
+// boundPort is the port a packet conn listens on, or 0 when the address names
+// none, as a unix socket or an unknown network does.
+func boundPort(c net.PacketConn) int {
+	if ua, ok := c.LocalAddr().(*net.UDPAddr); ok {
+		return ua.Port
+	}
+	return 0
+}
+
+// setTurnPort writes the port the relay actually listens on into the config,
+// before any goroutine can read it, and rebuilds the STUN list from it: a port
+// of 0 is a request for a free one, and the join has to advertise the port the
+// kernel chose, not the zero that was asked for.
+func setTurnPort(cfg *Config, port int) {
+	cfg.TurnPort = port
+	cfg.setEmbeddedStun()
 }
 
 func randomUserTag() string {
@@ -74,6 +95,11 @@ func startTURN(cfg *Config, log *slog.Logger) (*turn.Server, error) {
 	udpConn, err := net.ListenPacket("udp4", fmt.Sprintf("0.0.0.0:%d", cfg.TurnPort))
 	if err != nil {
 		return nil, fmt.Errorf("turn udp listen: %w", err)
+	}
+	// The port is settled before a single datagram is served, so the config a
+	// join reads is the one that names the socket.
+	if port := boundPort(udpConn); port > 0 && port != cfg.TurnPort {
+		setTurnPort(cfg, port)
 	}
 
 	turnCfg := turn.ServerConfig{

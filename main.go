@@ -57,7 +57,7 @@ func main() {
 	slog.SetDefault(log)
 
 	switch {
-	case cfg.turnEnabled():
+	case cfg.turnWanted():
 		if cfg.TurnIPAuto {
 			log.Info("turn: no address given, using the outbound address", "ip", cfg.TurnPublicIP)
 		}
@@ -75,7 +75,7 @@ func main() {
 	srv := newServer(cfg, hub, log)
 
 	var turnSrv interface{ Close() error }
-	if cfg.turnEnabled() {
+	if cfg.turnWanted() {
 		t, err := startTURN(cfg, log)
 		if err != nil {
 			log.Error("turn start failed", "err", err)

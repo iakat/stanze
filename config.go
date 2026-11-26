@@ -20,6 +20,7 @@ type Config struct {
 	Listen         string
 	Debug          bool
 	StunURLs       []string
+	stunExplicit   bool // an operator gave the STUN list; never replace it
 	Turn           bool
 	TurnPublicIP   string
 	TurnIPAuto     bool
@@ -108,7 +109,7 @@ func loadConfig(args []string) (*Config, error) {
 	fs.Var(stringList{&stunFlags}, "stun", "STUN URL handed to browsers (repeatable, comma separated; env STUN_URLS)")
 	fs.BoolVar(&cfg.Turn, "turn", envStr("TURN", "1") != "0", "run the embedded relay and STUN (default on; env TURN=0 disables)")
 	fs.StringVar(&cfg.TurnPublicIP, "turn-public-ip", envStr("TURN_PUBLIC_IP", ""), "public IP advertised to clients for the embedded TURN relay; empty takes the outbound address")
-	fs.IntVar(&cfg.TurnPort, "turn-port", envInt("TURN_PORT", 3478), "UDP port for the embedded TURN server")
+	fs.IntVar(&cfg.TurnPort, "turn-port", envInt("TURN_PORT", 3478), "UDP port for the embedded TURN server (0 = a free port at start)")
 	fs.IntVar(&cfg.TurnTCPPort, "turn-tcp-port", envInt("TURN_TCP_PORT", 0), "optional TCP port for TURN (0 = off)")
 	fs.StringVar(&cfg.TurnRealm, "turn-realm", envStr("TURN_REALM", "stanze"), "TURN realm")
 	fs.StringVar(&cfg.TurnSecret, "turn-secret", envStr("TURN_SECRET", ""), "shared secret for ephemeral TURN credentials (env TURN_SECRET); empty makes a random one at each start")
@@ -135,6 +136,7 @@ func loadConfig(args []string) (*Config, error) {
 		stun = stunFlags
 	}
 	cfg.StunURLs = stun
+	cfg.stunExplicit = len(stun) > 0
 	cfg.TurnURLs = turnURLs
 
 	// The relay and its STUN are on unless asked off. A missing secret is
@@ -157,13 +159,7 @@ func loadConfig(args []string) (*Config, error) {
 
 	// With no explicit STUN, use the embedded relay as the STUN endpoint. The
 	// TURN server also answers Binding requests, so no third party is contacted.
-	if len(cfg.StunURLs) == 0 && cfg.turnEnabled() {
-		host := cfg.TurnPublicIP
-		if strings.Contains(host, ":") {
-			host = "[" + host + "]"
-		}
-		cfg.StunURLs = []string{fmt.Sprintf("stun:%s:%d", host, cfg.TurnPort)}
-	}
+	cfg.setEmbeddedStun()
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -194,7 +190,32 @@ func (c *Config) validate() error {
 }
 
 func (c *Config) turnEnabled() bool {
-	return c.TurnPublicIP != "" && c.TurnSecret != ""
+	return c.TurnPublicIP != "" && c.TurnSecret != "" && c.TurnPort != 0
+}
+
+// turnWanted reports whether the relay should run. It differs from
+// turnEnabled only before the socket is bound: a port of 0 is a request for a
+// free one, and the relay has to run to learn it.
+func (c *Config) turnWanted() bool {
+	return c.TurnPublicIP != "" && c.TurnSecret != "" && c.TurnPort >= 0
+}
+
+// setEmbeddedStun fills the STUN list with the embedded relay, unless the
+// operator gave one. It runs again after the relay socket is bound, because a
+// port of 0 is only known then; a URL of the relay is never a broken one, since
+// :0 would name no port at all.
+func (c *Config) setEmbeddedStun() {
+	if c.stunExplicit || !c.turnEnabled() {
+		return
+	}
+	host := c.TurnPublicIP
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if host == "" || c.TurnPort <= 0 {
+		return
+	}
+	c.StunURLs = []string{fmt.Sprintf("stun:%s:%d", host, c.TurnPort)}
 }
 
 func (c *Config) logLevel() slog.Level {
