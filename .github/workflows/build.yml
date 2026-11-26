@@ -75,6 +75,13 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: client/package-lock.json
+
+      # The filter is checked before it is packed: the worklet's own loader
+      # runs over the two files the server will serve, so a module that does
+      # not match its fe.q8 fails here and not in a browser with
+      # "the noise filter stopped: fe: fe_init failed" in a corner.
+      - name: filter check
+        run: node tools/fe-check.mjs
       - name: client
         run: |
           npm ci --prefix client
@@ -124,6 +131,71 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
           fi
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Same filter step as the binaries: the browser below hears the module a
+      # user would get, not one built by a different clang.
+      - name: filter
+        env:
+          WASI_SDK_URL: https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
+          WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+        run: |
+          sdk=/opt/wasi-sdk
+          if [ ! -x "$sdk/bin/clang" ]; then
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              --connect-timeout 20 --max-time 900 -o /tmp/sdk.tar.gz "$WASI_SDK_URL"
+            echo "$WASI_SDK_SHA256  /tmp/sdk.tar.gz" | sha256sum -c -
+            sudo mkdir -p "$sdk"
+            sudo tar -xzf /tmp/sdk.tar.gz -C "$sdk" --strip-components=1
+            rm -f /tmp/sdk.tar.gz
+          fi
+          TIER=small CC="$sdk/bin/clang" tools/fewasm/build.sh tools/fewasm/out
+          cp tools/fewasm/out/fe.wasm static/fe.wasm
+          cp tools/fewasm/engine/weights/fe.q8 static/fe.q8
+          rm -rf tools/fewasm/out
+          node tools/fe-check.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # Chromium and its system libraries come from the distribution, so the
+      # test run needs no browser download and no runtime install.
+      - name: browser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends chromium-browser
+          npm ci --prefix client
+          mkdir -p /tmp/pw
+          npm ci --prefix /tmp/pw --no-save playwright-core@1.47.2
+
+      - name: build and run
+        env:
+          PW: /tmp/pw/node_modules/playwright-core
+          CHROME: /usr/bin/chromium-browser
+          ROOMSBASE: http://127.0.0.1:8095
+          OUTDIR: shots
+        run: |
+          node client/build.mjs
+          GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+          go build -trimpath -buildvcs=false -ldflags "-s -w" -o /tmp/stanze .
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 &
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:8095/ && break
+            sleep 1
+          done
+          node tools/smoke.js
 
   image:
     name: image

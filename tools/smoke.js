@@ -81,6 +81,9 @@ function newRoomID() {
   const room = newRoomID();
   const browser = await chromium.launch({
     headless: true,
+    // CHROME names a browser the runner already has (a distribution package);
+    // without it playwright-core uses its own download.
+    executablePath: process.env.CHROME || undefined,
     args: [
       '--use-fake-device-for-media-stream',
       '--use-fake-ui-for-media-stream',
