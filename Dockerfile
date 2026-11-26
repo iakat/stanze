@@ -31,6 +31,44 @@ RUN npm ci --prefix client
 COPY client ./client
 RUN node client/build.mjs
 
+# The incoming filter is one compile per tier of one engine tree, so it is its
+# own stage: a Debian base carrying the upstream wasi-sdk, because the filter
+# must be compiled by a clang that owns a wasm32-wasip1 sysroot and its
+# builtins. Debian's own clang has neither (no wasm headers, no wasm builtins
+# archive), and Alpine's clang has no compiler at all, so neither can build it.
+# The tier is a build argument and the small one is the default, as in
+# build.sh; the weights follow the tier, because fe.q8 in the engine tree and
+# the frame size the worklet cuts are one property.
+ARG FE_TIER=small
+# Pinned by version and by the sha256 of the release tarball, so a changed
+# download fails the build instead of changing the module silently.
+ARG WASI_SDK_VERSION=34.0
+ARG WASI_SDK_SHA256=b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS werecompiler
+ARG FE_TIER
+ARG WASI_SDK_VERSION
+ARG WASI_SDK_SHA256
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+RUN cd /opt \
+ && curl -fsSL -o sdk.tar.gz \
+      "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz" \
+ && echo "${WASI_SDK_SHA256}  sdk.tar.gz" | sha256sum -c - \
+ && tar -xzf sdk.tar.gz \
+ && mv "wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux" wasi-sdk \
+ && rm sdk.tar.gz
+ENV PATH=/opt/wasi-sdk/bin:$PATH
+WORKDIR /src
+COPY tools/fewasm ./tools/fewasm
+# The check is the point of the step: a page that asks for /fe.wasm and gets
+# nothing has no incoming filter at all, so a missing module fails the build
+# here rather than in a browser. The sandbox build takes its clang from PATH,
+# and the strip step comes from the same directory as the compiler.
+RUN TIER="${FE_TIER}" tools/fewasm/build.sh /fe \
+ && test -s /fe/fe.wasm \
+ && test -s tools/fewasm/engine/weights/fe.q8
+
 # The client is platform independent, so it is built once in its own stage:
 # build static/pq.wasm from source, then pack static/ into packed/static.tgz,
 # which the server embeds. Both steps mirror build.sh and write no timestamps,
@@ -39,34 +77,21 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS client
 # The commit the image was built from, shown on the page. Pass it with
 # --build-arg GIT_COMMIT=$(git rev-parse --short HEAD); it defaults to unknown.
 ARG GIT_COMMIT=unknown
-# The incoming filter is one compile per tier, so the tier is a build argument
-# and the small one is the default, as in build.sh. The weights follow the tier:
-# fe.q8 in the engine tree and the frame size the worklet cuts are one property.
-ARG FE_TIER=small
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOPATH=/go \
     GOMODCACHE=/go/pkg/mod \
     GOCACHE=/go/cache
-# Alpine has no wasm target and no wasm-ld: build-base and lld give the first
-# two, and the C sources are plain C11 with simd128 vector extensions.
-RUN apk add --no-cache build-base lld file
 WORKDIR /src
 COPY --from=mods /go/pkg/mod /go/pkg/mod
 COPY . .
 COPY --from=clientbundle /src/static/app.js static/app.js
 RUN GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
-# The filter module and its weights are built here, not taken from the tree:
-# they are build artifacts, so a context without them (a clean clone, a CI
-# checkout without the local toolchain) still gives a complete image. The check
-# is the point of the step: a page that asks for /fe.wasm and gets nothing has
-# no incoming filter at all, so the build fails here rather than at the user.
-RUN TIER="${FE_TIER}" CC=clang tools/fewasm/build.sh /fe \
- && test -s /fe/fe.wasm \
- && cp /fe/fe.wasm static/fe.wasm \
- && test -s tools/fewasm/engine/weights/fe.q8 \
- && cp tools/fewasm/engine/weights/fe.q8 static/fe.q8 \
- && rm -rf /fe
+# The filter came from the stage above, never from the tree: it is a build
+# artifact, so a context without one (a clean clone, a CI checkout without the
+# local toolchain) still gives a complete image.
+COPY --from=werecompiler /fe/fe.wasm static/fe.wasm
+COPY --from=werecompiler /src/tools/fewasm/engine/weights/fe.q8 static/fe.q8
 RUN printf '%s\n' "${GIT_COMMIT}" > static/version.txt
 # Nothing below may ship a page whose filter files are missing or empty: the
 # packer would happily pack whatever is in static/, so this is the last gate.
