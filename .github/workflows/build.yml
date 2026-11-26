@@ -44,6 +44,29 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The filter module is built on the runner, the same way build.sh does
+      # it: the packer refuses to pack a tree without static/fe.wasm. The sdk
+      # is the pinned release, verified by its checksum before it is unpacked.
+      - name: filter
+        env:
+          WASI_SDK_URL: https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz
+          WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+        run: |
+          sdk=/opt/wasi-sdk
+          if [ ! -x "$sdk/bin/clang" ]; then
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              --connect-timeout 20 --max-time 900 -o /tmp/sdk.tar.gz "$WASI_SDK_URL"
+            echo "$WASI_SDK_SHA256  /tmp/sdk.tar.gz" | sha256sum -c -
+            sudo mkdir -p "$sdk"
+            sudo tar -xzf /tmp/sdk.tar.gz -C "$sdk" --strip-components=1
+            rm -f /tmp/sdk.tar.gz
+          fi
+          TIER=small CC="$sdk/bin/clang" tools/fewasm/build.sh tools/fewasm/out
+          cp tools/fewasm/out/fe.wasm static/fe.wasm
+          cp tools/fewasm/engine/weights/fe.q8 static/fe.q8
+          rm -rf tools/fewasm/out
+          test -s static/fe.wasm
+
       # The client is TypeScript and its bundle is not in the tree, so both are
       # rebuilt from this commit's source first, exactly like build.sh does
       # (bundle, wasm, then the deterministic pack).
