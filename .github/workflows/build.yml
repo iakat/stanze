@@ -170,20 +170,19 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
-      # Chromium and its system libraries come from the distribution, so the
-      # test run needs no browser download and no runtime install.
+      # The browser is playwright's own build, matching the driver, with the
+      # libraries it needs. /tmp/pw has no lockfile, so the package goes in
+      # with install and not ci.
       - name: browser
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends chromium-browser
           npm ci --prefix client
           mkdir -p /tmp/pw
-          npm ci --prefix /tmp/pw --no-save playwright-core@1.47.2
+          npm install --prefix /tmp/pw --no-save playwright-core@1.47.2
+          node /tmp/pw/node_modules/playwright-core/cli.js install --with-deps chromium
 
       - name: build and run
         env:
           PW: /tmp/pw/node_modules/playwright-core
-          CHROME: /usr/bin/chromium-browser
           ROOMSBASE: http://127.0.0.1:8095
           OUTDIR: shots
         run: |
