@@ -188,6 +188,8 @@ jobs:
         run: |
           node client/build.mjs
           GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
+          # the server embeds packed/static.tgz, a build artifact
+          go run -trimpath -buildvcs=false ./cmd/pack
           go build -trimpath -buildvcs=false -ldflags "-s -w" -o /tmp/stanze .
           /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 &
           for i in $(seq 1 30); do
