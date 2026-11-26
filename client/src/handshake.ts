@@ -127,6 +127,8 @@ export function sealedRefusePass(peer) {
   sealedSetE2E(peer, 'failed');
   say(shortPeer(peer.id) + ' does not know the room passphrase; the link stays closed');
   if (state.waiting) return;
+  // The admin removes the identity, not the socket, so the same guest can not
+  // come back on a fresh pair in this call.
   if (!isAdmin(state.self) || isAdmin(peer.id)) return;
   sealedKick(peer.id);
 }
@@ -166,6 +168,8 @@ export function sealedRestart(peer, resend) {
   // page that restarted its own pair must not get its tries back.
   if (peer.passTimer) clearTimeout(peer.passTimer);
   peer.passTimer = null;
+  for (const t of peer.passHold || []) clearTimeout(t);
+  peer.passHold = [];
   peer.ctlPending = [];
   fileDropPeer(peer);
   if (peer.pc) {
@@ -175,6 +179,27 @@ export function sealedRestart(peer, resend) {
   if (peer.tile) peer.tile.dataset.sas = '';
   sealedSetE2E(peer, 'new');
   if (resend) sealedSendPub(peer);
+  // A pair that restarted still owes the room its proof, and the restart has
+  // just emptied it: the passphrase exchange can not start with no keys, so a
+  // lower id asks to be looked at again and the bundle it gets back starts the
+  // exchange on the emptied pair. Without this the pair sits keyed and silent.
+  if (resend && peer.keys && String(state.self) < String(peer.id)) sealedHoldPass(peer);
+}
+
+// sealedHoldPass keeps a proof this page may not start yet: the window is spent
+// on another pair. It is retried a few times, because a pair with its keys in
+// and no proof is a pair that will never carry a frame.
+const PASS_HOLDS_MAX = 6;
+
+function sealedHoldPass(peer) {
+  if (peer.pass || peer.passSpent || (peer.passHold || []).length >= PASS_HOLDS_MAX) return;
+  const timer = setTimeout(() => {
+    peer.passHold = (peer.passHold || []).filter((t) => t !== timer);
+    if (!state.peers.has(peer.id) || state.leaving || peer.pass || !peer.keys) return;
+    if (startPassNow(peer)) sealedOfferPass(peer);
+    else sealedHoldPass(peer);
+  }, PASS_SPEND_MS + 100);
+  (peer.passHold = peer.passHold || []).push(timer);
 }
 
 // sealedOnPub decides which side initiates: the lower peer id, and the other
@@ -449,14 +474,20 @@ async function sealedOnProof(peer, msg) {
   // The keys go to the worker now: the passphrase proof travels sealed, and a
   // frame that can not be opened would stall it. The keys are not permission:
   // every application frame of this pair waits for the proof.
-  peer.keyPromise = sealedInstallKeys(peer);
+  const keys = sealedInstallKeys(peer);
+  peer.keyPromise = keys;
   sealedSetE2E(peer, 'ready');
-  Promise.resolve(peer.keyPromise).then((ok) => {
+  Promise.resolve(keys).then((ok) => {
+    // The promise is the one proof this side has keys in the worker now. It is
+    // cleared with the answer so nothing that asks whether the install is still
+    // running reads a settled promise as a pending one.
+    if (peer.keyPromise === keys) peer.keyPromise = null;
     if (!ok || !state.peers.has(peer.id) || state.leaving) return;
     sealedFlushApp(peer);
     // The bundle decides who begins; this call arrives after both sides have
     // installed their keys, so it is the one place an answer starts an exchange.
     if (startPassNow(peer)) sealedOfferPass(peer);
+    else sealedHoldPass(peer);
   });
 }
 
