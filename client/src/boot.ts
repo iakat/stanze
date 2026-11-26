@@ -39,7 +39,7 @@ import {
   refreshDevices,
   setDeaf,
 } from './devices.js';
-import { applyMirror, ensurePlayback, setHand, setNoise, updateButtons } from './audio.js';
+import { applyMirror, ensurePlayback, paintFilterNote, setHand, setNoise, updateButtons } from './audio.js';
 import {
   lookInit,
   lookOn,
@@ -54,6 +54,7 @@ import { startShare, stopShare } from './screen.js';
 import { enterRoom, leave } from './room.js';
 import { fileOffer } from './files.js';
 import { setSounds, startLost, stopLost } from './sfx.js';
+import { wireBoard } from './board.js';
 import { setStatsOpen, startStats, statsOpen, stopStats, updateStats } from './stats.js';
 import { win } from './sealed.js';
 import {
@@ -471,6 +472,8 @@ function wirePanels() {
   paintGate();
   $('stats-btn').addEventListener('click', () => setStatsOpen(!statsOpen()));
   $('stats-close').addEventListener('click', () => setStatsOpen(false));
+  wireBoard();
+  paintFilterNote();
 }
 
 // wireStage the stage: spotlight, the phone chrome, the rail list and the key handler.

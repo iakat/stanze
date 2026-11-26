@@ -39,6 +39,13 @@ class GtcrnWorkletProcessor extends AudioWorkletProcessor {
     this.dead = 0;
     this.bypassLeft = 0;
 
+    // Counters for the page: frames filtered, the time the model took, and the
+    // output samples that came out zero because the ring ran dry. The filter
+    // runs on the audio thread, so a miss is heard, not queued.
+    this.statFrames = 0;
+    this.statMs = 0;
+    this.statStarved = 0;
+
     Module({ wasmBinary: new Uint8Array(wasm) })
       .then((mod) => {
         this.module = mod;
@@ -66,7 +73,11 @@ class GtcrnWorkletProcessor extends AudioWorkletProcessor {
       heap[inBase + i] = v;
       inEnergy += v * v;
     }
+    const t0 = performance.now();
     this.module._gtcrn_process_48k(this.state, this.inPtr, this.outPtr);
+    this.statMs += performance.now() - t0;
+    this.statFrames++;
+    if ((this.statFrames & 63) === 0) this.report();
     let outEnergy = 0;
     for (let i = 0; i < FRAME; i++) {
       const v = heap[outBase + i];
@@ -88,6 +99,17 @@ class GtcrnWorkletProcessor extends AudioWorkletProcessor {
       this.frameOut.set(this.pending);
     }
     this.push(this.frameOut);
+  }
+
+  // report hands the counters to the page. All three are totals since the node
+  // started; the page keeps the latest and does the division.
+  report() {
+    this.port.postMessage({
+      ev: 'stats',
+      frames: this.statFrames,
+      ms: this.statMs,
+      starved: this.statStarved,
+    });
   }
 
   push(frame) {
@@ -126,6 +148,7 @@ class GtcrnWorkletProcessor extends AudioWorkletProcessor {
         this.ringFill--;
       } else {
         out[i] = 0;
+        this.statStarved++;
       }
     }
     return this.alive;

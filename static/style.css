@@ -525,8 +525,9 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   gap: 5px;
 }
 
-/* The chat and the stats are the same panel: one border, one header bar. */
-.chat, .stats {
+/* The chat, the stats and the cue board are the same panel: one border,
+   one header bar. */
+.chat, .stats, .sfx-panel {
   flex: none;
   min-height: 0;
   display: flex;
@@ -548,7 +549,7 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 }
 .chat { width: auto; flex: 1 1 auto; min-height: 0; }
 .stats { width: 320px; }
-.chat-head, .stats-head {
+.chat-head, .stats-head, .sfx-head {
   /* The chat head is a title bar of the era: the same navy gradient as the
      window title, with a light edge on top and on the left. */
   background: linear-gradient(90deg, var(--navy), #084a80);
@@ -560,14 +561,14 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   padding: 1px 4px;
   flex: none;
 }
-.stats-head {
+.stats-head, .sfx-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
 }
 .chat-head .muted { color: var(--navy-soft); }
-.stats-head button {
+.stats-head button, .sfx-head button {
   font: inherit;
   font-weight: bold;
   line-height: 1;
@@ -580,6 +581,40 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   border-color: var(--panel-hi) var(--panel-lo) var(--panel-lo) var(--panel-hi);
   box-shadow: none;
 }
+/* The cue board: eight one shot buttons, a volume and a stop. It is narrow so
+   the pictures keep their room, and it opens beside them like the stats. */
+.sfx-panel { width: 252px; }
+.sfx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+}
+.sfx-cue {
+  min-height: 32px;
+  padding: 2px 4px;
+  font-size: var(--fs-smaller);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.sfx-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 3px 3px;
+}
+.sfx-vol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: var(--fs-smaller);
+}
+.sfx-vol input { flex: 1; min-width: 0; margin: 0; }
+.sfx-foot button { flex: none; min-width: 54px; }
+
 .chat-log, .stats-body {
   flex: 1;
   min-height: 0;

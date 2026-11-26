@@ -2,6 +2,7 @@
  The stats panel: media metrics per guest and the wire and crypto counters.
 */
 
+import { feDrops } from './audio.js';
 import { $ } from './dom.js';
 import { clamp } from './util.js';
 import { state } from './state.js';
@@ -400,7 +401,10 @@ function ownPairs(total) {
     false,
     level ? levelFraction(state.meterPeak) : 0,
   ]);
-  out.push(['filter ', `out ${state.denoiseOn ? state.denoiseEngine : 'off'}`]);
+  const fe = feDrops();
+  const seen = fe.frames + fe.dropped;
+  const drops = seen > 0 ? `, ${((100 * fe.dropped) / seen).toFixed(1)}% drop` : '';
+  out.push(['filter ', `out ${state.denoiseOn ? state.denoiseEngine : 'off'}${drops}`]);
   const ctx = state.playCtx;
   const play = ctx ? ctx.state : 'none';
   if (play !== 'running') out.push(['sound ', `${play}, tap the page once`, false]);

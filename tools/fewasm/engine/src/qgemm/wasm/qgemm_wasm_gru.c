@@ -160,7 +160,6 @@ static void fe_wasm_gru_scalar(int M, int D, const int8_t *Xq, int ld_x,
                                uint16_t *h_inout_fp16, int ld_h_inout,
                                float *h_out_scratch, int ld_h_out) {
     const int NR = FE_WASM_NR;
-    const int nblk = (D + NR - 1) / NR;
     const int lanes = D;
 
     for (int r = 0; r < M; r++) {
@@ -169,34 +168,32 @@ static void fe_wasm_gru_scalar(int M, int D, const int8_t *Xq, int ld_x,
         uint16_t *hs = h_inout_fp16 + (size_t)r * ld_h_inout;
         float *hscr = h_out_scratch + (size_t)r * ld_h_out;
 
+        /* The gate offsets are not block-aligned when D % NR != 0 (Base
+         * D=36), so the block index comes from the flat output index. */
         for (int n = 0; n < lanes; n++) {
-            int32_t ci = fe_wasm_dot(x, fe_wasm_b(Wq_ih, D, n / NR), D,
-                                     n % NR);
-            int32_t ch = fe_wasm_dot(h, fe_wasm_b(Wq_hh, D, n / NR), D,
-                                     n % NR);
+            const int blk = n / NR, lane = n % NR;
+            int32_t ci = fe_wasm_dot(x, fe_wasm_b(Wq_ih, D, blk), D, lane);
+            int32_t ch = fe_wasm_dot(h, fe_wasm_b(Wq_hh, D, blk), D, lane);
             float ih = fmaf(combined_ih[n], (float)ci, bias_eff_ih[n]);
             float hh = fmaf(combined_hh[n], (float)ch, bias_eff_hh[n]);
             fe_gru_r_band[(size_t)(r % FE_QGEMM_GRU_MR) * D + n] =
                 fe_wasm_sigmoid_g((ih + hh) + br_sum[n]);
         }
         for (int n = 0; n < lanes; n++) {
-            int32_t ci = fe_wasm_dot(x, fe_wasm_b(Wq_ih, D, nblk + n / NR), D,
-                                     n % NR);
-            int32_t ch = fe_wasm_dot(h, fe_wasm_b(Wq_hh, D, nblk + n / NR), D,
-                                     n % NR);
-            float ih = fmaf(combined_ih[D + n], (float)ci,
-                            bias_eff_ih[D + n]);
-            float hh = fmaf(combined_hh[D + n], (float)ch,
-                            bias_eff_hh[D + n]);
+            const int g = D + n;
+            const int blk = g / NR, lane = g % NR;
+            int32_t ci = fe_wasm_dot(x, fe_wasm_b(Wq_ih, D, blk), D, lane);
+            int32_t ch = fe_wasm_dot(h, fe_wasm_b(Wq_hh, D, blk), D, lane);
+            float ih = fmaf(combined_ih[g], (float)ci, bias_eff_ih[g]);
+            float hh = fmaf(combined_hh[g], (float)ch, bias_eff_hh[g]);
             fe_gru_z_band[(size_t)(r % FE_QGEMM_GRU_MR) * D + n] =
                 fe_wasm_sigmoid_g((ih + hh) + bz_sum[n]);
         }
         for (int n = 0; n < lanes; n++) {
-            int32_t ci = fe_wasm_dot(x, fe_wasm_b(Wq_ih, D, 2 * nblk + n / NR),
-                                     D, n % NR);
-            int32_t ch = fe_wasm_dot(h, fe_wasm_b(Wq_hh, D, 2 * nblk + n / NR),
-                                     D, n % NR);
             const int g = 2 * D + n;
+            const int blk = g / NR, lane = g % NR;
+            int32_t ci = fe_wasm_dot(x, fe_wasm_b(Wq_ih, D, blk), D, lane);
+            int32_t ch = fe_wasm_dot(h, fe_wasm_b(Wq_hh, D, blk), D, lane);
             float ih = fmaf(combined_ih[g], (float)ci, bias_eff_ih[g]);
             float hh = fmaf(combined_hh[g], (float)ch, bias_eff_hh[g]);
             const float rv = fe_gru_r_band[(size_t)(r % FE_QGEMM_GRU_MR) * D + n];

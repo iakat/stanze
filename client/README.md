@@ -50,7 +50,7 @@ module in `src` has no row yet.
 | [src/audio.ts](src/audio.ts) | 557 | The talking light, the remote audio graph and the noise suppression worklet. |
 | [src/screen.ts](src/screen.ts) | 89 | Screen share: points the screen sender at the display track, never the camera sender. |
 | [src/volume.ts](src/volume.ts) | 149 | Per peer volume, remembered by identity when one is pinned. |
-| [src/sfx.ts](src/sfx.ts) | 178 | The page's own sound effects, decoded once and cached. |
+| [src/sfx.ts](src/sfx.ts) | 197 | The page's own sound effects, decoded once and cached. |
 | [src/clock.ts](src/clock.ts) | 36 | The call clock. |
 | [src/badge.ts](src/badge.ts) | 43 | The relay badge, read from the transport stats. |
 
@@ -72,6 +72,7 @@ module in `src` has no row yet.
 | --- | ---: | --- |
 | [src/tiles.ts](src/tiles.ts) | 471 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
+| [src/board.ts](src/board.ts) | 82 | The cue board: eight one shot notification cues, a volume and a stop. |
 | [src/stats.ts](src/stats.ts) | 955 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1273 | Local transcription, one language and many. |
 | [src/fawkes.ts](src/fawkes.ts) | 778 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |

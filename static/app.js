@@ -119,6 +119,10 @@
     denoiseFeId: 0,
     // worker lane of the microphone filter when FastEnhancer owns it
     denoiseOn: false,
+    feStats: /* @__PURE__ */ new Map(),
+    gtStats: /* @__PURE__ */ new Map(),
+    gtSeq: 0,
+    // ids of the GTCRN nodes, so their counters can be told apart
     denoiseEngine: "off",
     // the filter on the microphone now, 'off' on the raw path
     noiseWasm: null,
@@ -3432,7 +3436,21 @@
   }
 
   // src/sfx.ts
-  var SFX_NAMES = ["pop", "bonk", "timp", "hammer", "lost"];
+  var SFX_NAMES = [
+    "pop",
+    "bonk",
+    "timp",
+    "hammer",
+    "lost",
+    "discord",
+    "knock2",
+    "imsg-out",
+    "imsg-in",
+    "signal-call",
+    "tg-call",
+    "ios",
+    "vineboom"
+  ];
   var SFX_RATE = 0.35;
   var LOST_RATE = 0.2;
   var LOST_LOOP_START = 0.16;
@@ -3473,7 +3491,7 @@
       });
     }
   }
-  function playSfx(name) {
+  function playSfx(name, rate2 = 1) {
     if (!state.sounds) return;
     if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
     const ctx = state.sfxCtx;
@@ -3483,15 +3501,12 @@
     if (!buffer) {
       return;
     }
-    if (state.sfxSource) {
-      stopQuietly(state.sfxSource);
-      state.sfxSource = null;
-    }
+    stopSfx();
     try {
       const src = ctx.createBufferSource();
       src.buffer = buffer;
       const gain = ctx.createGain();
-      gain.gain.value = SFX_RATE;
+      gain.gain.value = SFX_RATE * Math.max(0, Math.min(1, rate2));
       src.connect(gain);
       gain.connect(ctx.destination);
       src.onended = () => {
@@ -3501,6 +3516,11 @@
       src.start();
     } catch {
     }
+  }
+  function stopSfx() {
+    if (!state.sfxSource) return;
+    stopQuietly(state.sfxSource);
+    state.sfxSource = null;
   }
   function startLost() {
     state.lostWanted = true;
@@ -4558,9 +4578,9 @@
   function omniSync() {
     syncTaps(omni, omniTap, omniUntap);
   }
-  function omniDown(input, rate) {
-    if (rate === 16e3) return new Float32Array(input);
-    const ratio = rate / 16e3;
+  function omniDown(input, rate2) {
+    if (rate2 === 16e3) return new Float32Array(input);
+    const ratio = rate2 / 16e3;
     const n = Math.max(0, Math.floor(input.length / ratio));
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) {
@@ -5812,10 +5832,13 @@
       false,
       level ? levelFraction(state.meterPeak) : 0
     ]);
-    out.push(["filter ", `out ${state.denoiseOn ? state.denoiseEngine : "off"}`]);
+    const fe = feDrops();
+    const seen = fe.frames + fe.dropped;
+    const drops = seen > 0 ? `, ${(100 * fe.dropped / seen).toFixed(1)}% drop` : "";
+    out.push(["filter ", `out ${state.denoiseOn ? state.denoiseEngine : "off"}${drops}`]);
     const ctx = state.playCtx;
-    const play = ctx ? ctx.state : "none";
-    if (play !== "running") out.push(["sound ", `${play}, tap the page once`, false]);
+    const play2 = ctx ? ctx.state : "none";
+    if (play2 !== "running") out.push(["sound ", `${play2}, tap the page once`, false]);
     return out;
   }
   function peerPairs(peer, s) {
@@ -7730,8 +7753,8 @@
     if (rec.status === "offered") return "waiting for you";
     if (rec.status === "receiving") {
       const pct = rec.size ? Math.round(rec.got / rec.size * 100) : 0;
-      const rate = fileRateText(rec.rate);
-      return "receiving " + pct + " percent" + (rate ? ", " + rate : "");
+      const rate2 = fileRateText(rec.rate);
+      return "receiving " + pct + " percent" + (rate2 ? ", " + rate2 : "");
     }
     if (rec.status === "done") {
       return rec.disk ? "saved to disk" + (rec.avg ? ", " + rec.avg : "") : "ready, click save" + (rec.avg ? ", " + rec.avg : "");
@@ -7839,8 +7862,8 @@
         accepted.map((s) => {
           const pct = out.size ? Math.round(Math.min(out.size, s.sent * FILE_CHUNK) / Math.max(1, out.size) * 100) : s.status === "done" ? 100 : 0;
           const sent = Math.min(out.size, s.sent * FILE_CHUNK);
-          const rate = s.status === "done" ? fileAverageRate(sent, s.rateAt, performance.now()) : fileRateText(s.rate);
-          return s.peer.name + " " + (s.status === "done" ? "done" : pct + " percent") + (rate ? ", " + rate : "");
+          const rate2 = s.status === "done" ? fileAverageRate(sent, s.rateAt, performance.now()) : fileRateText(s.rate);
+          return s.peer.name + " " + (s.status === "done" ? "done" : pct + " percent") + (rate2 ? ", " + rate2 : "");
         }).join(", ")
       );
     }
@@ -9068,12 +9091,13 @@
     }
     return state.noiseWasm;
   }
-  async function makeDenoiseNode(ctx) {
+  var gtIds = /* @__PURE__ */ new WeakMap();
+  async function makeDenoiseNode(ctx, dir) {
     const [binary] = await Promise.all([
       noiseWasm(),
       ctx.audioWorklet.addModule(scriptURL("/gtcrn-node.js"))
     ]);
-    return new AudioWorkletNode(ctx, "gtcrn", {
+    const node = new AudioWorkletNode(ctx, "gtcrn", {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [1],
@@ -9081,6 +9105,22 @@
       channelCountMode: "explicit",
       processorOptions: { wasm: new Uint8Array(binary) }
     });
+    const id = "g" + ++state.gtSeq;
+    node.port.onmessage = (event) => {
+      const msg = event.data || {};
+      if (msg.ev !== "stats") return;
+      state.gtStats.set(id, {
+        dir,
+        frames: Number(msg.frames) || 0,
+        ms: Number(msg.ms) || 0,
+        starved: Number(msg.starved) || 0
+      });
+      paintFilterNote();
+    };
+    gtIds.set(node, id);
+    node.addEventListener("processorerror", () => state.gtStats.delete(id));
+    state.gtStats.set(id, { dir, frames: 0, ms: 0, starved: 0 });
+    return node;
   }
   function prefetchNoise() {
     const warm = (url) => fetch(url).then((res) => res.ok ? res.arrayBuffer() : null).catch(() => {
@@ -9094,10 +9134,66 @@
       state.feWorker.onmessage = (event) => {
         const msg = event.data || {};
         if (msg.ev === "error") say("the noise filter stopped: " + String(msg.text || "unknown"));
+        else if (msg.ev === "stats") {
+          state.feStats.set(Number(msg.id) || 0, {
+            frames: Number(msg.frames) || 0,
+            dropped: Number(msg.dropped) || 0,
+            ms: Number(msg.ms) || 0
+          });
+          paintFilterNote();
+        }
       };
       state.feWorker.postMessage({ ev: "warm" });
     }
     return state.feWorker;
+  }
+  function feDrops() {
+    let frames = 0;
+    let dropped = 0;
+    for (const s of state.feStats.values()) {
+      frames += s.frames;
+      dropped += s.dropped;
+    }
+    return { frames, dropped };
+  }
+  function noteLine(label, frames, ms, dropped) {
+    if (!frames) return `${label}, warming up`;
+    const per = ms / frames;
+    const drop = dropped / frames > 5e-4 ? `, ${(100 * dropped / frames).toFixed(1)}% drop` : "";
+    return `${label} ${per.toFixed(per < 1 ? 2 : 1)} ms/frame${drop}`;
+  }
+  function paintFilterNote() {
+    const out = $("noise-note-out");
+    const inc = $("noise-note-in");
+    if (out) {
+      if (!state.denoiseOn) out.textContent = "off";
+      else if (state.denoiseEngine === "gtcrn") {
+        const g = state.gtStats.get("out");
+        out.textContent = g ? noteLine("GTCRN", g.frames, g.ms, g.starved / 768) : "GTCRN, warming up";
+      } else {
+        const f = state.feStats.get(state.denoiseFeId);
+        out.textContent = f ? noteLine("FastEnhancer", f.frames, f.ms, f.dropped) : "FastEnhancer, warming up";
+      }
+    }
+    if (inc) {
+      let frames = 0, ms = 0, dropped = 0, engines = 0;
+      for (const g of state.gtStats.values()) {
+        if (g.dir !== "in") continue;
+        frames += g.frames;
+        ms += g.ms;
+        dropped += g.starved / 768;
+        engines++;
+      }
+      for (const [id, f] of state.feStats) {
+        if (id === state.denoiseFeId) continue;
+        frames += f.frames;
+        ms += f.ms;
+        dropped += f.dropped;
+        engines++;
+      }
+      inc.textContent = engines ? noteLine(engines > 1 ? `${engines} streams` : "in", frames, ms, dropped) : "off";
+    }
+    return void 0;
   }
   async function makeFastEnhancerNode(ctx) {
     await ctx.audioWorklet.addModule(scriptURL("/fastenhancer-worklet.js"));
@@ -9113,13 +9209,19 @@
     return { node, id };
   }
   function dropMicFilter() {
-    if (state.denoise) disconnectQuietly(state.denoise);
+    if (state.denoise) {
+      disconnectQuietly(state.denoise);
+      const id = gtIds.get(state.denoise);
+      if (id) state.gtStats.delete(id);
+    }
     if (state.denoiseFeId) {
       feWorker().postMessage({ ev: "detach", id: state.denoiseFeId });
+      state.feStats.delete(state.denoiseFeId);
       state.denoiseFeId = 0;
     }
     state.denoise = null;
     state.denoiseEngine = "off";
+    paintFilterNote();
   }
   async function setNoise(on, engine = state.noiseEngine) {
     if (!state.micSource || !state.audioCtx) {
@@ -9131,7 +9233,7 @@
     if (want !== "off" && !state.denoise) {
       try {
         if (want === "gtcrn") {
-          state.denoise = await makeDenoiseNode(state.audioCtx);
+          state.denoise = await makeDenoiseNode(state.audioCtx, "out");
         } else {
           const { node, id } = await makeFastEnhancerNode(state.audioCtx);
           state.denoise = node;
@@ -9155,6 +9257,7 @@
       state.denoiseOn = true;
     }
     sendState();
+    paintFilterNote();
     return state.denoiseOn;
   }
   function resumeAudio() {
@@ -9293,10 +9396,13 @@
     }
     if (peer.inDenoise) {
       disconnectQuietly(peer.inDenoise);
+      const id = gtIds.get(peer.inDenoise);
+      if (id) state.gtStats.delete(id);
       peer.inDenoise = null;
     }
     if (peer.feId) {
       feWorker().postMessage({ ev: "detach", id: peer.feId });
+      state.feStats.delete(peer.feId);
       peer.feId = 0;
     }
     if (want === "off") {
@@ -9308,7 +9414,7 @@
     }
     try {
       if (want === "gtcrn") {
-        peer.inDenoise = await makeDenoiseNode(ctx);
+        peer.inDenoise = await makeDenoiseNode(ctx, "in");
       } else {
         const made = await makeFastEnhancerNode(ctx);
         peer.inDenoise = made.node;
@@ -9327,6 +9433,7 @@
     peer.inEngine = want;
     wirePlayNoise(peer);
     sendState();
+    paintFilterNote();
   }
   function stateFrame(peer) {
     return {
@@ -10066,6 +10173,69 @@
     layoutStage();
   }
 
+  // src/board.ts
+  var CUES = [
+    { name: "discord", label: "discord" },
+    { name: "knock2", label: "knock" },
+    { name: "imsg-out", label: "imessage out" },
+    { name: "imsg-in", label: "imessage in" },
+    { name: "signal-call", label: "signal call" },
+    { name: "tg-call", label: "telegram call" },
+    { name: "ios", label: "ios" },
+    { name: "vineboom", label: "boom" }
+  ];
+  var rate = 0.8;
+  function boardOpen() {
+    return !$("sfx-panel").hidden;
+  }
+  function setBoardOpen(open) {
+    $("sfx-panel").hidden = !open;
+    $("sfx-btn").setAttribute("aria-pressed", String(open));
+    if (open) ensureSfx();
+  }
+  function play(i) {
+    if (i < 0 || i >= CUES.length) return;
+    playSfx(CUES[i].name, rate);
+  }
+  function wireBoard() {
+    const grid = $("sfx-grid");
+    CUES.forEach((cue, i) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "sfx-cue";
+      button.textContent = cue.label;
+      button.title = "play this cue (key " + (i + 1) + ")";
+      button.setAttribute("aria-label", "play the " + cue.label + " cue");
+      button.addEventListener("click", () => play(i));
+      grid.appendChild(button);
+    });
+    $("sfx-btn").addEventListener("click", () => setBoardOpen(!boardOpen()));
+    $("sfx-close").addEventListener("click", () => setBoardOpen(false));
+    $("sfx-stop").addEventListener("click", () => stopSfx());
+    const volume = $("sfx-vol");
+    rate = Number(volume.value) / 100;
+    volume.addEventListener("input", () => {
+      rate = Number(volume.value) / 100;
+    });
+    document.addEventListener("keydown", (event) => {
+      if (!boardOpen()) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "Escape") {
+        setBoardOpen(false);
+        return;
+      }
+      const target = event.target;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
+        return;
+      }
+      if (!/^[1-9]$/.test(event.key)) return;
+      const i = Number(event.key) - 1;
+      if (i >= CUES.length) return;
+      event.preventDefault();
+      play(i);
+    });
+  }
+
   // src/lobby.ts
   var LOBBY_STEP = 16;
   function lobbyPlace(win2, x, y) {
@@ -10584,6 +10754,8 @@
     paintGate();
     $("stats-btn").addEventListener("click", () => setStatsOpen(!statsOpen()));
     $("stats-close").addEventListener("click", () => setStatsOpen(false));
+    wireBoard();
+    paintFilterNote();
   }
   function wireStage() {
     const touch = window.matchMedia ? window.matchMedia("(hover: none)") : { matches: false };

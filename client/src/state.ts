@@ -47,6 +47,9 @@ export const state = {
   denoise: null,
   denoiseFeId: 0, // worker lane of the microphone filter when FastEnhancer owns it
   denoiseOn: false,
+  feStats: new Map<number, { frames: number; dropped: number; ms: number }>(),
+  gtStats: new Map<string, { dir: string; frames: number; ms: number; starved: number }>(),
+  gtSeq: 0, // ids of the GTCRN nodes, so their counters can be told apart
   denoiseEngine: 'off', // the filter on the microphone now, 'off' on the raw path
   noiseWasm: null, // one fetch of the noise model, shared by every node
   feWorker: null, // the worker that holds FastEnhancer, shared by every stream

@@ -48,6 +48,12 @@ export interface Elements {
   'share-btn': HTMLButtonElement;
   'stats-btn': HTMLButtonElement;
   'stats-close': HTMLButtonElement;
+  'sfx-btn': HTMLButtonElement;
+  'sfx-panel': HTMLElement;
+  'sfx-close': HTMLButtonElement;
+  'sfx-grid': HTMLElement;
+  'sfx-vol': HTMLInputElement;
+  'sfx-stop': HTMLButtonElement;
   'leave-btn': HTMLButtonElement;
   'call-timer': HTMLElement;
   mirror: HTMLInputElement;
@@ -62,6 +68,8 @@ export interface Elements {
   'menu-effects': HTMLElement;
   'noise-live': HTMLInputElement;
   'noise-engine': HTMLSelectElement;
+  'noise-note-out': HTMLElement;
+  'noise-note-in': HTMLElement;
   'stage-error': HTMLElement;
   'cam-select': HTMLSelectElement;
   'mic-select': HTMLSelectElement;

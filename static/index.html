@@ -8,7 +8,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=20261125f">
+<link rel="stylesheet" href="/style.css?v=20261125g">
 </head>
 <body>
 
@@ -107,6 +107,8 @@
             <option value="fastenhancer">FastEnhancer</option>
           </select>
         </label>
+        <label class="menu-item"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">filter time, out</span><span class="menu-note" id="noise-note-out">off</span></label>
+        <label class="menu-item"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">filter time, in</span><span class="menu-note" id="noise-note-in">off</span></label>
         <label class="menu-item"><input id="sounds" type="checkbox" checked><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">sounds</span></label>
         <div class="menu-sep" role="separator"></div>
         <label class="menu-item admin-only" id="waiting-room-pick"><input id="waiting-room" type="checkbox"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">waiting room</span></label>
@@ -207,6 +209,7 @@
         <button id="share-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F5A5.svg" alt="" width="22" height="22"><span>share screen</span></button>
         <button id="hand-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F590.svg" alt="" width="22" height="22"><span>raise hand</span></button>
         <button id="stats-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F4C9.svg" alt="" width="22" height="22"><span>stats</span></button>
+        <button id="sfx-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F514.svg" alt="" width="22" height="22"><span>cues</span></button>
         <label class="pick perf-pick">performance
           <input id="perf-live" type="range" min="0" max="3" step="1" value="0" aria-label="performance: picture quality against bandwidth and compute">
           <span id="perf-live-text" class="perf-name"></span>
@@ -243,6 +246,20 @@
         </div>
       </aside>
 
+      <aside id="sfx-panel" class="sfx-panel" hidden aria-label="notification cues">
+        <div class="sfx-head">
+          <span>cues</span>
+          <button id="sfx-close" type="button" aria-label="close the cues" title="close">&times;</button>
+        </div>
+        <div id="sfx-grid" class="sfx-grid" role="group" aria-label="notification cue buttons"></div>
+        <div class="sfx-foot">
+          <label class="sfx-vol">volume
+            <input id="sfx-vol" type="range" min="0" max="100" step="1" value="80" aria-label="cue volume">
+          </label>
+          <button id="sfx-stop" type="button">stop</button>
+        </div>
+      </aside>
+
       <div class="side">
       <aside id="hand-queue" class="hand-queue" aria-label="raised hands in order" hidden>
         <div class="hq-head">hands up</div>
@@ -271,6 +288,6 @@
   <p id="buildtag" class="buildtag" hidden></p>
 </main>
 
-<script src="/app.js?v=20261125g"></script>
+<script src="/app.js?v=20261125h"></script>
 </body>
 </html>

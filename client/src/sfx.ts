@@ -8,10 +8,24 @@ import { disconnectQuietly, stopQuietly } from './util.js';
 import { newAudioCtx } from './audio.js';
 
 // ---------------------------------------------------------------- sound effects
-// Four one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
-// lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3 copy
-// last for a browser that can not decode either.
-const SFX_NAMES = ['pop', 'bonk', 'timp', 'hammer', 'lost'];
+// Thirteen one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus
+// a lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3
+// copy last for a browser that can not decode either.
+const SFX_NAMES = [
+  'pop',
+  'bonk',
+  'timp',
+  'hammer',
+  'lost',
+  'discord',
+  'knock2',
+  'imsg-out',
+  'imsg-in',
+  'signal-call',
+  'tg-call',
+  'ios',
+  'vineboom',
+];
 
 const SFX_RATE = 0.35;
 
@@ -73,8 +87,9 @@ export function preloadSfx() {
 }
 
 // playSfx plays one cue in full. A cue never waits in a line: it replaces the
-// one that is playing, so the newest event is the one that is heard.
-export function playSfx(name) {
+// one that is playing, so the newest event is the one that is heard. The rate
+// scales the cue's own gain, for a caller that wants it quieter.
+export function playSfx(name, rate = 1) {
   if (!state.sounds) return;
   if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
   const ctx = state.sfxCtx;
@@ -85,15 +100,12 @@ export function playSfx(name) {
     // click finds it ready.
     return;
   }
-  if (state.sfxSource) {
-    stopQuietly(state.sfxSource);
-    state.sfxSource = null;
-  }
+  stopSfx();
   try {
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     const gain = ctx.createGain();
-    gain.gain.value = SFX_RATE;
+    gain.gain.value = SFX_RATE * Math.max(0, Math.min(1, rate));
     src.connect(gain);
     gain.connect(ctx.destination);
     src.onended = () => {
@@ -104,6 +116,13 @@ export function playSfx(name) {
   } catch {
     // The context is gone; the next join builds a new one.
   }
+}
+
+// stopSfx cuts the one shot that plays now, if any.
+export function stopSfx() {
+  if (!state.sfxSource) return;
+  stopQuietly(state.sfxSource);
+  state.sfxSource = null;
 }
 
 // startLost loops the waiting chime while the signaling socket is down. A second
@@ -142,7 +161,7 @@ export function startLost() {
   }
 }
 
-// setSounds is the switch for the four cues and the lost connection chime. Off
+// setSounds is the switch for the cues and the lost connection chime. Off
 // cuts whatever plays now, and the body carries the state for the stylesheet.
 export function setSounds(on) {
   state.sounds = on;

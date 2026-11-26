@@ -118,14 +118,33 @@ class Lane {
     this.queue = [];
     this.busy = false;
     this.frames = 0;
+    this.dropped = 0;
+    this.ms = 0;
     this.port.onmessage = (event) => this.push(event.data);
   }
 
   push(msg) {
     if (!msg || msg.ev !== 'frame' || !msg.pcm) return;
-    if (this.queue.length >= 8) this.queue.shift();
+    if (this.queue.length >= 8) {
+      this.queue.shift();
+      this.dropped++;
+    }
     this.queue.push(msg.pcm);
     void this.drain();
+  }
+
+  // report sends this lane's counters to the page: a queue overflow is a frame
+  // the filter never saw, so the drop rate is measured and not guessed, and
+  // ms is the time the engine spent in this lane so far. The page divides one
+  // by the other, so a lane that started late still reports honestly.
+  report() {
+    self.postMessage({
+      ev: 'stats',
+      id: this.id,
+      frames: this.frames,
+      dropped: this.dropped,
+      ms: this.ms,
+    });
   }
 
   async drain() {
@@ -134,8 +153,11 @@ class Lane {
     try {
       if (!this.engine) this.engine = (await loadLibrary()).create();
       while (this.queue.length) {
+        const t0 = performance.now();
         const out = this.engine.run(this.queue.shift());
+        this.ms += performance.now() - t0;
         this.frames++;
+        if ((this.frames & 63) === 0) this.report();
         this.port.postMessage({ ev: 'frame', pcm: out }, [out.buffer]);
       }
     } catch (err) {
@@ -163,6 +185,7 @@ onmessage = (event) => {
   } else if (msg.ev === 'detach') {
     const lane = lanes.get(msg.id);
     if (lane) {
+      lane.report();
       lane.queue.length = 0;
       lane.engine = null;
       lanes.delete(msg.id);

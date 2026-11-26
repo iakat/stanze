@@ -157,9 +157,9 @@ void fe_qgemm_repack_wasm(int8_t *packed, int N, int K) {
     if ((K & 7) != 0) return;
     const int NR = FE_QGEMM_NR;
     int k4_groups = K / 4;
-    int full_blocks = N / NR;
+    int n_blocks = (N + NR - 1) / NR;
     int8_t scratch[FE_QGEMM_MAX_K * 8];
-    for (int bn = 0; bn < full_blocks; ++bn) {
+    for (int bn = 0; bn < n_blocks; ++bn) {
         int8_t *blk = packed + (size_t)bn * (size_t)k4_groups * NR * 4;
         for (int p = 0; p < K / 2; ++p) {
             const int g = p >> 1;

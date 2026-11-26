@@ -110,15 +110,19 @@ export function noiseWasm() {
   return state.noiseWasm;
 }
 
+// gtIds ties a GTCRN node to its row in state.gtStats, because the node is a
+// graph object and the counters are keyed by a small string.
+const gtIds = new WeakMap();
+
 // makeDenoiseNode builds one GTCRN processor on one context. The microphone and
 // every incoming stream that wants it own a node, because the filter state
 // belongs to one stream.
-async function makeDenoiseNode(ctx) {
+async function makeDenoiseNode(ctx, dir) {
   const [binary] = await Promise.all([
     noiseWasm(),
     ctx.audioWorklet.addModule(scriptURL('/gtcrn-node.js')),
   ]);
-  return new AudioWorkletNode(ctx, 'gtcrn', {
+  const node = new AudioWorkletNode(ctx, 'gtcrn', {
     numberOfInputs: 1,
     numberOfOutputs: 1,
     outputChannelCount: [1],
@@ -126,6 +130,24 @@ async function makeDenoiseNode(ctx) {
     channelCountMode: 'explicit',
     processorOptions: { wasm: new Uint8Array(binary) },
   });
+  // One row per node: the microphone and every filtered peer own a model, and
+  // the counters of a node that stops are dropped with it.
+  const id = 'g' + ++state.gtSeq;
+  node.port.onmessage = (event) => {
+    const msg = event.data || {};
+    if (msg.ev !== 'stats') return;
+    state.gtStats.set(id, {
+      dir,
+      frames: Number(msg.frames) || 0,
+      ms: Number(msg.ms) || 0,
+      starved: Number(msg.starved) || 0,
+    });
+    paintFilterNote();
+  };
+  gtIds.set(node, id);
+  node.addEventListener('processorerror', () => state.gtStats.delete(id));
+  state.gtStats.set(id, { dir, frames: 0, ms: 0, starved: 0 });
+  return node;
 }
 
 // prefetchNoise starts the download of the FastEnhancer engine and its weights,
@@ -150,12 +172,85 @@ function feWorker() {
     state.feWorker.onmessage = (event) => {
       const msg = event.data || {};
       if (msg.ev === 'error') say('the noise filter stopped: ' + String(msg.text || 'unknown'));
+      else if (msg.ev === 'stats') {
+        state.feStats.set(Number(msg.id) || 0, {
+          frames: Number(msg.frames) || 0,
+          dropped: Number(msg.dropped) || 0,
+          ms: Number(msg.ms) || 0,
+        });
+        paintFilterNote();
+      }
     };
     // The streams ask for the model at call start, so the load does not land on
     // the first frame of the first talker.
     state.feWorker.postMessage({ ev: 'warm' });
   }
   return state.feWorker;
+}
+
+// feDrops sums the counter every worker lane sends: frames it filtered and
+// frames its queue threw away, over all lanes alive in this call.
+export function feDrops() {
+  let frames = 0;
+  let dropped = 0;
+  for (const s of state.feStats.values()) {
+    frames += s.frames;
+    dropped += s.dropped;
+  }
+  return { frames, dropped };
+}
+
+// filterNote paints the frame time and the drop rate of the filters that run
+// now: the outgoing one next to its model choice, the incoming ones summed over
+// every peer that asks for a filter. A filter that is off shows off, so the row
+// never keeps a number from a stream that stopped.
+function noteLine(label, frames, ms, dropped) {
+  if (!frames) return `${label}, warming up`;
+  const per = ms / frames;
+  const drop = dropped / frames > 0.0005
+    ? `, ${((100 * dropped) / frames).toFixed(1)}% drop`
+    : '';
+  return `${label} ${per.toFixed(per < 1 ? 2 : 1)} ms/frame${drop}`;
+}
+
+export function paintFilterNote() {
+  const out = $('noise-note-out');
+  const inc = $('noise-note-in');
+  if (out) {
+    if (!state.denoiseOn) out.textContent = 'off';
+    else if (state.denoiseEngine === 'gtcrn') {
+      const g = state.gtStats.get('out');
+      out.textContent = g
+        ? noteLine('GTCRN', g.frames, g.ms, g.starved / 768)
+        : 'GTCRN, warming up';
+    } else {
+      const f = state.feStats.get(state.denoiseFeId);
+      out.textContent = f
+        ? noteLine('FastEnhancer', f.frames, f.ms, f.dropped)
+        : 'FastEnhancer, warming up';
+    }
+  }
+  if (inc) {
+    let frames = 0, ms = 0, dropped = 0, engines = 0;
+    for (const g of state.gtStats.values()) {
+      if (g.dir !== 'in') continue;
+      frames += g.frames;
+      ms += g.ms;
+      dropped += g.starved / 768;
+      engines++;
+    }
+    for (const [id, f] of state.feStats) {
+      if (id === state.denoiseFeId) continue;
+      frames += f.frames;
+      ms += f.ms;
+      dropped += f.dropped;
+      engines++;
+    }
+    inc.textContent = engines
+      ? noteLine(engines > 1 ? `${engines} streams` : 'in', frames, ms, dropped)
+      : 'off';
+  }
+  return undefined;
 }
 
 // makeFastEnhancerNode builds one node for one stream and attaches it to the
@@ -178,13 +273,19 @@ async function makeFastEnhancerNode(ctx) {
 // dropMicFilter takes the microphone filter out of the graph and drops its
 // worker lane, so a change of model builds the next one from a clean state.
 function dropMicFilter() {
-  if (state.denoise) disconnectQuietly(state.denoise);
+  if (state.denoise) {
+    disconnectQuietly(state.denoise);
+    const id = gtIds.get(state.denoise);
+    if (id) state.gtStats.delete(id);
+  }
   if (state.denoiseFeId) {
     feWorker().postMessage({ ev: 'detach', id: state.denoiseFeId });
+    state.feStats.delete(state.denoiseFeId);
     state.denoiseFeId = 0;
   }
   state.denoise = null;
   state.denoiseEngine = 'off';
+  paintFilterNote();
 }
 
 // setNoise switches the microphone between the raw path and one of the two
@@ -203,7 +304,7 @@ export async function setNoise(on, engine = state.noiseEngine) {
       if (want === 'gtcrn') {
         // The wasm bytes travel in processorOptions: a worklet can only build
         // a module from bytes it already holds.
-        state.denoise = await makeDenoiseNode(state.audioCtx);
+        state.denoise = await makeDenoiseNode(state.audioCtx, 'out');
       } else {
         // FastEnhancer keeps its model and runtime in the worker, and its port
         // is transferred, so no sample passes through the page.
@@ -229,6 +330,7 @@ export async function setNoise(on, engine = state.noiseEngine) {
     state.denoiseOn = true;
   }
   sendState();
+  paintFilterNote();
   return state.denoiseOn;
 }
 
@@ -380,8 +482,7 @@ function wirePlayNoise(peer) {
 
 // setPeerNoise sets the noise cancel of one incoming stream. Three states: off,
 // GTCRN, and FastEnhancer, the tier the page was built with. A change of engine
-// rebuilds that one filter and
-// leaves the peer connection alone.
+// rebuilds that one filter and leaves the peer connection alone.
 export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
   if (!peer) return;
   const want = on ? engine : 'off';
@@ -397,10 +498,13 @@ export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
   }
   if (peer.inDenoise) {
     disconnectQuietly(peer.inDenoise);
+    const id = gtIds.get(peer.inDenoise);
+    if (id) state.gtStats.delete(id);
     peer.inDenoise = null;
   }
   if (peer.feId) {
     feWorker().postMessage({ ev: 'detach', id: peer.feId });
+    state.feStats.delete(peer.feId);
     peer.feId = 0;
   }
   if (want === 'off') {
@@ -412,7 +516,7 @@ export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
   }
   try {
     if (want === 'gtcrn') {
-      peer.inDenoise = await makeDenoiseNode(ctx!);
+      peer.inDenoise = await makeDenoiseNode(ctx!, 'in');
     } else {
       const made = await makeFastEnhancerNode(ctx!);
       peer.inDenoise = made.node;
@@ -431,6 +535,7 @@ export async function setPeerNoise(peer, on, engine = 'fastenhancer') {
   peer.inEngine = want;
   wirePlayNoise(peer);
   sendState();
+  paintFilterNote();
 }
 
 // stateFrame is the one sealed message that carries the flags of this guest.

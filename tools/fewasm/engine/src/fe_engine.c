@@ -16,6 +16,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef FE_DBG_DUMP
+/* Temporary stage-tap instrumentation: not part of the shipped build. */
+static float g_dbg[163840];
+static int g_dbg_off;
+static int g_dbg_taps[64];
+static int g_dbg_ntaps;
+static void dbg_tap(const float *p, int n) {
+    memcpy(g_dbg + g_dbg_off, p, (size_t)n * sizeof(float));
+    g_dbg_taps[g_dbg_ntaps++] = g_dbg_off;
+    g_dbg_off += n;
+}
+float *fe_dbg_buf(void) { return g_dbg; }
+int *fe_dbg_taps(void) { return g_dbg_taps; }
+int fe_dbg_ntaps(void) { return g_dbg_ntaps; }
+int fe_dbg_off(void) { return g_dbg_off; }
+#endif
+
 FeState *fe_state_create(void) {
     FeState *s = (FeState *)calloc(1, sizeof(FeState));
     if (!s) return NULL;
@@ -69,6 +86,13 @@ void fe_process_frame(FeState *s, FeWeights *w,
                       const float *in, float *out) {
     /* 1) STFT -> compressed spectrum in split [re | im] layout. */
     FE_TIME("01_stft", fe_stft(s, in));
+#ifdef FE_DBG_DUMP
+    g_dbg_off = 0; g_dbg_ntaps = 0;
+#define DBG_TAP(p, n) dbg_tap((const float *)(p), (n))
+#else
+#define DBG_TAP(p, n) ((void)0)
+#endif
+    DBG_TAP(s->spec_cf, 2 * FE_FREQ_BINS);
 
     /* Working buffers buf_a/buf_b/enc_skip/rf_* use [F, C] layout. */
 
@@ -86,6 +110,7 @@ void fe_process_frame(FeState *s, FeWeights *w,
     {
         FE_TIME("04_enc_pre_silu",
                 fe_silu_skip_fp16(s->buf_a, FE_C1 * FE_F1, s->enc_skip[0]));
+        DBG_TAP(s->buf_a, FE_C1 * FE_F1);
 
         float *cur = s->buf_a;
         float *nxt = s->buf_b;
@@ -95,6 +120,7 @@ void fe_process_frame(FeState *s, FeWeights *w,
                                                      s->enc_skip[i + 1], FE_F1,
                                                      s->qgemm_aq, s->qgemm_c32));
             float *t = cur; cur = nxt; nxt = t;
+            DBG_TAP(cur, FE_C1 * FE_F1);
         }
         (void)cur;
     }
@@ -111,9 +137,11 @@ void fe_process_frame(FeState *s, FeWeights *w,
                 w->rf_pre_lin.row_sums, w->rf_pre_lin.bias,
                 s->rf_lin_T, FE_F2,
                 s->qgemm_aq, s->qgemm_c32, &w->rf_pre_lin.act));
+    DBG_TAP(s->rf_lin_T, FE_C1 * FE_F2);
     FE_TIME("08_rf_pre_conv",
             fe_conv1d_k1_FCin(&w->rf_pre_conv, s->rf_lin_T, s->rf_b, FE_F2,
                               s->qgemm_aq, s->qgemm_c32));
+    DBG_TAP(s->rf_b, FE_F2 * FE_F2);
 
     /* 5) RNNFormer blocks (GRU + FC + residual + attention + residual).
      * All SIMD tiers' gru_full_fused_fp16inout dual-stores new state to
@@ -128,6 +156,7 @@ void fe_process_frame(FeState *s, FeWeights *w,
                 fe_gru_step_fp16h(&rb->gru, s->rf_b,
                                    s->gru_h[blk], gru_h_fp32, FE_F2,
                                    s->qgemm_aq, s->qgemm_c32));
+        DBG_TAP(gru_h_fp32, FE_F2 * FE_C2);
 
         /* rnn_fc + resA fused: rf_b += bias + scale*c32 in the kernel
          * epilogue. fp32_scratch unreachable on ARM tiers (NULL). */
@@ -140,6 +169,7 @@ void fe_process_frame(FeState *s, FeWeights *w,
                                            s->qgemm_aq, s->qgemm_c32,
                                            NULL,
                                            &rb->rnn_fc.act));
+        DBG_TAP(s->rf_b, FE_F2 * FE_C2);
 
         if (rb->has_pe && rb->pe) {
             FE_TIME("rf_b0_pe", fe_vec_add(s->rf_b, rb->pe, FE_F2 * FE_C2));
@@ -154,6 +184,7 @@ void fe_process_frame(FeState *s, FeWeights *w,
                         s->qkv_q, s->attn_Qq, s->attn_Kpq, s->attn_Vpq,
                         s->attn_scoresq, FE_F2,
                         s->qgemm_aq, s->qgemm_c32));
+        DBG_TAP(s->rf_b, FE_F2 * FE_C2);
     }
 
     /* 6) RNNFormer post-net (both transposes fused, same trick as pre-net). */
@@ -161,9 +192,11 @@ void fe_process_frame(FeState *s, FeWeights *w,
             apply_freq_linear_FCin(&w->rf_post_lin, s->rf_b, s->rf_lin_T,
                                    FE_C2, FE_F2, FE_F1,
                                    s->qgemm_aq, s->qgemm_c32));
+    DBG_TAP(s->rf_lin_T, FE_F1 * FE_C2);
     FE_TIME("18_rf_post_conv",
             fe_conv1d_k1_FCin(&w->rf_post_conv, s->rf_lin_T, s->buf_a, FE_F1,
                               s->qgemm_aq, s->qgemm_c32));
+    DBG_TAP(s->buf_a, FE_F1 * FE_C1);
 
     /* 7) Decoder blocks: concat[buf_a | enc_skip] -> conv k=1 + SiLU ->
      * conv k=3 + SiLU. The concat2_fp16b kernel consumes the fp16 enc_skip
@@ -181,10 +214,12 @@ void fe_process_frame(FeState *s, FeWeights *w,
                                                  s->buf_a, s->enc_skip[skip_idx],
                                                  s->buf_b, FE_F1,
                                                  s->qgemm_aq, s->qgemm_c32));
+        DBG_TAP(s->buf_b, FE_F1 * FE_C1);
         FE_TIME(NM_DEC_K3[i],
                 fe_conv1d_k3_buf_silu(&w->dec_3x3[i], s->buf_b, s->buf_a,
                                       FE_F1,
                                       s->qgemm_aq, s->qgemm_c32));
+        DBG_TAP(s->buf_a, FE_F1 * FE_C1);
     }
 
     /* 8) Decoder post-net (enc_skip[0] from enc_pre via fp16 storage).
@@ -198,8 +233,10 @@ void fe_process_frame(FeState *s, FeWeights *w,
                                              s->buf_a, s->enc_skip[0],
                                              s->buf_b, FE_F1,
                                              s->qgemm_aq, s->qgemm_c32));
+    DBG_TAP(s->buf_b, FE_F1 * FE_C1);
     FE_TIME("25_dec_post_convT",
             fe_conv_transpose1d(&w->dec_post_up, s->buf_b, s->mask_cf, FE_F1));
+    DBG_TAP(s->mask_cf, 2 * FE_FREQ_BINS);
 
     /* 9) Complex mask multiply (split layout).
      *    out_re = sr*mr - si*mi ; out_im = sr*mi + si*mr */
