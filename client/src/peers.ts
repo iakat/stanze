@@ -17,7 +17,7 @@ import { wipeKeys } from './handshake.js';
 import { sealedSendCand, sealedSendSdp } from './gate.js';
 import { paintRelay } from './badge.js';
 import { worldDrop } from './roomworld.js';
-import { forgetRoute, paintPresence, routeNow, setGuestFlags, setTalks } from './presence.js';
+import { forgetRoute, paintPresence, routeNow } from './presence.js';
 
 // ---------------------------------------------------------------- peers
 // A direct only path drops the TURN servers. A relay path needs no filter:
@@ -169,6 +169,9 @@ export function connectPeer(id, initiator) {
       // Audio is played through this peer gain, not through the video element,
       // so it can be louder than the browser maximum and silent at 0 percent.
       routeAudio(peer, track);
+      // A track that arrives while the pair is out of the conversation starts
+      // silent: the routing of the presence owns the gain.
+      routeNow(peer);
       track.addEventListener('ended', () => dropAudio(peer));
       return;
     }
@@ -194,7 +197,7 @@ export function connectPeer(id, initiator) {
     // The track is kept, so undeafen needs no new negotiation, and a deafened
     // guest never draws it.
     peer.videoTrack = track;
-    paintPeerVideo(peer);
+    routeNow(peer);
     // A sender that stops its camera mutes the track instead of ending it, so
     // mute, unmute and ended each repaint, and a fresh camera needs no new
     // negotiation.

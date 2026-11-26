@@ -195,6 +195,19 @@
         </div>
       </div>
     </div>
+    <div class="menubar-slot">
+      <button id="menu-you-btn" class="menubar-item" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-you">you</button>
+      <div id="menu-you" class="menubar-menu" role="menu" aria-labelledby="menu-you-btn" hidden>
+        <label class="menu-item"><span class="menu-tick" aria-hidden="true"></span><span class="menu-text">avatar</span>
+          <select id="avatar-pick" aria-label="your avatar">
+            <option value="0">pipoya 1</option>
+            <option value="1">pipoya 2</option>
+            <option value="2">pipoya 3</option>
+            <option value="3">pipoya 4</option>
+          </select>
+        </label>
+      </div>
+    </div>
     <div class="menubar-slot menubar-right">
       <button id="copy-btn" class="menubar-item" type="button">copy link</button>
     </div>
@@ -227,6 +240,16 @@
         </div>
         <div id="stage-main" class="stage-main"></div>
         <div id="self-pip" class="self-pip" hidden></div>
+      </section>
+
+      <!-- Who this page talks to, one line: nobody hears a guest that is not
+           named here, and every guest this page hears is named. -->
+      <section id="presence" class="presence" aria-label="who you are talking to">
+        <div class="presence-row">
+          <span id="presence-room" class="presence-room">room: you alone</span>
+          <span id="presence-near" class="presence-near">hearing: nobody</span>
+        </div>
+        <div id="presence-via" class="presence-via" hidden></div>
       </section>
 
       <aside id="stats-panel" class="stats" hidden aria-label="call statistics">

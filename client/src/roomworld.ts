@@ -11,7 +11,7 @@ import { state } from './state.js';
 import { load, store } from './prefs.js';
 import { CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } from './world.js';
 import { Guest, Proximity } from './proximity.js';
-import { ZoneGrid, ZoneWatch, inside } from './zones.js';
+import { ZoneGrid, ZoneWatch } from './zones.js';
 import { posAt, posFrame, posForget, posReset, posSend, POSITION_DELAY, remoteDir, remoteMoving, remotePoints } from './positions.js';
 import { layoutStage } from './tiles.js';
 import { updateCount } from './host.js';
@@ -35,6 +35,15 @@ let near: string[] = [];
 // worldStats counts the maps that loaded and the frames that went and came, so
 // a browser test can prove the world drew before it walks.
 export const worldStats = { loaded: 0, sent: 0, recv: 0, frames: 0, near: 0, zones: [] as string[] };
+
+// worldAvatar is the pick of the own avatar: the boot raises it when the menu
+// changes, and the view redraws with the new sheet.
+export function worldAvatar() {
+  if (!view || !sheets.length) return;
+  const self = view.avatars.get('self') as any;
+  if (self) self.sheet = sheetFor('self', sheets, true);
+  view.mark();
+}
 
 // isWorld answers whether the world view is the one in front of the visitor.
 // It is a stored choice that defaults to on, so a guest lands in the world and
@@ -165,7 +174,7 @@ function startLoop() {
     const now = performance.now();
     if (now - lastFrame >= POSITION_DELAY) {
       lastFrame = now;
-      step(now);
+      step();
     }
     raf = requestAnimationFrame(run);
   };
@@ -195,7 +204,7 @@ function guestOf(x: number, y: number, load: Map<string, number>): Guest {
 
 // step is one position tick: walk the zones, send the frame and the one word
 // about the conversation, judge the pairs, and route the media.
-function step(now: number) {
+function step() {
   if (!view || !walker || !proximity) return;
   const local = view.local as any;
   if (local && walker) {
@@ -258,12 +267,6 @@ export function route(peers: any[], nearIds: string[]) {
     if (isRouted(peer.id) !== wanted) setRouted(peer.id, wanted);
   }
   paintPresence();
-}
-
-// talksFrame is the app frame a guest sends about its own conversation: the
-// ids it talks to, on the sealed channel of the pair that receives it.
-export function talksFrame(ids: string[]): { k: string; ids: string[] } {
-  return { k: 'talks', ids };
 }
 
 // worldOnPos is the one entry the files channel calls for a position frame. It
@@ -399,9 +402,38 @@ export function worldHook() {
       return { x: Math.round(walker.x), y: Math.round(walker.y) };
     },
     near: () => (view ? [...near] : []),
+    // points is the exact place of every remote frame, which is what the pair
+    // rule is judged on, and the zones of each place.
+    points: () => {
+      const out: any[] = [];
+      for (const [id, at] of remotePoints()) {
+        out.push({ id, x: at.x, y: at.y, zones: zones ? zones.at(at.x, at.y).map((z) => z.id + ':' + z.kind) : [] });
+      }
+      return out;
+    },
+    // presence is the line as a person reads it, and the facts behind it: the
+    // pairs this page routes, and the pairs each of them says it talks to.
+    presence: () => ({
+      room: (document.getElementById('presence-room') || {}).textContent || '',
+      near: (document.getElementById('presence-near') || {}).textContent || '',
+      via: (document.getElementById('presence-via') || {}).textContent || '',
+      routed: (view ? [...near] : []).filter((id) => isRouted(id)),
+    }),
     set: (on: boolean) => {
       store('world', on ? 1 : 0);
       worldSet(on);
     },
   };
+}
+
+// talksFrame is the app frame a guest sends about its own conversation: the ids
+// it talks to, sealed to the pair that receives it. It never routes media; the
+// receiver's own rule decides that.
+export function talksFrame(ids: string[]): { k: 'talks'; ids: string[] } {
+  return { k: 'talks', ids };
+}
+
+function sendTalks(peer: any, ids: string[]) {
+  if (!peer || !peer.keys || peer.waiting) return;
+  sealedSend(peer, talksFrame(ids));
 }

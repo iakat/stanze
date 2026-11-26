@@ -75,9 +75,10 @@ import { initLobbyWindow } from './lobby.js';
 import { renameSelf, sendSealedChat, setWaitingRoom } from './gate.js';
 import { runLab } from './lab.js';
 import { applyImmersive, phoneQuery, setChrome } from './phone.js';
-import { isWorld, talksFrame, worldHook, worldToggle } from './roomworld.js';
-import { forgetRoute, paintPresence, setGuestFlags, setTalks } from './presence.js';
-import { AVATARS, loadSheets, setAvatar } from './world.js';
+import { isWorld, worldAvatar, worldHook, worldToggle } from './roomworld.js';
+import { isRouted } from './presence.js';
+
+import { setAvatar } from './world.js';
 
 // window.e2eApp is the hook the browser test drives; a person never needs it.
 // It exposes the counters of a sealed call from the one client.
@@ -108,6 +109,15 @@ win().e2eApp = {
       videoW: p.video ? p.video.videoWidth : 0,
       videoT: p.video ? p.video.currentTime : 0,
       video: p.video,
+    })),
+  // peerGains is the output level of every pair this page plays, so a test can
+  // see that a guest out of the conversation is actually silent and not only
+  // absent from a line.
+  peerGains: () =>
+    [...state.peers.values()].map((p) => ({
+      id: p.id,
+      gain: p.gain ? Math.round(p.gain.gain.value * 1000) / 1000 : p.audioEl ? p.audioEl.volume : 0,
+      routed: isRouted(p.id),
     })),
   identity: () =>
     state.idKey
@@ -604,6 +614,15 @@ function wireStage() {
       paint();
     });
     paint();
+  }
+  // The avatar is a pick, not a custom face: the list of sheets ships with the
+  // world, and the choice is kept and drawn on the next frame.
+  const avatarPick = document.getElementById('avatar-pick') as HTMLSelectElement | null;
+  if (avatarPick) {
+    avatarPick.addEventListener('change', () => {
+      setAvatar(parseInt(avatarPick.value, 10) || 0);
+      worldAvatar();
+    });
   }
   document.addEventListener('click', closeMenus);
   document.addEventListener('keydown', (event) => {

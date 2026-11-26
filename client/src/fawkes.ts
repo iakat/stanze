@@ -13,7 +13,6 @@ const EYE_Y = 0.045;
 // the hairline, at the crown. The real mask is wide for its height: the rim is
 // one width across the cheekbones and 1.28 widths from the chin to the crown.
 const CHIN_Y = -0.8;
-const CROWN_Y = 0.56;
 const FIT_CHIN_Y = -0.66;
 const NOSE_Y = -0.02;
 
@@ -339,30 +338,6 @@ function flatModel(f: Fit, px: number, py: number): P2 {
     sp = Math.sin(f.pitch);
   const x = x1 / cy;
   const y = (y1 + x * syaw * sp) / cp;
-  return [x, y];
-}
-
-// toModel is flatModel with the shell under the point: the depth of the surface
-// is read back into the map, so a point of the paint lands where the mesh put
-// it even on a turned head.
-function toModel(f: Fit, px: number, py: number): P2 {
-  const dx = px - f.ox,
-    dy = py - f.oy;
-  const x1 = (dx * f.ax[0] + dy * f.ax[1]) / f.sx;
-  const y1 = (dx * f.ay[0] + dy * f.ay[1]) / f.sy;
-  const cy = Math.cos(f.yaw) || 1,
-    syaw = Math.sin(f.yaw);
-  const cp = Math.cos(f.pitch) || 1,
-    sp = Math.sin(f.pitch);
-  let x = x1 / cy,
-    y = y1 / cp,
-    z = 0;
-  for (let k = 0; k < 2; k++) {
-    z = fawkesHeight(f, x, y, fawkesRho(x, y));
-    const z1 = -x * syaw + z * cy;
-    x = (x1 - z * syaw) / cy;
-    y = (y1 + z1 * sp) / cp;
-  }
   return [x, y];
 }
 

@@ -19,7 +19,7 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 698 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/boot.ts](src/boot.ts) | 719 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
 | [src/state.ts](src/state.ts) | 214 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 77 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
@@ -35,8 +35,8 @@ module in `src` has no row yet.
 | --- | ---: | --- |
 | [src/room.ts](src/room.ts) | 305 | Create, join, wait, leave, and the lobby that drives them. |
 | [src/signaling.ts](src/signaling.ts) | 186 | The websocket frames, both directions. |
-| [src/peers.ts](src/peers.ts) | 347 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
-| [src/gate.ts](src/gate.ts) | 835 | The room gate: the passphrase, the member list and the sealed claims. |
+| [src/peers.ts](src/peers.ts) | 356 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
+| [src/gate.ts](src/gate.ts) | 839 | The room gate: the passphrase, the member list and the sealed claims. |
 | [src/host.ts](src/host.ts) | 235 | The host controls in the call panel: waiting room, let in, member menus. |
 | [src/lobby.ts](src/lobby.ts) | 91 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
 | [src/menu.ts](src/menu.ts) | 213 | The drop-down menu bar. |
@@ -47,9 +47,9 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/media.ts](src/media.ts) | 164 | Camera and screen requests, the performance step, the sender bitrate and frame ceilings. |
-| [src/audio.ts](src/audio.ts) | 688 | The talking light, the remote audio graph and the noise suppression worklet. |
+| [src/audio.ts](src/audio.ts) | 691 | The talking light, the remote audio graph and the noise suppression worklet. |
 | [src/screen.ts](src/screen.ts) | 89 | Screen share: points the screen sender at the display track, never the camera sender. |
-| [src/volume.ts](src/volume.ts) | 149 | Per peer volume, remembered by identity when one is pinned. |
+| [src/volume.ts](src/volume.ts) | 152 | Per peer volume, remembered by identity when one is pinned. |
 | [src/sfx.ts](src/sfx.ts) | 197 | The page's own sound effects, decoded once and cached. |
 | [src/clock.ts](src/clock.ts) | 36 | The call clock. |
 | [src/badge.ts](src/badge.ts) | 43 | The relay badge, read from the transport stats. |
@@ -58,7 +58,7 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/handshake.ts](src/handshake.ts) | 921 | The post-quantum handshake of a pair. |
+| [src/handshake.ts](src/handshake.ts) | 959 | The post-quantum handshake of a pair. |
 | [src/sealed.ts](src/sealed.ts) | 246 | Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair. |
 | [src/frame.ts](src/frame.ts) | 51 | The frame transform worker and its key install. |
 | [src/identity.ts](src/identity.ts) | 454 | The pinned identity of a peer and its fingerprint rows. |
@@ -71,18 +71,19 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/tiles.ts](src/tiles.ts) | 476 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
-| [src/world.ts](src/world.ts) | 803 | The world: the Tiled map on one canvas, the collision grid, the spawn, the walking avatar and the camera. |
-| [src/zones.ts](src/zones.ts) | 186 | The named rectangles of a map, the cell cached hit test and the enter and leave of a walk. |
-| [src/proximity.ts](src/proximity.ts) | 141 | The bubbles: who is near enough to talk, with a leave radius and a dwell. |
-| [src/positions.ts](src/positions.ts) | 206 | Position frames at 5 Hz over the sealed files channel, and the lerp that draws them. |
-| [src/roomworld.ts](src/roomworld.ts) | 347 | Joining the world of a room, the position tick, and the switch between the map and the call grid. |
+| [src/world.ts](src/world.ts) | 999 | The world: the Tiled map with its tilesets and avatars, the collision grid, the spawn, the walking avatar, the camera and the touch pad. |
+| [src/zones.ts](src/zones.ts) | 191 | The named rectangles of a map (meeting or silent), the cell cached hit test and the enter and leave of a walk. |
+| [src/proximity.ts](src/proximity.ts) | 98 | The talk rule of a pair: a meeting area, a shared area inside its bubble, a silent area, or the conversation bubble. |
+| [src/positions.ts](src/positions.ts) | 199 | Position frames at 5 Hz over the sealed files channel, and the lerp that draws them. |
+| [src/roomworld.ts](src/roomworld.ts) | 439 | Joining the world of a room, the position tick, the near pairs, the talks frame and the switch between the map and the call grid. |
+| [src/presence.ts](src/presence.ts) | 133 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
 | [src/board.ts](src/board.ts) | 82 | The cue board: eight one shot notification cues, a volume and a stop. |
 | [src/stats.ts](src/stats.ts) | 970 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1273 | Local transcription, one language and many. |
-| [src/fawkes.ts](src/fawkes.ts) | 1135 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |
+| [src/fawkes.ts](src/fawkes.ts) | 1110 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |
 | [src/look.ts](src/look.ts) | 2445 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 823 | The device pickers of the join card and the toolbar. |
+| [src/devices.ts](src/devices.ts) | 826 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 896 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory

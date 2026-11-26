@@ -50,6 +50,9 @@ async function until(page, fn, arg, timeout, label) {
 // response status with its URL instead of the console text: a real miss still
 // fails the run, and it names the file.
 const EXPECTED_404 = ['/vosk/models', '/omni/models'];
+// A room with no map of its own walks the default office, so its own map is
+// asked for and missing on purpose: that is a fallback, not an error.
+const EXPECTED_MAP_MISS = /^\/world\/maps\/[^/]+\.(json|zones\.json)$/;
 
 function attach(page, errors) {
   page.on('console', (m) => {
@@ -63,6 +66,7 @@ function attach(page, errors) {
     if (r.status() < 400) return;
     const path = new URL(r.url()).pathname;
     if (r.status() === 404 && EXPECTED_404.includes(path)) return;
+    if (r.status() === 404 && EXPECTED_MAP_MISS.test(path)) return;
     errors.push('http ' + r.status() + ': ' + r.url());
   });
   page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url() + ' ' + (r.failure() || {}).errorText));
