@@ -43,17 +43,21 @@ ARG FE_TIER=small
 # Pinned by version and by the sha256 of the release tarball, so a changed
 # download fails the build instead of changing the module silently.
 ARG WASI_SDK_VERSION=34.0
+# The release tag drops the patch number (wasi-sdk-34 carries 34.0), so the
+# download URL needs both halves and cannot be derived from one.
+ARG WASI_SDK_TAG=wasi-sdk-34
 ARG WASI_SDK_SHA256=b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS werecompiler
 ARG FE_TIER
 ARG WASI_SDK_VERSION
+ARG WASI_SDK_TAG
 ARG WASI_SDK_SHA256
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 RUN cd /opt \
  && curl -fsSL -o sdk.tar.gz \
-      "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION%%.*}/wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz" \
+      "https://github.com/WebAssembly/wasi-sdk/releases/download/${WASI_SDK_TAG}/wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz" \
  && echo "${WASI_SDK_SHA256}  sdk.tar.gz" | sha256sum -c - \
  && tar -xzf sdk.tar.gz \
  && mv "wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux" wasi-sdk \
