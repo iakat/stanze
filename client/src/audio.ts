@@ -9,6 +9,7 @@ import { detachMedia, disconnectQuietly, isAdmin, say } from './util.js';
 import { layoutStage, ownTile, rowOf } from './tiles.js';
 import { applyFlags, volGain } from './volume.js';
 import { refreshSelf } from './devices.js';
+import { isRouted } from './presence.js';
 import { sealedSend } from './gate.js';
 import { scriptURL } from './trust.js';
 
@@ -393,7 +394,7 @@ export function routeAudio(peer, track) {
     const el = peer.audioEl || new Audio();
     el.autoplay = true;
     el.srcObject = new MediaStream([track]);
-    el.volume = state.deaf ? 0 : Math.min(volGain(peer.vol), 1);
+    el.volume = state.deaf || !isRouted(peer.id) ? 0 : Math.min(volGain(peer.vol), 1);
     el.play().catch(() => {});
     peer.audioEl = el;
     return;
@@ -409,7 +410,9 @@ export function routeAudio(peer, track) {
   pump.play().catch(() => {});
   peer.pump = pump;
   peer.gain = ctx.createGain();
-  peer.gain.gain.value = state.deaf ? 0 : volGain(peer.vol);
+  // A track can arrive while the pair is out of the conversation: it starts
+  // silent and the routing of the presence turns it up.
+  peer.gain.gain.value = state.deaf || !isRouted(peer.id) ? 0 : volGain(peer.vol);
   peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
   peer.audioSrc.connect(peer.gain);
   peer.gain.connect(ctx.destination);

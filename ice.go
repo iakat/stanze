@@ -17,14 +17,14 @@ import (
 	"github.com/pion/turn/v5"
 )
 
-// iceServersFor builds the ICE server list handed to a client at join time.
+// iceServersFor builds the ICE server list handed to a client at request time.
 // STUN is answered by the embedded relay itself (see stunMux); TURN is offered
 // with a fresh ephemeral credential derived from the shared secret, so the
 // relay can be used as a fallback. Neither needs a third party.
 //
 // A URL must name a real port, or a browser refuses the whole list, so nothing
 // is offered while the relay is not running or its port is not known yet.
-func iceServersFor(cfg *Config) ([]iceServer, error) {
+func iceServersFor(cfg *Config, tag string) ([]iceServer, error) {
 	var out []iceServer
 	if len(cfg.StunURLs) > 0 {
 		out = append(out, iceServer{URLs: cfg.StunURLs})
@@ -33,7 +33,7 @@ func iceServersFor(cfg *Config) ([]iceServer, error) {
 		return out, nil
 	}
 
-	user, pass, err := turn.GenerateLongTermTURNRESTCredentials(cfg.TurnSecret, randomUserTag(), cfg.TurnTTL)
+	user, pass, err := turn.GenerateLongTermTURNRESTCredentials(cfg.TurnSecret, tag, cfg.TurnTTL)
 	if err != nil {
 		return out, err
 	}
@@ -105,8 +105,23 @@ func startTURN(cfg *Config, log *slog.Logger) (*turn.Server, error) {
 	turnCfg := turn.ServerConfig{
 		Realm:       cfg.TurnRealm,
 		AuthHandler: turn.LongTermTURNRESTAuthHandler(cfg.TurnSecret, nil),
+		// The quota is keyed by the address the allocation comes from, not by
+		// the minted username: a username is a fresh random string per mint, so
+		// a per-user count never blocked anything. See allocQuota.
 		QuotaHandler: func(username, realm string, srcAddr net.Addr) bool {
-			return turnQuota.allow(username)
+			return turnQuota.allow(addrKey(srcAddr))
+		},
+		// The allocation count is kept honest by the lifecycle, not by the
+		// request: a count that only goes up in the quota handler and never
+		// down would lock an address out after its first allocation. Created
+		// and deleted are the only two events that move it.
+		EventHandler: turn.EventHandler{
+			OnAllocationCreated: func(srcAddr, _ net.Addr, _, _, _ string, _ net.Addr, _ int) {
+				turnQuota.created(addrKey(srcAddr))
+			},
+			OnAllocationDeleted: func(srcAddr, _ net.Addr, _, _, _ string) {
+				turnQuota.deleted(addrKey(srcAddr))
+			},
 		},
 		PacketConnConfigs: []turn.PacketConnConfig{{
 			PacketConn:            stunMux{udpConn},
@@ -141,24 +156,128 @@ func startTURN(cfg *Config, log *slog.Logger) (*turn.Server, error) {
 	return srv, nil
 }
 
-// turnQuota is a blunt per-credential allocation cap: every join gets its own
-// username, so one client cannot open unlimited relay allocations.
-var turnQuota = &quotaCounter{max: 8, seen: make(map[string]int)}
+// turnQuota caps relay allocations per client address. A credential is a
+// portable UDP relay for its lifetime, so what matters is how many relays one
+// host holds at once, not how many usernames it asked for.
+var turnQuota = newAllocQuota(8, 10*time.Minute)
 
-type quotaCounter struct {
-	mu   sync.Mutex
-	max  int
-	seen map[string]int
+// allocQuota counts live relay allocations per key.
+//
+// The key is the address the allocation request came from, so the ceiling
+// follows whatever it protects: one host cannot hold more than max relays, and
+// it gets its slots back when the allocations close. A count that only went up
+// would turn into a permanent ban, and a map that was wiped whole at a size
+// limit would hand a fresh allowance to everyone at once; instead an entry
+// whose last allocation closed is forgotten after idle, and a sweep drops such
+// entries on its own.
+type allocQuota struct {
+	mu    sync.Mutex
+	max   int
+	idle  time.Duration
+	seen  map[string]*allocEntry
+	swept time.Time
 }
 
-func (q *quotaCounter) allow(user string) bool {
+type allocEntry struct {
+	live int
+	last time.Time // last time this entry moved up or down
+}
+
+func newAllocQuota(max int, idle time.Duration) *allocQuota {
+	return &allocQuota{max: max, idle: idle, seen: make(map[string]*allocEntry), swept: time.Now()}
+}
+
+// allow reports whether key may open another allocation. It counts nothing:
+// the count moves on created and deleted, so a request that is never granted
+// (a bad credential, a refused port) cannot use up a slot.
+func (q *allocQuota) allow(key string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.seen) > 10000 {
-		q.seen = make(map[string]int)
+	now := time.Now()
+	q.sweepLocked(now)
+	e := q.seen[key]
+	if e == nil {
+		return true
 	}
-	q.seen[user]++
-	return q.seen[user] <= q.max
+	return e.live < q.max
+}
+
+// created books one more allocation for key.
+func (q *allocQuota) created(key string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e := q.seen[key]
+	if e == nil {
+		e = &allocEntry{}
+		q.seen[key] = e
+	}
+	e.live++
+	e.last = time.Now()
+}
+
+// deleted returns one allocation slot for key. The entry stays until it has
+// been idle, so a client that reconnects at once finds its count again.
+func (q *allocQuota) deleted(key string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e := q.seen[key]
+	if e == nil {
+		return
+	}
+	if e.live > 0 {
+		e.live--
+	}
+	e.last = time.Now()
+	if e.live == 0 {
+		delete(q.seen, key)
+	}
+}
+
+// live is the number of allocations held by key. It is for tests.
+func (q *allocQuota) live(key string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if e := q.seen[key]; e != nil {
+		return e.live
+	}
+	return 0
+}
+
+// sweepLocked drops empty entries that have been idle for idle. It runs at most
+// once per idle, and only while the map is worth looking at.
+func (q *allocQuota) sweepLocked(now time.Time) {
+	if len(q.seen) < 256 || now.Sub(q.swept) < q.idle {
+		return
+	}
+	q.swept = now
+	for k, e := range q.seen {
+		if e.live == 0 && now.Sub(e.last) > 2*q.idle {
+			delete(q.seen, k)
+		}
+	}
+}
+
+// addrKey names the host behind an address, without the port: a client opens
+// many connections from many ports of one address.
+func addrKey(a net.Addr) string {
+	if a == nil {
+		return ""
+	}
+	switch v := a.(type) {
+	case *net.UDPAddr:
+		if v.IP != nil {
+			return v.IP.String()
+		}
+	case *net.TCPAddr:
+		if v.IP != nil {
+			return v.IP.String()
+		}
+	}
+	host, _, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return a.String()
+	}
+	return host
 }
 
 // stunMux answers STUN binding requests on the relay socket and passes every

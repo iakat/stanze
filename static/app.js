@@ -241,12 +241,26 @@
     // session id of this call, public, never a secret
     w: "",
     // SPAKE2 scalar of the room passphrase, never sent
+    wGen: 0,
+    // the generation of the derivation in flight, so the newest one wins
     gate: { v: null, n: 0 },
     // the room passphrase the members hold now, with a counter
     auth: { n: -1, admins: [], by: "", sig: "" },
     // the signed role claim this page holds
+    root: "",
+    // the identity fingerprint that roots this room, '' while it is unknown
     authTimer: null,
-    // the one timer that gives a room with no member a first admin
+    // the one timer that seeds step 0 on the page that made the room
+    warmed: false,
+    // the module is loaded and the room key derived
+    passTries: 0,
+    // passphrase guesses this page paid for in this call
+    passRefusals: 0,
+    // pairs closed for exceeding that budget
+    passLast: 0,
+    // when this page last started an exchange, for the pacing
+    seqGaps: 0,
+    // sealed frames that arrived with a gap in their counter
     wait: { on: false, n: 0 },
     // the sealed waiting-room switch, with a counter
     kickedFps: /* @__PURE__ */ new Set(),
@@ -304,7 +318,7 @@
   };
 
   // src/util.ts
-  function newRoomID() {
+  function newRoomID(fp = "") {
     const bytes = crypto.getRandomValues(new Uint8Array(16));
     let bits = 0;
     let value = 0;
@@ -318,7 +332,7 @@
       }
     }
     if (bits > 0) out += B32[value << 5 - bits & 31];
-    return out;
+    return fp ? String(fp).toLowerCase() + "-" + out : out;
   }
   function say(text) {
     const box = state.room ? $("stage-error") : $("lobby-error");
@@ -379,183 +393,6 @@
     } catch {
       return "";
     }
-  }
-
-  // src/audit.ts
-  function canary(value) {
-    const s = String(value || "");
-    if (s.length >= 4) state.canaries.add(s);
-  }
-  function auditWire(where, raw) {
-    const text = typeof raw === "string" ? raw : String(raw);
-    state.wireFrames++;
-    for (const c of state.canaries) {
-      if (text.includes(c) && state.wireLeaks.length < 20) {
-        state.wireLeaks.push({ where, canary: c });
-      }
-    }
-    if (/"sdp"|"candidate"|v=0|a=fingerprint/.test(text)) state.clearSignaling++;
-  }
-
-  // src/menu.ts
-  var MENUS = [
-    ["menu-settings-btn", "menu-settings"],
-    ["menu-effects-btn", "menu-effects"],
-    ["menu-asr-btn", "menu-asr"],
-    ["menu-devices-btn", "menu-devices"]
-  ];
-  function fitMenu(list) {
-    if (!(list instanceof HTMLElement)) return;
-    const room = document.documentElement.clientWidth;
-    list.style.left = "";
-    const box = list.getBoundingClientRect();
-    let shift = 0;
-    if (box.right > room - 2) shift = room - 2 - box.right;
-    if (box.left + shift < 2) shift = 2 - box.left;
-    if (shift) list.style.left = Math.round(shift) + "px";
-  }
-  function menuSet(open, which = null) {
-    for (const [btnId, listId] of MENUS) {
-      const btn = $(btnId);
-      const list = $(listId);
-      if (!btn || !list) continue;
-      const on = open && (!which || which === listId);
-      const was = !list.hidden;
-      list.hidden = !on;
-      if (!on) closeSubmenus(list);
-      btn.setAttribute("aria-expanded", String(on));
-      if (on && !was) {
-        fitMenu(list);
-        const first = list.querySelector(
-          'input[type="checkbox"], select, .menu-choice, .menu-sub'
-        );
-        if (first) first.focus();
-      }
-    }
-  }
-  function menuClose() {
-    let any = false;
-    for (const [, listId] of MENUS) {
-      const list = $(listId);
-      if (list && !list.hidden) any = true;
-    }
-    if (any) menuSet(false);
-    return any;
-  }
-  function closeSubmenus(panel) {
-    if (!panel) return;
-    for (const sub of Array.from(panel.querySelectorAll(".menu-sub-list"))) {
-      if (sub instanceof HTMLElement) sub.hidden = true;
-    }
-    for (const btn of Array.from(panel.querySelectorAll(".menu-sub")))
-      btn.setAttribute("aria-expanded", "false");
-  }
-  function wireSubmenus() {
-    for (const wrap of Array.from(document.querySelectorAll(".menu-subwrap"))) {
-      const btn = wrap.querySelector(".menu-sub");
-      const list = wrap.querySelector(".menu-sub-list");
-      if (!btn || !list) continue;
-      const openSub = (on) => {
-        list.hidden = !on;
-        btn.setAttribute("aria-expanded", String(on));
-        if (!on) return;
-        for (const other of Array.from(document.querySelectorAll(".menu-subwrap"))) {
-          if (other === wrap) continue;
-          const otherList = other.querySelector(".menu-sub-list");
-          const otherBtn = other.querySelector(".menu-sub");
-          if (otherList) otherList.hidden = true;
-          if (otherBtn) otherBtn.setAttribute("aria-expanded", "false");
-        }
-      };
-      wrap.addEventListener("mouseenter", () => openSub(true));
-      btn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        openSub(!list.hidden);
-      });
-      btn.addEventListener("keydown", (event) => {
-        if (event.key !== "ArrowRight" && event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        openSub(true);
-        const first = list.querySelector(".menu-choice");
-        if (first) first.focus();
-      });
-      list.addEventListener("keydown", (event) => {
-        if (event.key !== "ArrowLeft" && event.key !== "Escape") return;
-        event.preventDefault();
-        event.stopPropagation();
-        openSub(false);
-        btn.focus();
-      });
-    }
-  }
-  function wireMenuBar() {
-    for (const [btnId, listId] of MENUS) {
-      const btn = $(btnId);
-      const list = $(listId);
-      if (!btn || !list) continue;
-      btn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        menuSet(list.hidden, listId);
-      });
-      list.addEventListener("click", (event) => event.stopPropagation());
-      list.addEventListener("keydown", (event) => {
-        const rows = Array.from(
-          list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub')
-        ).filter((el2) => !el2.hidden);
-        const at = rows.indexOf(document.activeElement);
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          menuSet(false);
-          btn.focus();
-          return;
-        }
-        if (event.key === "Tab") {
-          menuSet(false);
-          return;
-        }
-        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-        event.preventDefault();
-        const step = event.key === "ArrowDown" ? 1 : -1;
-        const next = rows[(at + step + rows.length) % rows.length];
-        if (next) next.focus();
-      });
-    }
-    document.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target.closest("#menubar")) return;
-      menuSet(false);
-    });
-  }
-  function suggestRoom() {
-    $("room").value = newRoomID();
-  }
-  function normalizeRoom(raw) {
-    let text = String(raw || "").trim();
-    const hash = text.match(/#r=([^&\s"'<>]+)/);
-    if (hash) text = hash[1];
-    try {
-      text = decodeURIComponent(text);
-    } catch {
-    }
-    return text.trim().toLowerCase();
-  }
-  function roomFromHash() {
-    const raw = location.hash.replace(/^#/, "");
-    const id = normalizeRoom(new URLSearchParams(raw).get("r") || "");
-    return ROOM_RE.test(id) ? id : "";
-  }
-  function setHash(room) {
-    history.replaceState(null, "", room ? `#r=${encodeURIComponent(room)}` : location.pathname);
-  }
-  function wsURL() {
-    const proto = location.protocol === "https:" ? "wss://" : "ws://";
-    return proto + location.host + "/ws";
-  }
-  function send(msg) {
-    const raw = JSON.stringify(msg);
-    auditWire("out", raw);
-    if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(raw);
   }
 
   // src/trust.ts
@@ -957,13 +794,13 @@
     const sw = Math.max(2, Math.min(1400, Math.round(bx2 - bx)));
     const sh = Math.max(2, Math.min(1400, Math.round(by2 - by)));
     const S = SHEET_SCALE;
-    const sheet = sheetOf(Math.ceil(sw * S), Math.ceil(sh * S));
-    if (!sheet) return;
-    const c = sheet.c;
+    const sheet2 = sheetOf(Math.ceil(sw * S), Math.ceil(sh * S));
+    if (!sheet2) return;
+    const c = sheet2.c;
     const sws = Math.ceil(sw * S), shs = Math.ceil(sh * S);
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, sws, shs);
-    const sc = sheet.sc;
+    const sc = sheet2.sc;
     sc.setTransform(1, 0, 0, 1, 0, 0);
     sc.clearRect(0, 0, sws, shs);
     sc.setTransform(S, 0, 0, S, -bx * S, -by * S);
@@ -1078,7 +915,7 @@
     ctx.fill();
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(sheet.canvas, 0, 0, sws, shs, bx, by, sw, sh);
+    ctx.drawImage(sheet2.canvas, 0, 0, sws, shs, bx, by, sw, sh);
     ctx.restore();
     if (typeof location !== "undefined" && /[?&]fawkesdebug/.test(location.search)) {
       const mesh = f.form ? "mesh" : "dome";
@@ -3334,6 +3171,186 @@
     if (refused) say("the browser refused the new camera quality; the old one stays in effect");
   }
 
+  // src/audit.ts
+  function canary(value) {
+    const s = String(value || "");
+    if (s.length >= 4) state.canaries.add(s);
+  }
+  function auditWire(where, raw) {
+    const text = typeof raw === "string" ? raw : String(raw);
+    state.wireFrames++;
+    for (const c of state.canaries) {
+      if (text.includes(c) && state.wireLeaks.length < 20) {
+        state.wireLeaks.push({ where, canary: c });
+      }
+    }
+    if (/"sdp"|"candidate"|v=0|a=fingerprint/.test(text)) state.clearSignaling++;
+  }
+
+  // src/menu.ts
+  var MENUS = [
+    ["menu-settings-btn", "menu-settings"],
+    ["menu-effects-btn", "menu-effects"],
+    ["menu-asr-btn", "menu-asr"],
+    ["menu-devices-btn", "menu-devices"]
+  ];
+  function fitMenu(list) {
+    if (!(list instanceof HTMLElement)) return;
+    const room = document.documentElement.clientWidth;
+    list.style.left = "";
+    const box = list.getBoundingClientRect();
+    let shift = 0;
+    if (box.right > room - 2) shift = room - 2 - box.right;
+    if (box.left + shift < 2) shift = 2 - box.left;
+    if (shift) list.style.left = Math.round(shift) + "px";
+  }
+  function menuSet(open, which = null) {
+    for (const [btnId, listId] of MENUS) {
+      const btn = $(btnId);
+      const list = $(listId);
+      if (!btn || !list) continue;
+      const on = open && (!which || which === listId);
+      const was = !list.hidden;
+      list.hidden = !on;
+      if (!on) closeSubmenus(list);
+      btn.setAttribute("aria-expanded", String(on));
+      if (on && !was) {
+        fitMenu(list);
+        const first = list.querySelector(
+          'input[type="checkbox"], select, .menu-choice, .menu-sub'
+        );
+        if (first) first.focus();
+      }
+    }
+  }
+  function menuClose() {
+    let any = false;
+    for (const [, listId] of MENUS) {
+      const list = $(listId);
+      if (list && !list.hidden) any = true;
+    }
+    if (any) menuSet(false);
+    return any;
+  }
+  function closeSubmenus(panel) {
+    if (!panel) return;
+    for (const sub of Array.from(panel.querySelectorAll(".menu-sub-list"))) {
+      if (sub instanceof HTMLElement) sub.hidden = true;
+    }
+    for (const btn of Array.from(panel.querySelectorAll(".menu-sub")))
+      btn.setAttribute("aria-expanded", "false");
+  }
+  function wireSubmenus() {
+    for (const wrap of Array.from(document.querySelectorAll(".menu-subwrap"))) {
+      const btn = wrap.querySelector(".menu-sub");
+      const list = wrap.querySelector(".menu-sub-list");
+      if (!btn || !list) continue;
+      const openSub = (on) => {
+        list.hidden = !on;
+        btn.setAttribute("aria-expanded", String(on));
+        if (!on) return;
+        for (const other of Array.from(document.querySelectorAll(".menu-subwrap"))) {
+          if (other === wrap) continue;
+          const otherList = other.querySelector(".menu-sub-list");
+          const otherBtn = other.querySelector(".menu-sub");
+          if (otherList) otherList.hidden = true;
+          if (otherBtn) otherBtn.setAttribute("aria-expanded", "false");
+        }
+      };
+      wrap.addEventListener("mouseenter", () => openSub(true));
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openSub(!list.hidden);
+      });
+      btn.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowRight" && event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openSub(true);
+        const first = list.querySelector(".menu-choice");
+        if (first) first.focus();
+      });
+      list.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        openSub(false);
+        btn.focus();
+      });
+    }
+  }
+  function wireMenuBar() {
+    for (const [btnId, listId] of MENUS) {
+      const btn = $(btnId);
+      const list = $(listId);
+      if (!btn || !list) continue;
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        menuSet(list.hidden, listId);
+      });
+      list.addEventListener("click", (event) => event.stopPropagation());
+      list.addEventListener("keydown", (event) => {
+        const rows = Array.from(
+          list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub')
+        ).filter((el2) => !el2.hidden);
+        const at = rows.indexOf(document.activeElement);
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          menuSet(false);
+          btn.focus();
+          return;
+        }
+        if (event.key === "Tab") {
+          menuSet(false);
+          return;
+        }
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        const step2 = event.key === "ArrowDown" ? 1 : -1;
+        const next = rows[(at + step2 + rows.length) % rows.length];
+        if (next) next.focus();
+      });
+    }
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target.closest("#menubar")) return;
+      menuSet(false);
+    });
+  }
+  function suggestRoom() {
+    const fp = state.idKey && state.idKey.fp ? state.idKey.fp : "";
+    const room = newRoomID(fp);
+    $("room").value = room;
+    return room;
+  }
+  function normalizeRoom(raw) {
+    let text = String(raw || "").trim();
+    const hash = text.match(/#r=([^&\s"'<>]+)/);
+    if (hash) text = hash[1];
+    try {
+      text = decodeURIComponent(text);
+    } catch {
+    }
+    return text.trim().toLowerCase();
+  }
+  function roomFromHash() {
+    const raw = location.hash.replace(/^#/, "");
+    const id = normalizeRoom(new URLSearchParams(raw).get("r") || "");
+    return ROOM_RE.test(id) ? id : "";
+  }
+  function setHash(room) {
+    history.replaceState(null, "", room ? `#r=${encodeURIComponent(room)}` : location.pathname);
+  }
+  function wsURL() {
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    return proto + location.host + "/ws";
+  }
+  function send(msg) {
+    const raw = JSON.stringify(msg);
+    auditWire("out", raw);
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(raw);
+  }
+
   // src/chat.ts
   var CHAT_MAX = 200;
   function chatTime(ts = null) {
@@ -3410,485 +3427,1939 @@
     log.scrollTop = log.scrollHeight;
   }
 
-  // src/clock.ts
-  function clockText(ms) {
-    const total = Math.max(0, Math.floor(ms / 1e3));
-    const h = Math.floor(total / 3600);
-    const m = Math.floor(total % 3600 / 60);
-    const s = total % 60;
-    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  // src/positions.ts
+  var POSITION_DELAY = 200;
+  var MAX_EXTRAPOLATION = 100;
+  var POS_MAX_JSON = 200;
+  var POS_MAX_ZONES = 8;
+  var POS_MAX_POINT = 65535;
+  var POS_XFER = "pos";
+  var STEP = 32;
+  var remotes = /* @__PURE__ */ new Map();
+  var seqOut = /* @__PURE__ */ new Map();
+  var seqIn = /* @__PURE__ */ new Map();
+  var DIR_X = [0, -1, 1, 0];
+  var DIR_Y = [1, 0, 0, -1];
+  function posReset() {
+    remotes.clear();
+    seqOut.clear();
+    seqIn.clear();
   }
-  function startCallClock() {
-    stopCallClock();
-    state.callStart = Date.now();
-    $("call-timer").textContent = clockText(0);
-    state.callTimer = setInterval(() => {
-      if (!state.callStart) return;
-      $("call-timer").textContent = clockText(Date.now() - state.callStart);
-    }, 1e3);
+  function posForget(peerId) {
+    remotes.delete(peerId);
   }
-  function stopCallClock() {
-    if (state.callTimer) clearInterval(state.callTimer);
-    state.callTimer = null;
-    state.callStart = 0;
-    const el2 = $("call-timer");
-    if (el2) el2.textContent = "";
+  function posAt(id, now) {
+    const sample = remotes.get(id);
+    if (!sample) return { x: 0, y: 0 };
+    const age = now - sample.at;
+    const span = sample.n <= 0 ? 0 : POSITION_DELAY;
+    const t = Math.max(0, Math.min(age, POSITION_DELAY + MAX_EXTRAPOLATION)) / (span || 1);
+    const back = sample.mv && span ? STEP : 0;
+    const px = sample.x - DIR_X[sample.d] * back;
+    const py = sample.y - DIR_Y[sample.d] * back;
+    const f = Math.min(t, span ? (POSITION_DELAY + MAX_EXTRAPOLATION) / POSITION_DELAY : 1);
+    return { x: px + (sample.x - px) * f, y: py + (sample.y - py) * f };
   }
-
-  // src/sfx.ts
-  var SFX_NAMES = [
-    "pop",
-    "bonk",
-    "timp",
-    "hammer",
-    "lost",
-    "discord",
-    "knock2",
-    "imsg-out",
-    "imsg-in",
-    "signal-call",
-    "tg-call",
-    "ios",
-    "vineboom"
-  ];
-  var SFX_RATE = 0.35;
-  var LOST_RATE = 0.2;
-  var LOST_LOOP_START = 0.16;
-  var LOST_LOOP_END = 8.16;
-  var sfxCache = /* @__PURE__ */ new Map();
-  var sfxExt = "";
-  function pickSfxExt() {
-    if (sfxExt) return sfxExt;
-    const probe = document.createElement("audio");
-    const tries = [
-      ["ogg", "audio/ogg; codecs=opus"],
-      ["webm", "audio/webm; codecs=opus"],
-      ["mp3", "audio/mpeg"]
-    ];
-    for (const [ext, type] of tries) {
-      if (probe.canPlayType && probe.canPlayType(type)) {
-        sfxExt = ext;
-        return ext;
-      }
-    }
-    sfxExt = "webm";
-    return sfxExt;
+  function remotePoints(now) {
+    const out = /* @__PURE__ */ new Map();
+    for (const id of remotes.keys()) out.set(id, posAt(id, now));
+    return out;
   }
-  function ensureSfx() {
-    if (!state.sfxCtx) state.sfxCtx = newAudioCtx();
+  function remoteDir(id) {
+    const sample = remotes.get(id);
+    return sample ? sample.d : 0;
   }
-  function preloadSfx() {
-    ensureSfx();
-    const ctx = state.sfxCtx;
-    if (!ctx) return;
-    const ext = pickSfxExt();
-    for (const name of SFX_NAMES) {
-      if (sfxCache.has(name)) continue;
-      fetch(`sfx/${name}.${ext}`).then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)).then((buffer) => {
-        sfxCache.set(name, buffer);
-        if (name === "lost" && state.lostWanted) startLost();
-      }).catch(() => {
+  function remoteMoving(id) {
+    const sample = remotes.get(id);
+    return !!(sample && sample.mv);
+  }
+  function posFrame(x, y, d, mv, zones, flags = 0) {
+    return {
+      x: Math.round(Math.max(0, Math.min(POS_MAX_POINT, x))),
+      y: Math.round(Math.max(0, Math.min(POS_MAX_POINT, y))),
+      d: d === 1 || d === 2 || d === 3 ? d : 0,
+      mv: mv ? 1 : 0,
+      z: zones.slice(0, POS_MAX_ZONES).map((one) => String(one).slice(0, 32)),
+      f: Math.floor(flags) & 255,
+      ts: Date.now(),
+      n: 0
+    };
+  }
+  function posSend(peerList, frame) {
+    if (!state.self || state.leaving) return;
+    for (const peer of peerList) {
+      const dc = peer && peer.dc;
+      if (!dc || dc.readyState !== "open" || !peer.keys) continue;
+      const key = state.self + "|" + peer.id;
+      const n = seqOut.get(key) || 0;
+      const body = { k: "pos", ...frame, n };
+      const plain = JSON.stringify(body);
+      if (plain.length > POS_MAX_JSON) continue;
+      const sealed = pqCall((json) => pqModule().seal(json), {
+        key: b64e(peer.keys.sendChat),
+        aad: b64e(fileAAD(peer.id, state.self, POS_XFER, n, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+        pt: b64e(new TextEncoder().encode(plain))
       });
-    }
-  }
-  function playSfx(name, rate2 = 1) {
-    if (!state.sounds) return;
-    if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
-    const ctx = state.sfxCtx;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {
-    });
-    const buffer = sfxCache.get(name);
-    if (!buffer) {
-      return;
-    }
-    stopSfx();
-    try {
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      const gain = ctx.createGain();
-      gain.gain.value = SFX_RATE * Math.max(0, Math.min(1, rate2));
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      src.onended = () => {
-        if (state.sfxSource === src) state.sfxSource = null;
-      };
-      state.sfxSource = src;
-      src.start();
-    } catch {
-    }
-  }
-  function stopSfx() {
-    if (!state.sfxSource) return;
-    stopQuietly(state.sfxSource);
-    state.sfxSource = null;
-  }
-  function startLost() {
-    state.lostWanted = true;
-    if (!state.sounds) return;
-    if (state.lostSource) return;
-    const ctx = state.sfxCtx;
-    const buffer = sfxCache.get("lost");
-    if (!ctx || !buffer) return;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {
-    });
-    try {
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      src.loop = true;
-      if (buffer.duration >= LOST_LOOP_END) {
-        src.loopStart = LOST_LOOP_START;
-        src.loopEnd = LOST_LOOP_END;
+      if (!sealed || !sealed.b) continue;
+      try {
+        dc.send(JSON.stringify({ t: "pos", s: sealed.b }));
+      } catch {
+        continue;
       }
-      const gain = ctx.createGain();
-      gain.gain.value = LOST_RATE;
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      src.start();
-      state.lostSource = src;
-      state.lostGain = gain;
-    } catch {
-      state.lostSource = null;
-      state.lostGain = null;
+      seqOut.set(key, n + 1);
     }
   }
-  function setSounds(on) {
-    state.sounds = on;
-    document.body.dataset.sounds = on ? "on" : "off";
-    const box = $("sounds");
-    if (box) box.checked = on;
-    if (!on) {
-      if (state.sfxSource) {
-        stopQuietly(state.sfxSource);
-        state.sfxSource = null;
-      }
-      const wanted = state.lostWanted;
-      stopLost();
-      state.lostWanted = wanted;
-    } else if (state.lostWanted) {
-      startLost();
-    }
-  }
-  function stopLost() {
-    state.lostWanted = false;
-    const src = state.lostSource;
-    state.lostSource = null;
-    if (state.lostGain) {
-      disconnectQuietly(state.lostGain);
-      state.lostGain = null;
-    }
-    if (!src) return;
-    stopQuietly(src);
-    disconnectQuietly(src);
-  }
-
-  // src/identity.ts
-  var ID_DB = "stanze-identity";
-  var ID_CHALLENGE = "stanze identity";
-  var ID_NOTE = {
-    kept: "the identity is kept in this browser",
-    fresh: "the stored identity could not be reopened: a new key for this page",
-    session: "this browser keeps no identity: a new key each load, the device stays unverified"
-  };
-  var idDb = null;
-  function idStore() {
-    if (idDb) return idDb;
-    idDb = new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        reject(new Error("no indexeddb"));
-        return;
-      }
-      const req = indexedDB.open(ID_DB, 1);
-      req.onupgradeneeded = () => {
-        for (const name of ["id", "pins", "revoked"]) {
-          if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error || new Error("indexeddb refused"));
-    });
-    idDb.catch(() => {
-      idDb = null;
-    });
-    return idDb;
-  }
-  function idbRequest(store2, mode, fn) {
-    return idStore().then(
-      (db) => new Promise((resolve, reject) => {
-        const req = fn(db.transaction(store2, mode).objectStore(store2));
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      })
-    );
-  }
-  function idbGet(store2, key) {
-    return idbRequest(store2, "readonly", (s) => s.get(key));
-  }
-  function idbAll(store2) {
-    return idbRequest(store2, "readonly", (s) => s.getAll());
-  }
-  function idbPut(store2, key, value) {
-    return idbRequest(store2, "readwrite", (s) => s.put(value, key));
-  }
-  function idbDelete(store2, key) {
-    return idbRequest(store2, "readwrite", (s) => s.delete(key));
-  }
-  function fingerprint(pub) {
-    const out = pqCall((json) => pqModule().idfp(json), { id: pub });
-    return out && out.fp ? out.fp : "";
-  }
-  async function provesKey(pub, sign) {
-    if (!pub || typeof sign !== "function") return false;
-    const msg = b64e(sealUtf8.encode(ID_CHALLENGE));
-    let sig = "";
-    try {
-      sig = await sign(msg);
-    } catch {
-    }
-    const res = pqCall((json) => pqModule().idverify(json), { id: pub, msg, sig });
-    return !!(res && res.ok);
-  }
-  function subtleIdentity(key, pub) {
-    return {
-      kind: "webcrypto",
-      pub,
-      fp: fingerprint(pub),
-      sign: (msg) => crypto.subtle.sign({ name: "Ed25519" }, key, b64d(msg)).then(b64e),
-      store: () => ({ kind: "webcrypto", key, pub })
+  function posOnMessage(peer, raw) {
+    if (!raw || typeof raw.s !== "string" || !peer || !peer.keys) return null;
+    const body = openBody(peer, raw.s);
+    if (!body || body.k !== "pos") return null;
+    const n = Number(body.n);
+    if (!Number.isSafeInteger(n) || n < 0) return null;
+    if (!Number.isSafeInteger(body.x) || !Number.isSafeInteger(body.y)) return null;
+    if (body.x < 0 || body.x > POS_MAX_POINT || body.y < 0 || body.y > POS_MAX_POINT) return null;
+    const seen = seqIn.get(peer.id);
+    if (seen !== void 0 && n <= seen) return null;
+    seqIn.set(peer.id, n);
+    const z = Array.isArray(body.z) ? body.z.filter((one) => typeof one === "string").slice(0, POS_MAX_ZONES).map((one) => one.slice(0, 32)) : [];
+    const frame = {
+      x: body.x,
+      y: body.y,
+      d: body.d === 1 || body.d === 2 || body.d === 3 ? body.d : 0,
+      mv: Number(body.mv) ? 1 : 0,
+      z,
+      f: (Number(body.f) || 0) & 255,
+      ts: Number(body.ts) || 0,
+      n
     };
+    remotes.set(peer.id, { x: frame.x, y: frame.y, d: frame.d, mv: frame.mv, at: performance.now(), n });
+    return frame;
   }
-  function seedIdentity(seed, pub, kind) {
-    return {
-      kind,
-      pub,
-      fp: fingerprint(pub),
-      seed,
-      sign: async (msg) => {
-        const out = pqCall((json) => pqModule().idsign(json), { seed: b64e(seed), msg });
-        return out && out.sig ? out.sig : "";
-      },
-      store: async () => {
-        const wrap = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
-          "encrypt",
-          "decrypt"
-        ]);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrap, seed));
-        return { kind: "sealed", wrap, iv, ct, pub };
-      }
-    };
+  function openBody(peer, blob) {
+    const last = seqIn.get(peer.id);
+    const next = last === void 0 ? 0 : last + 1;
+    return openWith(peer, blob, next) || openWith(peer, blob, last === void 0 ? -1 : last) || openWith(peer, blob, 0);
   }
-  function createIdentity() {
-    return Promise.resolve().then(() => crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"])).then(
-      async (pair) => subtleIdentity(
-        pair.privateKey,
-        b64e(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)))
-      )
-    ).catch(() => {
-      const made = pqCall((json) => pqModule().idgen(json), {});
-      return made && made.pub && made.seed ? seedIdentity(b64d(made.seed), made.pub, "sealed") : null;
+  function openWith(peer, blob, seq) {
+    const out = pqCall((json) => pqModule().open(json), {
+      key: b64e(peer.keys.recvChat),
+      aad: b64e(fileAAD(peer.id, peer.id, POS_XFER, seq, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+      b: blob
     });
-  }
-  async function reopenIdentity(rec) {
-    if (!rec || !rec.pub) return null;
-    let key = null;
+    if (!out || out.error || typeof out.pt !== "string") return null;
     try {
-      if (rec.kind === "webcrypto" && rec.key) {
-        key = subtleIdentity(rec.key, rec.pub);
-      } else if (rec.kind === "sealed" && rec.wrap && rec.iv && rec.ct) {
-        const seed = new Uint8Array(
-          await crypto.subtle.decrypt({ name: "AES-GCM", iv: rec.iv }, rec.wrap, rec.ct)
-        );
-        key = seedIdentity(seed, rec.pub, "sealed");
-      }
+      return JSON.parse(new TextDecoder().decode(b64d(out.pt)));
     } catch {
       return null;
     }
-    return key && await provesKey(rec.pub, key.sign) ? key : null;
   }
-  function loadPins() {
-    return Promise.all([idbAll("pins"), idbAll("revoked")]).then(([pins, revoked]) => {
-      for (const rec of pins || []) if (rec && rec.label && rec.fp) state.pins.set(rec.label, rec);
-      for (const rec of revoked || []) if (rec && rec.fp) state.revoked.set(rec.fp, rec);
-    }).catch(() => {
-    });
+
+  // src/zones.ts
+  var ZONE_KINDS = [
+    "meeting",
+    "silent",
+    "lockable",
+    "podium",
+    "audience",
+    "exit",
+    "start"
+  ];
+  var ZONE_ID = /^[a-z0-9-]{1,32}$/;
+  function zoneCleanId(raw) {
+    return String(raw || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
   }
-  var identityLoad = null;
-  function ensureIdentity() {
-    if (identityLoad) return identityLoad;
-    identityLoad = (async () => {
-      await loadPins();
-      let rec = null;
-      try {
-        rec = await idbGet("id", "self");
-      } catch {
-      }
-      let key = await reopenIdentity(rec);
-      if (key) {
-        state.device = "kept";
-      } else {
-        key = await createIdentity();
-        if (!key) throw new Error("no identity key");
-        state.device = rec ? "fresh" : "kept";
-        try {
-          await idbPut("id", "self", await key.store());
-          if (navigator.storage && typeof navigator.storage.persist === "function") {
-            navigator.storage.persist().catch(() => {
-            });
-          }
-        } catch {
-          key.kind = "session";
-          state.device = "session";
-        }
-      }
-      state.idKey = key;
-      return key;
-    })().catch((err) => {
-      identityLoad = null;
-      throw err;
-    });
-    return identityLoad;
+  function zoneCleanName(raw) {
+    return String(raw || "").replace(/[^\p{L}\p{N}\p{P}\p{Zs}]+/gu, " ").trim().slice(0, 64);
   }
-  function deviceNote() {
-    return ID_NOTE[state.device] || ID_NOTE.session;
+  function rectOf(raw) {
+    if (!raw) return null;
+    const x = Number(raw.x);
+    const y = Number(raw.y);
+    const w = Number(raw.w);
+    const h = Number(raw.h);
+    if (![x, y, w, h].every((n) => Number.isFinite(n))) return null;
+    if (w <= 0 || h <= 0) return null;
+    return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
   }
-  function pinState(peer) {
-    if (peer.pin === "changed") return "changed";
-    if (!peer.fp) return "new";
-    if (state.revoked.has(peer.fp)) return "rollback";
-    for (const rec of state.pins.values()) if (rec.fp === peer.fp) return "known";
-    return "new";
-  }
-  function pinLabelOf(peer) {
-    for (const rec of state.pins.values()) if (rec.fp === peer.fp) return rec.label;
-    return peer.pinLabel || "";
-  }
-  function pinPeer(peer, label) {
-    if (!peer || !peer.fp) return "new";
-    const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
-    const held = state.pins.get(name);
-    if (held && held.fp !== peer.fp) {
-      peer.pin = "changed";
-      peer.pinLabel = name;
-      paintPin(peer);
-      return "changed";
+  function zoneFromObject(raw, index) {
+    if (!raw || typeof raw !== "object") return null;
+    const fromName = zoneCleanId(raw.name);
+    const id = zoneCleanId(raw.id) || fromName || "zone-" + index;
+    if (!ZONE_ID.test(id)) return null;
+    const kind = ZONE_KINDS.includes(raw.kind) ? raw.kind : "meeting";
+    const name = zoneCleanName(raw.name) || id;
+    const capacity = Number(raw.capacity);
+    const list = Array.isArray(raw.rects) ? raw.rects : [raw];
+    const rects = [];
+    for (const one of list) {
+      const rect = rectOf(one);
+      if (rect) rects.push(rect);
     }
-    const now = Date.now();
-    const rec = { label: name, fp: peer.fp, first: held ? held.first : now, last: now };
-    state.pins.set(name, rec);
-    idbPut("pins", name, rec).catch(() => {
-    });
-    if (state.revoked.has(peer.fp)) {
-      state.revoked.delete(peer.fp);
-      idbDelete("revoked", peer.fp).catch(() => {
-      });
+    if (!rects.length) return null;
+    const zone = {
+      id,
+      kind,
+      name,
+      capacity: Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : 0,
+      rects
+    };
+    if (raw.exit && typeof raw.exit === "object" && raw.exit.room) {
+      zone.exit = { room: String(raw.exit.room), start: String(raw.exit.start || "") };
     }
-    peer.pin = "";
-    peer.pinLabel = name;
-    paintPin(peer);
-    return "known";
+    if (raw.stage) zone.stage = String(raw.stage).slice(0, 32);
+    return zone;
   }
-  function renamePin(peer, label) {
-    if (!peer || pinState(peer) !== "known") return "new";
-    const old = pinLabelOf(peer);
-    const name = String(label || "").trim().slice(0, 32);
-    if (!name || name === old) return "known";
-    const held = state.pins.get(name);
-    if (held && held.fp !== peer.fp) return pinPeer(peer, name);
-    const was = state.pins.get(old);
-    state.pins.delete(old);
-    idbDelete("pins", old).catch(() => {
-    });
-    const now = Date.now();
-    state.pins.set(name, { label: name, fp: peer.fp, first: was ? was.first : now, last: now });
-    idbPut("pins", name, state.pins.get(name)).catch(() => {
-    });
-    peer.pin = "";
-    peer.pinLabel = name;
-    paintPin(peer);
-    return "known";
-  }
-  function resetDevice(peer, label) {
-    const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
-    const held = state.pins.get(name);
-    if (held && held.fp && held.fp !== peer.fp) {
-      const gone = { fp: held.fp, label: name, at: Date.now() };
-      state.revoked.set(gone.fp, gone);
-      idbPut("revoked", gone.fp, gone).catch(() => {
-      });
-      state.pins.delete(name);
-      idbDelete("pins", name).catch(() => {
-      });
-    }
-    peer.pin = "";
-    const state_ = pinPeer(peer, name);
-    if (!peer.proven) sealedRestart(peer, true);
-    return state_;
-  }
-  function verifiedPeers() {
-    let n = 0;
-    for (const peer of state.peers.values()) if (peer.fp && pinState(peer) === "known") n++;
-    return n;
-  }
-  function updatePinCount() {
-    const el2 = $("pin-count");
-    if (!el2) return;
-    const total = state.peers.size;
-    const known = verifiedPeers();
-    const failed = sealedFailedPairs();
-    const full = total > 0 && known === total && failed.length === 0;
-    el2.hidden = total === 0;
-    el2.textContent = total ? `verified ${known}/${total}` : "";
-    el2.dataset.verified = full ? "all" : "part";
-    $("stage").dataset.verified = full ? "all" : "part";
-    if (total === 0) {
-      el2.removeAttribute("title");
-    } else if (failed.length > 0) {
-      el2.title = "the keys do not match with " + sealedPairNames(failed) + ", so do not trust this call";
-    } else {
-      el2.title = `${known} of ${total} guests present an identity this browser pinned; each pair has its own code on its tile`;
-    }
-  }
-  function paintPin(peer) {
-    updatePinCount();
-    paintState(peer);
-    for (const host of [peer.tile, rowOf.get(peer.tile)]) refreshCodeCard(host, peer);
-    const chip = peer.tile ? peer.tile.querySelector(".pin") : null;
-    if (!chip) return;
-    const what = pinState(peer);
-    chip.hidden = !peer.fp;
-    chip.dataset.pin = what === "rollback" ? "changed" : what;
-    chip.textContent = what === "known" ? pinLabelOf(peer) : what === "changed" ? "identity changed" : what === "rollback" ? "old key came back" : "unverified";
-    chip.title = peer.fp ? "identity " + peer.fp : "";
-    const named = what === "known";
-    chip.dataset.action = named ? "rename" : "";
-    if (named) {
-      chip.title = (chip.title ? chip.title + " | " : "") + "click to rename";
-      chip.onclick = () => renamePin(peer, prompt("new name for this device", pinLabelOf(peer)) || "");
-    } else {
-      chip.onclick = null;
-    }
-  }
-  async function storageAudit() {
-    const out = { local: Object.keys(localStorage), stores: {}, keys: 0 };
-    try {
-      const db = await idStore();
-      for (const name of db.objectStoreNames) {
-        const rows = await idbAll(name);
-        out.stores[name] = rows.map((row) => {
-          const shape = {};
-          for (const [k, v] of Object.entries(row || {})) {
-            if (v instanceof Uint8Array) shape[k] = "bytes:" + v.length;
-            else if (v && v.type) shape[k] = "key:" + v.type;
-            else if (typeof v === "string") shape[k] = v.length > 40 ? "string:" + v.length : v;
-            else shape[k] = typeof v;
-          }
-          return shape;
-        });
-      }
-    } catch {
-      out.stores = null;
+  function zoneList(raw) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (let i = 0; i < raw.length; i++) {
+      const zone = zoneFromObject(raw[i], i);
+      if (!zone) continue;
+      if (seen.has(zone.id)) throw new Error("duplicate zone id: " + zone.id);
+      seen.add(zone.id);
+      out.push(zone);
     }
     return out;
+  }
+  var ZoneGrid = class {
+    zones;
+    key = Number.NaN;
+    here = [];
+    constructor(zones) {
+      this.zones = zones;
+    }
+    // at answers every zone holding the point. The cached answer is only reused
+    // for the same map cell, so a zone edge inside one 32 px cell still updates
+    // at walking speed.
+    at(x, y, cell = 32) {
+      const key = Math.floor(x / cell) * 65536 + Math.floor(y / cell);
+      if (key === this.key) return this.here;
+      this.key = key;
+      const found = [];
+      for (const zone of this.zones) {
+        for (const rect of zone.rects) {
+          if (x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h) {
+            found.push(zone);
+            break;
+          }
+        }
+      }
+      this.here = found;
+      return found;
+    }
+    byId(id) {
+      for (const zone of this.zones) if (zone.id === id) return zone;
+      return null;
+    }
+  };
+  var ZoneWatch = class {
+    inside = /* @__PURE__ */ new Set();
+    grid;
+    constructor(grid) {
+      this.grid = grid;
+    }
+    // update returns the zones entered and left since the last call.
+    update(x, y, cell = 32) {
+      const now = this.grid.at(x, y, cell);
+      const next = /* @__PURE__ */ new Set();
+      for (const zone of now) next.add(zone.id);
+      const enter = [];
+      const leave2 = [];
+      for (const zone of now) if (!this.inside.has(zone.id)) enter.push(zone);
+      for (const id of this.inside) {
+        if (next.has(id)) continue;
+        const zone = this.grid.byId(id);
+        if (zone) leave2.push(zone);
+      }
+      this.inside = next;
+      return { enter, leave: leave2 };
+    }
+    ids() {
+      return [...this.inside];
+    }
+    reset() {
+      this.inside = /* @__PURE__ */ new Set();
+    }
+  };
+
+  // src/world.ts
+  var TILE = 32;
+  var CHAR_W = 32;
+  var CHAR_H = 32;
+  var CHAR_ORIGIN_Y = 32;
+  var SHEET_ROW = [2, 3, 1, 0];
+  var IDLE_FRAME = 3;
+  var WALK_ORDER = [0, 1, 2, 1];
+  var CHAR_FPS = 10;
+  var CHAR_MOVE_MS = 1e3 / CHAR_FPS;
+  var WALK_SPEED = 160;
+  var AVATAR_SORT_OFFSET = 0;
+  var BODY_W = 20;
+  var BODY_H = 16;
+  var BODY_BASE = 2;
+  var DIR = ["down", "left", "right", "up"];
+  function loadImage(src, signal) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => signal && signal.aborted ? reject(new Error("aborted")) : resolve(image);
+      image.onerror = () => reject(new Error("image failed: " + src));
+      image.src = src;
+    });
+  }
+  async function loadJSON(src, signal, optional = false) {
+    let res;
+    try {
+      res = await fetch(src, { signal, credentials: "same-origin" });
+    } catch {
+      if (optional) return null;
+      throw new Error("fetch failed: " + src);
+    }
+    if (!res.ok) {
+      if (optional && res.status === 404) return null;
+      throw new Error(res.status + ": " + src);
+    }
+    return res.json();
+  }
+  function gidOf(cell) {
+    return cell & 536870911;
+  }
+  function isWallLayer(layer) {
+    return layer && layer.type === "tilelayer" && /wall|collide|block/i.test(String(layer.name || ""));
+  }
+  function walkLayers(list, tiles, objects) {
+    for (const layer of list || []) {
+      if (!layer) continue;
+      if (layer.type === "group" && Array.isArray(layer.layers)) {
+        walkLayers(layer.layers, tiles, objects);
+        continue;
+      }
+      if (layer.type === "tilelayer" && Array.isArray(layer.data)) tiles.push(layer);
+      if (layer.type === "objectgroup" && Array.isArray(layer.objects)) objects.push(layer);
+    }
+  }
+  function polygonRects(obj, points) {
+    const xs = points.map((p) => Number(p.x)).filter(Number.isFinite);
+    const ys = points.map((p) => Number(p.y)).filter(Number.isFinite);
+    if (!xs.length || !ys.length) return [];
+    const ox = Number(obj.x) || 0;
+    const oy = Number(obj.y) || 0;
+    const y0 = Math.floor(Math.min(...ys) + oy);
+    const y1 = Math.ceil(Math.max(...ys) + oy);
+    const rects = [];
+    for (let y = y0; y < y1; y += TILE) {
+      const h = Math.min(TILE, y1 - y);
+      const mid2 = y + h / 2;
+      const hits = [];
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[(i + 1) % points.length];
+        const ya = Number(a.y) + oy;
+        const yb = Number(b.y) + oy;
+        if (ya === yb) continue;
+        if (mid2 >= ya && mid2 < yb || mid2 >= yb && mid2 < ya) {
+          const xa = Number(a.x) + ox;
+          const xb = Number(b.x) + ox;
+          hits.push(xa + (mid2 - ya) / (yb - ya) * (xb - xa));
+        }
+      }
+      hits.sort((p, q) => p - q);
+      for (let i = 0; i + 1 < hits.length; i += 2) {
+        const x = Math.round(hits[i]);
+        const w = Math.round(hits[i + 1]) - x;
+        if (w > 0) rects.push({ x, y, w, h });
+      }
+    }
+    return rects;
+  }
+  function zoneObjects(objects) {
+    const out = [];
+    for (const layer of objects) {
+      for (const obj of layer.objects) {
+        if (!obj || obj.class !== "zone" && obj.class !== "area") continue;
+        const props = {};
+        for (const p of obj.properties || []) if (p && p.name) props[p.name] = p.value;
+        let rects;
+        const shape = obj.polygon || obj.polyline;
+        if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
+        else rects = [{ x: Math.round(obj.x), y: Math.round(obj.y), w: Math.round(obj.width), h: Math.round(obj.height) }];
+        const zone = {
+          id: obj.name,
+          kind: props.kind || props.type || "meeting",
+          name: props.label || props.name || obj.name,
+          capacity: props.maxUsers !== void 0 ? props.maxUsers : props.capacity,
+          rects
+        };
+        if (props.proximity !== void 0) zone.radius = Number(props.proximity) || 0;
+        if (props.exitRoom) {
+          zone.exit = { room: String(props.exitRoom), start: String(props.exitStart || "") };
+        }
+        if (props.stage) zone.stage = props.stage;
+        out.push(zone);
+      }
+    }
+    return out;
+  }
+  function spawn(zones, want, blocked, w, h, tw, th) {
+    const free = (x, y) => !bodyBlocked(blocked, w, h, tw, th, x, y);
+    let zone = null;
+    for (const one of zones) if (want && one.id === want && one.kind === "start") zone = one;
+    if (!zone) {
+      for (const one of zones) if (!zone && one.kind === "start") zone = one;
+    }
+    if (zone) {
+      const rect = zone.rects[0];
+      for (let draw = 0; draw < 10; draw++) {
+        const x = rect.x + 8 + Math.random() * Math.max(1, rect.w - 16);
+        const y = rect.y + 8 + Math.random() * Math.max(1, rect.h - 8);
+        if (free(x, y)) return { x: Math.round(x), y: Math.round(y) };
+      }
+    }
+    const centre = { x: Math.round(w * tw / 2), y: Math.round(h * th / 2) };
+    if (free(centre.x, centre.y)) return centre;
+    return { x: Math.round(tw * 1.5), y: Math.round(th * 1.5) };
+  }
+  function mapPath(room) {
+    return room === "" ? "/world/map.json" : "/world/maps/" + room + ".json";
+  }
+  async function atlasFrames(signal) {
+    const raw = await loadJSON("/world/atlas.json", signal, true);
+    if (!raw || typeof raw !== "object" || !raw.image) return null;
+    const frames = /* @__PURE__ */ new Map();
+    const list = raw.frames && typeof raw.frames === "object" ? raw.frames : {};
+    for (const [key, rect] of Object.entries(list)) {
+      const id = Number(key);
+      if (!Number.isSafeInteger(id) || !rect) continue;
+      const one = rect;
+      const x = Math.floor(Number(one.x));
+      const y = Math.floor(Number(one.y));
+      const w = Math.floor(Number(one.w));
+      const h = Math.floor(Number(one.h));
+      if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) continue;
+      frames.set(id, { x, y, w, h });
+    }
+    return { image: String(raw.image), frames };
+  }
+  async function loadWorld(room, signal) {
+    if (!ROOM_RE.test(room)) throw new Error("bad room name");
+    const base = "/world/";
+    const map = await loadJSON(mapPath(room), signal);
+    if (!map || typeof map !== "object") throw new Error("no map for " + room);
+    const width = Math.max(1, Math.floor(Number(map.width)) || 1);
+    const height = Math.max(1, Math.floor(Number(map.height)) || 1);
+    const tw = Math.max(1, Math.floor(Number(map.tilewidth)) || TILE);
+    const th = Math.max(1, Math.floor(Number(map.tileheight)) || TILE);
+    const tiles = [];
+    const objects = [];
+    walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
+    const sidecar = await loadJSON(room === "" ? "" : base + "maps/" + room + ".zones.json", signal, true);
+    const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
+    const zones = zoneList(fromSidecar.length ? fromSidecar : zoneObjects(objects));
+    const images = /* @__PURE__ */ new Map();
+    const image = async (path) => {
+      const src = path.startsWith("/") ? path : base + path.replace(/^\.\//, "");
+      let found = images.get(src);
+      if (!found) {
+        found = await loadImage(src, signal);
+        images.set(src, found);
+      }
+      return found;
+    };
+    const sets = [];
+    for (const raw of Array.isArray(map.tilesets) ? map.tilesets : []) {
+      if (!raw || !raw.image) continue;
+      const firstgid = Math.floor(Number(raw.firstgid));
+      if (!Number.isSafeInteger(firstgid) || firstgid < 1) continue;
+      sets.push({
+        firstgid,
+        columns: Math.max(1, Math.floor(Number(raw.columns)) || 1),
+        tileWidth: Math.max(1, Math.floor(Number(raw.tilewidth)) || tw),
+        tileHeight: Math.max(1, Math.floor(Number(raw.tileheight)) || th),
+        margin: Math.max(0, Math.floor(Number(raw.margin)) || 0),
+        spacing: Math.max(0, Math.floor(Number(raw.spacing)) || 0),
+        image: await image(String(raw.image))
+      });
+    }
+    const atlas = await atlasFrames(signal);
+    let atlasImage = null;
+    if (atlas && atlas.frames.size) atlasImage = await image(atlas.image);
+    const flags = /* @__PURE__ */ new Set();
+    for (const set of Array.isArray(map.tilesets) ? map.tilesets : []) {
+      const firstgid = Math.floor(Number(set && set.firstgid)) || 1;
+      for (const tile of set && Array.isArray(set.tiles) && set.tiles || []) {
+        if (!tile) continue;
+        const props = Array.isArray(tile.properties) ? tile.properties : [];
+        const hit = tile.class === "collides" || props.some((p) => p && p.name === "collides" && (p.value === true || p.value === "true"));
+        if (hit) flags.add(firstgid + Math.floor(Number(tile.id) || 0));
+      }
+    }
+    const px = width * tw;
+    const py = height * th;
+    const floor = document.createElement("canvas");
+    floor.width = px;
+    floor.height = py;
+    const fctx = floor.getContext("2d");
+    const wallCanvas = document.createElement("canvas");
+    wallCanvas.width = px;
+    wallCanvas.height = py;
+    const wctx = wallCanvas.getContext("2d");
+    if (!fctx || !wctx) throw new Error("no 2d context");
+    fctx.imageSmoothingEnabled = false;
+    wctx.imageSmoothingEnabled = false;
+    const blocked = new Uint8Array(width * height);
+    const paint = (target, layer) => {
+      const data = layer.data;
+      const opacity = layer.opacity === void 0 ? 1 : Number(layer.opacity);
+      const alpha = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
+      const cells = Math.min(data.length, width * height);
+      for (let i = 0; i < cells; i++) {
+        const gid = gidOf(Number(data[i]) || 0);
+        if (!gid) continue;
+        const dx = i % width * tw;
+        const dy = Math.floor(i / width) * th;
+        target.globalAlpha = alpha;
+        const frame = atlasImage && atlas ? atlas.frames.get(gid) : null;
+        if (frame) {
+          target.drawImage(atlasImage, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
+          continue;
+        }
+        let set = null;
+        for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
+        if (!set) continue;
+        const index = gid - set.firstgid;
+        const sx = set.margin + index % set.columns * (set.tileWidth + set.spacing);
+        const sy = set.margin + Math.floor(index / set.columns) * (set.tileHeight + set.spacing);
+        target.drawImage(set.image, sx, sy, set.tileWidth, set.tileHeight, dx, dy, tw, th);
+      }
+      target.globalAlpha = 1;
+    };
+    for (const layer of tiles) {
+      const data = layer.data;
+      const wall = isWallLayer(layer);
+      const cells = Math.min(data.length, width * height);
+      for (let i = 0; i < cells; i++) {
+        const gid = gidOf(Number(data[i]) || 0);
+        if (!gid) continue;
+        if (wall || flags.has(gid)) blocked[i] = 1;
+      }
+      if (layer.visible === false) continue;
+      paint(wall ? wctx : fctx, layer);
+    }
+    const grid = new ZoneGrid(zones);
+    return {
+      room,
+      widthPx: px,
+      heightPx: py,
+      tiles: floor,
+      walls: wallCanvas,
+      collision(x, y) {
+        return bodyBlocked(blocked, width, height, tw, th, x, y);
+      },
+      zones,
+      zoneAt(x, y) {
+        return grid.at(x, y);
+      },
+      startPoint(want) {
+        return spawn(zones, want, blocked, width, height, tw, th);
+      },
+      images
+    };
+  }
+  function bodyBlocked(blocked, width, height, tileW, tileH, x, y) {
+    const left = x - BODY_W / 2;
+    const right = x + BODY_W / 2;
+    const top = y - BODY_BASE - BODY_H;
+    const bottom = y - BODY_BASE;
+    const probe = (px, py) => {
+      const cx = Math.floor(px / tileW);
+      const cy = Math.floor(py / tileH);
+      if (cx < 0 || cy < 0 || cx >= width || cy >= height) return true;
+      return blocked[cy * width + cx] === 1;
+    };
+    return probe(left, top) || probe(right, top) || probe(left, bottom) || probe(right, bottom) || probe(x, bottom);
+  }
+  function classicSheet(image) {
+    const idle = {};
+    const walk = {};
+    for (let d = 0; d < DIR.length; d++) {
+      idle[DIR[d]] = IDLE_FRAME;
+      walk[DIR[d]] = [...WALK_ORDER];
+    }
+    return { image, cellW: CHAR_W, cellH: CHAR_H, idle, walk };
+  }
+  async function loadCharacter(signal) {
+    let image;
+    try {
+      image = await loadImage("/world/char_player.png", signal);
+    } catch {
+      return defaultSheet();
+    }
+    return classicSheet(image);
+  }
+  function defaultSheet() {
+    const cols = 4;
+    const canvas = document.createElement("canvas");
+    canvas.width = CHAR_W * cols;
+    canvas.height = CHAR_H * SHEET_ROW.length;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#4a6fa5";
+      for (let row = 0; row < SHEET_ROW.length; row++) {
+        for (let col = 0; col < cols; col++) {
+          ctx.fillRect(col * CHAR_W + 8, row * CHAR_H + 6, 16, 22);
+        }
+      }
+    }
+    const idle = {};
+    const walk = {};
+    for (const dir of DIR) {
+      idle[dir] = IDLE_FRAME;
+      walk[dir] = [...WALK_ORDER];
+    }
+    return { image: canvas, cellW: CHAR_W, cellH: CHAR_H, idle, walk };
+  }
+  var Walker = class {
+    x;
+    y;
+    dir = 0;
+    moving = false;
+    frame = 0;
+    clock = 0;
+    world;
+    constructor(world, start) {
+      this.world = world;
+      this.x = start.x;
+      this.y = start.y;
+    }
+    // step advances the avatar by one frame of time with the keys held now. A
+    // diagonal is normalised, so a corner is not walked twice as fast, and each
+    // axis is tried alone, so a wall on one side still lets the other slide.
+    step(dt, keys) {
+      let dx = 0;
+      let dy = 0;
+      if (keys.has("ArrowLeft") || keys.has("a")) dx -= 1;
+      if (keys.has("ArrowRight") || keys.has("d")) dx += 1;
+      if (keys.has("ArrowUp") || keys.has("w")) dy -= 1;
+      if (keys.has("ArrowDown") || keys.has("s")) dy += 1;
+      this.moving = dx !== 0 || dy !== 0;
+      if (!this.moving) {
+        this.clock = 0;
+        this.frame = 0;
+        return;
+      }
+      if (dx !== 0 && dy === 0) this.dir = dx < 0 ? 1 : 2;
+      else if (dy !== 0 && dx === 0) this.dir = dy < 0 ? 3 : 0;
+      const ms = Math.min(Math.max(dt, 0), 100);
+      const len = Math.hypot(dx, dy) || 1;
+      const moveX = dx / len * WALK_SPEED * (ms / 1e3);
+      const moveY = dy / len * WALK_SPEED * (ms / 1e3);
+      if (moveX && !this.world.collision(this.x + moveX, this.y)) this.x += moveX;
+      if (moveY && !this.world.collision(this.x, this.y + moveY)) this.y += moveY;
+      this.clock += ms;
+      if (this.clock >= CHAR_MOVE_MS) {
+        this.clock -= CHAR_MOVE_MS;
+        this.frame++;
+      }
+    }
+    // cell is the sheet cell of the current facing and step: the row of the
+    // facing, the idle column when still, the walk cycle when moving.
+    cell(sheet2) {
+      const name = DIR[this.dir] || DIR[0];
+      const row = SHEET_ROW[this.dir] ?? 0;
+      if (!this.moving) return { col: sheet2.idle[name] ?? IDLE_FRAME, row };
+      const walk = sheet2.walk[name] && sheet2.walk[name].length ? sheet2.walk[name] : WALK_ORDER;
+      return { col: walk[this.frame % walk.length], row };
+    }
+  };
+  var KEYS = /* @__PURE__ */ new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "a", "d", "w", "s"]);
+  var TYPING = /* @__PURE__ */ new Set(["INPUT", "TEXTAREA", "SELECT"]);
+  function typing(event) {
+    const target = event.target;
+    if (!target) return false;
+    if (event.ctrlKey || event.metaKey || event.altKey) return true;
+    return TYPING.has(target.tagName) || !!target.isContentEditable;
+  }
+  var WorldView = class {
+    canvas;
+    world;
+    avatars = /* @__PURE__ */ new Map();
+    // frames is read by the browser test: a map that never drew is a map that
+    // failed.
+    frames = 0;
+    // near is the bubble set of the proximity layer, drawn beside the name of a
+    // guest that hears this page.
+    near = /* @__PURE__ */ new Set();
+    ctx;
+    held = /* @__PURE__ */ new Set();
+    dirty = true;
+    raf = 0;
+    scale = 1;
+    camX = 0;
+    camY = 0;
+    last = 0;
+    onKeyDown = (event) => this.key(event, true);
+    onKeyUp = (event) => this.key(event, false);
+    constructor(canvas, world) {
+      this.canvas = canvas;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      if (!ctx) throw new Error("no 2d context");
+      this.ctx = ctx;
+      this.world = world;
+      canvas.tabIndex = 0;
+      canvas.setAttribute("role", "img");
+      canvas.setAttribute("aria-label", "the world of this room, walk with the arrow keys or w a s d");
+      window.addEventListener("keydown", this.onKeyDown);
+      window.addEventListener("keyup", this.onKeyUp);
+      if (typeof ResizeObserver === "function") {
+        const observe = new ResizeObserver(() => {
+          this.dirty = true;
+        });
+        observe.observe(canvas);
+      }
+      this.raf = requestAnimationFrame((t) => this.tick(t));
+    }
+    // keys is the set of keys held now, for the walker of this page.
+    get keys() {
+      return this.held;
+    }
+    destroy() {
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      window.removeEventListener("keydown", this.onKeyDown);
+      window.removeEventListener("keyup", this.onKeyUp);
+      this.avatars.clear();
+      this.held.clear();
+    }
+    key(event, down) {
+      if (!KEYS.has(event.key) || typing(event)) return;
+      if (down && document.visibilityState !== "visible") return;
+      if (down) {
+        this.held.add(event.key);
+        event.preventDefault();
+      } else {
+        this.held.delete(event.key);
+      }
+      this.dirty = true;
+    }
+    // mark asks for a frame: a change from outside the loop (a peer appeared, a
+    // name arrived) is neither a key press nor a walker step.
+    mark() {
+      this.dirty = true;
+    }
+    // local is the avatar of this page.
+    get local() {
+      for (const one of this.avatars.values()) if (one.local) return one;
+      return void 0;
+    }
+    // fit sizes the canvas to its box and picks the zoom. A whole number of
+    // pixels per map pixel keeps pixel art crisp; a narrow window takes the
+    // largest fraction that still shows two tiles of the map.
+    fit() {
+      const width = this.canvas.clientWidth || 0;
+      const height = this.canvas.clientHeight || 0;
+      if (!width || !height) return;
+      if (this.canvas.width !== width || this.canvas.height !== height) {
+        this.canvas.width = width;
+        this.canvas.height = height;
+      }
+      const want = Math.floor(width / 320);
+      this.scale = want >= 1 ? Math.min(3, want) : Math.max(0.5, width / 320);
+    }
+    tick(time) {
+      const dt = this.last ? time - this.last : 16;
+      this.last = time;
+      const local = this.local;
+      if (local && local.walker && document.visibilityState === "visible") {
+        const walker2 = local.walker;
+        walker2.step(dt, this.held);
+        if (walker2.x !== local.x || walker2.y !== local.y || walker2.dir !== local.dir || walker2.moving !== local.moving) {
+          local.x = walker2.x;
+          local.y = walker2.y;
+          local.dir = walker2.dir;
+          local.moving = walker2.moving;
+          this.dirty = true;
+        }
+      }
+      if (this.dirty) {
+        this.dirty = false;
+        this.draw();
+      }
+      this.raf = requestAnimationFrame((t) => this.tick(t));
+    }
+    // topLeft is where the window stands in map pixels, whole, because the scale
+    // keeps every edge of the art on a whole pixel.
+    topLeft() {
+      return { x: this.camX / this.scale, y: this.camY / this.scale };
+    }
+    // size is the drawn window in map pixels.
+    size() {
+      return { w: this.canvas.width / this.scale, h: this.canvas.height / this.scale };
+    }
+    // ink counts the distinct colours of the frame, thinned out. A blank window is
+    // one colour and a map is many: it is the cheap proof that a map was painted
+    // and not a black rectangle.
+    ink() {
+      if (!this.canvas.width || !this.canvas.height) return 0;
+      const pixels = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height).data;
+      const seen = /* @__PURE__ */ new Set();
+      for (let i = 0; i < pixels.length; i += 4 * 97) {
+        seen.add(pixels[i] << 16 | pixels[i + 1] << 8 | pixels[i + 2]);
+        if (seen.size >= 64) break;
+      }
+      return seen.size;
+    }
+    // draw paints one frame: the visible window of the floor, then every avatar
+    // in the window with its feet sorted, then its name.
+    draw() {
+      this.fit();
+      const ctx = this.ctx;
+      const width = this.canvas.width;
+      const height = this.canvas.height;
+      if (!width || !height) return;
+      const local = this.local;
+      if (local) {
+        const wantX = local.x * this.scale - width / 2;
+        const wantY = local.y * this.scale - height / 2;
+        this.camX = Math.round(Math.max(0, Math.min(this.world.widthPx * this.scale - width, wantX)));
+        this.camY = Math.round(Math.max(0, Math.min(this.world.heightPx * this.scale - height, wantY)));
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.imageSmoothingEnabled = this.scale % 1 !== 0;
+      ctx.fillStyle = "#1d1d20";
+      ctx.fillRect(0, 0, width, height);
+      const x0 = Math.max(0, Math.floor(this.camX / this.scale));
+      const y0 = Math.max(0, Math.floor(this.camY / this.scale));
+      const x1 = Math.min(this.world.widthPx, Math.ceil((this.camX + width) / this.scale) + 1);
+      const y1 = Math.min(this.world.heightPx, Math.ceil((this.camY + height) / this.scale) + 1);
+      const view2 = { x0, y0, x1, y1 };
+      if (x1 > x0 && y1 > y0) {
+        ctx.drawImage(this.world.tiles, x0, y0, x1 - x0, y1 - y0, x0 * this.scale - this.camX, y0 * this.scale - this.camY, (x1 - x0) * this.scale, (y1 - y0) * this.scale);
+      }
+      ctx.setTransform(this.scale, 0, 0, this.scale, -this.camX, -this.camY);
+      const list = [...this.avatars.values()].filter((one) => one.x + CHAR_W >= view2.x0 && one.x - CHAR_W <= view2.x1 && one.y >= view2.y0 && one.y - CHAR_H <= view2.y1).sort((a, b) => a.y + AVATAR_SORT_OFFSET - (b.y + AVATAR_SORT_OFFSET) || (a.id < b.id ? -1 : 1));
+      for (const one of list) this.drawAvatar(one);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.frames++;
+    }
+    drawAvatar(one) {
+      const ctx = this.ctx;
+      const sheet2 = one.sheet;
+      const name = DIR[one.dir] || DIR[0];
+      const walk = sheet2.walk[name] && sheet2.walk[name].length ? sheet2.walk[name] : WALK_ORDER;
+      const col = one.moving ? walk[Math.floor(performance.now() / CHAR_MOVE_MS) % walk.length] : sheet2.idle[name] ?? IDLE_FRAME;
+      const row = SHEET_ROW[one.dir] ?? 0;
+      const dx = Math.round(one.x - CHAR_W / 2);
+      const dy = Math.round(one.y - CHAR_ORIGIN_Y);
+      if (one.local) {
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.ellipse(Math.round(one.x), Math.round(one.y), 10, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      ctx.drawImage(sheet2.image, col * sheet2.cellW, row * sheet2.cellH, sheet2.cellW, sheet2.cellH, dx, dy, sheet2.cellW, sheet2.cellH);
+      const label = one.name || one.id.slice(0, 6);
+      ctx.font = "8px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      const top = dy - 2;
+      const wide = Math.ceil(ctx.measureText(label).width) + 4;
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(Math.round(one.x - wide / 2), top - 9, wide, 9);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = one.local ? "#9fe3ff" : "#ffffff";
+      ctx.fillText(label, Math.round(one.x), top);
+      if (!one.local && this.near.has(one.id)) {
+        ctx.fillStyle = "#57d957";
+        ctx.beginPath();
+        ctx.arc(Math.round(one.x + wide / 2) + 1, top - 5, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // paintNear takes the bubble set of this tick and repaints only on a change.
+    paintNear(ids) {
+      const next = new Set(ids);
+      if (next.size !== this.near.size || ids.some((id) => !this.near.has(id))) {
+        this.near = next;
+        this.dirty = true;
+      }
+    }
+  };
+
+  // src/proximity.ts
+  var BUBBLE_R = 96;
+  var BUBBLE_LEAVE = Math.round(BUBBLE_R * 1.3);
+  var BUBBLE_DWELL = 300;
+  var BUBBLE_CELL = BUBBLE_R;
+  function dist2(a, b) {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return dx * dx + dy * dy;
+  }
+  var Proximity = class {
+    // pair key "a|b" -> when the pair first came close, for the dwell
+    since = /* @__PURE__ */ new Map();
+    // pair key -> bubble is open now
+    open = /* @__PURE__ */ new Set();
+    near = /* @__PURE__ */ new Set();
+    // reset forgets every pair, for a leave or a room change.
+    reset() {
+      this.since.clear();
+      this.open.clear();
+      this.near.clear();
+    }
+    isNear(id) {
+      return this.near.has(id);
+    }
+    nearIds() {
+      return [...this.near];
+    }
+    // build regroups every self id and its peers. `now` is the page clock of
+    // this tick, so the dwell is measured on one clock and not on a remote ts.
+    build(selfId, points, now) {
+      const buckets = /* @__PURE__ */ new Map();
+      const put = (id, p) => {
+        const key = Math.floor(p.x / BUBBLE_CELL) + "," + Math.floor(p.y / BUBBLE_CELL);
+        const list = buckets.get(key);
+        if (list) list.push(id);
+        else buckets.set(key, [id]);
+      };
+      const mine = points.get(selfId);
+      if (!mine) {
+        for (const id of this.near) this.since.delete(this.pair(selfId, id));
+        this.near.clear();
+        return [];
+      }
+      for (const [id, p] of points) put(id, p);
+      const near = /* @__PURE__ */ new Set();
+      for (const id of sweep(buckets, mine, selfId)) {
+        const p = points.get(id);
+        if (!p) continue;
+        const d2 = dist2(mine, p);
+        const key = this.pair(selfId, id);
+        if (d2 <= BUBBLE_R * BUBBLE_R) {
+          if (this.open.has(key)) {
+            near.add(id);
+            continue;
+          }
+          const at = this.since.get(key);
+          if (at === void 0) {
+            this.since.set(key, now);
+          } else if (now - at >= BUBBLE_DWELL) {
+            this.open.add(key);
+            this.since.delete(key);
+            near.add(id);
+          }
+          continue;
+        }
+        if (d2 > BUBBLE_LEAVE * BUBBLE_LEAVE) {
+          this.open.delete(key);
+          this.since.delete(key);
+          continue;
+        }
+        if (this.open.has(key)) near.add(id);
+      }
+      for (const key of [...this.open]) {
+        const other = key.startsWith(selfId + "|") ? key.slice(selfId.length + 1) : "";
+        if (!other || !points.has(other)) {
+          this.open.delete(key);
+          this.since.delete(key);
+        }
+      }
+      this.near = near;
+      return [...near];
+    }
+    pair(a, b) {
+      return a + "|" + b;
+    }
+  };
+  function sweep(buckets, mine, selfId) {
+    const cx = Math.floor(mine.x / BUBBLE_CELL);
+    const cy = Math.floor(mine.y / BUBBLE_CELL);
+    const out = [];
+    for (let ix = cx - 1; ix <= cx + 1; ix++) {
+      for (let iy = cy - 1; iy <= cy + 1; iy++) {
+        const list = buckets.get(ix + "," + iy);
+        if (!list) continue;
+        for (const id of list) if (id !== selfId) out.push(id);
+      }
+    }
+    return out;
+  }
+
+  // src/roomworld.ts
+  var view = null;
+  var walker = null;
+  var proximity = null;
+  var watch = null;
+  var sheet = null;
+  var raf = 0;
+  var lastFrame = 0;
+  var generation = 0;
+  var worldStats = { loaded: 0, sent: 0, recv: 0, frames: 0, near: 0, zones: [] };
+  function isWorld() {
+    return load("world") !== "0";
+  }
+  function worldNode() {
+    let box = document.getElementById("world-view");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "world-view";
+      box.className = "world-view";
+      box.hidden = true;
+      const canvas2 = document.createElement("canvas");
+      canvas2.id = "world-canvas";
+      canvas2.className = "world-canvas";
+      const note2 = document.createElement("p");
+      note2.id = "world-note";
+      note2.className = "world-note";
+      note2.hidden = true;
+      box.append(canvas2, note2);
+      $("grid").prepend(box);
+    }
+    const canvas = box.querySelector("canvas");
+    const note = box.querySelector(".world-note");
+    return { box, canvas, note };
+  }
+  async function worldEnter(room) {
+    const gen = ++generation;
+    if (!isWorld()) {
+      worldSet(false);
+      return;
+    }
+    const { box, canvas, note } = worldNode();
+    box.hidden = false;
+    note.hidden = true;
+    try {
+      const world = await loadWorld(room);
+      if (gen !== generation || state.leaving) return;
+      sheet = await loadCharacter();
+      if (gen !== generation || state.leaving) return;
+      if (view) view.destroy();
+      view = new WorldView(canvas, world);
+      const want = startZoneFromHash();
+      const start = world.startPoint(want);
+      walker = new Walker(world, start);
+      proximity = new Proximity();
+      const grid = new ZoneGrid(world.zones);
+      watch = new ZoneWatch(grid);
+      view.avatars.set("self", {
+        id: "self",
+        name: state.name || "you",
+        x: walker.x,
+        y: walker.y,
+        dir: walker.dir,
+        moving: false,
+        sheet,
+        local: true,
+        walker
+      });
+      worldStats.loaded++;
+      worldStats.frames = 0;
+      lastFrame = 0;
+      worldSet(true);
+      note.hidden = false;
+      note.textContent = "walk with the arrow keys or w a s d; the call grid is one click away";
+      layoutStage();
+      startLoop();
+    } catch (err) {
+      if (gen !== generation) return;
+      worldSet(false);
+      const why = err && err.message ? err.message : String(err);
+      note.hidden = false;
+      note.textContent = "no world for this room (" + why + "), the call grid is shown instead";
+    }
+  }
+  function worldLeave() {
+    generation++;
+    stopLoop();
+    if (view) view.destroy();
+    view = null;
+    walker = null;
+    proximity = null;
+    watch = null;
+    posReset();
+    sheet = null;
+    const box = document.getElementById("world-view");
+    if (box) box.hidden = true;
+  }
+  function worldSet(on) {
+    const { box } = worldNode();
+    const grid = $("stage-main");
+    box.hidden = !on;
+    grid.hidden = on || grid.children.length === 0;
+    if (view && on) view.mark();
+    layoutStage();
+    if (!on) updateCount();
+  }
+  function worldToggle() {
+    const on = !isWorld();
+    store("world", on ? 1 : 0);
+    const { box } = worldNode();
+    if (on && !view) {
+      worldEnter(state.room).catch(() => {
+      });
+      return;
+    }
+    box.hidden = !on;
+    $("stage-main").hidden = on;
+    if (view) view.mark();
+    layoutStage();
+  }
+  function startZoneFromHash() {
+    const hash = String(location.hash || "").replace(/^#/, "");
+    const found = /(?:^|&)start=([a-z0-9-]{1,32})(?:&|$)/.exec(hash);
+    return found ? found[1] : null;
+  }
+  function startLoop() {
+    stopLoop();
+    const run = () => {
+      if (!view || !walker || state.leaving) return;
+      const now = performance.now();
+      if (now - lastFrame >= POSITION_DELAY) {
+        lastFrame = now;
+        step(now);
+      }
+      raf = requestAnimationFrame(run);
+    };
+    raf = requestAnimationFrame(run);
+  }
+  function stopLoop() {
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+  }
+  function step(now) {
+    if (!view || !walker || !proximity) return;
+    const local = view.local;
+    if (local && walker) {
+      local.x = walker.x;
+      local.y = walker.y;
+      local.dir = walker.dir;
+      local.moving = walker.moving;
+    }
+    if (watch) watch.update(walker.x, walker.y);
+    const zoneIds = watch ? watch.ids() : [];
+    if (worldStats.zones.join(",") !== zoneIds.join(",")) worldStats.zones = zoneIds;
+    const frame = posFrame(walker.x, walker.y, walker.dir, walker.moving, zoneIds);
+    const peers = [...state.peers.values()];
+    posSend(peers, frame);
+    worldStats.sent++;
+    const points = remotePoints(now);
+    if (state.self) points.set(state.self, { x: walker.x, y: walker.y });
+    const near = proximity.build(state.self || "self", points, now);
+    worldStats.near = near.length;
+    view.paintNear(near);
+    syncPeers();
+    view.mark();
+  }
+  function worldOnPos(peer) {
+    if (!view || !peer) return;
+    worldStats.recv++;
+    view.mark();
+  }
+  function syncPeers() {
+    if (!view) return;
+    const avatars = view.avatars;
+    const now = performance.now();
+    const points = remotePoints(now);
+    for (const [id, peer] of state.peers) {
+      const at = points.get(id);
+      let one = avatars.get(id);
+      if (!at) {
+        if (one) avatars.delete(id);
+        continue;
+      }
+      if (!one) {
+        one = {
+          id,
+          name: peer.name || id.slice(0, 6),
+          x: at.x,
+          y: at.y,
+          dir: remoteDir(id),
+          moving: remoteMoving(id),
+          sheet: sheet || avatars.get("self").sheet
+        };
+        avatars.set(id, one);
+      } else {
+        one.x = at.x;
+        one.y = at.y;
+        one.dir = remoteDir(id);
+        one.moving = remoteMoving(id);
+        one.name = peer.name || one.name;
+      }
+    }
+    for (const id of [...avatars.keys()]) {
+      if (id === "self") continue;
+      if (!state.peers.has(id) || !points.has(id)) {
+        avatars.delete(id);
+        posForget(id);
+      }
+    }
+    view.mark();
+  }
+  function worldDrop(peerId) {
+    if (view) view.avatars.delete(peerId);
+    posForget(peerId);
+  }
+  function worldHook() {
+    return {
+      stats: () => ({ ...worldStats, frames: view ? view.frames : 0 }),
+      pos: () => view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y), dir: view.local.dir, moving: !!view.local.moving } : null,
+      map: () => {
+        if (!view) return null;
+        const world = view.world;
+        return { room: world.room, widthPx: world.widthPx, heightPx: world.heightPx, zones: world.zones.length, avatars: view.avatars.size };
+      },
+      // walk holds one key for a number of milliseconds, the way a person holds
+      // it, so the walker takes real steps through real collision.
+      walk: async (key, ms = 400) => {
+        const held = view ? view.keys : null;
+        if (!held || !walker) return null;
+        held.add(key);
+        view?.mark();
+        await new Promise((done) => setTimeout(done, ms));
+        held.delete(key);
+        view?.mark();
+        return view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y) } : null;
+      },
+      near: () => view ? [...view.near] : [],
+      set: (on) => {
+        store("world", on ? 1 : 0);
+        worldSet(on);
+      }
+    };
+  }
+
+  // src/files.ts
+  var FILE_LABEL = "files";
+  var FILE_CHUNK = 16 * 1024;
+  var FILE_BUFFER = 256 * 1024;
+  var FILE_LOW = 64 * 1024;
+  var FILE_OPEN_WAIT = 15e3;
+  var FILE_DONE = /* @__PURE__ */ new Set(["done", "refused", "cancelled", "gone"]);
+  function cleanFileName(raw) {
+    return String(raw || "").replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 64);
+  }
+  function fileID() {
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    let out = "";
+    for (const b of bytes) out += b.toString(16).padStart(2, "0");
+    return out;
+  }
+  function fileBytes(n) {
+    if (!n) return "0 B";
+    if (n < 1024) return n + " B";
+    const units = ["kB", "MB", "GB"];
+    let value = n / 1024;
+    let i = 0;
+    while (value >= 1024 && i < units.length - 1) {
+      value /= 1024;
+      i++;
+    }
+    return (value >= 10 ? value.toFixed(0) : value.toFixed(1)) + " " + units[i];
+  }
+  function fileRateText(kbs) {
+    if (!kbs || !isFinite(kbs) || kbs <= 0) return "";
+    return (kbs >= 10 ? Math.round(kbs) : kbs.toFixed(1)) + " kB/s";
+  }
+  function fileMarkRate(o, bytes, now) {
+    if (!o.rateT) {
+      o.rateT = now;
+      o.rateB = bytes;
+      const secs = (now - (o.rateAt || now)) / 1e3;
+      o.rate = secs > 0.05 ? bytes / 1024 / secs : 0;
+      return;
+    }
+    const dt = now - o.rateT;
+    if (dt < 500) return;
+    o.rate = (bytes - o.rateB) / 1024 / (dt / 1e3);
+    o.rateT = now;
+    o.rateB = bytes;
+  }
+  function fileAverageRate(bytes, start, now) {
+    if (!start || !bytes) return "";
+    const secs = (now - start) / 1e3;
+    if (secs < 0.2) return "";
+    return fileRateText(bytes / 1024 / secs);
+  }
+  function fileButton(label, fn) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      fn(button);
+    });
+    return button;
+  }
+  function addFileRow(who, name, size) {
+    const log = $("chat-log");
+    if (!log) return null;
+    const li = document.createElement("li");
+    li.className = "chat-file";
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = chatTime();
+    const speaker = document.createElement("span");
+    speaker.className = "who";
+    speaker.textContent = (who || "guest") + ":";
+    const head = document.createElement("span");
+    head.className = "file-head";
+    const label = document.createElement("span");
+    label.className = "file-name";
+    label.textContent = name;
+    label.title = name;
+    const labelSize = document.createElement("span");
+    labelSize.className = "file-size";
+    labelSize.textContent = fileBytes(size);
+    head.append(label, labelSize);
+    const bar = document.createElement("span");
+    bar.className = "file-bar";
+    bar.hidden = true;
+    const fill = document.createElement("span");
+    fill.className = "file-fill";
+    bar.appendChild(fill);
+    const status = document.createElement("span");
+    status.className = "file-status";
+    const acts = document.createElement("span");
+    acts.className = "file-acts";
+    li.append(when, speaker, head, bar, status, acts);
+    log.appendChild(li);
+    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+    return { li, bar, fill, status, acts };
+  }
+  function fileSetBar(el2, show, frac) {
+    if (!el2) return;
+    el2.bar.hidden = !show;
+    el2.fill.style.width = clamp(Math.round(frac * 100), 0, 100) + "%";
+  }
+  function fileOffer(file) {
+    if (!file || !state.self || state.leaving || state.waiting) return;
+    const size = Number(file.size);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      say("that file cannot be read");
+      return;
+    }
+    const name = cleanFileName(file.name) || "file";
+    const type = String(file.type || "").slice(0, 64);
+    const x = fileID();
+    const out = { x, file, name, size, type, peers: /* @__PURE__ */ new Map(), cancelled: false, el: null };
+    for (const peer of state.peers.values()) {
+      if (!peer.keys || peer.waiting) continue;
+      out.peers.set(peer.id, { peer, status: "offered", sent: 0, dead: false, wake: null });
+      sealedSend(peer, { k: "file", a: "offer", x, n: name, z: size, m: type });
+    }
+    if (!out.peers.size) {
+      addChatLine(state.name, "no sealed peer for " + name, Date.now());
+      return;
+    }
+    canary(name);
+    state.fileOffers++;
+    state.files.set(x, out);
+    out.el = addFileRow(state.name, name, size);
+    if (out.el) out.el.acts.append(fileButton("cancel", () => fileCancelOut(out)));
+    filePaintOut(out);
+  }
+  function fileOnMessage(peer, msg) {
+    switch (msg.a) {
+      case "offer":
+        fileOnOffer(peer, msg);
+        break;
+      case "accept":
+        fileOnAccept(peer, msg);
+        break;
+      case "refuse":
+        fileOnRefuse(peer, msg);
+        break;
+      case "cancel":
+        fileOnCancel(peer, msg);
+        break;
+      case "done":
+        fileOnDone(peer, msg);
+        break;
+      default:
+        break;
+    }
+  }
+  function fileOnOffer(peer, msg) {
+    const x = String(msg.x || "").slice(0, 32);
+    const name = cleanFileName(msg.n);
+    const size = Number(msg.z);
+    const type = String(msg.m || "").slice(0, 64);
+    if (!x || !name || !Number.isSafeInteger(size) || size < 0) return;
+    const key = peer.id + "|" + x;
+    if (state.filesIn.has(key)) return;
+    const rec = {
+      key,
+      x,
+      peerId: peer.id,
+      name,
+      size,
+      type,
+      status: "offered",
+      chunks: [],
+      got: 0,
+      expect: 0,
+      el: null,
+      url: "",
+      rateT: 0,
+      rateB: 0,
+      rate: 0,
+      rateAt: 0
+    };
+    state.filesIn.set(key, rec);
+    canary(name);
+    rec.el = addFileRow(peer.name || shortPeer(peer.id), name, size);
+    if (rec.el) {
+      rec.el.acts.append(
+        fileButton("accept", (button) => fileAccept(rec, button)),
+        fileButton("refuse", () => fileRefuse(rec))
+      );
+    }
+    filePaintIn(rec);
+  }
+  function fileDiskWanted() {
+    const pick = window.showSaveFilePicker;
+    return typeof pick === "function" && !window.e2eNoPicker;
+  }
+  async function fileDiskOpen(rec) {
+    if (!fileDiskWanted()) return false;
+    let handle2;
+    try {
+      handle2 = await window.showSaveFilePicker({ suggestedName: rec.name });
+    } catch (err) {
+      if (err && err.name === "AbortError") return null;
+      return false;
+    }
+    try {
+      rec.writer = await handle2.createWritable();
+      rec.disk = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function fileDiskWrite(rec, bytes) {
+    const writer = rec.writer;
+    if (!writer) return;
+    rec.writes = (rec.writes || Promise.resolve()).then(() => writer.write(bytes)).catch(() => {
+      fileDiskAbort(rec);
+      const peer = state.peers.get(rec.peerId);
+      if (peer && peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
+      fileFinishIn(rec, "cancelled");
+    });
+  }
+  function fileDiskAbort(rec) {
+    const writer = rec.writer;
+    rec.writer = null;
+    rec.chunks = [];
+    if (!writer) return;
+    const pending = rec.writes || Promise.resolve();
+    rec.writes = pending.then(() => writer.abort()).catch(() => {
+    });
+  }
+  function fileAccept(rec, button) {
+    const peer = state.peers.get(rec.peerId);
+    if (!peer || !peer.keys) {
+      fileFinishIn(rec, "gone");
+      return;
+    }
+    return fileDiskOpen(rec).then((ok) => {
+      if (ok === null) {
+        if (button) button.disabled = false;
+        return;
+      }
+      fileAcceptGo(rec, peer, ok);
+    });
+  }
+  function fileAcceptGo(rec, peer, disk) {
+    if (disk === null || !state.peers.has(peer.id) || !peer.keys) return;
+    rec.status = "receiving";
+    rec.got = 0;
+    rec.expect = 0;
+    rec.chunks = [];
+    rec.rateT = 0;
+    rec.rateB = 0;
+    rec.rate = 0;
+    rec.rateAt = performance.now();
+    fileArmIn(rec);
+    if (rec.el) {
+      rec.el.acts.replaceChildren(fileButton("cancel", () => fileCancelIn(rec)));
+    }
+    sealedSend(peer, { k: "file", a: "accept", x: rec.x });
+    filePaintIn(rec);
+  }
+  function fileRefuse(rec) {
+    const peer = state.peers.get(rec.peerId);
+    if (peer && peer.keys) sealedSend(peer, { k: "file", a: "refuse", x: rec.x });
+    fileFinishIn(rec, "refused");
+  }
+  function fileCancelIn(rec) {
+    const peer = state.peers.get(rec.peerId);
+    if (peer && peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
+    state.fileCancelled++;
+    fileFinishIn(rec, "cancelled");
+  }
+  function fileCancelOut(out, why = "") {
+    if (!out || out.cancelled) return;
+    out.cancelled = true;
+    state.fileCancelled++;
+    for (const st of out.peers.values()) {
+      if (st.status === "done" || st.status === "refused" || st.status === "gone") continue;
+      st.status = "cancelled";
+      fileStop(st);
+      if (st.peer.keys) sealedSend(st.peer, { k: "file", a: "cancel", x: out.x, y: why || "" });
+    }
+    out.file = null;
+    filePaintOut(out);
+    fileSettle(out);
+  }
+  function fileCancelPeer(out, st, why) {
+    if (st.status === "done" || st.status === "refused" || st.status === "gone") return;
+    st.status = "cancelled";
+    fileStop(st);
+    if (st.peer.keys) sealedSend(st.peer, { k: "file", a: "cancel", x: out.x, y: why || "" });
+    filePaintOut(out);
+    fileSettle(out);
+  }
+  function fileOnAccept(peer, msg) {
+    const out = state.files.get(String(msg.x || ""));
+    if (!out || out.cancelled) {
+      if (peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: String(msg.x || "") });
+      return;
+    }
+    const st = out.peers.get(peer.id);
+    if (!st || st.status !== "offered") return;
+    st.status = "sending";
+    st.rateAt = performance.now();
+    filePaintOut(out);
+    filePump(out, st).catch(() => fileCancelPeer(out, st, "the transfer failed"));
+  }
+  function fileOnRefuse(peer, msg) {
+    const out = state.files.get(String(msg.x || ""));
+    if (!out || out.cancelled) return;
+    const st = out.peers.get(peer.id);
+    if (!st || st.status === "refused") return;
+    st.status = "refused";
+    fileStop(st);
+    state.fileRefused++;
+    filePaintOut(out);
+    fileSettle(out);
+  }
+  function fileOnCancel(peer, msg) {
+    const x = String(msg.x || "");
+    const out = state.files.get(x);
+    if (out) {
+      const st = out.peers.get(peer.id);
+      if (st && st.status !== "done" && st.status !== "refused" && st.status !== "cancelled" && st.status !== "gone") {
+        st.status = "cancelled";
+        fileStop(st);
+        state.fileCancelled++;
+        filePaintOut(out);
+        fileSettle(out);
+      }
+      return;
+    }
+    const rec = state.filesIn.get(peer.id + "|" + x);
+    if (!rec || rec.status === "done" || rec.status === "refused" || rec.status === "cancelled")
+      return;
+    rec.status = "cancelled";
+    fileFinishIn(rec, "cancelled");
+  }
+  function fileOnDone(peer, msg) {
+    const rec = state.filesIn.get(peer.id + "|" + String(msg.x || ""));
+    if (!rec || rec.status !== "receiving") return;
+    if (rec.got !== rec.size) return;
+    fileFinishIn(rec, "done");
+  }
+  function fileOnFrame(peer, raw) {
+    if (typeof raw !== "string") return;
+    let frame;
+    try {
+      frame = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!frame || typeof frame !== "object") return;
+    if (frame.t !== void 0) {
+      if (frame.t === "pos" && posOnMessage(peer, frame)) worldOnPos(peer);
+      return;
+    }
+    fileOnChunk(peer, frame);
+  }
+  function fileOnChunk(peer, frame) {
+    if (!frame || typeof frame.b !== "string") return;
+    const rec = state.filesIn.get(peer.id + "|" + String(frame.x || ""));
+    if (!rec || rec.status !== "receiving" || !peer.keys) return;
+    const q = Number(frame.q);
+    if (!Number.isSafeInteger(q) || q !== rec.expect) {
+      state.replayDrops++;
+      return;
+    }
+    const out = pqCall((json) => pqModule().open(json), {
+      key: b64e(peer.keys.recvChat),
+      aad: b64e(fileAAD(peer.id, peer.id, rec.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+      b: frame.b
+    });
+    if (!out || out.error) {
+      state.replayDrops++;
+      return;
+    }
+    const bytes = b64d(out.pt);
+    if (rec.got + bytes.length > rec.size) {
+      if (peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
+      fileFinishIn(rec, "cancelled");
+      return;
+    }
+    if (rec.writer) fileDiskWrite(rec, bytes);
+    else rec.chunks.push(bytes);
+    rec.got += bytes.length;
+    rec.expect = q + 1;
+    state.fileChunksRecv++;
+    fileMarkRate(rec, rec.got, performance.now());
+    filePaintIn(rec);
+    fileArmIn(rec);
+    if (rec.got === rec.size) fileFinishIn(rec, "done");
+  }
+  function fileArmIn(rec) {
+    if (rec.timer) clearTimeout(rec.timer);
+    rec.timer = setTimeout(() => {
+      rec.timer = 0;
+      if (rec.status !== "receiving") return;
+      const peer = state.peers.get(rec.peerId);
+      if (peer && peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
+      fileFinishIn(rec, "cancelled");
+    }, 2e4);
+  }
+  async function filePump(out, st) {
+    const peer = st.peer;
+    const dc = await fileWaitOpen(peer, st);
+    if (!dc || st.dead || out.cancelled || !out.file) return;
+    const total = Math.ceil(out.size / FILE_CHUNK);
+    for (let q = 0; q < total; q++) {
+      if (st.dead || out.cancelled || !out.file) return;
+      if (!state.peers.has(peer.id) || !peer.keys) {
+        fileStop(st);
+        return;
+      }
+      let buf;
+      try {
+        buf = new Uint8Array(
+          await out.file.slice(q * FILE_CHUNK, (q + 1) * FILE_CHUNK).arrayBuffer()
+        );
+      } catch {
+        fileCancelPeer(out, st, "the file could not be read");
+        return;
+      }
+      if (st.dead || out.cancelled) return;
+      const sealed = pqCall((json) => pqModule().seal(json), {
+        key: b64e(peer.keys.sendChat),
+        aad: b64e(fileAAD(peer.id, state.self, out.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+        pt: b64e(buf)
+      });
+      if (!sealed || !sealed.b) {
+        fileCancelPeer(out, st, "a chunk could not be sealed");
+        return;
+      }
+      const ready = await fileSpace(dc, st);
+      if (!ready || st.dead || out.cancelled) return;
+      try {
+        dc.send(JSON.stringify({ x: out.x, q, b: sealed.b }));
+      } catch {
+        fileCancelPeer(out, st, "the file channel closed");
+        return;
+      }
+      st.sent = q + 1;
+      state.fileChunksSent++;
+      fileMarkRate(st, st.sent * FILE_CHUNK, performance.now());
+      filePaintOut(out);
+    }
+    if (st.dead || out.cancelled) return;
+    st.status = "done";
+    if (peer.keys) sealedSend(peer, { k: "file", a: "done", x: out.x });
+    filePaintOut(out);
+    fileSettle(out);
+  }
+  function fileWaitOpen(peer, st) {
+    return new Promise((resolve) => {
+      let timer = 0;
+      let dc = null;
+      const done = (value) => {
+        if (st.wake !== wake) return;
+        st.wake = null;
+        clearTimeout(timer);
+        if (dc) {
+          dc.removeEventListener("open", onOpen);
+          dc.removeEventListener("close", onClose);
+        }
+        resolve(value);
+      };
+      const wake = () => done(null);
+      const onOpen = () => done(dc);
+      const onClose = () => done(null);
+      const attach = (channel) => {
+        dc = channel;
+        if (!dc) return done(null);
+        if (dc.readyState === "open") return done(dc);
+        if (dc.readyState !== "connecting") return done(null);
+        dc.addEventListener("open", onOpen);
+        dc.addEventListener("close", onClose);
+      };
+      st.wake = wake;
+      if (peer.dc) attach(peer.dc);
+      else if (peer.dcPromise) {
+        peer.dcPromise.then((channel) => {
+          if (st.wake === wake) attach(channel);
+        });
+      }
+      timer = setTimeout(wake, FILE_OPEN_WAIT);
+    });
+  }
+  function fileSpace(dc, st) {
+    if (dc.readyState !== "open") return Promise.resolve(false);
+    if (dc.bufferedAmount <= FILE_BUFFER) return Promise.resolve(true);
+    dc.bufferedAmountLowThreshold = FILE_LOW;
+    return new Promise((resolve) => {
+      let timer = 0;
+      const done = (value) => {
+        if (st.wake !== wake) return;
+        st.wake = null;
+        clearTimeout(timer);
+        dc.removeEventListener("bufferedamountlow", onLow);
+        resolve(value);
+      };
+      const wake = () => done(false);
+      const onLow = () => {
+        if (dc.bufferedAmount <= FILE_BUFFER) done(true);
+      };
+      st.wake = wake;
+      dc.addEventListener("bufferedamountlow", onLow);
+      timer = setTimeout(
+        () => done(dc.readyState === "open" && dc.bufferedAmount <= FILE_BUFFER),
+        2e3
+      );
+    });
+  }
+  function fileBindChannel(peer, dc) {
+    if (!dc || peer.dc === dc) return;
+    if (peer.dc) {
+      peer.dc.onmessage = null;
+      peer.dc.onclose = null;
+      peer.dc.onerror = null;
+    }
+    peer.dc = dc;
+    dc.onmessage = (event) => fileOnFrame(peer, typeof event.data === "string" ? event.data : "");
+    dc.onclose = () => {
+      if (peer.dc !== dc) return;
+      peer.dc = null;
+      fileChannelClosed(peer);
+    };
+    dc.onerror = () => {
+    };
+    if (peer.dcResolve) {
+      const resolve = peer.dcResolve;
+      peer.dcResolve = null;
+      peer.dcPromise = Promise.resolve(dc);
+      resolve(dc);
+    }
+  }
+  function fileOutGone(id) {
+    for (const out of state.files.values()) {
+      const st = out.peers.get(id);
+      if (!st || FILE_DONE.has(st.status)) continue;
+      st.status = "gone";
+      fileStop(st);
+      if (!out.cancelled) filePaintOut(out);
+      fileSettle(out);
+    }
+  }
+  function fileChannelClosed(peer) {
+    fileOutGone(peer.id);
+    for (const rec of state.filesIn.values()) {
+      if (rec.peerId === peer.id && rec.status === "receiving") fileFinishIn(rec, "cancelled");
+    }
+  }
+  function fileDropPeer(peer) {
+    const dc = peer.dc;
+    peer.dc = null;
+    if (dc) {
+      dc.onmessage = null;
+      dc.onopen = null;
+      dc.onclose = null;
+      dc.onerror = null;
+    }
+    if (peer.dcResolve) {
+      const resolve = peer.dcResolve;
+      peer.dcResolve = null;
+      peer.dcPromise = Promise.resolve(null);
+      resolve(null);
+    }
+    filePeerGone(peer.id);
+  }
+  function filePeerGone(id) {
+    fileOutGone(id);
+    for (const rec of state.filesIn.values()) {
+      if (rec.peerId === id && !FILE_DONE.has(rec.status)) fileFinishIn(rec, "gone");
+    }
+  }
+  function fileStop(st) {
+    st.dead = true;
+    if (st.wake) st.wake();
+  }
+  function fileInText(rec) {
+    if (rec.status === "offered") return "waiting for you";
+    if (rec.status === "receiving") {
+      const pct = rec.size ? Math.round(rec.got / rec.size * 100) : 0;
+      const rate2 = fileRateText(rec.rate);
+      return "receiving " + pct + " percent" + (rate2 ? ", " + rate2 : "");
+    }
+    if (rec.status === "done") {
+      return rec.disk ? "saved to disk" + (rec.avg ? ", " + rec.avg : "") : "ready, click save" + (rec.avg ? ", " + rec.avg : "");
+    }
+    if (rec.status === "refused") return "refused";
+    if (rec.status === "cancelled") return "cancelled";
+    if (rec.status === "gone") return "the sender left";
+    return "";
+  }
+  function filePaintIn(rec) {
+    if (!rec.el) return;
+    const pct = rec.size ? rec.got / rec.size : 0;
+    fileSetBar(rec.el, rec.status === "receiving", pct);
+    rec.el.status.textContent = fileInText(rec);
+  }
+  function fileFinishDisk(rec) {
+    const writer = rec.writer;
+    rec.writer = null;
+    rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
+    if (rec.el) rec.el.status.textContent = "saving to disk" + (rec.avg ? ", " + rec.avg : "");
+    const pending = rec.writes || Promise.resolve();
+    pending.then(() => writer.close()).then(() => {
+      state.fileRecv++;
+      state.filesIn.delete(rec.key);
+      if (rec.el) {
+        rec.el.acts.replaceChildren();
+        rec.el.status.textContent = fileInText(rec);
+      }
+    }).catch(() => {
+      state.filesIn.delete(rec.key);
+      if (rec.el) {
+        rec.el.acts.replaceChildren();
+        rec.el.status.textContent = "the disk write failed";
+      }
+    });
+  }
+  function fileFinishIn(rec, status) {
+    if (rec.timer) {
+      clearTimeout(rec.timer);
+      rec.timer = 0;
+    }
+    if (status === "done" && rec.got !== rec.size) status = "cancelled";
+    rec.status = status;
+    if (rec.el) rec.el.bar.hidden = true;
+    if (status === "done" && rec.writer) {
+      fileFinishDisk(rec);
+      return;
+    }
+    if (status === "done") {
+      rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
+      const blob = new Blob(rec.chunks, { type: rec.type || "application/octet-stream" });
+      rec.chunks = [];
+      if (rec.url) {
+        URL.revokeObjectURL(rec.url);
+        state.fileLinks.delete(rec.url);
+      }
+      rec.url = URL.createObjectURL(blob);
+      state.fileLinks.add(rec.url);
+      state.fileRecv++;
+      if (rec.el) {
+        const link = document.createElement("a");
+        link.className = "file-save";
+        link.href = rec.url;
+        link.download = rec.name;
+        link.textContent = "save " + fileBytes(rec.size);
+        rec.el.acts.replaceChildren(link);
+        rec.el.status.textContent = "ready, click save" + (rec.avg ? ", " + rec.avg : "");
+      }
+      state.filesIn.delete(rec.key);
+      return;
+    }
+    fileDiskAbort(rec);
+    if (rec.url) {
+      URL.revokeObjectURL(rec.url);
+      state.fileLinks.delete(rec.url);
+      rec.url = "";
+    }
+    if (rec.el) {
+      rec.el.acts.replaceChildren();
+      rec.el.status.textContent = fileInText(rec);
+    }
+    state.filesIn.delete(rec.key);
+  }
+  function filePaintOut(out) {
+    if (!out.el) return;
+    const list = [...out.peers.values()];
+    const accepted = list.filter((s) => s.status === "sending" || s.status === "done");
+    const refused = list.filter((s) => s.status === "refused");
+    const gone = list.filter((s) => s.status === "gone");
+    const stopped = list.filter((s) => s.status === "cancelled");
+    const open = list.some((s) => s.status === "offered" || s.status === "sending");
+    const bytes = accepted.reduce((n, s) => n + Math.min(out.size, s.sent * FILE_CHUNK), 0);
+    const total = accepted.length * Math.max(1, out.size);
+    const allDone = accepted.length > 0 && accepted.every((s) => s.status === "done");
+    const frac = out.size === 0 ? allDone ? 1 : 0 : total ? bytes / total : 0;
+    fileSetBar(out.el, !out.cancelled && accepted.length > 0 && !allDone, frac);
+    if (out.cancelled) {
+      out.el.acts.replaceChildren();
+      out.el.status.textContent = "cancelled";
+      return;
+    }
+    const words = ["accepted " + accepted.length + " of " + list.length];
+    if (accepted.length) {
+      words.push(
+        accepted.map((s) => {
+          const pct = out.size ? Math.round(Math.min(out.size, s.sent * FILE_CHUNK) / Math.max(1, out.size) * 100) : s.status === "done" ? 100 : 0;
+          const sent = Math.min(out.size, s.sent * FILE_CHUNK);
+          const rate2 = s.status === "done" ? fileAverageRate(sent, s.rateAt, performance.now()) : fileRateText(s.rate);
+          return s.peer.name + " " + (s.status === "done" ? "done" : pct + " percent") + (rate2 ? ", " + rate2 : "");
+        }).join(", ")
+      );
+    }
+    if (refused.length) words.push("refused " + refused.map((s) => s.peer.name).join(", "));
+    if (stopped.length) words.push("cancelled " + stopped.map((s) => s.peer.name).join(", "));
+    if (gone.length) words.push("left " + gone.map((s) => s.peer.name).join(", "));
+    out.el.status.textContent = words.join(" | ");
+    if (!open) out.el.acts.replaceChildren();
+  }
+  function fileSettle(out) {
+    const list = [...out.peers.values()];
+    if (!list.length) return;
+    const open = list.some((s) => s.status === "offered" || s.status === "sending");
+    if (open) return;
+    out.file = null;
+    state.files.delete(out.x);
+  }
+  function fileClearAll() {
+    for (const out of state.files.values()) {
+      out.cancelled = true;
+      for (const st of out.peers.values()) fileStop(st);
+      out.file = null;
+    }
+    state.files.clear();
+    for (const rec of state.filesIn.values()) {
+      fileDiskAbort(rec);
+      if (rec.url) URL.revokeObjectURL(rec.url);
+      rec.url = "";
+    }
+    state.filesIn.clear();
+    for (const url of state.fileLinks) URL.revokeObjectURL(url);
+    state.fileLinks.clear();
+    state.fileOffers = 0;
+    state.fileRecv = 0;
+    state.fileChunksSent = 0;
+    state.fileChunksRecv = 0;
+    state.fileRefused = 0;
+    state.fileCancelled = 0;
   }
 
   // src/asr.ts
@@ -4929,12 +6400,30 @@
     say(shortPeer(peer.id) + " " + why + "; the link stays closed");
     updatePinCount();
   }
-  function sealedRefusePass(peer) {
-    sealedRefuse(peer, "does not know the room passphrase");
-    if (state.waiting) {
-      setTimeout(() => leave("the room refused the passphrase"), 0);
+  var GAP_RESETS_MAX = 3;
+  function sealedGapReset(peer) {
+    peer.gapResets = (peer.gapResets || 0) + 1;
+    if (peer.gapResets > GAP_RESETS_MAX) {
+      sealedRefuse(peer, "keeps losing sealed frames");
       return;
     }
+    if (peer.pc) {
+      peer.pc.close();
+      peer.pc = null;
+    }
+    sealedRestart(peer, true);
+    say(shortPeer(peer.id) + ": one sealed frame went missing, so the link starts again");
+  }
+  function sealedRefusePass(peer) {
+    if (!state.peers.has(peer.id)) return;
+    if (peer.pc) {
+      peer.pc.close();
+      peer.pc = null;
+    }
+    wipeKeys(peer);
+    sealedSetE2E(peer, "failed");
+    say(shortPeer(peer.id) + " does not know the room passphrase; the link stays closed");
+    if (state.waiting) return;
     if (!isAdmin(state.self) || isAdmin(peer.id)) return;
     sealedKick(peer.id);
   }
@@ -4964,6 +6453,8 @@
     peer.appHeld = [];
     peer.pass = null;
     peer.passEarly = [];
+    if (peer.passTimer) clearTimeout(peer.passTimer);
+    peer.passTimer = null;
     peer.ctlPending = [];
     fileDropPeer(peer);
     if (peer.pc) {
@@ -4982,9 +6473,15 @@
       return;
     }
     if (!peer.keys && !peer.keyPromise && String(state.self) < String(peer.id)) {
+      peer.sentPub = true;
       sealedInitiate(peer).catch(() => sealedRefuse(peer, "handshake failed"));
     }
     sealedDrainCtl(peer);
+  }
+  function startPassNow(peer) {
+    if (!peer.keys || peer.keyPromise || peer.pass || peer.passSpent) return false;
+    if (state.passTries >= PASS_PAGE_TRIES) return false;
+    return passMayStart(Date.now());
   }
   function sealedProved(peer) {
     peer.proven = true;
@@ -5174,7 +6671,7 @@
     Promise.resolve(peer.keyPromise).then((ok) => {
       if (!ok || !state.peers.has(peer.id) || state.leaving) return;
       sealedFlushApp(peer);
-      sealedStartPass(peer);
+      if (startPassNow(peer)) sealedOfferPass(peer);
     });
   }
   function sealedFlushApp(peer) {
@@ -5182,11 +6679,32 @@
     peer.appPending = [];
     for (const msg of held) sealedHandleOpaque(peer.id, encOpaque(msg));
   }
-  function sealedStartPass(peer) {
+  var PASS_TRIES = 3;
+  var PASS_PAGE_TRIES = 24;
+  var PASS_SPEND_MS = 3e3;
+  function sealedPassBudget(peer) {
+    peer.passTries = (peer.passTries || 0) + 1;
+    state.passTries += 1;
+    if (!peer.pub && !peer.pass) return true;
+    if (peer.passTries <= PASS_TRIES && state.passTries <= PASS_PAGE_TRIES) return true;
+    state.passRefusals += 1;
+    sealedRefuse(peer, "made too many passphrase attempts");
+    return false;
+  }
+  function passMayStart(now) {
+    if (state.passTries >= PASS_PAGE_TRIES) return false;
+    return now - state.passLast >= PASS_SPEND_MS;
+  }
+  function sealedOfferPass(peer) {
     if (!state.w) {
       sealedRefuse(peer, "this page holds no room key");
       return;
     }
+    if (!passMayStart(Date.now())) return;
+    state.passLast = Date.now();
+    sealedStartPass(peer);
+  }
+  function sealedStartPass(peer) {
     const first = String(state.self) < String(peer.id);
     const a = b64e(sealUtf8.encode(first ? state.self : peer.id));
     const b = b64e(sealUtf8.encode(first ? peer.id : state.self));
@@ -5207,15 +6725,22 @@
   function sealedDrainPass(peer) {
     const held = peer.passEarly || [];
     peer.passEarly = [];
-    for (const msg of held) sealedOnPassFrame(peer, msg);
+    for (const msg of held) {
+      if (!peer.pass || peer.pass.done) break;
+      sealedOnPassFrame(peer, msg);
+    }
   }
   function sealedOnPassFrame(peer, msg) {
     if (!peer.pass) {
       (peer.passEarly = peer.passEarly || []).push(msg);
       return;
     }
+    if (peer.pass.done) {
+      return;
+    }
     if (msg.k === "spake") {
       if (peer.pass.finished) return;
+      if (!sealedPassBudget(peer)) return;
       const out2 = pqCall((json) => pqModule().spakefinish(json), { id: peer.pass.id, msg: msg.m });
       if (!out2 || !out2.conf) {
         sealedRefuse(peer, "the passphrase exchange failed");
@@ -5228,6 +6753,7 @@
       sealedPassMaybe(peer);
       return;
     }
+    if (!sealedPassBudget(peer)) return;
     const out = pqCall((json) => pqModule().spakeverify(json), { id: peer.pass.id, tag: msg.c });
     if (!out || !out.ok) {
       sealedRefusePass(peer);
@@ -5252,8 +6778,9 @@
     if (peer.waiting) maybeAdmitHeld(peer);
     const held = peer.appHeld || [];
     peer.appHeld = [];
-    for (const obj of held) sealedDispatchApp(peer, obj);
+    for (const obj of held) if (peer.pass && peer.pass.done) sealedDispatchApp(peer, obj);
     if (!peer.pc && String(state.self) < String(peer.id)) connectPeer(peer.id, true);
+    if (peer.prepareHeld && peer.pc && !peer.tx) preparePeer(peer);
   }
   function sealedHoldCtl(peer, msg) {
     if (peer.ctlPending.length < 8) peer.ctlPending.push(msg);
@@ -5291,7 +6818,8 @@
         sealedOnProof(peer, msg).catch(() => sealedRefuse(peer, "handshake failed"));
         break;
       case "key":
-        if (state.worker) state.worker.postMessage({ type: "keyframe", pair: pairLabel(peer.id) });
+        if (peer.pass && peer.pass.done && peer.keys && state.worker)
+          state.worker.postMessage({ type: "keyframe", pair: pairLabel(peer.id) });
         break;
       case "app": {
         if (!msg.b) return;
@@ -5300,8 +6828,13 @@
           return;
         }
         const seq = Number(msg.q);
-        if (!Number.isSafeInteger(seq) || seq !== peer.seqIn + 1) {
+        if (!Number.isSafeInteger(seq) || seq <= peer.seqIn) {
           state.replayDrops++;
+          return;
+        }
+        if (seq !== peer.seqIn + 1) {
+          state.seqGaps++;
+          sealedGapReset(peer);
           return;
         }
         sealedOnApp(peer, msg.b, seq);
@@ -5314,7 +6847,7 @@
   function sealedOnApp(peer, b, seq) {
     const out = pqCall((json) => pqModule().open(json), {
       key: b64e(peer.keys.recvChat),
-      aad: b64e(chatAAD(peer.id, seq)),
+      aad: b64e(chatAAD(peer.id, seq, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
       b
     });
     if (!out || out.error) return;
@@ -5367,6 +6900,8 @@
       sealedOnGate(peer, obj);
     } else if (obj.k === "claim") {
       sealedOnClaim(peer, obj);
+    } else if (obj.k === "handover") {
+      onHandover(peer);
     } else if (obj.k === "claimq") {
       sealedSendClaim(peer);
     } else if (obj.k === "wait") {
@@ -5400,12 +6935,50 @@
   }
   function adoptGate(v, n) {
     state.gate = { v, n };
-    try {
-      state.w = roomW(v, state.room);
-    } catch {
-      state.w = "";
-    }
+    const gen = ++state.wGen;
+    state.w = "";
+    Promise.resolve(deriveRoomW(v, state.room)).then((w) => {
+      if (state.leaving || state.wGen !== gen) return;
+      state.w = typeof w === "string" ? w : "";
+    }).catch(() => {
+      if (state.wGen === gen) state.w = "";
+    });
     paintGate();
+  }
+  function deriveRoomW(pass, room) {
+    const secret = pass === "" ? "\0open room" : pass;
+    return new Promise((resolve, reject) => {
+      if (typeof Worker !== "function") {
+        try {
+          resolve(roomW(pass, room));
+        } catch (err) {
+          reject(err);
+        }
+        return;
+      }
+      let worker;
+      try {
+        worker = new Worker(scriptURL("/wasm-derive.js"));
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      const done = (w, err) => {
+        try {
+          worker.terminate();
+        } catch {
+        }
+        if (err) reject(err);
+        else resolve(w);
+      };
+      worker.onmessage = (ev) => {
+        const msg = ev.data || {};
+        if (msg.error || typeof msg.w !== "string") done("", new Error(msg.error || "derive"));
+        else done(msg.w, null);
+      };
+      worker.onerror = () => done("", new Error("the room key could not be derived"));
+      worker.postMessage({ pass: secret, salt: room });
+    });
   }
   function paintGate() {
     const note = document.getElementById("gate-note");
@@ -5418,2490 +6991,331 @@
     toSealed({ k: "gate", v, n });
   }
 
-  // src/signaling.ts
-  function dropPeers() {
-    for (const id of [...state.peers.keys()]) dropPeer(id);
+  // src/identity.ts
+  var ID_DB = "stanze-identity";
+  function adoptRoot(room, fp) {
+    if (!room || !fp) return Promise.resolve(false);
+    if (!idDbReady()) return Promise.resolve(true);
+    return idbGet("roots", room).then((rec) => {
+      if (rec && rec.fp === fp) return true;
+      if (rec && rec.fp && rec.fp !== fp) return false;
+      return idbPut("roots", room, { fp, at: Date.now() }).then(() => true);
+    }).catch(() => true);
   }
-  function scheduleReconnect() {
-    if (state.leaving || state.fatal || state.reconnectTimer) return;
-    const delay = state.reconnectDelay;
-    state.reconnectDelay = Math.min(state.reconnectDelay * 2, 1e4);
-    state.reconnectTimer = setTimeout(() => {
-      state.reconnectTimer = null;
-      if (!state.leaving && !state.fatal) connectWS();
-    }, delay);
+  function roomRoot(room) {
+    if (!room) return Promise.resolve("");
+    if (!idDbReady()) return Promise.resolve("");
+    return idbGet("roots", room).then((rec) => rec && typeof rec.fp === "string" ? rec.fp : "").catch(() => "");
   }
-  function cancelReconnect() {
-    if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
-    state.reconnectTimer = null;
-    state.reconnectDelay = 500;
+  function idDbReady() {
+    return typeof indexedDB !== "undefined";
   }
-  function connectWS() {
-    cancelReconnect();
-    if (state.ws) {
-      const old = state.ws;
-      state.ws = null;
-      old.onclose = null;
-      try {
-        old.close();
-      } catch {
-      }
-    }
-    let ws;
-    try {
-      ws = new WebSocket(wsURL());
-    } catch {
-      scheduleReconnect();
-      return;
-    }
-    state.ws = ws;
-    ws.onopen = () => {
-      state.reconnectDelay = 500;
-      stopLost();
-      send({ t: "join", room: state.room });
-    };
-    ws.onmessage = (event) => {
-      auditWire("in", event.data);
-      let msg;
-      try {
-        msg = JSON.parse(event.data);
-      } catch {
+  var ID_CHALLENGE = "stanze identity";
+  var ID_NOTE = {
+    kept: "the identity is kept in this browser",
+    fresh: "the stored identity could not be reopened: a new key for this page",
+    session: "this browser keeps no identity: a new key each load, the device stays unverified"
+  };
+  var idDb = null;
+  function idStore() {
+    if (idDb) return idDb;
+    idDb = new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error("no indexeddb"));
         return;
       }
-      handle(msg);
-    };
-    ws.onclose = () => {
-      if (state.ws === ws) state.ws = null;
-      if (state.leaving) return;
-      dropPeers();
-      if (state.fatal) {
-        leave(state.fatal);
-        return;
-      }
-      say("connection lost, reconnecting");
-      startLost();
-      scheduleReconnect();
-    };
-    ws.onerror = () => {
-    };
-  }
-  function handle(msg) {
-    if (msg.t === "error") {
-      if (msg.code === "unavailable") {
-        state.fatal = "room unavailable or full";
-        leave(state.fatal);
-      } else if (msg.code === "sealed-only") {
-        state.fatal = "this page is out of date; reload it to join";
-        leave(state.fatal);
-      }
-      return;
-    }
-    switch (msg.t) {
-      case "joined": {
-        state.self = msg.self;
-        state.ice = msg.ice || [];
-        if (state.notice === "connection lost, reconnecting") say("");
-        state.auth = { n: -1, admins: [], by: "", sig: "" };
-        setAdmins([]);
-        state.waiting = true;
-        asrProbe();
-        omniProbe();
-        let listed = 0;
-        for (const info of msg.peers || []) {
-          if (!info || !info.id) continue;
-          const peer = ensurePeer(info.id);
-          peer.waiting = false;
-          sealedSendPub(peer);
-          listed++;
+      const req = indexedDB.open(ID_DB, 2);
+      req.onupgradeneeded = () => {
+        for (const name of ["id", "pins", "revoked", "roots"]) {
+          if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
         }
-        if (!listed) sealedSendPub(null);
-        startAuthSeed();
-        markAdmins();
-        paintWaiting();
-        sendState();
-        updateCount();
-        break;
-      }
-      case "peer-joined": {
-        if (!msg.peer || !msg.peer.id) break;
-        const peer = ensurePeer(msg.peer.id);
-        markAdmins();
-        paintWaiting();
-        paintHandQueue();
-        sealedSendPub(peer);
-        playSfx("pop");
-        break;
-      }
-      case "peer-left": {
-        dropPeer(msg.from);
-        state.admins.delete(msg.from);
-        resealOnLeave(msg.from);
-        markAdmins();
-        paintWaiting();
-        playSfx("bonk");
-        break;
-      }
-      case "enc": {
-        if (msg.from && typeof msg.b === "string") sealedHandleOpaque(msg.from, msg.b);
-        break;
-      }
-    }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error("indexeddb refused"));
+    });
+    idDb.catch(() => {
+      idDb = null;
+    });
+    return idDb;
   }
-
-  // src/stats.ts
-  var STATS_MS = 1e3;
-  var STATS_HISTORY = 60;
-  function statsOpen() {
-    const panel = $("stats-panel");
-    return !!panel && !panel.hidden;
+  function idbRequest(store2, mode, fn) {
+    return idStore().then(
+      (db) => new Promise((resolve, reject) => {
+        const req = fn(db.transaction(store2, mode).objectStore(store2));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      })
+    );
   }
-  function startStats() {
-    if (state.statsTimer || !statsOpen()) return;
-    for (const peer of state.peers.values()) {
-      peer.statLast.clear();
-      peer.statLoss = void 0;
-    }
-    state.statHist.length = 0;
-    clearStatsPanel();
-    updateStats();
-    state.statsTimer = setInterval(() => updateStats(), STATS_MS);
+  function idbGet(store2, key) {
+    return idbRequest(store2, "readonly", (s) => s.get(key));
   }
-  function stopStats() {
-    if (state.statsTimer) clearInterval(state.statsTimer);
-    state.statsTimer = null;
+  function idbAll(store2) {
+    return idbRequest(store2, "readonly", (s) => s.getAll());
   }
-  function setStatsOpen(open) {
-    $("stats-panel").hidden = !open;
-    $("stats-btn").setAttribute("aria-pressed", String(open));
-    if (open && !document.hidden) startStats();
-    else stopStats();
+  function idbPut(store2, key, value) {
+    return idbRequest(store2, "readwrite", (s) => s.put(value, key));
   }
-  function clearStatsPanel() {
-    const body = $("stats-body");
-    if (body) body.replaceChildren();
-    const sum = $("stats-sum");
-    if (sum) sum.replaceChildren();
+  function idbDelete(store2, key) {
+    return idbRequest(store2, "readwrite", (s) => s.delete(key));
   }
-  function bitrate(last, report, field) {
-    const bytes = report[field] || 0;
-    const ts = report.timestamp || 0;
-    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
-    const prev = last.get(key);
-    last.set(key, { bytes, ts });
-    if (!prev || !(ts > prev.ts)) return 0;
-    const kbit = (bytes - prev.bytes) * 8 / (ts - prev.ts);
-    return kbit > 0 ? Math.round(kbit) : 0;
+  function fingerprint(pub) {
+    const out = pqCall((json) => pqModule().idfp(json), { id: pub });
+    return out && out.fp ? out.fp : "";
   }
-  function isDirectType(type) {
-    return type === "host" || type === "srflx" || type === "prflx";
-  }
-  function counterDelta(last, report, field) {
-    const value = report[field];
-    if (typeof value !== "number") return null;
-    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
-    const prev = last.get(key);
-    last.set(key, { bytes: value, ts: report.timestamp || 0 });
-    return prev ? value - prev.bytes : null;
-  }
-  async function peerStats(peer) {
-    const pc = peer.pc;
-    if (!pc || typeof pc.getStats !== "function") return null;
-    if (pc.connectionState === "closed" || pc.signalingState === "closed") return null;
-    let report;
+  async function provesKey(pub, sign) {
+    if (!pub || typeof sign !== "function") return false;
+    const msg = b64e(sealUtf8.encode(ID_CHALLENGE));
+    let sig = "";
     try {
-      report = await pc.getStats();
+      sig = await sign(msg);
+    } catch {
+    }
+    const res = pqCall((json) => pqModule().idverify(json), { id: pub, msg, sig });
+    return !!(res && res.ok);
+  }
+  function subtleIdentity(key, pub) {
+    return {
+      kind: "webcrypto",
+      pub,
+      fp: fingerprint(pub),
+      sign: (msg) => crypto.subtle.sign({ name: "Ed25519" }, key, b64d(msg)).then(b64e),
+      store: () => ({ kind: "webcrypto", key, pub })
+    };
+  }
+  function seedIdentity(seed, pub, kind) {
+    return {
+      kind,
+      pub,
+      fp: fingerprint(pub),
+      seed,
+      sign: async (msg) => {
+        const out = pqCall((json) => pqModule().idsign(json), { seed: b64e(seed), msg });
+        return out && out.sig ? out.sig : "";
+      },
+      store: async () => {
+        const wrap = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
+          "encrypt",
+          "decrypt"
+        ]);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrap, seed));
+        return { kind: "sealed", wrap, iv, ct, pub };
+      }
+    };
+  }
+  function createIdentity() {
+    return Promise.resolve().then(() => crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"])).then(
+      async (pair) => subtleIdentity(
+        pair.privateKey,
+        b64e(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)))
+      )
+    ).catch(() => {
+      const made = pqCall((json) => pqModule().idgen(json), {});
+      return made && made.pub && made.seed ? seedIdentity(b64d(made.seed), made.pub, "sealed") : null;
+    });
+  }
+  async function reopenIdentity(rec) {
+    if (!rec || !rec.pub) return null;
+    let key = null;
+    try {
+      if (rec.kind === "webcrypto" && rec.key) {
+        key = subtleIdentity(rec.key, rec.pub);
+      } else if (rec.kind === "sealed" && rec.wrap && rec.iv && rec.ct) {
+        const seed = new Uint8Array(
+          await crypto.subtle.decrypt({ name: "AES-GCM", iv: rec.iv }, rec.wrap, rec.ct)
+        );
+        key = seedIdentity(seed, rec.pub, "sealed");
+      }
     } catch {
       return null;
     }
-    if (!report || typeof report.forEach !== "function") return null;
-    if (!(peer.statLast instanceof Map)) peer.statLast = /* @__PURE__ */ new Map();
-    const out = {
-      up: { audio: 0, video: 0 },
-      down: { audio: 0, video: 0 },
-      rtt: null,
-      path: "",
-      jitter: null,
-      loss: null,
-      shot: ""
-    };
-    let jitterMax = null;
-    let lost = 0;
-    let got = 0;
-    let pairId = null;
-    const pairs = /* @__PURE__ */ new Map();
-    const cands = /* @__PURE__ */ new Map();
-    try {
-      report.forEach((r) => {
-        if (r.type === "outbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
-          out.up[r.kind] += bitrate(peer.statLast, r, "bytesSent");
-        } else if (r.type === "inbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
-          out.down[r.kind] += bitrate(peer.statLast, r, "bytesReceived");
-          if (r.kind === "video" && r.frameWidth && r.frameHeight) {
-            out.shot = `${r.frameWidth}x${r.frameHeight}`;
-          }
-          if (typeof r.jitter === "number") {
-            jitterMax = jitterMax === null ? r.jitter : Math.max(jitterMax, r.jitter);
-          }
-          const dLost = counterDelta(peer.statLast, r, "packetsLost");
-          const dGot = counterDelta(peer.statLast, r, "packetsReceived");
-          if (dLost !== null && dGot !== null && dGot >= 0) {
-            lost += Math.max(0, dLost);
-            got += dGot;
-          }
-        } else if (r.type === "transport" && r.selectedCandidatePairId) {
-          pairId = r.selectedCandidatePairId;
-        } else if (r.type === "candidate-pair") {
-          pairs.set(r.id, r);
-        } else if (r.type === "local-candidate" || r.type === "remote-candidate") {
-          cands.set(r.id, r);
-        }
-      });
-    } catch {
-    }
-    let pair = pairId ? pairs.get(pairId) : null;
-    if (!pair) {
-      for (const p of pairs.values()) {
-        if (p.selected || p.nominated) {
-          pair = p;
-          break;
-        }
+    return key && await provesKey(rec.pub, key.sign) ? key : null;
+  }
+  function loadPins() {
+    return Promise.all([idbAll("pins"), idbAll("revoked")]).then(([pins, revoked]) => {
+      for (const rec of pins || []) if (rec && rec.label && rec.fp) state.pins.set(rec.label, rec);
+      for (const rec of revoked || []) if (rec && rec.fp) state.revoked.set(rec.fp, rec);
+    }).catch(() => {
+    });
+  }
+  var identityLoad = null;
+  function ensureIdentity() {
+    if (identityLoad) return identityLoad;
+    identityLoad = (async () => {
+      await loadPins();
+      let rec = null;
+      try {
+        rec = await idbGet("id", "self");
+      } catch {
       }
-    }
-    if (!pair) {
-      for (const p of pairs.values()) {
-        if (p.state === "succeeded") {
-          pair = p;
-          break;
-        }
-      }
-    }
-    if (pair) {
-      if (typeof pair.currentRoundTripTime === "number") {
-        out.rtt = Math.round(pair.currentRoundTripTime * 1e3);
-      }
-      const local = cands.get(pair.localCandidateId);
-      const remote = cands.get(pair.remoteCandidateId);
-      const lt = local ? local.candidateType || local.type || "" : "";
-      const rt = remote ? remote.candidateType || remote.type || "" : "";
-      const relays = [];
-      if (lt === "relay") relays.push("you");
-      if (rt === "relay") relays.push("them");
-      if (relays.length) out.path = `relay (${relays.join(" + ")})`;
-      else if (isDirectType(lt) && isDirectType(rt)) out.path = "p2p";
-    }
-    if (jitterMax !== null) out.jitter = jitterMax * 1e3;
-    if (got > 0) {
-      const now = lost / (lost + got) * 100;
-      out.loss = typeof peer.statLoss === "number" ? peer.statLoss * 0.7 + now * 0.3 : now;
-      peer.statLoss = out.loss;
-    }
-    return out;
-  }
-  function rateScale(kbit) {
-    const bytes = state.statsBytes;
-    const n = Math.max(0, kbit) * (bytes ? 125 : 1);
-    const big = n >= (bytes ? 1048576 : 1e3);
-    const v = n / (big ? bytes ? 1048576 : 1e3 : bytes ? 1024 : 1);
-    const num = big ? v.toFixed(v >= 10 ? 0 : 1) : Math.round(v).toString();
-    return { num, unit: big ? "m" : "k" };
-  }
-  function rateText(kbit) {
-    if (!(kbit > 0)) return "";
-    const r = rateScale(kbit);
-    return r.num + r.unit;
-  }
-  function msText(ms) {
-    return Math.round(ms) + " ms";
-  }
-  function jitterText(ms) {
-    if (typeof ms !== "number") return "";
-    return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + " ms";
-  }
-  function lossText(pct) {
-    if (typeof pct !== "number") return "";
-    if (pct < 0.05) return "none";
-    return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + " %";
-  }
-  function lossMark(pct) {
-    return pct >= 2 ? false : void 0;
-  }
-  var VIDEO_ICON = ["1F3A5", "video"];
-  var AUDIO_ICON = ["1F50A", "audio"];
-  var PICTURE_ICON = ["1F5BC", "picture size"];
-  var PING_ICON = ["1F3D3", "round trip"];
-  var JITTER_ICON = ["1F30A", "jitter, how far apart the packets arrive"];
-  var LOSS_ICON = ["1F4C9", "packet loss"];
-  var DIRECT_ICON = ["1F517", "direct, the two browsers talk to each other"];
-  var RELAY_ICON = ["1F4E1", "relay, the media goes through the server"];
-  var UP_ICON = ["2B06", "out, what this browser sends"];
-  var DOWN_ICON = ["2B07", "in, what this browser receives"];
-  function routeCell(path) {
-    if (!path) return ["", "", "not known yet"];
-    const direct = path === "direct" || path === "p2p";
-    return [...direct ? DIRECT_ICON : RELAY_ICON, path === "p2p" ? "direct" : path];
-  }
-  function rateCell(dir, kbit) {
-    return [...dir === "up" ? UP_ICON : DOWN_ICON, rateText(kbit) || "-"];
-  }
-  function tripCells(rtt, jitter, loss) {
-    return [
-      [...PING_ICON, typeof rtt === "number" ? msText(rtt) : ""],
-      [...JITTER_ICON, typeof jitter === "number" ? jitterText(jitter) : ""],
-      [...LOSS_ICON, typeof loss === "number" ? lossText(loss) : "", lossMark(loss)]
-    ];
-  }
-  function pathText(path) {
-    return path === "p2p" ? "direct" : path;
-  }
-  function callPath(live) {
-    const words = /* @__PURE__ */ new Set();
-    for (const s of live) if (s.path) words.add(pathText(s.path));
-    if (words.size === 0) return "";
-    if (words.size === 1) return [...words][0];
-    return "mixed: " + [...words].join(", ");
-  }
-  function worstOf(live, key) {
-    const nums = live.map((s) => s[key]).filter((n) => typeof n === "number");
-    return nums.length ? Math.max(...nums) : null;
-  }
-  function callPairs(live, total) {
-    const out = [];
-    const path = callPath(live);
-    const rtt = worstOf(live, "rtt");
-    const jitter = worstOf(live, "jitter");
-    const loss = worstOf(live, "loss");
-    if (path) out.push(["route ", [routeCell(path)]]);
-    if (rtt !== null || jitter !== null || loss !== null) {
-      out.push(["link ", tripCells(rtt, jitter, loss), void 0, "metrics"]);
-    }
-    out.push([
-      VIDEO_ICON,
-      [["", "", ""], rateCell("up", total.up.video), rateCell("down", total.down.video)]
-    ]);
-    out.push([
-      AUDIO_ICON,
-      [["", "", ""], rateCell("up", total.up.audio), rateCell("down", total.down.audio)]
-    ]);
-    return out;
-  }
-  function levelDb(peak) {
-    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
-    return db > -60 ? `${Math.round(db)} dB` : "silent";
-  }
-  function levelFraction(peak) {
-    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
-    return clamp((db + 60) / 60, 0, 1);
-  }
-  function peerLevel(peer) {
-    if (!peer.audioSrc || !peer.meter) return "";
-    return levelDb(peer.meterPeak || 0);
-  }
-  function noiseText(out, down) {
-    if (!out && !down) return "";
-    return `out ${out || "?"}, in ${down || "?"}`;
-  }
-  function ownPairs(total) {
-    const out = [];
-    if (state.idKey) out.push(["key ", state.idKey.fp, void 0, "mono"]);
-    const live = !!(state.mic && state.micTrack && state.micTrack.readyState === "live");
-    const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
-    const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
-    const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : "off";
-    out.push([
-      VIDEO_ICON,
-      [
-        [...PICTURE_ICON, shot],
-        rateCell("up", total ? total.up.video : 0),
-        rateCell("down", total ? total.down.video : 0)
-      ]
-    ]);
-    const sample = mic && mic.sampleRate ? `${Math.round(mic.sampleRate / 1e3)} kHz ${mic.channelCount || 1}ch` : "";
-    out.push([
-      AUDIO_ICON,
-      [
-        ["", "", live ? sample || "on" : "off"],
-        rateCell("up", total ? total.up.audio : 0),
-        rateCell("down", total ? total.down.audio : 0)
-      ]
-    ]);
-    const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
-    out.push([
-      "mic ",
-      [["", "", level ? level.state === "silent" ? "silent" : level.db : "off"]],
-      void 0,
-      false,
-      level ? levelFraction(state.meterPeak) : 0
-    ]);
-    const fe = feDrops();
-    const seen = fe.frames + fe.dropped;
-    const drops = seen > 0 ? `, ${(100 * fe.dropped / seen).toFixed(1)}% drop` : "";
-    out.push(["filter ", `out ${state.denoiseOn ? state.denoiseEngine : "off"}${drops}`]);
-    const ctx = state.playCtx;
-    const play2 = ctx ? ctx.state : "none";
-    if (play2 !== "running") out.push(["sound ", `${play2}, tap the page once`, false]);
-    return out;
-  }
-  function peerPairs(peer, s) {
-    const out = [];
-    const pin = pinState(peer);
-    if (peer.fp && pin !== "new") {
-      const bad = pin === "changed" || pin === "rollback";
-      const cells = [pin === "known" ? ["2714", "verified", peer.fp] : ["", "", peer.fp]];
-      if (pin !== "known") cells.push(["", "", pin]);
-      out.push(["key ", cells, bad ? false : void 0, "mono"]);
-    }
-    if (!s) {
-      out.push(["", "connecting", void 0, true]);
-    } else {
-      out.push(["route ", [routeCell(s.path)]]);
-      out.push(["link ", tripCells(s.rtt, s.jitter, s.loss), void 0, "metrics"]);
-      out.push([
-        VIDEO_ICON,
-        [[...PICTURE_ICON, s.shot || ""], rateCell("up", s.up.video), rateCell("down", s.down.video)]
-      ]);
-      out.push([
-        AUDIO_ICON,
-        [["", "", peerLevel(peer)], rateCell("up", s.up.audio), rateCell("down", s.down.audio)]
-      ]);
-      const noise = noiseText(peer.outFilter, peer.inFilter);
-      if (noise) out.push(["filter ", noise]);
-    }
-    if (peer.sas && sealedRoomCodes().size > 1)
-      out.push(["code ", verifyText(peer.sas), void 0, true]);
-    if (!peer.keys) out.push(["keys ", "none", false, true]);
-    else if (peer.ready === "ready" && !peer.confirmed)
-      out.push(["keys ", "not confirmed", false, true]);
-    const c = sealedPairCount(peer.id);
-    if (c.refused) out.push(["frames ", `${c.refused} refused`, false, true]);
-    return out;
-  }
-  function statIcon(hex, title) {
-    const img = document.createElement("img");
-    img.className = "sico";
-    img.src = `/openmoji/${hex}.svg`;
-    img.alt = title;
-    img.title = title;
-    return img;
-  }
-  function statCells(value, metrics) {
-    const span = document.createElement("span");
-    span.className = "sv";
-    const parts = Array.isArray(value) ? value : [value];
-    for (const raw of parts) {
-      const p = Array.isArray(raw) ? raw : [raw];
-      const cell = document.createElement("span");
-      cell.className = "cell" + (p[3] === true ? " good" : p[3] === false ? " bad" : "");
-      const word = p.length > 1 ? p[2] : p[0];
-      const text = document.createElement("span");
-      text.textContent = word === null || word === void 0 ? "" : String(word);
-      if (metrics && p.length > 1 && p[1]) {
-        const label = document.createElement("span");
-        label.className = "cl";
-        label.title = String(p[1]);
-        label.textContent = String(p[1]).split(",")[0];
-        text.className = "cv";
-        cell.append(label, text);
+      let key = await reopenIdentity(rec);
+      if (key) {
+        state.device = "kept";
       } else {
-        if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
-        cell.appendChild(text);
-      }
-      span.appendChild(cell);
-    }
-    return span;
-  }
-  function statLine(key, value, mark, sub, meter) {
-    const line = document.createElement("div");
-    const parts = Array.isArray(value) ? value : [value];
-    line.className = "sline" + (sub === "mono" ? " mono" : sub === "metrics" ? " metrics" : sub ? " sub" : "") + (typeof meter === "number" ? " meterline" : "") + (mark === true ? " good" : mark === false ? " bad" : "");
-    line.dataset.n = String(parts.length);
-    const k = document.createElement("span");
-    k.className = "sk";
-    if (Array.isArray(key) && key[0]) {
-      k.appendChild(statIcon(key[0], key[1]));
-      k.appendChild(document.createTextNode(String(key[1]).split(",")[0]));
-    } else k.textContent = Array.isArray(key) ? key[1] || "" : key;
-    line.appendChild(k);
-    if (typeof meter === "number") {
-      const bar = document.createElement("span");
-      bar.className = "meter";
-      bar.setAttribute("role", "img");
-      bar.setAttribute("aria-label", `level ${Math.round(meter * 100)} percent`);
-      const fill = document.createElement("i");
-      fill.style.width = `${Math.round(meter * 100)}%`;
-      bar.appendChild(fill);
-      line.appendChild(bar);
-    }
-    line.appendChild(statCells(value, sub === "metrics"));
-    return line;
-  }
-  function statsRow(title, pairs, mark = null, badge = null) {
-    const row = document.createElement("div");
-    row.className = "srow";
-    const head = document.createElement("div");
-    head.className = "sname";
-    const name = document.createElement("span");
-    name.className = "stitle";
-    name.textContent = title;
-    head.appendChild(name);
-    if (badge && badge.level) {
-      const chip = document.createElement("span");
-      chip.className = "sbadge";
-      chip.dataset.level = badge.level;
-      chip.textContent = badge.text || badge.level;
-      head.appendChild(chip);
-    }
-    row.appendChild(head);
-    for (const p of pairs) {
-      row.appendChild(
-        statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false, p[4])
-      );
-    }
-    return row;
-  }
-  function linkLevel(s) {
-    if (!s) return "";
-    const { rtt, loss, jitter } = s;
-    if (rtt === null && loss === null) return "";
-    if (loss !== null && loss >= 5 || rtt !== null && rtt >= 400) return "poor";
-    if (loss !== null && loss >= 2 || rtt !== null && rtt >= 200 || jitter !== null && jitter >= 40)
-      return "fair";
-    return "good";
-  }
-  function worstLevel(levels) {
-    for (const word of ["poor", "fair", "good"]) if (levels.includes(word)) return word;
-    return "";
-  }
-  function statsSummary(live, guestCount) {
-    const level = worstLevel(live.map(linkLevel));
-    const box = document.createElement("div");
-    box.className = "ssum";
-    box.dataset.level = level;
-    const lamp = document.createElement("span");
-    lamp.className = "slamp";
-    const text = document.createElement("div");
-    const head = document.createElement("div");
-    head.className = "ssum-head";
-    const sub = document.createElement("div");
-    sub.className = "ssum-sub";
-    if (guestCount === 0) {
-      head.textContent = "waiting for guests";
-      sub.textContent = "the numbers start when someone joins";
-    } else if (!level) {
-      head.textContent = "measuring";
-      sub.textContent = "the first numbers arrive in a second";
-    } else {
-      head.textContent = `connection ${level}`;
-      const nums = live.map((s) => s.rtt).filter((n) => typeof n === "number");
-      const loss = live.map((s) => s.loss).filter((n) => typeof n === "number");
-      const bits = [callPath(live)];
-      if (nums.length) bits.push(msText(Math.max(...nums)));
-      if (loss.length) bits.push(`loss ${lossText(Math.max(...loss))}`);
-      sub.textContent = bits.filter(Boolean).join(" | ");
-      if (level === "poor") sub.textContent += ". Try a lower quality in the toolbar.";
-    }
-    text.append(head, sub);
-    box.append(lamp, text);
-    return box;
-  }
-  function recordStatsHistory(total, live) {
-    state.statHist.push({
-      down: total.down.video + total.down.audio,
-      rtt: worstOf(live, "rtt"),
-      loss: worstOf(live, "loss")
-    });
-    if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
-  }
-  function statsPlot(canvas, values, peak, fill, color) {
-    if (!canvas) return;
-    const cssW = canvas.clientWidth || 288;
-    const cssH = canvas.clientHeight || 34;
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.round(cssW * dpr);
-    const h = Math.round(cssH * dpr);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, cssW, cssH);
-    const n = values.length;
-    const stepX = (cssW - 2) / (STATS_HISTORY - 1);
-    const px = (i) => cssW - 1 - (n - 1 - i) * stepX;
-    const py = (v) => cssH - 1 - Math.min(v, peak) / peak * (cssH - 2);
-    ctx.strokeStyle = "#0c3c0c";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let g = 1; g < 3; g++) {
-      const y = Math.round(cssH * g / 3) + 0.5;
-      ctx.moveTo(0, y);
-      ctx.lineTo(cssW, y);
-    }
-    for (let g = 1; g < 6; g++) {
-      const x = Math.round(cssW * g / 6) + 0.5;
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, cssH);
-    }
-    ctx.stroke();
-    if (n < 1) return;
-    if (fill) {
-      ctx.beginPath();
-      ctx.moveTo(px(0), cssH - 1);
-      for (let i = 0; i < n; i++) ctx.lineTo(px(i), py(values[i] === null ? 0 : values[i]));
-      ctx.lineTo(px(n - 1), cssH - 1);
-      ctx.closePath();
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.35;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-    ctx.beginPath();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    let drawing = false;
-    for (let i = 0; i < n; i++) {
-      const v = values[i];
-      if (v === null) {
-        drawing = false;
-        continue;
-      }
-      if (drawing) ctx.lineTo(px(i), py(v));
-      else {
-        ctx.moveTo(px(i), py(v));
-        drawing = true;
-      }
-    }
-    ctx.stroke();
-  }
-  function statsNote(id, text) {
-    const note = $(id);
-    if (note) note.textContent = text;
-  }
-  function rateWords(kbit) {
-    const r = rateScale(kbit);
-    const words = state.statsBytes ? ["KiB/s", "MiB/s"] : ["kbit/s", "Mbit/s"];
-    return `${r.num} ${words[r.unit === "m" ? 1 : 0]}`;
-  }
-  function drawStatsGraphs() {
-    const box = $("stats-graph-box");
-    if (!box) return;
-    const hist = state.statHist;
-    box.hidden = hist.length < 2;
-    if (hist.length < 2) return;
-    const series = (key) => hist.map((p) => typeof p[key] === "number" ? p[key] : null);
-    const values = (arr) => arr.filter((v) => v !== null);
-    const peak = (arr, floor) => Math.max(floor, ...values(arr));
-    const now = (arr) => {
-      const kept = values(arr);
-      return kept.length ? kept[kept.length - 1] : null;
-    };
-    const secs = `last ${hist.length} s`;
-    const down = series("down");
-    statsPlot($("stats-graph-down"), down, peak(down, 100), true, "#00e000");
-    const downMax = Math.max(0, ...values(down));
-    statsNote(
-      "stats-note-down",
-      `down ${rateWords(now(down))} now, peak ${rateWords(downMax)}, ${secs}`
-    );
-    const rtt = series("rtt");
-    statsPlot($("stats-graph-rtt"), rtt, peak(rtt, 100), false, "#f0e000");
-    statsNote(
-      "stats-note-rtt",
-      values(rtt).length ? `round trip ${msText(now(rtt))} now, peak ${msText(Math.max(...values(rtt)))}, ${secs}` : `round trip not measured, ${secs}`
-    );
-    const loss = series("loss");
-    statsPlot($("stats-graph-loss"), loss, peak(loss, 1), false, "#ff5050");
-    const lossMax = Math.max(0, ...values(loss));
-    statsNote(
-      "stats-note-loss",
-      lossMax > 0 ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}` : `loss none, ${secs}`
-    );
-  }
-  async function updateStats() {
-    if (!statsOpen() || state.statsBusy) return;
-    const body = $("stats-body");
-    if (!body) return;
-    state.statsBusy = true;
-    try {
-      const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
-      const live = [];
-      const guests = [];
-      for (const peer of state.peers.values()) {
-        const s = await peerStats(peer);
-        if (s) {
-          live.push(s);
-          for (const dir of ["up", "down"]) {
-            for (const kind of ["audio", "video"]) total[dir][kind] += s[dir][kind];
+        key = await createIdentity();
+        if (!key) throw new Error("no identity key");
+        state.device = rec ? "fresh" : "kept";
+        try {
+          await idbPut("id", "self", await key.store());
+          if (navigator.storage && typeof navigator.storage.persist === "function") {
+            navigator.storage.persist().catch(() => {
+            });
           }
-        }
-        guests.push({ peer, s });
-      }
-      const rows = [];
-      recordStatsHistory(total, live);
-      if (state.peers.size > 1) {
-        const call = callPairs(live, total);
-        if (call.length) rows.push(statsRow("call", call));
-      }
-      for (const { peer, s } of guests) {
-        if (s && s.path && peer.tile)
-          peer.tile.dataset.relay = s.path.startsWith("relay") ? "yes" : "no";
-        const level = linkLevel(s);
-        const pairs = peerPairs(peer, s);
-        if (pairs.length) {
-          rows.push(
-            statsRow(
-              peer.name || shortPeer(peer.id),
-              pairs,
-              void 0,
-              level ? { level, text: level } : null
-            )
-          );
+        } catch {
+          key.kind = "session";
+          state.device = "session";
         }
       }
-      rows.push(statsRow("you", ownPairs(total)));
-      $("stats-sum").replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
-      const legend = document.createElement("p");
-      legend.className = "slegend";
-      legend.textContent = state.statsBytes ? "k is KiB/s and m is MiB/s, eight bits to the byte. The up arrow is what you send, the down arrow what you receive." : "k is kbit/s and m is Mbit/s. The up arrow is what you send, the down arrow what you receive.";
-      body.replaceChildren(...rows, ...sealedCards(), legend);
-      drawStatsGraphs();
-    } finally {
-      state.statsBusy = false;
-    }
-  }
-  function sealedPairCount(id) {
-    const label = pairLabel(id);
-    let out = 0;
-    let inn = 0;
-    let refused = 0;
-    for (const st of Object.values(state.frames)) {
-      if (!st || st.pair !== label) continue;
-      if (st.dir === "send") out += st.ok || 0;
-      else if (st.dir === "recv") {
-        inn += st.ok || 0;
-        refused += st.fail || 0;
-      }
-    }
-    return { out, inn, refused };
-  }
-  function sealedAlarms() {
-    const out = [];
-    if (state.sealFault) out.push(statsRow("sealing fault", [["", state.sealFault, false]]));
-    const failed = sealedFailedPairs();
-    if (failed.length) {
-      const tags = failed.map(
-        (peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || "no code"}`
-      );
-      out.push(
-        statsRow("room code", [
-          ["", "KEY MISMATCH " + tags.join(", "), false],
-          ["", "do not trust this call", false]
-        ])
-      );
-    }
-    if (state.wireLeaks.length) {
-      out.push(
-        statsRow(
-          "leak",
-          state.wireLeaks.map((w) => ["", `${w.where}: ${w.canary}`, false])
-        )
-      );
-    }
-    if (state.workerErrors.length) {
-      out.push(
-        statsRow(
-          "worker",
-          state.workerErrors.slice(0, 5).map((e) => ["", e, false])
-        )
-      );
-    }
-    const wt = state.wasmTest;
-    if (wt && !wasmTestOk(wt)) out.push(statsRow("self test", wasmTestFaults(wt)));
-    return out;
-  }
-  function wasmTestOk(wt) {
-    return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused && wt.idSign && wt.idUnsigned && wt.idFp && wt.pad && wt.passGood && wt.passBad);
-  }
-  function wasmTestFaults(wt) {
-    const bad = [
-      ["sas ", wt.sasMatch ? "match" : "no", !!wt.sasMatch],
-      ["confirm ", wt.confirm ? "ok" : "no", !!wt.confirm],
-      ["open ", wt.open ? "ok" : "no", !!wt.open],
-      ["padding ", wt.pad ? "ok" : "BROKEN", !!wt.pad],
-      ["wrong key ", wt.wrongKeyRefused ? "refused" : "OPENED", !!wt.wrongKeyRefused],
-      ["identity ", wt.idSign ? "signs" : "BROKEN", !!wt.idSign],
-      ["unsigned ", wt.idUnsigned ? "refused" : "ACCEPTED", !!wt.idUnsigned],
-      ["fingerprint ", wt.idFp ? "ok" : "BROKEN", !!wt.idFp],
-      ["room key ", wt.passGood ? "ok" : "BROKEN", !!wt.passGood],
-      ["wrong key ", wt.passBad ? "refused" : "ACCEPTED", !!wt.passBad]
-    ];
-    const out = [["", "FAIL", false]];
-    for (const b of bad) if (!b[2]) out.push(b);
-    return out;
-  }
-  function sealedCards() {
-    const out = [];
-    const available = sealingAvailable();
-    const wt = state.wasmTest;
-    const seal = [
-      ["media ", available ? "sealed, every frame" : "NO SEALING, no media is sent", available]
-    ];
-    if (wt) seal.push(["self test ", wasmTestOk(wt) ? "pass" : "FAIL", wasmTestOk(wt)]);
-    out.push(statsRow("crypto", seal));
-    let refused = 0;
-    for (const st of Object.values(state.frames)) {
-      if (st && st.dir === "recv") refused += st.fail || 0;
-    }
-    const clean = state.workerErrors.length === 0;
-    const counts = [
-      [
-        "frames ",
-        `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`,
-        refused === 0 && clean
-      ],
-      [
-        "wire ",
-        `frames ${state.wireFrames} leaks ${state.wireLeaks.length} clear ${state.clearSignaling}`,
-        state.wireLeaks.length === 0 && state.clearSignaling === 0
-      ]
-    ];
-    const files = state.fileOffers + state.fileRecv + state.fileChunksRecv + state.fileChunksSent + state.fileRefused + state.fileCancelled;
-    if (files) {
-      counts.push([
-        "files ",
-        `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`,
-        state.fileRefused === 0 && state.fileCancelled === 0
-      ]);
-    }
-    const chat = state.chatSent + state.chatRecv + state.replayDrops + state.confirmFailures + state.identityFailures;
-    if (chat) {
-      counts.push([
-        "chat ",
-        `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`,
-        state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0
-      ]);
-    }
-    out.push(statsRow("counters", counts));
-    return out;
-  }
-
-  // src/frame.ts
-  function startSealedWorker() {
-    const worker = new Worker(scriptURL("/e2e-transform.js"));
-    worker.onmessage = (event) => {
-      const msg = event.data || {};
-      if (msg.type === "stats") {
-        state.frames[msg.pair + "|" + msg.dir + (msg.kind ? "|" + msg.kind : "")] = msg;
-        paintFrameCounters();
-      } else if (msg.type === "keys-ok") {
-        const waiting = state.keyWait.get(msg.pair);
-        if (waiting && waiting.gen === msg.gen) {
-          state.keyWait.delete(msg.pair);
-          waiting.resolve(true);
-        }
-      } else if (msg.type === "sample") {
-        if (state.samples.length < 40) state.samples.push(msg);
-      } else if (msg.type === "error") {
-        state.workerErrors.push(msg.msg || "worker error");
-        const waiting = msg.pair && state.keyWait.get(msg.pair);
-        if (waiting && (msg.gen === void 0 || waiting.gen === msg.gen)) {
-          state.keyWait.delete(msg.pair);
-          waiting.resolve(false);
-          say("the frame keys did not install; the link stays without video");
-        }
-      }
-    };
-    worker.onerror = (event) => state.workerErrors.push(String(event.message || event));
-    state.worker = worker;
-  }
-  function paintFrameCounters() {
-    let enc = 0;
-    let dec = 0;
-    for (const st of Object.values(state.frames)) {
-      if (!st) continue;
-      if (st.dir === "send") enc += st.ok || 0;
-      else if (st.dir === "recv") dec += st.ok || 0;
-    }
-    state.encryptFrames = enc;
-    state.decryptFrames = dec;
-  }
-
-  // src/wasm.ts
-  function loadScriptOnce(src) {
-    return new Promise((resolve, reject) => {
-      if (win().Go) return resolve(null);
-      const el2 = document.createElement("script");
-      el2.src = scriptURL(src);
-      el2.onload = () => resolve(null);
-      el2.onerror = () => reject(new Error("could not load " + src));
-      document.head.appendChild(el2);
-    });
-  }
-  function loadWasmModule() {
-    return new Promise((resolve, reject) => {
-      const Go = win().Go;
-      if (!window.WebAssembly || typeof Go !== "function")
-        return reject(new Error("webassembly unavailable"));
-      const go = new Go();
-      fetch("/pq.wasm" + BUILD_Q).then((res) => {
-        if (!res.ok) throw new Error("wasm " + res.status);
-        return WebAssembly.instantiateStreaming(res, go.importObject);
-      }).catch(async () => {
-        const res = await fetch("/pq.wasm" + BUILD_Q);
-        if (!res.ok) throw new Error("wasm " + res.status);
-        const buf = await res.arrayBuffer();
-        return WebAssembly.instantiate(buf, go.importObject);
-      }).then((res) => {
-        go.run(res.instance);
-        const started = Date.now();
-        const timer = setInterval(() => {
-          if (pqModule()) {
-            clearInterval(timer);
-            resolve(null);
-          } else if (Date.now() - started > 3e4) {
-            clearInterval(timer);
-            reject(new Error("wasm module did not start"));
-          }
-        }, 20);
-      }).catch(reject);
-    });
-  }
-  function fpShape(fp) {
-    const parts = String(fp || "").split("-");
-    if (parts.length !== 5) return false;
-    return parts.every((part) => part.length === 4 && /^[a-z2-7]+$/.test(part));
-  }
-  function pqSelfTest() {
-    const pq = pqModule();
-    const a = JSON.parse(pq.gen());
-    const b = JSON.parse(pq.gen());
-    const k1 = JSON.parse(pq.idgen());
-    const k2 = JSON.parse(pq.idgen());
-    const sidA = b64e(crypto.getRandomValues(new Uint8Array(16)));
-    const sidB = b64e(crypto.getRandomValues(new Uint8Array(16)));
-    const off = JSON.parse(
-      pq.initiate(
-        JSON.stringify({
-          self: "a",
-          peer: "b",
-          selfX: a.xpub,
-          selfK: a.ek,
-          selfID: k1.pub,
-          selfSID: sidA,
-          peerX: b.xpub,
-          peerK: b.ek,
-          peerID: k2.pub,
-          peerSID: sidB
-        })
-      )
-    );
-    const helloSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k1.seed, msg: off.transcript })));
-    const respond = (sig) => JSON.parse(
-      pq.respond(
-        JSON.stringify({
-          self: "b",
-          peer: "a",
-          selfX: b.xpub,
-          selfSK: b.xsk,
-          selfK: b.ek,
-          selfDK: b.dk,
-          selfID: k2.pub,
-          selfSID: sidB,
-          peerX: a.xpub,
-          peerK: a.ek,
-          peerID: k1.pub,
-          peerSID: sidA,
-          epk: off.epk,
-          ct: off.ct,
-          ...sig ? { sig } : {}
-        })
-      )
-    );
-    const acc = respond(helloSig.sig);
-    const okSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k2.seed, msg: acc.transcript })));
-    const proved = (key, tag, id, sig) => JSON.parse(pq.proved(JSON.stringify({ key, transcript: off.transcript, tag, id, sig })));
-    const verifyA = proved(off.keys.recvMedia, acc.confirm, k2.pub, okSig.sig);
-    const verifyB = proved(acc.keys.recvMedia, off.confirm, k1.pub, helloSig.sig);
-    const verifyNoSig = proved(off.keys.recvMedia, acc.confirm, k2.pub, "");
-    const pt = b64e(sealUtf8.encode("sealed hello"));
-    const aad = b64e(sealUtf8.encode("pq-e2e v2 chat a|b 1"));
-    const sealed = JSON.parse(pq.seal(JSON.stringify({ key: off.keys.sendChat, aad, pt })));
-    const openWith = (key) => JSON.parse(pq.open(JSON.stringify({ key, aad, b: sealed.b })));
-    const opened = openWith(acc.keys.recvChat);
-    const wrong = openWith(b64e(crypto.getRandomValues(new Uint8Array(32))));
-    const idV = (id, msg, sig) => JSON.parse(pq.idverify(JSON.stringify({ id, msg, sig })));
-    const idOk = idV(k1.pub, off.transcript, helloSig.sig);
-    const idOther = idV(k2.pub, off.transcript, helloSig.sig);
-    const idOk2 = idV(k2.pub, acc.transcript, okSig.sig);
-    const idTampered = idV(k1.pub, b64e(sealUtf8.encode("another transcript")), helloSig.sig);
-    const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
-    const w1 = JSON.parse(pq.spakew(JSON.stringify({ pass: "a", salt: "room" }))).w;
-    const wBad = (() => {
-      const raw = b64d(w1);
-      raw[raw.length - 1] ^= 1;
-      return b64e(raw);
-    })();
-    const passRun = (wa, wb) => {
-      const start = (w, role) => JSON.parse(
-        pq.spakestart(
-          JSON.stringify({
-            w,
-            role,
-            a: b64e(sealUtf8.encode("a")),
-            b: b64e(sealUtf8.encode("b"))
-          })
-        )
-      );
-      const one = start(wa, "A");
-      const two = start(wb, "B");
-      if (!one.id || !two.id) return { error: true };
-      const finA = JSON.parse(pq.spakefinish(JSON.stringify({ id: one.id, msg: two.msg })));
-      const finB = JSON.parse(pq.spakefinish(JSON.stringify({ id: two.id, msg: one.msg })));
-      const okA = JSON.parse(pq.spakeverify(JSON.stringify({ id: one.id, tag: finB.conf })));
-      const okB = JSON.parse(pq.spakeverify(JSON.stringify({ id: two.id, tag: finA.conf })));
-      return {
-        match: !!finA.ke && finA.ke === finB.ke,
-        ok: !!(okA.ok && okB.ok)
-      };
-    };
-    const passGood = passRun(w1, w1);
-    const passBad = passRun(w1, wBad);
-    const noSig = respond("");
-    return {
-      sas: off.keys.sas,
-      sasMatch: off.keys.sas === acc.keys.sas,
-      pad: padRoundTripOk(),
-      confirm: !!(verifyA.ok && verifyB.ok && !verifyNoSig.ok),
-      open: opened.pt === pt,
-      wrongKeyRefused: !!wrong.error,
-      idSign: idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
-      idUnsigned: !!noSig.error,
-      idFp: fpShape(idFp.fp),
-      passGood: !!(passGood.match && passGood.ok),
-      passBad: !!(passBad.match === false && passBad.ok === false)
-    };
-  }
-  var wasmLoad = null;
-  function ensureWasm() {
-    if (state.wasmOk) return Promise.resolve();
-    if (wasmLoad) return wasmLoad;
-    wasmLoad = loadScriptOnce("/wasm_exec.js" + BUILD_Q).then(loadWasmModule).then(() => {
-      const test = pqSelfTest();
-      state.wasmTest = test;
-      if (!test.sasMatch || !test.confirm || !test.open || !test.wrongKeyRefused || !test.idSign || !test.idUnsigned || !test.idFp || !test.passGood || !test.passBad) {
-        throw new Error("crypto self test failed");
-      }
-      state.wasmOk = true;
-    }).catch((err) => {
-      wasmLoad = null;
+      state.idKey = key;
+      return key;
+    })().catch((err) => {
+      identityLoad = null;
       throw err;
     });
-    return wasmLoad;
+    return identityLoad;
   }
-  function preloadSealed() {
-    $("sealed-note").hidden = false;
-    $("sealed-note").textContent = "loading the post-quantum module";
-    ensureReady().then(() => {
-      if (!$("lobby").hidden) $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
-    }).catch((err) => {
-      if (!$("lobby").hidden) {
-        $("sealed-note").textContent = "the sealed client did not start: " + (err && err.message ? err.message : err);
-      }
+  function deviceNote() {
+    return ID_NOTE[state.device] || ID_NOTE.session;
+  }
+  function pinState(peer) {
+    if (peer.pin === "changed") return "changed";
+    if (!peer.fp) return "new";
+    if (state.revoked.has(peer.fp)) return "rollback";
+    for (const rec of state.pins.values()) if (rec.fp === peer.fp) return "known";
+    return "new";
+  }
+  function pinLabelOf(peer) {
+    for (const rec of state.pins.values()) if (rec.fp === peer.fp) return rec.label;
+    return peer.pinLabel || "";
+  }
+  function pinPeer(peer, label) {
+    if (!peer || !peer.fp) return "new";
+    const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+    const held = state.pins.get(name);
+    if (held && held.fp !== peer.fp) {
+      peer.pin = "changed";
+      peer.pinLabel = name;
+      paintPin(peer);
+      return "changed";
+    }
+    const now = Date.now();
+    const rec = { label: name, fp: peer.fp, first: held ? held.first : now, last: now };
+    state.pins.set(name, rec);
+    idbPut("pins", name, rec).catch(() => {
     });
-  }
-  function ensureReady() {
-    return ensureWasm().then(ensureIdentity);
-  }
-
-  // src/phone.ts
-  var phoneQuery = window.matchMedia ? window.matchMedia("(max-width: 620px), (max-height: 520px) and (hover: none)") : null;
-  function applyImmersive() {
-    const stage = $("stage");
-    const on = !!phoneQuery && phoneQuery.matches && !stage.hidden;
-    stage.classList.toggle("immersive", on);
-    if (!on) stage.classList.remove("chrome");
-    $("chrome-btn").setAttribute("aria-expanded", String(stage.classList.contains("chrome")));
-  }
-  function setChrome(show) {
-    const stage = $("stage");
-    if (!stage.classList.contains("immersive")) return;
-    stage.classList.toggle("chrome", show);
-    $("chrome-btn").setAttribute("aria-expanded", String(show));
-    if (show) return;
-    menuClose();
-    if (statsOpen()) setStatsOpen(false);
-  }
-
-  // src/room.ts
-  async function enterRoom(room, pass) {
-    ensureSfx();
-    preloadSfx();
-    cancelReconnect();
-    state.fatal = "";
-    state.room = room;
-    state.name = cleanSealedName($("name").value) || "guest";
-    state.path = $("path").value;
-    state.noiseWanted = $("noise").checked;
-    state.mirror = true;
-    state.leaving = false;
-    state.mic = load("mic") !== "0";
-    state.cam = load("cam") !== "0";
-    store("name", state.name);
-    store("room", state.room);
-    store("path", state.path);
-    store("noise", state.noiseWanted ? 1 : 0);
-    ensurePlayback();
-    $("enter-btn").disabled = true;
-    $("sealed-note").hidden = false;
-    $("sealed-note").textContent = "loading the post-quantum module";
-    try {
-      try {
-        await ensureReady();
-        $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
-      } catch (err) {
-        const why = err && err.message ? err.message : String(err);
-        $("sealed-note").textContent = "the sealed client did not start: " + why;
-        state.room = "";
-        say("cannot open a sealed room: " + why);
-        return;
-      }
-      $("sealed-note").textContent = "deriving the room key";
-      canary(pass);
-      state.w = roomW(pass, room);
-      state.gate = { v: pass, n: 0 };
-      paintGate();
-      startSealedWorker();
-      const made = JSON.parse(pqModule().gen());
-      state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
-      state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
-      canary(state.name);
-      if (!sealingAvailable()) {
-        state.sealFault = "this browser cannot seal media frames, so no media is sent";
-        state.mic = false;
-        state.cam = false;
-      }
-      $("lobby").hidden = true;
-      $("stage").hidden = false;
-      $("stage").classList.remove("chrome");
-      applyImmersive();
-      $("room-label").textContent = room;
-      $("room-label").title = room;
-      $("chat-note").hidden = false;
-      updatePinCount();
-      setHash(room);
-      startCallClock();
-      startSpeaking();
-      prepareLocal();
-      prefetchNoise();
-      if (sealingAvailable()) {
-        try {
-          await requestLocal();
-        } catch {
-        }
-      } else {
-        updateButtons();
-        say(state.sealFault + "; you joined without microphone and camera");
-      }
-      connectWS();
-    } catch (err) {
-      leave("");
-      state.leaving = false;
-      say("cannot open a sealed room: " + (err && err.message ? err.message : String(err)));
-    } finally {
-      $("enter-btn").disabled = false;
-    }
-  }
-  function leave(message) {
-    const was = state.room;
-    state.leaving = true;
-    cancelReconnect();
-    if (state.ws) {
-      const ws = state.ws;
-      state.ws = null;
-      ws.onclose = null;
-      try {
-        ws.close();
-      } catch {
-      }
-    }
-    if (state.screen) {
-      stopTracks(state.screen);
-      state.screen = null;
-      if (state.screenTile) {
-        state.screenTile.remove();
-        state.screenTile = null;
-      }
-    }
-    dropPeers();
-    if (state.worker) {
-      state.worker.terminate();
-      state.worker = null;
-    }
-    wipeIdentity();
-    state.w = "";
-    state.gate = { v: null, n: 0 };
-    state.auth = { n: -1, admins: [], by: "", sig: "" };
-    if (state.authTimer) clearTimeout(state.authTimer);
-    state.authTimer = null;
-    state.wait = { on: false, n: 0 };
-    state.kickedFps = /* @__PURE__ */ new Set();
-    state.sid = "";
-    state.identityFailures = 0;
-    state.keyWait.clear();
-    state.frames = {};
-    state.encryptFrames = 0;
-    state.decryptFrames = 0;
-    state.chatSent = 0;
-    state.chatRecv = 0;
-    state.replayDrops = 0;
-    fileClearAll();
-    state.confirmFailures = 0;
-    state.workerErrors = [];
-    state.sealFault = "";
-    state.wireFrames = 0;
-    state.wireLeaks = [];
-    state.clearSignaling = 0;
-    state.canaries = /* @__PURE__ */ new Set();
-    state.samples = [];
-    asrStop();
-    omniStop();
-    state.waiting = false;
-    state.waitingRoom = false;
-    state.hand = false;
-    state.handTs = 0;
-    state.insideFps.clear();
-    paintWaiting();
-    paintHandQueue();
-    updatePinCount();
-    $("chat-note").hidden = true;
-    if (state.micTrack) stopQuietly(state.micTrack);
-    if (state.camTrack) stopQuietly(state.camTrack);
-    if (state.audioCtx) {
-      state.audioCtx.close().catch(() => {
+    if (state.revoked.has(peer.fp)) {
+      state.revoked.delete(peer.fp);
+      idbDelete("revoked", peer.fp).catch(() => {
       });
-      state.audioCtx = null;
     }
-    if (state.playCtx) {
-      state.playCtx.close().catch(() => {
-      });
-      state.playCtx = null;
-    }
-    stopLost();
-    if (state.sfxCtx) {
-      state.sfxCtx.close().catch(() => {
-      });
-      state.sfxCtx = null;
-    }
-    sfxCache.clear();
-    state.sfxSource = null;
-    state.mixer = null;
-    state.micGain = null;
-    state.micSource = null;
-    state.denoise = null;
-    state.denoiseOn = false;
-    state.denoiseEngine = "off";
-    state.micAnalyser = null;
-    state.meterPeak = 0;
-    stopSpeaking();
-    state.outStream = null;
-    state.camTrack = null;
-    state.micTrack = null;
-    stopStats();
-    clearStatsPanel();
-    $("stats-panel").hidden = true;
-    $("stats-btn").setAttribute("aria-pressed", "false");
-    state.spotlight = "";
-    setLocalTile(null);
-    $("stage-main").replaceChildren();
-    $("self-pip").replaceChildren();
-    $("self-pip").hidden = true;
-    $("stage-rail").replaceChildren();
-    $("stage-rail").hidden = false;
-    stopCallClock();
-    menuSet(false);
-    $("stage").hidden = true;
-    $("lobby").hidden = false;
-    applyImmersive();
-    $("room-label").textContent = "";
-    $("peer-count").textContent = "";
-    state.room = "";
-    state.self = null;
-    state.ice = [];
-    state.fatal = "";
-    state.reconnectDelay = 500;
-    state.mic = false;
-    state.cam = false;
-    setAdmins([]);
-    state.peers.clear();
-    if ($("chat-log")) $("chat-log").replaceChildren();
-    setHash("");
-    if (was) $("room").value = was;
-    else suggestRoom();
-    if (message) {
-      say(message);
-      const note = $("sealed-note");
-      if (note) {
-        note.hidden = false;
-        note.textContent = message;
-      }
-    }
-  }
-
-  // src/gate.ts
-  function claimText(n, admins) {
-    return b64e(sealUtf8.encode(`stanze/claim/1|${state.room}|${n}|${admins.join(",")}`));
-  }
-  async function makeClaim(n, admins) {
-    if (!state.idKey) return null;
-    let sig;
-    try {
-      sig = await state.idKey.sign(claimText(n, admins));
-    } catch {
-      return null;
-    }
-    return sig ? { n, admins: admins.slice(), sig } : null;
-  }
-  function adoptClaim(claim) {
-    state.auth = { n: claim.n, admins: claim.admins.slice(), by: claim.by, sig: claim.sig };
-    setAdmins(claim.admins);
-    markAdmins();
-    paintWaiting();
-  }
-  async function issueClaim(n, admins) {
-    const unique = [...new Set(admins)].filter((id) => /^[0-9a-f]{12}$/.test(String(id || "")));
-    if (!unique.length) return false;
-    if (n === 0) {
-      if (state.auth.n >= 0) return false;
-    } else {
-      if (state.auth.n < 0 || n !== state.auth.n + 1) return false;
-      if (!state.admins.has(state.self)) return false;
-    }
-    const claim = await makeClaim(n, unique);
-    if (!claim || state.leaving) return false;
-    adoptClaim({ ...claim, by: state.self });
-    toSealed({ k: "claim", n: claim.n, admins: claim.admins, sig: claim.sig });
-    return true;
-  }
-  function sealedSendClaim(peer) {
-    if (state.auth.n < 0) return;
-    sealedSend(peer, { k: "claim", n: state.auth.n, admins: state.auth.admins, sig: state.auth.sig });
-  }
-  function sealedOnClaim(peer, obj) {
-    if (!peer.proven || !peer.pub || !peer.pub.id) return;
-    const n = Number(obj.n);
-    if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
-    if (!Array.isArray(obj.admins) || !obj.admins.length || obj.admins.length > 64) return;
-    if (obj.admins.some((id) => typeof id !== "string" || !/^[0-9a-f]{12}$/.test(id))) return;
-    if (!obj.admins.includes(peer.id) || typeof obj.sig !== "string") return;
-    const res = pqCall((json) => pqModule().idverify(json), {
-      id: peer.pub.id,
-      msg: claimText(n, obj.admins),
-      sig: obj.sig
-    });
-    if (!res || !res.ok) return;
-    if (state.auth.n < 0) {
-      if (n !== 0) return;
-      adoptClaim({ ...obj, by: peer.id });
-      return;
-    }
-    if (n !== state.auth.n + 1) return;
-    if (!state.admins.has(peer.id)) return;
-    if (obj.admins.join(",") === state.auth.admins.join(",")) return;
-    adoptClaim({ ...obj, by: peer.id });
-  }
-  function startAuthSeed() {
-    if (state.authTimer) clearTimeout(state.authTimer);
-    state.authTimer = setTimeout(() => {
-      state.authTimer = null;
-      if (state.leaving || !state.self) return;
-      if (!state.peers.size && state.waiting) admitPeer(state.self);
-      if (state.auth.n >= 0) return;
-      void issueClaim(0, [state.self]);
-    }, 1200);
-  }
-  function resealOnLeave(id) {
-    if (!state.auth.admins.includes(id)) return;
-    const rest = state.auth.admins.filter((other) => other !== id);
-    if (!rest.length) {
-      if (!state.waiting) void issueClaim(state.auth.n + 1, [state.self]);
-      return;
-    }
-    if (rest[0] !== state.self) return;
-    void issueClaim(state.auth.n + 1, rest);
-  }
-  function sealedOnWait(peer, obj) {
-    if (!isAdmin(peer.id)) return;
-    const n = Number(obj.n);
-    if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
-    const on = !!obj.on;
-    if (n < state.wait.n) return;
-    if (n === state.wait.n && (on === state.wait.on || String(peer.id) >= String(state.self))) return;
-    state.wait = { on, n };
-    state.waitingRoom = on;
-    paintWaiting();
-    if (!on) admitAllHeld();
-  }
-  function setWaitingRoom(on) {
-    if (!isAdmin(state.self) || state.waiting) return;
-    const n = state.wait.n + 1;
-    state.wait = { on: !!on, n };
-    state.waitingRoom = !!on;
-    toSealed({ k: "wait", on: !!on, n });
-    paintWaiting();
-    if (!on) admitAllHeld();
-  }
-  function sealedAdmit(peer) {
-    if (!peer || state.waiting) return;
-    sealedSend(peer, { k: "admit" });
-  }
-  function admitAllHeld() {
-    if (state.waiting) return;
-    for (const peer of state.peers.values()) {
-      if (!peer.waiting) continue;
-      sealedAdmit(peer);
-      admitPeer(peer.id);
-    }
-  }
-  function maybeAdmitHeld(peer) {
-    if (!peer || !peer.waiting) return;
-    if (!state.waiting) {
-      if (!state.waitingRoom || peer.fp && state.insideFps.has(peer.fp)) {
-        sealedAdmit(peer);
-        admitPeer(peer.id);
-      }
-      return;
-    }
-    if (String(state.self) < String(peer.id)) {
-      admitPeer(state.self);
-      sealedAdmit(peer);
-      return;
-    }
-    askHeldAgain(peer);
-  }
-  function askHeldAgain(peer) {
-    if (!peer || !state.waiting) return;
-    if ((peer.heldAsks || 0) >= 6) return;
-    peer.heldAsks = (peer.heldAsks || 0) + 1;
-    const timer = setTimeout(() => {
-      peer.heldTimers = (peer.heldTimers || []).filter((t) => t !== timer);
-      if (state.leaving || !state.peers.has(peer.id) || !state.waiting) return;
-      sealedSend(peer, { k: "held" });
-    }, 2e3);
-    (peer.heldTimers = peer.heldTimers || []).push(timer);
-  }
-  function sealedOnHeld(peer) {
-    if (!peer) return;
-    if (!peer.waiting) {
-      peer.waiting = true;
-      paintWaiting();
-      paintHandQueue();
-    }
-    maybeAdmitHeld(peer);
-  }
-  function sealedOnAdmit(peer) {
-    if (!state.waiting || !peer) return;
-    admitPeer(state.self);
-    toSealed({ k: "in" });
-  }
-  function sealedOnIn(peer) {
-    if (state.waiting || !peer || !peer.waiting) return;
-    maybeAdmitHeld(peer);
-  }
-  function sealedKick(id) {
-    if (!isAdmin(state.self) || !id || id === state.self) return;
-    const gone = state.peers.get(id);
-    if (gone && gone.fp) state.kickedFps.add(gone.fp);
-    toSealed({ k: "kick", of: id });
-    dropPeer(id);
-    state.admins.delete(id);
-    resealOnLeave(id);
-    markAdmins();
-    paintWaiting();
-  }
-  function sealedMute(id) {
-    if (!isAdmin(state.self) || !id || id === state.self) return;
-    toSealed({ k: "mute", of: id });
-  }
-  function sealedOnKick(peer, obj) {
-    if (!isAdmin(peer.id) || typeof obj.of !== "string") return;
-    if (obj.of === state.self) {
-      leave("the host removed you from the room");
-      return;
-    }
-    const gone = state.peers.get(obj.of);
-    if (!gone) return;
-    if (gone.fp) state.kickedFps.add(gone.fp);
-    dropPeer(obj.of);
-    state.admins.delete(obj.of);
-    resealOnLeave(obj.of);
-    markAdmins();
-    paintWaiting();
-  }
-  function padsOn(peer) {
-    if (!state.worker || !peer || peer.padsOn) return;
-    peer.padsOn = true;
-    for (const kind of ["audio", "video"]) {
-      state.worker.postMessage({ type: "pad", pair: pairLabel(peer.id), kind, on: true });
-    }
-  }
-  function filterName(value) {
-    return value === "gtcrn" || value === "fastenhancer" || value === "off" ? value : "";
-  }
-  function sealedOnState(peer, obj) {
-    if (obj.pad) padsOn(peer);
-    if (obj.mic !== void 0) peer.mic = !!obj.mic;
-    if (obj.cam !== void 0) {
-      peer.cam = !!obj.cam;
-      if (peer.cam) paintPeerVideo(peer);
-      else dropPeerCamera(peer);
-    }
-    if (obj.deaf !== void 0) peer.deaf = !!obj.deaf;
-    if (obj.outFilter !== void 0) peer.outFilter = filterName(obj.outFilter);
-    if (obj.inFilter !== void 0) peer.inFilter = filterName(obj.inFilter);
-    if (obj.screen !== void 0) {
-      peer.screenShared = !!obj.screen;
-      if (peer.screenShared) paintPeerScreen(peer);
-      else dropPeerScreen(peer);
-    }
-    if (obj.hand !== void 0) {
-      const was = peer.hand;
-      peer.hand = !!obj.hand;
-      peer.handTs = peer.hand ? clamp(Number(obj.ts) || 0, 0, Date.now()) : 0;
-      if (peer.hand !== was) {
-        playSfx(peer.hand ? "pop" : "bonk");
-        if (peer.hand) setChrome(true);
-      }
-    }
-    applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
-    if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
-    paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
-    paintHandQueue();
-  }
-  function renameSelf(raw) {
-    const name = cleanSealedName(raw);
-    if (!name || name === state.name) return false;
-    state.name = name;
-    store("name", name);
-    const self2 = ownTile();
-    if (self2) paintName(self2, name, true);
-    for (const peer of state.peers.values()) {
-      if (!peer.keys) continue;
-      peer.announcedName = "";
-      sealedAnnounceName(peer);
-    }
-    return true;
-  }
-  function sealedAnnounceName(peer) {
-    if (!peer.keys || !state.name || peer.announcedName === state.name) return;
-    peer.announcedName = state.name;
-    sealedSend(peer, { k: "name", n: state.name });
-  }
-  var PAD_KEY = "p";
-  var PAD_BUCKETS = [512, 2048, 8192];
-  var PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
-  function padPayload(obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY)) throw new Error("the padding key is reserved");
-    const withPad = Object.assign({}, obj, { [PAD_KEY]: "" });
-    const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
-    let target = PAD_BUCKETS.find((n) => n >= bytes);
-    if (!target) target = Math.ceil(bytes / PAD_LAST) * PAD_LAST;
-    const need = target - bytes;
-    if (need > 0) withPad[PAD_KEY] = "A".repeat(need);
-    return JSON.stringify(withPad);
-  }
-  function padRoundTripOk() {
-    const cases = [
-      { k: "name", n: "abc" },
-      { k: "chat", n: "a", x: "hello", ts: 1 },
-      { k: "chat", n: "b", x: "\xE9".repeat(400) },
-      { k: "file", a: "offer", x: "0123456789abcdef", n: "probe.bin", z: 4096, m: "" },
-      { k: "asr", n: "c", x: "z".repeat(9e3) }
-    ];
-    for (const c of cases) {
-      const raw = JSON.stringify(c);
-      const out = padPayload(c);
-      const bytes = sealUtf8.encode(out).length;
-      const onBucket = PAD_BUCKETS.includes(bytes) || bytes % PAD_LAST === 0;
-      const back = JSON.parse(out);
-      delete back[PAD_KEY];
-      if (!onBucket || JSON.stringify(back) !== raw) return false;
-    }
-    return true;
-  }
-  function roomW(pass, room) {
-    const secret = pass === "" ? "\0open room" : pass;
-    const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
-    if (!out || !out.w) throw new Error("the room key could not be derived");
-    return out.w;
-  }
-  function sealedSendSdp(peer, kind, sdp) {
-    if (!peer.keys || !sdp) return;
-    sealedSend(peer, { k: "sdp", d: kind, s: sdp });
-  }
-  function sealedSendCand(peer, cand) {
-    if (!peer.keys || !cand) return;
-    sealedSend(peer, { k: "cand", c: cand });
-  }
-  function sealedSend(peer, obj) {
-    if (!peer.keys) return;
-    const seq = peer.seqOut + 1;
-    const out = pqCall((json) => pqModule().seal(json), {
-      key: b64e(peer.keys.sendChat),
-      aad: b64e(chatAAD(peer.id, seq)),
-      pt: b64e(sealUtf8.encode(padPayload(obj)))
-    });
-    if (!out || !out.b) return;
-    peer.seqOut = seq;
-    sealedSendOpaque(peer.id, { k: "app", q: seq, b: out.b });
-  }
-  function toSealed(obj) {
-    for (const peer of state.peers.values()) {
-      if (!peer.keys || peer.waiting) continue;
-      sealedSend(peer, obj);
-    }
-  }
-  function sendSealedChat() {
-    const input = $("chat-text");
-    const text = (input.value || "").trim();
-    if (!text || !state.self || state.waiting) return;
-    input.value = "";
-    canary(text);
-    addChatLine(state.name, text, Date.now());
-    state.chatSent++;
-    toSealed({ k: "chat", n: state.name, x: text, ts: Date.now() });
-  }
-  function sealedSetName(peer, raw) {
-    const name = cleanSealedName(raw);
-    if (!name || peer.name === name) return;
-    peer.name = name;
-    if (peer.tile) paintName(peer.tile, name, false);
-    if (peer.screenTile) paintName(peer.screenTile, `${name}, screen`, false);
-  }
-  function sealedSetE2E(peer, status) {
-    peer.ready = status;
-    updatePinCount();
-    if (!peer.tile) return;
-    peer.tile.dataset.e2e = status;
-    paintState(peer);
+    peer.pin = "";
+    peer.pinLabel = name;
     paintPin(peer);
+    return "known";
   }
-  function refreshCodeCard(host, peer) {
-    const menu = hostMenu(host);
-    if (!menu || menu.hidden) return;
-    if (menu.classList.contains("row-menu") && menu.dataset.peer !== (host.dataset.peer || ""))
-      return;
-    let card = menu.querySelector(".sas");
-    if (!peer.sas) {
-      if (card) card.remove();
-      return;
-    }
-    if (!card) {
-      card = document.createElement("div");
-      card.className = "sas";
-      menu.appendChild(card);
-    }
-    card.replaceChildren(...sealedCodePanel(peer));
-  }
-  function paintState(peer) {
-    if (!peer.tile) return;
-    const badge = peer.tile.querySelector(".state");
-    if (!badge) return;
-    const known = peer.ready === "ready" && pinState(peer) === "known";
-    badge.hidden = known;
-    badge.dataset.e2e = known ? "known" : peer.ready === "ready" ? "unverified" : peer.ready === "failed" ? "failed" : "";
-    badge.textContent = known ? "" : peer.ready === "ready" ? "e2e unverified" : peer.ready === "failed" ? "e2e FAILED" : peer.ready || "";
-  }
-  function sealedCodePanel(peer) {
-    const code = peer.sas;
-    const head = document.createElement("span");
-    head.className = "sas-head";
-    head.textContent = "sealed code";
-    const row = document.createElement("span");
-    row.className = "sas-row";
-    for (const [emoji, name, hex] of verifyEmojis(code)) {
-      const cell = document.createElement("span");
-      cell.className = "sas-cell";
-      const img = document.createElement("img");
-      img.className = "sas-emoji";
-      img.src = `/openmoji/${hex}.svg`;
-      img.alt = emoji;
-      img.title = name;
-      const tip = document.createElement("span");
-      tip.className = "sas-tip";
-      tip.textContent = name;
-      cell.append(img, tip);
-      row.appendChild(cell);
-    }
-    const text = document.createElement("span");
-    text.className = "sas-code";
-    text.textContent = String(code || "").replace(/(.{4})(?=.)/g, "$1 ");
-    return [head, row, text, sealedIdentityRow(peer)];
-  }
-  function sealedIdentityRow(peer) {
-    const row = document.createElement("span");
-    row.className = "id-row";
-    const what = pinState(peer);
-    const state2 = document.createElement("span");
-    state2.className = "id-state";
-    state2.dataset.pin = what;
-    state2.textContent = what === "changed" ? "changed" : what === "rollback" ? "old key back" : "unverified";
-    const which = document.createElement("span");
-    which.className = "id-fp";
-    which.textContent = peer.fp || "no fingerprint yet";
-    if (what === "known") {
-      row.append(
-        pinButton(
-          pinLabelOf(peer) || "pinned",
-          () => renamePin(peer, prompt("new name for this device", pinLabelOf(peer)) || "")
-        )
-      );
-    } else row.append(state2);
-    row.append(which);
-    if (what === "new" && peer.fp) {
-      row.append(
-        pinButton(
-          "pin this device",
-          () => pinPeer(peer, prompt("label for this device", peer.name) || "")
-        )
-      );
-    } else if (what === "changed" || what === "rollback") {
-      row.append(pinButton("this device was reset", () => resetDevice(peer, peer.pinLabel)));
-    }
-    return row;
-  }
-  function pinButton(text, onclick) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "pin-btn";
-    button.textContent = text;
-    button.addEventListener("click", onclick);
-    return button;
-  }
-
-  // src/files.ts
-  var FILE_LABEL = "files";
-  var FILE_CHUNK = 16 * 1024;
-  var FILE_BUFFER = 256 * 1024;
-  var FILE_LOW = 64 * 1024;
-  var FILE_OPEN_WAIT = 15e3;
-  var FILE_DONE = /* @__PURE__ */ new Set(["done", "refused", "cancelled", "gone"]);
-  function cleanFileName(raw) {
-    return String(raw || "").replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 64);
-  }
-  function fileID() {
-    const bytes = crypto.getRandomValues(new Uint8Array(8));
-    let out = "";
-    for (const b of bytes) out += b.toString(16).padStart(2, "0");
-    return out;
-  }
-  function fileBytes(n) {
-    if (!n) return "0 B";
-    if (n < 1024) return n + " B";
-    const units = ["kB", "MB", "GB"];
-    let value = n / 1024;
-    let i = 0;
-    while (value >= 1024 && i < units.length - 1) {
-      value /= 1024;
-      i++;
-    }
-    return (value >= 10 ? value.toFixed(0) : value.toFixed(1)) + " " + units[i];
-  }
-  function fileRateText(kbs) {
-    if (!kbs || !isFinite(kbs) || kbs <= 0) return "";
-    return (kbs >= 10 ? Math.round(kbs) : kbs.toFixed(1)) + " kB/s";
-  }
-  function fileMarkRate(o, bytes, now) {
-    if (!o.rateT) {
-      o.rateT = now;
-      o.rateB = bytes;
-      const secs = (now - (o.rateAt || now)) / 1e3;
-      o.rate = secs > 0.05 ? bytes / 1024 / secs : 0;
-      return;
-    }
-    const dt = now - o.rateT;
-    if (dt < 500) return;
-    o.rate = (bytes - o.rateB) / 1024 / (dt / 1e3);
-    o.rateT = now;
-    o.rateB = bytes;
-  }
-  function fileAverageRate(bytes, start, now) {
-    if (!start || !bytes) return "";
-    const secs = (now - start) / 1e3;
-    if (secs < 0.2) return "";
-    return fileRateText(bytes / 1024 / secs);
-  }
-  function fileButton(label, fn) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = label;
-    button.addEventListener("click", () => {
-      button.disabled = true;
-      fn(button);
+  function renamePin(peer, label) {
+    if (!peer || pinState(peer) !== "known") return "new";
+    const old = pinLabelOf(peer);
+    const name = String(label || "").trim().slice(0, 32);
+    if (!name || name === old) return "known";
+    const held = state.pins.get(name);
+    if (held && held.fp !== peer.fp) return pinPeer(peer, name);
+    const was = state.pins.get(old);
+    state.pins.delete(old);
+    idbDelete("pins", old).catch(() => {
     });
-    return button;
-  }
-  function addFileRow(who, name, size) {
-    const log = $("chat-log");
-    if (!log) return null;
-    const li = document.createElement("li");
-    li.className = "chat-file";
-    const when = document.createElement("span");
-    when.className = "when";
-    when.textContent = chatTime();
-    const speaker = document.createElement("span");
-    speaker.className = "who";
-    speaker.textContent = (who || "guest") + ":";
-    const head = document.createElement("span");
-    head.className = "file-head";
-    const label = document.createElement("span");
-    label.className = "file-name";
-    label.textContent = name;
-    label.title = name;
-    const labelSize = document.createElement("span");
-    labelSize.className = "file-size";
-    labelSize.textContent = fileBytes(size);
-    head.append(label, labelSize);
-    const bar = document.createElement("span");
-    bar.className = "file-bar";
-    bar.hidden = true;
-    const fill = document.createElement("span");
-    fill.className = "file-fill";
-    bar.appendChild(fill);
-    const status = document.createElement("span");
-    status.className = "file-status";
-    const acts = document.createElement("span");
-    acts.className = "file-acts";
-    li.append(when, speaker, head, bar, status, acts);
-    log.appendChild(li);
-    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
-    log.scrollTop = log.scrollHeight;
-    return { li, bar, fill, status, acts };
-  }
-  function fileSetBar(el2, show, frac) {
-    if (!el2) return;
-    el2.bar.hidden = !show;
-    el2.fill.style.width = clamp(Math.round(frac * 100), 0, 100) + "%";
-  }
-  function fileOffer(file) {
-    if (!file || !state.self || state.leaving || state.waiting) return;
-    const size = Number(file.size);
-    if (!Number.isSafeInteger(size) || size < 0) {
-      say("that file cannot be read");
-      return;
-    }
-    const name = cleanFileName(file.name) || "file";
-    const type = String(file.type || "").slice(0, 64);
-    const x = fileID();
-    const out = { x, file, name, size, type, peers: /* @__PURE__ */ new Map(), cancelled: false, el: null };
-    for (const peer of state.peers.values()) {
-      if (!peer.keys || peer.waiting) continue;
-      out.peers.set(peer.id, { peer, status: "offered", sent: 0, dead: false, wake: null });
-      sealedSend(peer, { k: "file", a: "offer", x, n: name, z: size, m: type });
-    }
-    if (!out.peers.size) {
-      addChatLine(state.name, "no sealed peer for " + name, Date.now());
-      return;
-    }
-    canary(name);
-    state.fileOffers++;
-    state.files.set(x, out);
-    out.el = addFileRow(state.name, name, size);
-    if (out.el) out.el.acts.append(fileButton("cancel", () => fileCancelOut(out)));
-    filePaintOut(out);
-  }
-  function fileOnMessage(peer, msg) {
-    switch (msg.a) {
-      case "offer":
-        fileOnOffer(peer, msg);
-        break;
-      case "accept":
-        fileOnAccept(peer, msg);
-        break;
-      case "refuse":
-        fileOnRefuse(peer, msg);
-        break;
-      case "cancel":
-        fileOnCancel(peer, msg);
-        break;
-      case "done":
-        fileOnDone(peer, msg);
-        break;
-      default:
-        break;
-    }
-  }
-  function fileOnOffer(peer, msg) {
-    const x = String(msg.x || "").slice(0, 32);
-    const name = cleanFileName(msg.n);
-    const size = Number(msg.z);
-    const type = String(msg.m || "").slice(0, 64);
-    if (!x || !name || !Number.isSafeInteger(size) || size < 0) return;
-    const key = peer.id + "|" + x;
-    if (state.filesIn.has(key)) return;
-    const rec = {
-      key,
-      x,
-      peerId: peer.id,
-      name,
-      size,
-      type,
-      status: "offered",
-      chunks: [],
-      got: 0,
-      expect: 0,
-      el: null,
-      url: "",
-      rateT: 0,
-      rateB: 0,
-      rate: 0,
-      rateAt: 0
-    };
-    state.filesIn.set(key, rec);
-    canary(name);
-    rec.el = addFileRow(peer.name || shortPeer(peer.id), name, size);
-    if (rec.el) {
-      rec.el.acts.append(
-        fileButton("accept", (button) => fileAccept(rec, button)),
-        fileButton("refuse", () => fileRefuse(rec))
-      );
-    }
-    filePaintIn(rec);
-  }
-  function fileDiskWanted() {
-    const pick = window.showSaveFilePicker;
-    return typeof pick === "function" && !window.e2eNoPicker;
-  }
-  async function fileDiskOpen(rec) {
-    if (!fileDiskWanted()) return false;
-    let handle2;
-    try {
-      handle2 = await window.showSaveFilePicker({ suggestedName: rec.name });
-    } catch (err) {
-      if (err && err.name === "AbortError") return null;
-      return false;
-    }
-    try {
-      rec.writer = await handle2.createWritable();
-      rec.disk = true;
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  function fileDiskWrite(rec, bytes) {
-    const writer = rec.writer;
-    if (!writer) return;
-    rec.writes = (rec.writes || Promise.resolve()).then(() => writer.write(bytes)).catch(() => {
-      fileDiskAbort(rec);
-      const peer = state.peers.get(rec.peerId);
-      if (peer && peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
-      fileFinishIn(rec, "cancelled");
+    const now = Date.now();
+    state.pins.set(name, { label: name, fp: peer.fp, first: was ? was.first : now, last: now });
+    idbPut("pins", name, state.pins.get(name)).catch(() => {
     });
+    peer.pin = "";
+    peer.pinLabel = name;
+    paintPin(peer);
+    return "known";
   }
-  function fileDiskAbort(rec) {
-    const writer = rec.writer;
-    rec.writer = null;
-    rec.chunks = [];
-    if (!writer) return;
-    const pending = rec.writes || Promise.resolve();
-    rec.writes = pending.then(() => writer.abort()).catch(() => {
-    });
-  }
-  function fileAccept(rec, button) {
-    const peer = state.peers.get(rec.peerId);
-    if (!peer || !peer.keys) {
-      fileFinishIn(rec, "gone");
-      return;
-    }
-    return fileDiskOpen(rec).then((ok) => {
-      if (ok === null) {
-        if (button) button.disabled = false;
-        return;
-      }
-      fileAcceptGo(rec, peer, ok);
-    });
-  }
-  function fileAcceptGo(rec, peer, disk) {
-    if (disk === null || !state.peers.has(peer.id) || !peer.keys) return;
-    rec.status = "receiving";
-    rec.got = 0;
-    rec.expect = 0;
-    rec.chunks = [];
-    rec.rateT = 0;
-    rec.rateB = 0;
-    rec.rate = 0;
-    rec.rateAt = performance.now();
-    fileArmIn(rec);
-    if (rec.el) {
-      rec.el.acts.replaceChildren(fileButton("cancel", () => fileCancelIn(rec)));
-    }
-    sealedSend(peer, { k: "file", a: "accept", x: rec.x });
-    filePaintIn(rec);
-  }
-  function fileRefuse(rec) {
-    const peer = state.peers.get(rec.peerId);
-    if (peer && peer.keys) sealedSend(peer, { k: "file", a: "refuse", x: rec.x });
-    fileFinishIn(rec, "refused");
-  }
-  function fileCancelIn(rec) {
-    const peer = state.peers.get(rec.peerId);
-    if (peer && peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
-    state.fileCancelled++;
-    fileFinishIn(rec, "cancelled");
-  }
-  function fileCancelOut(out, why = "") {
-    if (!out || out.cancelled) return;
-    out.cancelled = true;
-    state.fileCancelled++;
-    for (const st of out.peers.values()) {
-      if (st.status === "done" || st.status === "refused" || st.status === "gone") continue;
-      st.status = "cancelled";
-      fileStop(st);
-      if (st.peer.keys) sealedSend(st.peer, { k: "file", a: "cancel", x: out.x, y: why || "" });
-    }
-    out.file = null;
-    filePaintOut(out);
-    fileSettle(out);
-  }
-  function fileCancelPeer(out, st, why) {
-    if (st.status === "done" || st.status === "refused" || st.status === "gone") return;
-    st.status = "cancelled";
-    fileStop(st);
-    if (st.peer.keys) sealedSend(st.peer, { k: "file", a: "cancel", x: out.x, y: why || "" });
-    filePaintOut(out);
-    fileSettle(out);
-  }
-  function fileOnAccept(peer, msg) {
-    const out = state.files.get(String(msg.x || ""));
-    if (!out || out.cancelled) {
-      if (peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: String(msg.x || "") });
-      return;
-    }
-    const st = out.peers.get(peer.id);
-    if (!st || st.status !== "offered") return;
-    st.status = "sending";
-    st.rateAt = performance.now();
-    filePaintOut(out);
-    filePump(out, st).catch(() => fileCancelPeer(out, st, "the transfer failed"));
-  }
-  function fileOnRefuse(peer, msg) {
-    const out = state.files.get(String(msg.x || ""));
-    if (!out || out.cancelled) return;
-    const st = out.peers.get(peer.id);
-    if (!st || st.status === "refused") return;
-    st.status = "refused";
-    fileStop(st);
-    state.fileRefused++;
-    filePaintOut(out);
-    fileSettle(out);
-  }
-  function fileOnCancel(peer, msg) {
-    const x = String(msg.x || "");
-    const out = state.files.get(x);
-    if (out) {
-      const st = out.peers.get(peer.id);
-      if (st && st.status !== "done" && st.status !== "refused" && st.status !== "cancelled" && st.status !== "gone") {
-        st.status = "cancelled";
-        fileStop(st);
-        state.fileCancelled++;
-        filePaintOut(out);
-        fileSettle(out);
-      }
-      return;
-    }
-    const rec = state.filesIn.get(peer.id + "|" + x);
-    if (!rec || rec.status === "done" || rec.status === "refused" || rec.status === "cancelled")
-      return;
-    rec.status = "cancelled";
-    fileFinishIn(rec, "cancelled");
-  }
-  function fileOnDone(peer, msg) {
-    const rec = state.filesIn.get(peer.id + "|" + String(msg.x || ""));
-    if (!rec || rec.status !== "receiving") return;
-    if (rec.got !== rec.size) return;
-    fileFinishIn(rec, "done");
-  }
-  function fileOnChunk(peer, raw) {
-    if (typeof raw !== "string") return;
-    let frame;
-    try {
-      frame = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (!frame || typeof frame.b !== "string") return;
-    const rec = state.filesIn.get(peer.id + "|" + String(frame.x || ""));
-    if (!rec || rec.status !== "receiving" || !peer.keys) return;
-    const q = Number(frame.q);
-    if (!Number.isSafeInteger(q) || q !== rec.expect) {
-      state.replayDrops++;
-      return;
-    }
-    const out = pqCall((json) => pqModule().open(json), {
-      key: b64e(peer.keys.recvChat),
-      aad: b64e(fileAAD(peer.id, peer.id, rec.x, q)),
-      b: frame.b
-    });
-    if (!out || out.error) {
-      state.replayDrops++;
-      return;
-    }
-    const bytes = b64d(out.pt);
-    if (rec.got + bytes.length > rec.size) {
-      if (peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
-      fileFinishIn(rec, "cancelled");
-      return;
-    }
-    if (rec.writer) fileDiskWrite(rec, bytes);
-    else rec.chunks.push(bytes);
-    rec.got += bytes.length;
-    rec.expect = q + 1;
-    state.fileChunksRecv++;
-    fileMarkRate(rec, rec.got, performance.now());
-    filePaintIn(rec);
-    fileArmIn(rec);
-    if (rec.got === rec.size) fileFinishIn(rec, "done");
-  }
-  function fileArmIn(rec) {
-    if (rec.timer) clearTimeout(rec.timer);
-    rec.timer = setTimeout(() => {
-      rec.timer = 0;
-      if (rec.status !== "receiving") return;
-      const peer = state.peers.get(rec.peerId);
-      if (peer && peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
-      fileFinishIn(rec, "cancelled");
-    }, 2e4);
-  }
-  async function filePump(out, st) {
-    const peer = st.peer;
-    const dc = await fileWaitOpen(peer, st);
-    if (!dc || st.dead || out.cancelled || !out.file) return;
-    const total = Math.ceil(out.size / FILE_CHUNK);
-    for (let q = 0; q < total; q++) {
-      if (st.dead || out.cancelled || !out.file) return;
-      if (!state.peers.has(peer.id) || !peer.keys) {
-        fileStop(st);
-        return;
-      }
-      let buf;
-      try {
-        buf = new Uint8Array(
-          await out.file.slice(q * FILE_CHUNK, (q + 1) * FILE_CHUNK).arrayBuffer()
-        );
-      } catch {
-        fileCancelPeer(out, st, "the file could not be read");
-        return;
-      }
-      if (st.dead || out.cancelled) return;
-      const sealed = pqCall((json) => pqModule().seal(json), {
-        key: b64e(peer.keys.sendChat),
-        aad: b64e(fileAAD(peer.id, state.self, out.x, q)),
-        pt: b64e(buf)
+  function resetDevice(peer, label) {
+    const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+    const held = state.pins.get(name);
+    if (held && held.fp && held.fp !== peer.fp) {
+      const gone = { fp: held.fp, label: name, at: Date.now() };
+      state.revoked.set(gone.fp, gone);
+      idbPut("revoked", gone.fp, gone).catch(() => {
       });
-      if (!sealed || !sealed.b) {
-        fileCancelPeer(out, st, "a chunk could not be sealed");
-        return;
-      }
-      const ready = await fileSpace(dc, st);
-      if (!ready || st.dead || out.cancelled) return;
-      try {
-        dc.send(JSON.stringify({ x: out.x, q, b: sealed.b }));
-      } catch {
-        fileCancelPeer(out, st, "the file channel closed");
-        return;
-      }
-      st.sent = q + 1;
-      state.fileChunksSent++;
-      fileMarkRate(st, st.sent * FILE_CHUNK, performance.now());
-      filePaintOut(out);
+      state.pins.delete(name);
+      idbDelete("pins", name).catch(() => {
+      });
     }
-    if (st.dead || out.cancelled) return;
-    st.status = "done";
-    if (peer.keys) sealedSend(peer, { k: "file", a: "done", x: out.x });
-    filePaintOut(out);
-    fileSettle(out);
+    peer.pin = "";
+    const state_ = pinPeer(peer, name);
+    if (!peer.proven) sealedRestart(peer, true);
+    return state_;
   }
-  function fileWaitOpen(peer, st) {
-    return new Promise((resolve) => {
-      let timer = 0;
-      let dc = null;
-      const done = (value) => {
-        if (st.wake !== wake) return;
-        st.wake = null;
-        clearTimeout(timer);
-        if (dc) {
-          dc.removeEventListener("open", onOpen);
-          dc.removeEventListener("close", onClose);
-        }
-        resolve(value);
-      };
-      const wake = () => done(null);
-      const onOpen = () => done(dc);
-      const onClose = () => done(null);
-      const attach = (channel) => {
-        dc = channel;
-        if (!dc) return done(null);
-        if (dc.readyState === "open") return done(dc);
-        if (dc.readyState !== "connecting") return done(null);
-        dc.addEventListener("open", onOpen);
-        dc.addEventListener("close", onClose);
-      };
-      st.wake = wake;
-      if (peer.dc) attach(peer.dc);
-      else if (peer.dcPromise) {
-        peer.dcPromise.then((channel) => {
-          if (st.wake === wake) attach(channel);
+  function verifiedPeers() {
+    let n = 0;
+    for (const peer of state.peers.values()) if (peer.fp && pinState(peer) === "known") n++;
+    return n;
+  }
+  function updatePinCount() {
+    const el2 = $("pin-count");
+    if (!el2) return;
+    const total = state.peers.size;
+    const known = verifiedPeers();
+    const failed = sealedFailedPairs();
+    const full = total > 0 && known === total && failed.length === 0;
+    el2.hidden = total === 0;
+    el2.textContent = total ? `verified ${known}/${total}` : "";
+    el2.dataset.verified = full ? "all" : "part";
+    $("stage").dataset.verified = full ? "all" : "part";
+    if (total === 0) {
+      el2.removeAttribute("title");
+    } else if (failed.length > 0) {
+      el2.title = "the keys do not match with " + sealedPairNames(failed) + ", so do not trust this call";
+    } else {
+      el2.title = `${known} of ${total} guests present an identity this browser pinned; each pair has its own code on its tile`;
+    }
+  }
+  function paintPin(peer) {
+    updatePinCount();
+    paintState(peer);
+    for (const host of [peer.tile, rowOf.get(peer.tile)]) refreshCodeCard(host, peer);
+    const chip = peer.tile ? peer.tile.querySelector(".pin") : null;
+    if (!chip) return;
+    const what = pinState(peer);
+    chip.hidden = !peer.fp;
+    chip.dataset.pin = what === "rollback" ? "changed" : what;
+    chip.textContent = what === "known" ? pinLabelOf(peer) : what === "changed" ? "identity changed" : what === "rollback" ? "old key came back" : "unverified";
+    chip.title = peer.fp ? "identity " + peer.fp : "";
+    const named = what === "known";
+    chip.dataset.action = named ? "rename" : "";
+    if (named) {
+      chip.title = (chip.title ? chip.title + " | " : "") + "click to rename";
+      chip.onclick = () => renamePin(peer, prompt("new name for this device", pinLabelOf(peer)) || "");
+    } else {
+      chip.onclick = null;
+    }
+  }
+  async function storageAudit() {
+    const out = { local: Object.keys(localStorage), stores: {}, keys: 0 };
+    try {
+      const db = await idStore();
+      for (const name of db.objectStoreNames) {
+        const rows = await idbAll(name);
+        out.stores[name] = rows.map((row) => {
+          const shape = {};
+          for (const [k, v] of Object.entries(row || {})) {
+            if (v instanceof Uint8Array) shape[k] = "bytes:" + v.length;
+            else if (v && v.type) shape[k] = "key:" + v.type;
+            else if (typeof v === "string") shape[k] = v.length > 40 ? "string:" + v.length : v;
+            else shape[k] = typeof v;
+          }
+          return shape;
         });
       }
-      timer = setTimeout(wake, FILE_OPEN_WAIT);
-    });
-  }
-  function fileSpace(dc, st) {
-    if (dc.readyState !== "open") return Promise.resolve(false);
-    if (dc.bufferedAmount <= FILE_BUFFER) return Promise.resolve(true);
-    dc.bufferedAmountLowThreshold = FILE_LOW;
-    return new Promise((resolve) => {
-      let timer = 0;
-      const done = (value) => {
-        if (st.wake !== wake) return;
-        st.wake = null;
-        clearTimeout(timer);
-        dc.removeEventListener("bufferedamountlow", onLow);
-        resolve(value);
-      };
-      const wake = () => done(false);
-      const onLow = () => {
-        if (dc.bufferedAmount <= FILE_BUFFER) done(true);
-      };
-      st.wake = wake;
-      dc.addEventListener("bufferedamountlow", onLow);
-      timer = setTimeout(
-        () => done(dc.readyState === "open" && dc.bufferedAmount <= FILE_BUFFER),
-        2e3
-      );
-    });
-  }
-  function fileBindChannel(peer, dc) {
-    if (!dc || peer.dc === dc) return;
-    if (peer.dc) {
-      peer.dc.onmessage = null;
-      peer.dc.onclose = null;
-      peer.dc.onerror = null;
+    } catch {
+      out.stores = null;
     }
-    peer.dc = dc;
-    dc.onmessage = (event) => fileOnChunk(peer, typeof event.data === "string" ? event.data : "");
-    dc.onclose = () => {
-      if (peer.dc !== dc) return;
-      peer.dc = null;
-      fileChannelClosed(peer);
-    };
-    dc.onerror = () => {
-    };
-    if (peer.dcResolve) {
-      const resolve = peer.dcResolve;
-      peer.dcResolve = null;
-      peer.dcPromise = Promise.resolve(dc);
-      resolve(dc);
-    }
-  }
-  function fileOutGone(id) {
-    for (const out of state.files.values()) {
-      const st = out.peers.get(id);
-      if (!st || FILE_DONE.has(st.status)) continue;
-      st.status = "gone";
-      fileStop(st);
-      if (!out.cancelled) filePaintOut(out);
-      fileSettle(out);
-    }
-  }
-  function fileChannelClosed(peer) {
-    fileOutGone(peer.id);
-    for (const rec of state.filesIn.values()) {
-      if (rec.peerId === peer.id && rec.status === "receiving") fileFinishIn(rec, "cancelled");
-    }
-  }
-  function fileDropPeer(peer) {
-    const dc = peer.dc;
-    peer.dc = null;
-    if (dc) {
-      dc.onmessage = null;
-      dc.onopen = null;
-      dc.onclose = null;
-      dc.onerror = null;
-    }
-    if (peer.dcResolve) {
-      const resolve = peer.dcResolve;
-      peer.dcResolve = null;
-      peer.dcPromise = Promise.resolve(null);
-      resolve(null);
-    }
-    filePeerGone(peer.id);
-  }
-  function filePeerGone(id) {
-    fileOutGone(id);
-    for (const rec of state.filesIn.values()) {
-      if (rec.peerId === id && !FILE_DONE.has(rec.status)) fileFinishIn(rec, "gone");
-    }
-  }
-  function fileStop(st) {
-    st.dead = true;
-    if (st.wake) st.wake();
-  }
-  function fileInText(rec) {
-    if (rec.status === "offered") return "waiting for you";
-    if (rec.status === "receiving") {
-      const pct = rec.size ? Math.round(rec.got / rec.size * 100) : 0;
-      const rate2 = fileRateText(rec.rate);
-      return "receiving " + pct + " percent" + (rate2 ? ", " + rate2 : "");
-    }
-    if (rec.status === "done") {
-      return rec.disk ? "saved to disk" + (rec.avg ? ", " + rec.avg : "") : "ready, click save" + (rec.avg ? ", " + rec.avg : "");
-    }
-    if (rec.status === "refused") return "refused";
-    if (rec.status === "cancelled") return "cancelled";
-    if (rec.status === "gone") return "the sender left";
-    return "";
-  }
-  function filePaintIn(rec) {
-    if (!rec.el) return;
-    const pct = rec.size ? rec.got / rec.size : 0;
-    fileSetBar(rec.el, rec.status === "receiving", pct);
-    rec.el.status.textContent = fileInText(rec);
-  }
-  function fileFinishDisk(rec) {
-    const writer = rec.writer;
-    rec.writer = null;
-    rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
-    if (rec.el) rec.el.status.textContent = "saving to disk" + (rec.avg ? ", " + rec.avg : "");
-    const pending = rec.writes || Promise.resolve();
-    pending.then(() => writer.close()).then(() => {
-      state.fileRecv++;
-      state.filesIn.delete(rec.key);
-      if (rec.el) {
-        rec.el.acts.replaceChildren();
-        rec.el.status.textContent = fileInText(rec);
-      }
-    }).catch(() => {
-      state.filesIn.delete(rec.key);
-      if (rec.el) {
-        rec.el.acts.replaceChildren();
-        rec.el.status.textContent = "the disk write failed";
-      }
-    });
-  }
-  function fileFinishIn(rec, status) {
-    if (rec.timer) {
-      clearTimeout(rec.timer);
-      rec.timer = 0;
-    }
-    if (status === "done" && rec.got !== rec.size) status = "cancelled";
-    rec.status = status;
-    if (rec.el) rec.el.bar.hidden = true;
-    if (status === "done" && rec.writer) {
-      fileFinishDisk(rec);
-      return;
-    }
-    if (status === "done") {
-      rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
-      const blob = new Blob(rec.chunks, { type: rec.type || "application/octet-stream" });
-      rec.chunks = [];
-      if (rec.url) {
-        URL.revokeObjectURL(rec.url);
-        state.fileLinks.delete(rec.url);
-      }
-      rec.url = URL.createObjectURL(blob);
-      state.fileLinks.add(rec.url);
-      state.fileRecv++;
-      if (rec.el) {
-        const link = document.createElement("a");
-        link.className = "file-save";
-        link.href = rec.url;
-        link.download = rec.name;
-        link.textContent = "save " + fileBytes(rec.size);
-        rec.el.acts.replaceChildren(link);
-        rec.el.status.textContent = "ready, click save" + (rec.avg ? ", " + rec.avg : "");
-      }
-      state.filesIn.delete(rec.key);
-      return;
-    }
-    fileDiskAbort(rec);
-    if (rec.url) {
-      URL.revokeObjectURL(rec.url);
-      state.fileLinks.delete(rec.url);
-      rec.url = "";
-    }
-    if (rec.el) {
-      rec.el.acts.replaceChildren();
-      rec.el.status.textContent = fileInText(rec);
-    }
-    state.filesIn.delete(rec.key);
-  }
-  function filePaintOut(out) {
-    if (!out.el) return;
-    const list = [...out.peers.values()];
-    const accepted = list.filter((s) => s.status === "sending" || s.status === "done");
-    const refused = list.filter((s) => s.status === "refused");
-    const gone = list.filter((s) => s.status === "gone");
-    const stopped = list.filter((s) => s.status === "cancelled");
-    const open = list.some((s) => s.status === "offered" || s.status === "sending");
-    const bytes = accepted.reduce((n, s) => n + Math.min(out.size, s.sent * FILE_CHUNK), 0);
-    const total = accepted.length * Math.max(1, out.size);
-    const allDone = accepted.length > 0 && accepted.every((s) => s.status === "done");
-    const frac = out.size === 0 ? allDone ? 1 : 0 : total ? bytes / total : 0;
-    fileSetBar(out.el, !out.cancelled && accepted.length > 0 && !allDone, frac);
-    if (out.cancelled) {
-      out.el.acts.replaceChildren();
-      out.el.status.textContent = "cancelled";
-      return;
-    }
-    const words = ["accepted " + accepted.length + " of " + list.length];
-    if (accepted.length) {
-      words.push(
-        accepted.map((s) => {
-          const pct = out.size ? Math.round(Math.min(out.size, s.sent * FILE_CHUNK) / Math.max(1, out.size) * 100) : s.status === "done" ? 100 : 0;
-          const sent = Math.min(out.size, s.sent * FILE_CHUNK);
-          const rate2 = s.status === "done" ? fileAverageRate(sent, s.rateAt, performance.now()) : fileRateText(s.rate);
-          return s.peer.name + " " + (s.status === "done" ? "done" : pct + " percent") + (rate2 ? ", " + rate2 : "");
-        }).join(", ")
-      );
-    }
-    if (refused.length) words.push("refused " + refused.map((s) => s.peer.name).join(", "));
-    if (stopped.length) words.push("cancelled " + stopped.map((s) => s.peer.name).join(", "));
-    if (gone.length) words.push("left " + gone.map((s) => s.peer.name).join(", "));
-    out.el.status.textContent = words.join(" | ");
-    if (!open) out.el.acts.replaceChildren();
-  }
-  function fileSettle(out) {
-    const list = [...out.peers.values()];
-    if (!list.length) return;
-    const open = list.some((s) => s.status === "offered" || s.status === "sending");
-    if (open) return;
-    out.file = null;
-    state.files.delete(out.x);
-  }
-  function fileClearAll() {
-    for (const out of state.files.values()) {
-      out.cancelled = true;
-      for (const st of out.peers.values()) fileStop(st);
-      out.file = null;
-    }
-    state.files.clear();
-    for (const rec of state.filesIn.values()) {
-      fileDiskAbort(rec);
-      if (rec.url) URL.revokeObjectURL(rec.url);
-      rec.url = "";
-    }
-    state.filesIn.clear();
-    for (const url of state.fileLinks) URL.revokeObjectURL(url);
-    state.fileLinks.clear();
-    state.fileOffers = 0;
-    state.fileRecv = 0;
-    state.fileChunksSent = 0;
-    state.fileChunksRecv = 0;
-    state.fileRefused = 0;
-    state.fileCancelled = 0;
+    return out;
   }
 
   // src/badge.ts
@@ -8067,7 +7481,7 @@
         await pc.setLocalDescription();
         sealedSendSdp(peer, "offer", pc.localDescription.sdp);
       } catch (err) {
-        console.warn("negotiation failed", err);
+        console.warn("negotiation failed", errName(err));
       } finally {
         peer.makingOffer = false;
       }
@@ -8118,6 +7532,9 @@
     if (initiator) preparePeer(peer);
     return peer;
   }
+  function errName(err) {
+    return err && (err.name || err.constructor && err.constructor.name) || "error";
+  }
   function setPeerState(peer, text) {
     peer.state = text;
     if (peer.tile) peer.tile.dataset.state = text;
@@ -8133,7 +7550,7 @@
       try {
         await peer.pc.addIceCandidate(cand);
       } catch (err) {
-        if (!peer.ignoreOffer) console.warn("candidate rejected", err);
+        if (!peer.ignoreOffer) console.warn("candidate rejected", errName(err));
       }
     }
   }
@@ -8166,8 +7583,8 @@
       capCameraSenders(pc);
     } catch (err) {
       peer.settingAnswer = false;
-      const why = err && err.message ? err.message : String(err);
-      state.workerErrors.push("description failed for " + shortPeer(peer.id) + ": " + why);
+      const kind = err && (err.name || err.constructor && err.constructor.name) || "error";
+      state.workerErrors.push("description failed for " + shortPeer(peer.id) + ": " + kind);
       say("the " + type + " with " + shortPeer(peer.id) + " failed; the link has no media");
     }
   }
@@ -8180,13 +7597,14 @@
     try {
       await peer.pc.addIceCandidate(candidate);
     } catch (err) {
-      if (!peer.ignoreOffer) console.warn("candidate rejected", err);
+      if (!peer.ignoreOffer) console.warn("candidate rejected", errName(err));
     }
   }
   function dropPeer(id) {
     const peer = state.peers.get(id);
     if (!peer) return;
     dropAudio(peer);
+    worldDrop(id);
     fileDropPeer(peer);
     if (peer.pc) peer.pc.close();
     const row = peer.tile ? rowOf.get(peer.tile) : null;
@@ -8245,11 +7663,11 @@
     return win().stanzePQ;
   }
   function b64e(bytes) {
-    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    if ("toBase64" in view) return view.toBase64();
+    const view2 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if ("toBase64" in view2) return view2.toBase64();
     let raw = "";
-    for (let i = 0; i < view.length; i += 32768)
-      raw += String.fromCharCode.apply(null, view.subarray(i, i + 32768));
+    for (let i = 0; i < view2.length; i += 32768)
+      raw += String.fromCharCode.apply(null, view2.subarray(i, i + 32768));
     return btoa(raw);
   }
   function b64d(s) {
@@ -8286,12 +7704,19 @@
   function verifyText(code) {
     return verifyEmojis(code).map((pair) => pair[0]).join(" ");
   }
-  function chatAAD(peerId, seq) {
-    return sealUtf8.encode("pq-e2e v2 chat " + pairLabel(peerId) + " " + seq);
+  function identityNames(peerId, selfId, peerIdKey) {
+    const a = String(selfId || "?");
+    const b = String(peerIdKey || "?");
+    return a < b ? a + " " + b : b + " " + a;
   }
-  function fileAAD(peerId, fromId, xfer, seq) {
+  function chatAAD(peerId, seq, selfId, peerIdKey) {
     return sealUtf8.encode(
-      "pq-e2e v2 file " + pairLabel(peerId) + " from " + String(fromId) + " " + xfer + " " + seq
+      "pq-e2e v2 chat " + pairLabel(peerId) + " id " + identityNames(peerId, selfId, peerIdKey) + " " + seq
+    );
+  }
+  function fileAAD(peerId, fromId, xfer, seq, selfId, peerIdKey) {
+    return sealUtf8.encode(
+      "pq-e2e v2 file " + pairLabel(peerId) + " id " + identityNames(peerId, selfId, peerIdKey) + " from " + String(fromId) + " " + xfer + " " + seq
     );
   }
   function sealingAvailable() {
@@ -8402,6 +7827,152 @@
     }
     layoutStage();
     updateButtons();
+  }
+
+  // src/sfx.ts
+  var SFX_NAMES = [
+    "pop",
+    "bonk",
+    "timp",
+    "hammer",
+    "lost",
+    "discord",
+    "knock2",
+    "imsg-out",
+    "imsg-in",
+    "signal-call",
+    "tg-call",
+    "ios",
+    "vineboom"
+  ];
+  var SFX_RATE = 0.35;
+  var LOST_RATE = 0.2;
+  var LOST_LOOP_START = 0.16;
+  var LOST_LOOP_END = 8.16;
+  var sfxCache = /* @__PURE__ */ new Map();
+  var sfxExt = "";
+  function pickSfxExt() {
+    if (sfxExt) return sfxExt;
+    const probe = document.createElement("audio");
+    const tries = [
+      ["ogg", "audio/ogg; codecs=opus"],
+      ["webm", "audio/webm; codecs=opus"],
+      ["mp3", "audio/mpeg"]
+    ];
+    for (const [ext, type] of tries) {
+      if (probe.canPlayType && probe.canPlayType(type)) {
+        sfxExt = ext;
+        return ext;
+      }
+    }
+    sfxExt = "webm";
+    return sfxExt;
+  }
+  function ensureSfx() {
+    if (!state.sfxCtx) state.sfxCtx = newAudioCtx();
+  }
+  function preloadSfx() {
+    ensureSfx();
+    const ctx = state.sfxCtx;
+    if (!ctx) return;
+    const ext = pickSfxExt();
+    for (const name of SFX_NAMES) {
+      if (sfxCache.has(name)) continue;
+      fetch(`sfx/${name}.${ext}`).then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)).then((buffer) => {
+        sfxCache.set(name, buffer);
+        if (name === "lost" && state.lostWanted) startLost();
+      }).catch(() => {
+      });
+    }
+  }
+  function playSfx(name, rate2 = 1) {
+    if (!state.sounds) return;
+    if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
+    const ctx = state.sfxCtx;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {
+    });
+    const buffer = sfxCache.get(name);
+    if (!buffer) {
+      return;
+    }
+    stopSfx();
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      const gain = ctx.createGain();
+      gain.gain.value = SFX_RATE * Math.max(0, Math.min(1, rate2));
+      src.connect(gain);
+      gain.connect(ctx.destination);
+      src.onended = () => {
+        if (state.sfxSource === src) state.sfxSource = null;
+      };
+      state.sfxSource = src;
+      src.start();
+    } catch {
+    }
+  }
+  function stopSfx() {
+    if (!state.sfxSource) return;
+    stopQuietly(state.sfxSource);
+    state.sfxSource = null;
+  }
+  function startLost() {
+    state.lostWanted = true;
+    if (!state.sounds) return;
+    if (state.lostSource) return;
+    const ctx = state.sfxCtx;
+    const buffer = sfxCache.get("lost");
+    if (!ctx || !buffer) return;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {
+    });
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      if (buffer.duration >= LOST_LOOP_END) {
+        src.loopStart = LOST_LOOP_START;
+        src.loopEnd = LOST_LOOP_END;
+      }
+      const gain = ctx.createGain();
+      gain.gain.value = LOST_RATE;
+      src.connect(gain);
+      gain.connect(ctx.destination);
+      src.start();
+      state.lostSource = src;
+      state.lostGain = gain;
+    } catch {
+      state.lostSource = null;
+      state.lostGain = null;
+    }
+  }
+  function setSounds(on) {
+    state.sounds = on;
+    document.body.dataset.sounds = on ? "on" : "off";
+    const box = $("sounds");
+    if (box) box.checked = on;
+    if (!on) {
+      if (state.sfxSource) {
+        stopQuietly(state.sfxSource);
+        state.sfxSource = null;
+      }
+      const wanted = state.lostWanted;
+      stopLost();
+      state.lostWanted = wanted;
+    } else if (state.lostWanted) {
+      startLost();
+    }
+  }
+  function stopLost() {
+    state.lostWanted = false;
+    const src = state.lostSource;
+    state.lostSource = null;
+    if (state.lostGain) {
+      disconnectQuietly(state.lostGain);
+      state.lostGain = null;
+    }
+    if (!src) return;
+    stopQuietly(src);
+    disconnectQuietly(src);
   }
 
   // src/devices.ts
@@ -8753,6 +8324,10 @@
   }
   function preparePeer(peer) {
     if (peer.tx) return;
+    if (!peer.pass || !peer.pass.done) {
+      peer.prepareHeld = true;
+      return;
+    }
     peer.tx = {};
     peer.sealed = true;
     const used = /* @__PURE__ */ new Set();
@@ -8779,6 +8354,7 @@
   }
   function attachTrack(peer, track) {
     if (peer.sealed === false || peer.waiting) return;
+    if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx[track.kind];
     if (!tr) return;
     tr.sender.replaceTrack(track).catch(() => {
@@ -8787,6 +8363,7 @@
   }
   function attachScreen(peer) {
     if (peer.sealed === false || peer.waiting) return;
+    if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx.screen;
     const track = state.screen && state.screen.getVideoTracks()[0];
     if (tr && track) tr.sender.replaceTrack(track).catch(() => {
@@ -10075,7 +9652,9 @@
     }
     const alone = bigs.length === 1 ? "yes" : "no";
     if (main.dataset.alone !== alone) main.dataset.alone = alone;
-    main.hidden = bigs.length === 0;
+    const world = document.getElementById("world-view");
+    const worldOn = !!world && !world.hidden;
+    main.hidden = bigs.length === 0 || worldOn;
   }
   function wirePipDrag() {
     const box = $("self-pip");
@@ -10171,6 +9750,1902 @@
     state.spotlight = id && state.spotlight !== id ? id : "";
     for (const open of document.querySelectorAll(".tile.ctl")) open.classList.remove("ctl");
     layoutStage();
+  }
+
+  // src/clock.ts
+  function clockText(ms) {
+    const total = Math.max(0, Math.floor(ms / 1e3));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor(total % 3600 / 60);
+    const s = total % 60;
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  function startCallClock() {
+    stopCallClock();
+    state.callStart = Date.now();
+    $("call-timer").textContent = clockText(0);
+    state.callTimer = setInterval(() => {
+      if (!state.callStart) return;
+      $("call-timer").textContent = clockText(Date.now() - state.callStart);
+    }, 1e3);
+  }
+  function stopCallClock() {
+    if (state.callTimer) clearInterval(state.callTimer);
+    state.callTimer = null;
+    state.callStart = 0;
+    const el2 = $("call-timer");
+    if (el2) el2.textContent = "";
+  }
+
+  // src/signaling.ts
+  function dropPeers() {
+    for (const id of [...state.peers.keys()]) dropPeer(id);
+  }
+  function scheduleReconnect() {
+    if (state.leaving || state.fatal || state.reconnectTimer) return;
+    const delay = state.reconnectDelay;
+    state.reconnectDelay = Math.min(state.reconnectDelay * 2, 1e4);
+    state.reconnectTimer = setTimeout(() => {
+      state.reconnectTimer = null;
+      if (!state.leaving && !state.fatal) connectWS();
+    }, delay);
+  }
+  function cancelReconnect() {
+    if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = null;
+    state.reconnectDelay = 500;
+  }
+  function connectWS() {
+    cancelReconnect();
+    if (state.ws) {
+      const old = state.ws;
+      state.ws = null;
+      old.onclose = null;
+      try {
+        old.close();
+      } catch {
+      }
+    }
+    let ws;
+    try {
+      ws = new WebSocket(wsURL());
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+    state.ws = ws;
+    ws.onopen = () => {
+      state.reconnectDelay = 500;
+      stopLost();
+      send({ t: "join", room: state.room });
+    };
+    ws.onmessage = (event) => {
+      auditWire("in", event.data);
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      handle(msg);
+    };
+    ws.onclose = () => {
+      if (state.ws === ws) state.ws = null;
+      if (state.leaving) return;
+      dropPeers();
+      if (state.fatal) {
+        leave(state.fatal);
+        return;
+      }
+      say("connection lost, reconnecting");
+      startLost();
+      scheduleReconnect();
+    };
+    ws.onerror = () => {
+    };
+  }
+  function handle(msg) {
+    if (msg.t === "error") {
+      if (msg.code === "unavailable") {
+        state.fatal = "room unavailable or full";
+        leave(state.fatal);
+      } else if (msg.code === "sealed-only") {
+        state.fatal = "this page is out of date; reload it to join";
+        leave(state.fatal);
+      }
+      return;
+    }
+    switch (msg.t) {
+      case "joined": {
+        state.self = msg.self;
+        state.ice = msg.ice || [];
+        if (state.notice === "connection lost, reconnecting") say("");
+        state.auth = { n: -1, admins: [], by: "", sig: "" };
+        setAdmins([]);
+        state.waiting = true;
+        asrProbe();
+        omniProbe();
+        let listed = 0;
+        for (const info of msg.peers || []) {
+          if (!info || !info.id) continue;
+          const peer = ensurePeer(info.id);
+          peer.waiting = false;
+          sealedSendPub(peer);
+          listed++;
+        }
+        if (!listed) sealedSendPub(null);
+        startAuthSeed();
+        markAdmins();
+        paintWaiting();
+        sendState();
+        updateCount();
+        break;
+      }
+      case "peer-joined": {
+        if (!msg.peer || !msg.peer.id) break;
+        const peer = ensurePeer(msg.peer.id);
+        markAdmins();
+        paintWaiting();
+        paintHandQueue();
+        sealedSendPub(peer);
+        playSfx("pop");
+        break;
+      }
+      case "peer-left": {
+        dropPeer(msg.from);
+        state.admins.delete(msg.from);
+        resealOnLeave(msg.from);
+        markAdmins();
+        paintWaiting();
+        playSfx("bonk");
+        break;
+      }
+      case "enc": {
+        if (msg.from && typeof msg.b === "string") sealedHandleOpaque(msg.from, msg.b);
+        break;
+      }
+    }
+  }
+
+  // src/stats.ts
+  var STATS_MS = 1e3;
+  var STATS_HISTORY = 60;
+  function statsOpen() {
+    const panel = $("stats-panel");
+    return !!panel && !panel.hidden;
+  }
+  function startStats() {
+    if (state.statsTimer || !statsOpen()) return;
+    for (const peer of state.peers.values()) {
+      peer.statLast.clear();
+      peer.statLoss = void 0;
+    }
+    state.statHist.length = 0;
+    clearStatsPanel();
+    updateStats();
+    state.statsTimer = setInterval(() => updateStats(), STATS_MS);
+  }
+  function stopStats() {
+    if (state.statsTimer) clearInterval(state.statsTimer);
+    state.statsTimer = null;
+  }
+  function setStatsOpen(open) {
+    $("stats-panel").hidden = !open;
+    $("stats-btn").setAttribute("aria-pressed", String(open));
+    if (open && !document.hidden) startStats();
+    else stopStats();
+  }
+  function clearStatsPanel() {
+    const body = $("stats-body");
+    if (body) body.replaceChildren();
+    const sum = $("stats-sum");
+    if (sum) sum.replaceChildren();
+  }
+  function bitrate(last, report, field) {
+    const bytes = report[field] || 0;
+    const ts = report.timestamp || 0;
+    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
+    const prev = last.get(key);
+    last.set(key, { bytes, ts });
+    if (!prev || !(ts > prev.ts)) return 0;
+    const kbit = (bytes - prev.bytes) * 8 / (ts - prev.ts);
+    return kbit > 0 ? Math.round(kbit) : 0;
+  }
+  function isDirectType(type) {
+    return type === "host" || type === "srflx" || type === "prflx";
+  }
+  function counterDelta(last, report, field) {
+    const value = report[field];
+    if (typeof value !== "number") return null;
+    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
+    const prev = last.get(key);
+    last.set(key, { bytes: value, ts: report.timestamp || 0 });
+    return prev ? value - prev.bytes : null;
+  }
+  async function peerStats(peer) {
+    const pc = peer.pc;
+    if (!pc || typeof pc.getStats !== "function") return null;
+    if (pc.connectionState === "closed" || pc.signalingState === "closed") return null;
+    let report;
+    try {
+      report = await pc.getStats();
+    } catch {
+      return null;
+    }
+    if (!report || typeof report.forEach !== "function") return null;
+    if (!(peer.statLast instanceof Map)) peer.statLast = /* @__PURE__ */ new Map();
+    const out = {
+      up: { audio: 0, video: 0 },
+      down: { audio: 0, video: 0 },
+      rtt: null,
+      path: "",
+      jitter: null,
+      loss: null,
+      shot: ""
+    };
+    let jitterMax = null;
+    let lost = 0;
+    let got = 0;
+    let pairId = null;
+    const pairs = /* @__PURE__ */ new Map();
+    const cands = /* @__PURE__ */ new Map();
+    try {
+      report.forEach((r) => {
+        if (r.type === "outbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
+          out.up[r.kind] += bitrate(peer.statLast, r, "bytesSent");
+        } else if (r.type === "inbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
+          out.down[r.kind] += bitrate(peer.statLast, r, "bytesReceived");
+          if (r.kind === "video" && r.frameWidth && r.frameHeight) {
+            out.shot = `${r.frameWidth}x${r.frameHeight}`;
+          }
+          if (typeof r.jitter === "number") {
+            jitterMax = jitterMax === null ? r.jitter : Math.max(jitterMax, r.jitter);
+          }
+          const dLost = counterDelta(peer.statLast, r, "packetsLost");
+          const dGot = counterDelta(peer.statLast, r, "packetsReceived");
+          if (dLost !== null && dGot !== null && dGot >= 0) {
+            lost += Math.max(0, dLost);
+            got += dGot;
+          }
+        } else if (r.type === "transport" && r.selectedCandidatePairId) {
+          pairId = r.selectedCandidatePairId;
+        } else if (r.type === "candidate-pair") {
+          pairs.set(r.id, r);
+        } else if (r.type === "local-candidate" || r.type === "remote-candidate") {
+          cands.set(r.id, r);
+        }
+      });
+    } catch {
+    }
+    let pair = pairId ? pairs.get(pairId) : null;
+    if (!pair) {
+      for (const p of pairs.values()) {
+        if (p.selected || p.nominated) {
+          pair = p;
+          break;
+        }
+      }
+    }
+    if (!pair) {
+      for (const p of pairs.values()) {
+        if (p.state === "succeeded") {
+          pair = p;
+          break;
+        }
+      }
+    }
+    if (pair) {
+      if (typeof pair.currentRoundTripTime === "number") {
+        out.rtt = Math.round(pair.currentRoundTripTime * 1e3);
+      }
+      const local = cands.get(pair.localCandidateId);
+      const remote = cands.get(pair.remoteCandidateId);
+      const lt = local ? local.candidateType || local.type || "" : "";
+      const rt = remote ? remote.candidateType || remote.type || "" : "";
+      const relays = [];
+      if (lt === "relay") relays.push("you");
+      if (rt === "relay") relays.push("them");
+      if (relays.length) out.path = `relay (${relays.join(" + ")})`;
+      else if (isDirectType(lt) && isDirectType(rt)) out.path = "p2p";
+    }
+    if (jitterMax !== null) out.jitter = jitterMax * 1e3;
+    if (got > 0) {
+      const now = lost / (lost + got) * 100;
+      out.loss = typeof peer.statLoss === "number" ? peer.statLoss * 0.7 + now * 0.3 : now;
+      peer.statLoss = out.loss;
+    }
+    return out;
+  }
+  function rateScale(kbit) {
+    const bytes = state.statsBytes;
+    const n = Math.max(0, kbit) * (bytes ? 125 : 1);
+    const big = n >= (bytes ? 1048576 : 1e3);
+    const v = n / (big ? bytes ? 1048576 : 1e3 : bytes ? 1024 : 1);
+    const num = big ? v.toFixed(v >= 10 ? 0 : 1) : Math.round(v).toString();
+    return { num, unit: big ? "m" : "k" };
+  }
+  function rateText(kbit) {
+    if (!(kbit > 0)) return "";
+    const r = rateScale(kbit);
+    return r.num + r.unit;
+  }
+  function msText(ms) {
+    return Math.round(ms) + " ms";
+  }
+  function jitterText(ms) {
+    if (typeof ms !== "number") return "";
+    return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + " ms";
+  }
+  function lossText(pct) {
+    if (typeof pct !== "number") return "";
+    if (pct < 0.05) return "none";
+    return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + " %";
+  }
+  function lossMark(pct) {
+    return pct >= 2 ? false : void 0;
+  }
+  var VIDEO_ICON = ["1F3A5", "video"];
+  var AUDIO_ICON = ["1F50A", "audio"];
+  var PICTURE_ICON = ["1F5BC", "picture size"];
+  var PING_ICON = ["1F3D3", "round trip"];
+  var JITTER_ICON = ["1F30A", "jitter, how far apart the packets arrive"];
+  var LOSS_ICON = ["1F4C9", "packet loss"];
+  var DIRECT_ICON = ["1F517", "direct, the two browsers talk to each other"];
+  var RELAY_ICON = ["1F4E1", "relay, the media goes through the server"];
+  var UP_ICON = ["2B06", "out, what this browser sends"];
+  var DOWN_ICON = ["2B07", "in, what this browser receives"];
+  function routeCell(path) {
+    if (!path) return ["", "", "not known yet"];
+    const direct = path === "direct" || path === "p2p";
+    return [...direct ? DIRECT_ICON : RELAY_ICON, path === "p2p" ? "direct" : path];
+  }
+  function rateCell(dir, kbit) {
+    return [...dir === "up" ? UP_ICON : DOWN_ICON, rateText(kbit) || "-"];
+  }
+  function tripCells(rtt, jitter, loss) {
+    return [
+      [...PING_ICON, typeof rtt === "number" ? msText(rtt) : ""],
+      [...JITTER_ICON, typeof jitter === "number" ? jitterText(jitter) : ""],
+      [...LOSS_ICON, typeof loss === "number" ? lossText(loss) : "", lossMark(loss)]
+    ];
+  }
+  function pathText(path) {
+    return path === "p2p" ? "direct" : path;
+  }
+  function callPath(live) {
+    const words = /* @__PURE__ */ new Set();
+    for (const s of live) if (s.path) words.add(pathText(s.path));
+    if (words.size === 0) return "";
+    if (words.size === 1) return [...words][0];
+    return "mixed: " + [...words].join(", ");
+  }
+  function worstOf(live, key) {
+    const nums = live.map((s) => s[key]).filter((n) => typeof n === "number");
+    return nums.length ? Math.max(...nums) : null;
+  }
+  function callPairs(live, total) {
+    const out = [];
+    const path = callPath(live);
+    const rtt = worstOf(live, "rtt");
+    const jitter = worstOf(live, "jitter");
+    const loss = worstOf(live, "loss");
+    if (path) out.push(["route ", [routeCell(path)]]);
+    if (rtt !== null || jitter !== null || loss !== null) {
+      out.push(["link ", tripCells(rtt, jitter, loss), void 0, "metrics"]);
+    }
+    out.push([
+      VIDEO_ICON,
+      [["", "", ""], rateCell("up", total.up.video), rateCell("down", total.down.video)]
+    ]);
+    out.push([
+      AUDIO_ICON,
+      [["", "", ""], rateCell("up", total.up.audio), rateCell("down", total.down.audio)]
+    ]);
+    return out;
+  }
+  function levelDb(peak) {
+    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+    return db > -60 ? `${Math.round(db)} dB` : "silent";
+  }
+  function levelFraction(peak) {
+    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+    return clamp((db + 60) / 60, 0, 1);
+  }
+  function peerLevel(peer) {
+    if (!peer.audioSrc || !peer.meter) return "";
+    return levelDb(peer.meterPeak || 0);
+  }
+  function noiseText(out, down) {
+    if (!out && !down) return "";
+    return `out ${out || "?"}, in ${down || "?"}`;
+  }
+  function ownPairs(total) {
+    const out = [];
+    if (state.idKey) out.push(["key ", state.idKey.fp, void 0, "mono"]);
+    const live = !!(state.mic && state.micTrack && state.micTrack.readyState === "live");
+    const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
+    const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
+    const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : "off";
+    out.push([
+      VIDEO_ICON,
+      [
+        [...PICTURE_ICON, shot],
+        rateCell("up", total ? total.up.video : 0),
+        rateCell("down", total ? total.down.video : 0)
+      ]
+    ]);
+    const sample = mic && mic.sampleRate ? `${Math.round(mic.sampleRate / 1e3)} kHz ${mic.channelCount || 1}ch` : "";
+    out.push([
+      AUDIO_ICON,
+      [
+        ["", "", live ? sample || "on" : "off"],
+        rateCell("up", total ? total.up.audio : 0),
+        rateCell("down", total ? total.down.audio : 0)
+      ]
+    ]);
+    const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
+    out.push([
+      "mic ",
+      [["", "", level ? level.state === "silent" ? "silent" : level.db : "off"]],
+      void 0,
+      false,
+      level ? levelFraction(state.meterPeak) : 0
+    ]);
+    const fe = feDrops();
+    const seen = fe.frames + fe.dropped;
+    const drops = seen > 0 ? `, ${(100 * fe.dropped / seen).toFixed(1)}% drop` : "";
+    out.push(["filter ", `out ${state.denoiseOn ? state.denoiseEngine : "off"}${drops}`]);
+    const ctx = state.playCtx;
+    const play2 = ctx ? ctx.state : "none";
+    if (play2 !== "running") out.push(["sound ", `${play2}, tap the page once`, false]);
+    return out;
+  }
+  function peerPairs(peer, s) {
+    const out = [];
+    const pin = pinState(peer);
+    if (peer.fp && pin !== "new") {
+      const bad = pin === "changed" || pin === "rollback";
+      const cells = [pin === "known" ? ["2714", "verified", peer.fp] : ["", "", peer.fp]];
+      if (pin !== "known") cells.push(["", "", pin]);
+      out.push(["key ", cells, bad ? false : void 0, "mono"]);
+    }
+    if (!s) {
+      out.push(["", "connecting", void 0, true]);
+    } else {
+      out.push(["route ", [routeCell(s.path)]]);
+      out.push(["link ", tripCells(s.rtt, s.jitter, s.loss), void 0, "metrics"]);
+      out.push([
+        VIDEO_ICON,
+        [[...PICTURE_ICON, s.shot || ""], rateCell("up", s.up.video), rateCell("down", s.down.video)]
+      ]);
+      out.push([
+        AUDIO_ICON,
+        [["", "", peerLevel(peer)], rateCell("up", s.up.audio), rateCell("down", s.down.audio)]
+      ]);
+      const noise = noiseText(peer.outFilter, peer.inFilter);
+      if (noise) out.push(["filter ", noise]);
+    }
+    if (peer.sas && sealedRoomCodes().size > 1)
+      out.push(["code ", verifyText(peer.sas), void 0, true]);
+    if (!peer.keys) out.push(["keys ", "none", false, true]);
+    else if (peer.ready === "ready" && !peer.confirmed)
+      out.push(["keys ", "not confirmed", false, true]);
+    const c = sealedPairCount(peer.id);
+    if (c.refused) out.push(["frames ", `${c.refused} refused`, false, true]);
+    return out;
+  }
+  function statIcon(hex, title) {
+    const img = document.createElement("img");
+    img.className = "sico";
+    img.src = `/openmoji/${hex}.svg`;
+    img.alt = title;
+    img.title = title;
+    return img;
+  }
+  function statCells(value, metrics) {
+    const span = document.createElement("span");
+    span.className = "sv";
+    const parts = Array.isArray(value) ? value : [value];
+    for (const raw of parts) {
+      const p = Array.isArray(raw) ? raw : [raw];
+      const cell = document.createElement("span");
+      cell.className = "cell" + (p[3] === true ? " good" : p[3] === false ? " bad" : "");
+      const word = p.length > 1 ? p[2] : p[0];
+      const text = document.createElement("span");
+      text.textContent = word === null || word === void 0 ? "" : String(word);
+      if (metrics && p.length > 1 && p[1]) {
+        const label = document.createElement("span");
+        label.className = "cl";
+        label.title = String(p[1]);
+        label.textContent = String(p[1]).split(",")[0];
+        text.className = "cv";
+        cell.append(label, text);
+      } else {
+        if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
+        cell.appendChild(text);
+      }
+      span.appendChild(cell);
+    }
+    return span;
+  }
+  function statLine(key, value, mark, sub, meter) {
+    const line = document.createElement("div");
+    const parts = Array.isArray(value) ? value : [value];
+    line.className = "sline" + (sub === "mono" ? " mono" : sub === "metrics" ? " metrics" : sub ? " sub" : "") + (typeof meter === "number" ? " meterline" : "") + (mark === true ? " good" : mark === false ? " bad" : "");
+    line.dataset.n = String(parts.length);
+    const k = document.createElement("span");
+    k.className = "sk";
+    if (Array.isArray(key) && key[0]) {
+      k.appendChild(statIcon(key[0], key[1]));
+      k.appendChild(document.createTextNode(String(key[1]).split(",")[0]));
+    } else k.textContent = Array.isArray(key) ? key[1] || "" : key;
+    line.appendChild(k);
+    if (typeof meter === "number") {
+      const bar = document.createElement("span");
+      bar.className = "meter";
+      bar.setAttribute("role", "img");
+      bar.setAttribute("aria-label", `level ${Math.round(meter * 100)} percent`);
+      const fill = document.createElement("i");
+      fill.style.width = `${Math.round(meter * 100)}%`;
+      bar.appendChild(fill);
+      line.appendChild(bar);
+    }
+    line.appendChild(statCells(value, sub === "metrics"));
+    return line;
+  }
+  function statsRow(title, pairs, mark = null, badge = null) {
+    const row = document.createElement("div");
+    row.className = "srow";
+    const head = document.createElement("div");
+    head.className = "sname";
+    const name = document.createElement("span");
+    name.className = "stitle";
+    name.textContent = title;
+    head.appendChild(name);
+    if (badge && badge.level) {
+      const chip = document.createElement("span");
+      chip.className = "sbadge";
+      chip.dataset.level = badge.level;
+      chip.textContent = badge.text || badge.level;
+      head.appendChild(chip);
+    }
+    row.appendChild(head);
+    for (const p of pairs) {
+      row.appendChild(
+        statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false, p[4])
+      );
+    }
+    return row;
+  }
+  function linkLevel(s) {
+    if (!s) return "";
+    const { rtt, loss, jitter } = s;
+    if (rtt === null && loss === null) return "";
+    if (loss !== null && loss >= 5 || rtt !== null && rtt >= 400) return "poor";
+    if (loss !== null && loss >= 2 || rtt !== null && rtt >= 200 || jitter !== null && jitter >= 40)
+      return "fair";
+    return "good";
+  }
+  function worstLevel(levels) {
+    for (const word of ["poor", "fair", "good"]) if (levels.includes(word)) return word;
+    return "";
+  }
+  function statsSummary(live, guestCount) {
+    const level = worstLevel(live.map(linkLevel));
+    const box = document.createElement("div");
+    box.className = "ssum";
+    box.dataset.level = level;
+    const lamp = document.createElement("span");
+    lamp.className = "slamp";
+    const text = document.createElement("div");
+    const head = document.createElement("div");
+    head.className = "ssum-head";
+    const sub = document.createElement("div");
+    sub.className = "ssum-sub";
+    if (guestCount === 0) {
+      head.textContent = "waiting for guests";
+      sub.textContent = "the numbers start when someone joins";
+    } else if (!level) {
+      head.textContent = "measuring";
+      sub.textContent = "the first numbers arrive in a second";
+    } else {
+      head.textContent = `connection ${level}`;
+      const nums = live.map((s) => s.rtt).filter((n) => typeof n === "number");
+      const loss = live.map((s) => s.loss).filter((n) => typeof n === "number");
+      const bits = [callPath(live)];
+      if (nums.length) bits.push(msText(Math.max(...nums)));
+      if (loss.length) bits.push(`loss ${lossText(Math.max(...loss))}`);
+      sub.textContent = bits.filter(Boolean).join(" | ");
+      if (level === "poor") sub.textContent += ". Try a lower quality in the toolbar.";
+    }
+    text.append(head, sub);
+    box.append(lamp, text);
+    return box;
+  }
+  function recordStatsHistory(total, live) {
+    state.statHist.push({
+      down: total.down.video + total.down.audio,
+      rtt: worstOf(live, "rtt"),
+      loss: worstOf(live, "loss")
+    });
+    if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
+  }
+  function statsPlot(canvas, values, peak, fill, color) {
+    if (!canvas) return;
+    const cssW = canvas.clientWidth || 288;
+    const cssH = canvas.clientHeight || 34;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(cssW * dpr);
+    const h = Math.round(cssH * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, cssW, cssH);
+    const n = values.length;
+    const stepX = (cssW - 2) / (STATS_HISTORY - 1);
+    const px = (i) => cssW - 1 - (n - 1 - i) * stepX;
+    const py = (v) => cssH - 1 - Math.min(v, peak) / peak * (cssH - 2);
+    ctx.strokeStyle = "#0c3c0c";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let g = 1; g < 3; g++) {
+      const y = Math.round(cssH * g / 3) + 0.5;
+      ctx.moveTo(0, y);
+      ctx.lineTo(cssW, y);
+    }
+    for (let g = 1; g < 6; g++) {
+      const x = Math.round(cssW * g / 6) + 0.5;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, cssH);
+    }
+    ctx.stroke();
+    if (n < 1) return;
+    if (fill) {
+      ctx.beginPath();
+      ctx.moveTo(px(0), cssH - 1);
+      for (let i = 0; i < n; i++) ctx.lineTo(px(i), py(values[i] === null ? 0 : values[i]));
+      ctx.lineTo(px(n - 1), cssH - 1);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.35;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    let drawing = false;
+    for (let i = 0; i < n; i++) {
+      const v = values[i];
+      if (v === null) {
+        drawing = false;
+        continue;
+      }
+      if (drawing) ctx.lineTo(px(i), py(v));
+      else {
+        ctx.moveTo(px(i), py(v));
+        drawing = true;
+      }
+    }
+    ctx.stroke();
+  }
+  function statsNote(id, text) {
+    const note = $(id);
+    if (note) note.textContent = text;
+  }
+  function rateWords(kbit) {
+    const r = rateScale(kbit);
+    const words = state.statsBytes ? ["KiB/s", "MiB/s"] : ["kbit/s", "Mbit/s"];
+    return `${r.num} ${words[r.unit === "m" ? 1 : 0]}`;
+  }
+  function drawStatsGraphs() {
+    const box = $("stats-graph-box");
+    if (!box) return;
+    const hist = state.statHist;
+    box.hidden = hist.length < 2;
+    if (hist.length < 2) return;
+    const series = (key) => hist.map((p) => typeof p[key] === "number" ? p[key] : null);
+    const values = (arr) => arr.filter((v) => v !== null);
+    const peak = (arr, floor) => Math.max(floor, ...values(arr));
+    const now = (arr) => {
+      const kept = values(arr);
+      return kept.length ? kept[kept.length - 1] : null;
+    };
+    const secs = `last ${hist.length} s`;
+    const down = series("down");
+    statsPlot($("stats-graph-down"), down, peak(down, 100), true, "#00e000");
+    const downMax = Math.max(0, ...values(down));
+    statsNote(
+      "stats-note-down",
+      `down ${rateWords(now(down))} now, peak ${rateWords(downMax)}, ${secs}`
+    );
+    const rtt = series("rtt");
+    statsPlot($("stats-graph-rtt"), rtt, peak(rtt, 100), false, "#f0e000");
+    statsNote(
+      "stats-note-rtt",
+      values(rtt).length ? `round trip ${msText(now(rtt))} now, peak ${msText(Math.max(...values(rtt)))}, ${secs}` : `round trip not measured, ${secs}`
+    );
+    const loss = series("loss");
+    statsPlot($("stats-graph-loss"), loss, peak(loss, 1), false, "#ff5050");
+    const lossMax = Math.max(0, ...values(loss));
+    statsNote(
+      "stats-note-loss",
+      lossMax > 0 ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}` : `loss none, ${secs}`
+    );
+  }
+  async function updateStats() {
+    if (!statsOpen() || state.statsBusy) return;
+    const body = $("stats-body");
+    if (!body) return;
+    state.statsBusy = true;
+    try {
+      const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
+      const live = [];
+      const guests = [];
+      for (const peer of state.peers.values()) {
+        const s = await peerStats(peer);
+        if (s) {
+          live.push(s);
+          for (const dir of ["up", "down"]) {
+            for (const kind of ["audio", "video"]) total[dir][kind] += s[dir][kind];
+          }
+        }
+        guests.push({ peer, s });
+      }
+      const rows = [];
+      recordStatsHistory(total, live);
+      if (state.peers.size > 1) {
+        const call = callPairs(live, total);
+        if (call.length) rows.push(statsRow("call", call));
+      }
+      for (const { peer, s } of guests) {
+        if (s && s.path && peer.tile)
+          peer.tile.dataset.relay = s.path.startsWith("relay") ? "yes" : "no";
+        const level = linkLevel(s);
+        const pairs = peerPairs(peer, s);
+        if (pairs.length) {
+          rows.push(
+            statsRow(
+              peer.name || shortPeer(peer.id),
+              pairs,
+              void 0,
+              level ? { level, text: level } : null
+            )
+          );
+        }
+      }
+      rows.push(statsRow("you", ownPairs(total)));
+      $("stats-sum").replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
+      const legend = document.createElement("p");
+      legend.className = "slegend";
+      legend.textContent = state.statsBytes ? "k is KiB/s and m is MiB/s, eight bits to the byte. The up arrow is what you send, the down arrow what you receive." : "k is kbit/s and m is Mbit/s. The up arrow is what you send, the down arrow what you receive.";
+      body.replaceChildren(...rows, ...sealedCards(), legend);
+      drawStatsGraphs();
+    } finally {
+      state.statsBusy = false;
+    }
+  }
+  function sealedPairCount(id) {
+    const label = pairLabel(id);
+    let out = 0;
+    let inn = 0;
+    let refused = 0;
+    for (const st of Object.values(state.frames)) {
+      if (!st || st.pair !== label) continue;
+      if (st.dir === "send") out += st.ok || 0;
+      else if (st.dir === "recv") {
+        inn += st.ok || 0;
+        refused += st.fail || 0;
+      }
+    }
+    return { out, inn, refused };
+  }
+  function sealedAlarms() {
+    const out = [];
+    if (state.sealFault) out.push(statsRow("sealing fault", [["", state.sealFault, false]]));
+    const failed = sealedFailedPairs();
+    if (failed.length) {
+      const tags = failed.map(
+        (peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || "no code"}`
+      );
+      out.push(
+        statsRow("room code", [
+          ["", "KEY MISMATCH " + tags.join(", "), false],
+          ["", "do not trust this call", false]
+        ])
+      );
+    }
+    if (state.wireLeaks.length) {
+      out.push(
+        statsRow(
+          "leak",
+          state.wireLeaks.map((w) => ["", `${w.where}: ${w.canary}`, false])
+        )
+      );
+    }
+    if (state.workerErrors.length) {
+      out.push(
+        statsRow(
+          "worker",
+          state.workerErrors.slice(0, 5).map((e) => ["", e, false])
+        )
+      );
+    }
+    const wt = state.wasmTest;
+    if (wt && !wasmTestOk(wt)) out.push(statsRow("self test", wasmTestFaults(wt)));
+    return out;
+  }
+  function wasmTestOk(wt) {
+    return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused && wt.idSign && wt.idUnsigned && wt.idFp && wt.pad && wt.passGood && wt.passBad);
+  }
+  function wasmTestFaults(wt) {
+    const bad = [
+      ["sas ", wt.sasMatch ? "match" : "no", !!wt.sasMatch],
+      ["confirm ", wt.confirm ? "ok" : "no", !!wt.confirm],
+      ["open ", wt.open ? "ok" : "no", !!wt.open],
+      ["padding ", wt.pad ? "ok" : "BROKEN", !!wt.pad],
+      ["wrong key ", wt.wrongKeyRefused ? "refused" : "OPENED", !!wt.wrongKeyRefused],
+      ["identity ", wt.idSign ? "signs" : "BROKEN", !!wt.idSign],
+      ["unsigned ", wt.idUnsigned ? "refused" : "ACCEPTED", !!wt.idUnsigned],
+      ["fingerprint ", wt.idFp ? "ok" : "BROKEN", !!wt.idFp],
+      ["room key ", wt.passGood ? "ok" : "BROKEN", !!wt.passGood],
+      ["wrong key ", wt.passBad ? "refused" : "ACCEPTED", !!wt.passBad]
+    ];
+    const out = [["", "FAIL", false]];
+    for (const b of bad) if (!b[2]) out.push(b);
+    return out;
+  }
+  function sealedCards() {
+    const out = [];
+    const available = sealingAvailable();
+    const wt = state.wasmTest;
+    const seal = [
+      ["media ", available ? "sealed, every frame" : "NO SEALING, no media is sent", available]
+    ];
+    if (wt) seal.push(["self test ", wasmTestOk(wt) ? "pass" : "FAIL", wasmTestOk(wt)]);
+    out.push(statsRow("crypto", seal));
+    let refused = 0;
+    for (const st of Object.values(state.frames)) {
+      if (st && st.dir === "recv") refused += st.fail || 0;
+    }
+    const clean = state.workerErrors.length === 0;
+    const counts = [
+      [
+        "frames ",
+        `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`,
+        refused === 0 && clean
+      ],
+      [
+        "wire ",
+        `frames ${state.wireFrames} leaks ${state.wireLeaks.length} clear ${state.clearSignaling}`,
+        state.wireLeaks.length === 0 && state.clearSignaling === 0
+      ]
+    ];
+    const files = state.fileOffers + state.fileRecv + state.fileChunksRecv + state.fileChunksSent + state.fileRefused + state.fileCancelled;
+    if (files) {
+      counts.push([
+        "files ",
+        `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`,
+        state.fileRefused === 0 && state.fileCancelled === 0
+      ]);
+    }
+    const chat = state.chatSent + state.chatRecv + state.replayDrops + state.confirmFailures + state.identityFailures;
+    if (chat) {
+      counts.push([
+        "chat ",
+        `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`,
+        state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0
+      ]);
+    }
+    out.push(statsRow("counters", counts));
+    return out;
+  }
+
+  // src/frame.ts
+  function startSealedWorker() {
+    const worker = new Worker(scriptURL("/e2e-transform.js"));
+    worker.onmessage = (event) => {
+      const msg = event.data || {};
+      if (msg.type === "stats") {
+        state.frames[msg.pair + "|" + msg.dir + (msg.kind ? "|" + msg.kind : "")] = msg;
+        paintFrameCounters();
+      } else if (msg.type === "keys-ok") {
+        const waiting = state.keyWait.get(msg.pair);
+        if (waiting && waiting.gen === msg.gen) {
+          state.keyWait.delete(msg.pair);
+          waiting.resolve(true);
+        }
+      } else if (msg.type === "sample") {
+        if (state.samples.length < 40) state.samples.push(msg);
+      } else if (msg.type === "error") {
+        state.workerErrors.push(msg.msg || "worker error");
+        const waiting = msg.pair && state.keyWait.get(msg.pair);
+        if (waiting && (msg.gen === void 0 || waiting.gen === msg.gen)) {
+          state.keyWait.delete(msg.pair);
+          waiting.resolve(false);
+          say("the frame keys did not install; the link stays without video");
+        }
+      }
+    };
+    worker.onerror = (event) => state.workerErrors.push(String(event.message || event));
+    state.worker = worker;
+  }
+  function paintFrameCounters() {
+    let enc = 0;
+    let dec = 0;
+    for (const st of Object.values(state.frames)) {
+      if (!st) continue;
+      if (st.dir === "send") enc += st.ok || 0;
+      else if (st.dir === "recv") dec += st.ok || 0;
+    }
+    state.encryptFrames = enc;
+    state.decryptFrames = dec;
+  }
+
+  // src/wasm.ts
+  function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+      if (win().Go) return resolve(null);
+      const el2 = document.createElement("script");
+      el2.src = scriptURL(src);
+      el2.onload = () => resolve(null);
+      el2.onerror = () => reject(new Error("could not load " + src));
+      document.head.appendChild(el2);
+    });
+  }
+  function loadWasmModule() {
+    return new Promise((resolve, reject) => {
+      const Go = win().Go;
+      if (!window.WebAssembly || typeof Go !== "function")
+        return reject(new Error("webassembly unavailable"));
+      const go = new Go();
+      fetch("/pq.wasm" + BUILD_Q).then((res) => {
+        if (!res.ok) throw new Error("wasm " + res.status);
+        return WebAssembly.instantiateStreaming(res, go.importObject);
+      }).catch(async () => {
+        const res = await fetch("/pq.wasm" + BUILD_Q);
+        if (!res.ok) throw new Error("wasm " + res.status);
+        const buf = await res.arrayBuffer();
+        return WebAssembly.instantiate(buf, go.importObject);
+      }).then((res) => {
+        go.run(res.instance);
+        const started = Date.now();
+        const timer = setInterval(() => {
+          if (pqModule()) {
+            clearInterval(timer);
+            resolve(null);
+          } else if (Date.now() - started > 3e4) {
+            clearInterval(timer);
+            reject(new Error("wasm module did not start"));
+          }
+        }, 20);
+      }).catch(reject);
+    });
+  }
+  function fpShape(fp) {
+    const parts = String(fp || "").split("-");
+    if (parts.length !== 5) return false;
+    return parts.every((part) => part.length === 4 && /^[a-z2-7]+$/.test(part));
+  }
+  function pqSelfTest() {
+    const pq = pqModule();
+    const a = JSON.parse(pq.gen());
+    const b = JSON.parse(pq.gen());
+    const k1 = JSON.parse(pq.idgen());
+    const k2 = JSON.parse(pq.idgen());
+    const sidA = b64e(crypto.getRandomValues(new Uint8Array(16)));
+    const sidB = b64e(crypto.getRandomValues(new Uint8Array(16)));
+    const off = JSON.parse(
+      pq.initiate(
+        JSON.stringify({
+          self: "a",
+          peer: "b",
+          selfX: a.xpub,
+          selfK: a.ek,
+          selfID: k1.pub,
+          selfSID: sidA,
+          peerX: b.xpub,
+          peerK: b.ek,
+          peerID: k2.pub,
+          peerSID: sidB
+        })
+      )
+    );
+    const helloSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k1.seed, msg: off.transcript })));
+    const respond = (sig) => JSON.parse(
+      pq.respond(
+        JSON.stringify({
+          self: "b",
+          peer: "a",
+          selfX: b.xpub,
+          selfSK: b.xsk,
+          selfK: b.ek,
+          selfDK: b.dk,
+          selfID: k2.pub,
+          selfSID: sidB,
+          peerX: a.xpub,
+          peerK: a.ek,
+          peerID: k1.pub,
+          peerSID: sidA,
+          epk: off.epk,
+          ct: off.ct,
+          ...sig ? { sig } : {}
+        })
+      )
+    );
+    const acc = respond(helloSig.sig);
+    const okSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k2.seed, msg: acc.transcript })));
+    const proved = (key, tag, id, sig) => JSON.parse(pq.proved(JSON.stringify({ key, transcript: off.transcript, tag, id, sig })));
+    const verifyA = proved(off.keys.recvMedia, acc.confirm, k2.pub, okSig.sig);
+    const verifyB = proved(acc.keys.recvMedia, off.confirm, k1.pub, helloSig.sig);
+    const verifyNoSig = proved(off.keys.recvMedia, acc.confirm, k2.pub, "");
+    const pt = b64e(sealUtf8.encode("sealed hello"));
+    const aad = b64e(sealUtf8.encode("pq-e2e v2 chat a|b 1"));
+    const sealed = JSON.parse(pq.seal(JSON.stringify({ key: off.keys.sendChat, aad, pt })));
+    const openWith2 = (key) => JSON.parse(pq.open(JSON.stringify({ key, aad, b: sealed.b })));
+    const opened = openWith2(acc.keys.recvChat);
+    const wrong = openWith2(b64e(crypto.getRandomValues(new Uint8Array(32))));
+    const idV = (id, msg, sig) => JSON.parse(pq.idverify(JSON.stringify({ id, msg, sig })));
+    const idOk = idV(k1.pub, off.transcript, helloSig.sig);
+    const idOther = idV(k2.pub, off.transcript, helloSig.sig);
+    const idOk2 = idV(k2.pub, acc.transcript, okSig.sig);
+    const idTampered = idV(k1.pub, b64e(sealUtf8.encode("another transcript")), helloSig.sig);
+    const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
+    const w1 = JSON.parse(pq.spakew(JSON.stringify({ pass: "a", salt: "room" }))).w;
+    const wBad = (() => {
+      const raw = b64d(w1);
+      raw[raw.length - 1] ^= 1;
+      return b64e(raw);
+    })();
+    const passRun = (wa, wb) => {
+      const start = (w, role) => JSON.parse(
+        pq.spakestart(
+          JSON.stringify({
+            w,
+            role,
+            a: b64e(sealUtf8.encode("a")),
+            b: b64e(sealUtf8.encode("b"))
+          })
+        )
+      );
+      const one = start(wa, "A");
+      const two = start(wb, "B");
+      if (!one.id || !two.id) return { error: true };
+      const finA = JSON.parse(pq.spakefinish(JSON.stringify({ id: one.id, msg: two.msg })));
+      const finB = JSON.parse(pq.spakefinish(JSON.stringify({ id: two.id, msg: one.msg })));
+      const okA = JSON.parse(pq.spakeverify(JSON.stringify({ id: one.id, tag: finB.conf })));
+      const okB = JSON.parse(pq.spakeverify(JSON.stringify({ id: two.id, tag: finA.conf })));
+      return {
+        match: !!finA.ke && finA.ke === finB.ke,
+        ok: !!(okA.ok && okB.ok)
+      };
+    };
+    const passGood = passRun(w1, w1);
+    const passBad = passRun(w1, wBad);
+    const noSig = respond("");
+    return {
+      sas: off.keys.sas,
+      sasMatch: off.keys.sas === acc.keys.sas,
+      pad: padRoundTripOk(),
+      confirm: !!(verifyA.ok && verifyB.ok && !verifyNoSig.ok),
+      open: opened.pt === pt,
+      wrongKeyRefused: !!wrong.error,
+      idSign: idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
+      idUnsigned: !!noSig.error,
+      idFp: fpShape(idFp.fp),
+      passGood: !!(passGood.match && passGood.ok),
+      passBad: !!(passBad.match === false && passBad.ok === false)
+    };
+  }
+  var wasmLoad = null;
+  function ensureWasm() {
+    if (state.wasmOk) return Promise.resolve();
+    if (wasmLoad) return wasmLoad;
+    wasmLoad = loadScriptOnce("/wasm_exec.js" + BUILD_Q).then(loadWasmModule).then(() => {
+      const test = pqSelfTest();
+      state.wasmTest = test;
+      if (!test.sasMatch || !test.confirm || !test.open || !test.wrongKeyRefused || !test.idSign || !test.idUnsigned || !test.idFp || !test.passGood || !test.passBad) {
+        throw new Error("crypto self test failed");
+      }
+      state.wasmOk = true;
+    }).catch((err) => {
+      wasmLoad = null;
+      throw err;
+    });
+    return wasmLoad;
+  }
+  function preloadSealed() {
+    $("sealed-note").hidden = false;
+    $("sealed-note").textContent = "loading the post-quantum module";
+    ensureReady().then(() => {
+      if (!$("lobby").hidden) $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
+    }).catch((err) => {
+      if (!$("lobby").hidden) {
+        $("sealed-note").textContent = "the sealed client did not start: " + (err && err.message ? err.message : err);
+      }
+    });
+  }
+  function ensureReady() {
+    return ensureWasm().then(ensureIdentity);
+  }
+
+  // src/phone.ts
+  var phoneQuery = window.matchMedia ? window.matchMedia("(max-width: 620px), (max-height: 520px) and (hover: none)") : null;
+  function applyImmersive() {
+    const stage = $("stage");
+    const on = !!phoneQuery && phoneQuery.matches && !stage.hidden;
+    stage.classList.toggle("immersive", on);
+    if (!on) stage.classList.remove("chrome");
+    $("chrome-btn").setAttribute("aria-expanded", String(stage.classList.contains("chrome")));
+  }
+  function setChrome(show) {
+    const stage = $("stage");
+    if (!stage.classList.contains("immersive")) return;
+    stage.classList.toggle("chrome", show);
+    $("chrome-btn").setAttribute("aria-expanded", String(show));
+    if (show) return;
+    menuClose();
+    if (statsOpen()) setStatsOpen(false);
+  }
+
+  // src/room.ts
+  async function enterRoom(room, pass) {
+    ensureSfx();
+    preloadSfx();
+    cancelReconnect();
+    state.fatal = "";
+    state.room = room;
+    state.name = cleanSealedName($("name").value) || "guest";
+    state.path = $("path").value;
+    state.noiseWanted = $("noise").checked;
+    state.mirror = true;
+    state.leaving = false;
+    state.mic = load("mic") !== "0";
+    state.cam = load("cam") !== "0";
+    store("name", state.name);
+    store("room", state.room);
+    store("path", state.path);
+    store("noise", state.noiseWanted ? 1 : 0);
+    ensurePlayback();
+    $("enter-btn").disabled = true;
+    $("sealed-note").hidden = false;
+    $("sealed-note").textContent = "loading the post-quantum module";
+    try {
+      try {
+        await ensureReady();
+        $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
+      } catch (err) {
+        const why = err && err.message ? err.message : String(err);
+        $("sealed-note").textContent = "the sealed client did not start: " + why;
+        state.room = "";
+        say("cannot open a sealed room: " + why);
+        return;
+      }
+      $("sealed-note").textContent = "deriving the room key";
+      canary(pass);
+      state.w = "";
+      try {
+        const derived = await deriveRoomW(pass, room);
+        state.w = typeof derived === "string" ? derived : "";
+      } catch {
+        state.w = roomW(pass, room);
+      }
+      state.gate = { v: pass, n: 0 };
+      paintGate();
+      state.warmed = true;
+      if (!rootFingerprint(room)) {
+        try {
+          const fp = await roomRoot(room);
+          if (fp) setRoot(fp);
+        } catch {
+        }
+      }
+      startSealedWorker();
+      const made = JSON.parse(pqModule().gen());
+      state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
+      state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
+      canary(state.name);
+      if (!sealingAvailable()) {
+        state.sealFault = "this browser cannot seal media frames, so no media is sent";
+        state.mic = false;
+        state.cam = false;
+      }
+      $("lobby").hidden = true;
+      $("stage").hidden = false;
+      $("stage").classList.remove("chrome");
+      applyImmersive();
+      $("room-label").textContent = room;
+      $("room-label").title = room;
+      $("chat-note").hidden = false;
+      updatePinCount();
+      setHash(room);
+      startCallClock();
+      startSpeaking();
+      prepareLocal();
+      prefetchNoise();
+      if (sealingAvailable()) {
+        try {
+          await requestLocal();
+        } catch {
+        }
+      } else {
+        updateButtons();
+        say(state.sealFault + "; you joined without microphone and camera");
+      }
+      connectWS();
+      worldEnter(room).catch(() => {
+      });
+    } catch (err) {
+      leave("");
+      state.leaving = false;
+      say("cannot open a sealed room: " + (err && err.message ? err.message : String(err)));
+    } finally {
+      $("enter-btn").disabled = false;
+    }
+  }
+  function leave(message) {
+    const was = state.room;
+    state.leaving = true;
+    cancelReconnect();
+    if (state.ws) {
+      const ws = state.ws;
+      state.ws = null;
+      ws.onclose = null;
+      try {
+        ws.close();
+      } catch {
+      }
+    }
+    if (state.screen) {
+      stopTracks(state.screen);
+      state.screen = null;
+      if (state.screenTile) {
+        state.screenTile.remove();
+        state.screenTile = null;
+      }
+    }
+    dropPeers();
+    if (state.worker) {
+      state.worker.terminate();
+      state.worker = null;
+    }
+    wipeIdentity();
+    state.w = "";
+    state.warmed = false;
+    state.root = "";
+    state.passTries = 0;
+    state.passRefusals = 0;
+    state.passLast = 0;
+    state.seqGaps = 0;
+    state.gate = { v: null, n: 0 };
+    state.auth = { n: -1, admins: [], by: "", sig: "" };
+    if (state.authTimer) clearTimeout(state.authTimer);
+    state.authTimer = null;
+    state.wait = { on: false, n: 0 };
+    state.kickedFps = /* @__PURE__ */ new Set();
+    state.sid = "";
+    state.identityFailures = 0;
+    state.keyWait.clear();
+    state.frames = {};
+    state.encryptFrames = 0;
+    state.decryptFrames = 0;
+    state.chatSent = 0;
+    state.chatRecv = 0;
+    state.replayDrops = 0;
+    fileClearAll();
+    state.confirmFailures = 0;
+    state.workerErrors = [];
+    state.sealFault = "";
+    state.wireFrames = 0;
+    state.wireLeaks = [];
+    state.clearSignaling = 0;
+    state.canaries = /* @__PURE__ */ new Set();
+    state.samples = [];
+    asrStop();
+    omniStop();
+    state.waiting = false;
+    state.waitingRoom = false;
+    state.hand = false;
+    state.handTs = 0;
+    state.insideFps.clear();
+    paintWaiting();
+    paintHandQueue();
+    updatePinCount();
+    $("chat-note").hidden = true;
+    if (state.micTrack) stopQuietly(state.micTrack);
+    if (state.camTrack) stopQuietly(state.camTrack);
+    if (state.audioCtx) {
+      state.audioCtx.close().catch(() => {
+      });
+      state.audioCtx = null;
+    }
+    if (state.playCtx) {
+      state.playCtx.close().catch(() => {
+      });
+      state.playCtx = null;
+    }
+    stopLost();
+    if (state.sfxCtx) {
+      state.sfxCtx.close().catch(() => {
+      });
+      state.sfxCtx = null;
+    }
+    sfxCache.clear();
+    state.sfxSource = null;
+    state.mixer = null;
+    state.micGain = null;
+    state.micSource = null;
+    state.denoise = null;
+    state.denoiseOn = false;
+    state.denoiseEngine = "off";
+    state.micAnalyser = null;
+    state.meterPeak = 0;
+    stopSpeaking();
+    state.outStream = null;
+    state.camTrack = null;
+    state.micTrack = null;
+    stopStats();
+    clearStatsPanel();
+    $("stats-panel").hidden = true;
+    $("stats-btn").setAttribute("aria-pressed", "false");
+    state.spotlight = "";
+    setLocalTile(null);
+    worldLeave();
+    $("stage-main").replaceChildren();
+    $("self-pip").replaceChildren();
+    $("self-pip").hidden = true;
+    $("stage-rail").replaceChildren();
+    $("stage-rail").hidden = false;
+    stopCallClock();
+    menuSet(false);
+    $("stage").hidden = true;
+    $("lobby").hidden = false;
+    applyImmersive();
+    $("room-label").textContent = "";
+    $("peer-count").textContent = "";
+    state.room = "";
+    state.self = null;
+    state.ice = [];
+    state.fatal = "";
+    state.reconnectDelay = 500;
+    state.mic = false;
+    state.cam = false;
+    setAdmins([]);
+    state.peers.clear();
+    if ($("chat-log")) $("chat-log").replaceChildren();
+    setHash("");
+    if (was) $("room").value = was;
+    else suggestRoom();
+    if (message) {
+      say(message);
+      const note = $("sealed-note");
+      if (note) {
+        note.hidden = false;
+        note.textContent = message;
+      }
+    }
+  }
+
+  // src/gate.ts
+  var ROOTED = /^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-([a-z0-9._-]{1,40})$/;
+  function rootFingerprint(room) {
+    const m = ROOTED.exec(String(room || ""));
+    if (m) return m[0].slice(0, 23);
+    return state.root || "";
+  }
+  function setRoot(fp) {
+    if (fp && !state.root) state.root = fp;
+  }
+  function claimText(n, admins, by = "") {
+    const who = by ? String(by) : "";
+    const root = rootFingerprint(state.room) || "-";
+    return `stanze/claim/2|${state.room}|${n}|${root}|${who}|${admins.join(",")}|`;
+  }
+  async function botSign(msg) {
+    const bytes = b64e(sealUtf8.encode(String(msg || "")));
+    let sig;
+    try {
+      sig = await state.idKey.sign(bytes);
+    } catch {
+      return "";
+    }
+    return typeof sig === "string" ? sig : "";
+  }
+  function botVerify(id, msg, sig) {
+    if (!id || typeof sig !== "string" || !sig) return false;
+    const res = pqCall((json) => pqModule().idverify(json), {
+      id,
+      msg: b64e(sealUtf8.encode(String(msg || ""))),
+      sig
+    });
+    return !!(res && res.ok);
+  }
+  function isRootOwner(root) {
+    return !!root && !!state.idKey && state.idKey.fp === root;
+  }
+  async function makeClaim(n, admins) {
+    if (!state.idKey) return null;
+    const sig = await botSign(claimText(n, admins, state.self));
+    if (!sig) return null;
+    return { n, admins: admins.slice(), by: state.self, sig };
+  }
+  function adoptClaim(claim) {
+    state.auth = { n: claim.n, admins: claim.admins.slice(), by: claim.by, sig: claim.sig };
+    setAdmins(claim.admins);
+    markAdmins();
+    paintWaiting();
+  }
+  async function issueClaim(n, admins) {
+    const unique = [...new Set(admins)].filter((id) => /^[0-9a-f]{12}$/.test(String(id || "")));
+    if (!unique.length) return false;
+    if (n === 0) {
+      if (state.auth.n >= 0) return false;
+      if (!isRootOwner(rootFingerprint(state.room))) return false;
+    } else if (n === 1) {
+      if (state.auth.n !== 0 || !isRootOwner(rootFingerprint(state.room))) return false;
+    } else {
+      if (state.auth.n < 0 || n !== state.auth.n + 1) return false;
+      if (!state.admins.has(state.self)) return false;
+    }
+    const claim = await makeClaim(n, unique);
+    if (!claim || state.leaving) return false;
+    adoptClaim(claim);
+    toSealed({ k: "claim", n: claim.n, admins: claim.admins, by: claim.by, sig: claim.sig });
+    return true;
+  }
+  function sealedSendClaim(peer) {
+    if (state.auth.n < 0) return;
+    sealedSend(peer, {
+      k: "claim",
+      n: state.auth.n,
+      admins: state.auth.admins,
+      by: state.auth.by,
+      sig: state.auth.sig
+    });
+  }
+  function stepOneAdmins(want) {
+    const list = [state.self];
+    if (want && want !== state.self) list.push(want);
+    for (const peer of state.peers.values()) {
+      if (list.length >= 5) break;
+      if (peer.proven && !peer.waiting && !list.includes(peer.id)) list.push(peer.id);
+    }
+    return list;
+  }
+  function handOver(peer, why) {
+    if (!peer || !peer.keys || peer.waiting) return;
+    const root = rootFingerprint(state.room);
+    if (!root || root === (state.idKey && state.idKey.fp)) return;
+    peer.handAsks = (peer.handAsks || 0) + 1;
+    if (peer.handAsks > 2) {
+      say("nobody here holds the key this room was made with, so nobody can change " + why);
+      return;
+    }
+    sealedSend(peer, { k: "handover", why: String(why || "").slice(0, 32) });
+  }
+  function onHandover(peer) {
+    if (state.auth.n !== 0 || !isRootOwner(rootFingerprint(state.room))) return;
+    if (peer.waiting || isAdmin(peer.id)) return;
+    void issueClaim(1, stepOneAdmins(peer.id));
+  }
+  function sealedOnClaim(peer, obj) {
+    if (!peer.proven || !peer.pub || !peer.pub.id) return;
+    const n = Number(obj.n);
+    if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
+    if (!Array.isArray(obj.admins) || !obj.admins.length || obj.admins.length > 64) return;
+    if (obj.admins.some((id) => typeof id !== "string" || !/^[0-9a-f]{12}$/.test(id))) return;
+    if (typeof obj.sig !== "string" || !obj.sig) return;
+    if (obj.by !== peer.id || !obj.admins.includes(peer.id)) return;
+    if (!botVerify(peer.pub.id, claimText(n, obj.admins, obj.by), obj.sig)) return;
+    const root = rootFingerprint(state.room);
+    if (n === 0) {
+      if (!root || !isRootOwner(root)) return;
+      if (peer.fp !== root) return;
+      if (obj.by !== state.self || obj.admins.length !== 1 || obj.admins[0] !== state.self) return;
+      if (state.auth.n >= 0) return;
+      adoptClaim(obj);
+      return;
+    }
+    if (n === 1) {
+      if (!root || !isRootOwner(root) || peer.fp !== root) return;
+      if (state.auth.n !== 0 || state.auth.by !== state.self) return;
+      if (obj.by !== state.self) return;
+      adoptClaim(obj);
+      return;
+    }
+    if (state.auth.n < 0) return;
+    if (n !== state.auth.n + 1) return;
+    if (!state.admins.has(peer.id)) return;
+    if (obj.admins.join(",") === state.auth.admins.join(",")) return;
+    adoptClaim(obj);
+  }
+  function startAuthSeed() {
+    if (state.authTimer) clearTimeout(state.authTimer);
+    state.authTimer = setTimeout(() => {
+      state.authTimer = null;
+      if (state.leaving || !state.self) return;
+      if (!state.peers.size && state.waiting) admitPeer(state.self);
+      if (state.auth.n >= 0) return;
+      if (!isRootOwner(rootFingerprint(state.room))) return;
+      void issueClaim(0, [state.self]);
+    }, 1200);
+  }
+  function resealOnLeave(id) {
+    if (!state.auth.admins.includes(id)) return;
+    const rest = state.auth.admins.filter((other) => other !== id);
+    if (!rest.length) return;
+    if (rest[0] !== state.self) return;
+    void issueClaim(state.auth.n + 1, rest);
+  }
+  function sealedOnWait(peer, obj) {
+    if (!isAdmin(peer.id)) return;
+    const n = Number(obj.n);
+    if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
+    const on = !!obj.on;
+    if (n < state.wait.n) return;
+    if (n === state.wait.n && (on === state.wait.on || String(peer.id) >= String(state.self))) return;
+    state.wait = { on, n };
+    state.waitingRoom = on;
+    paintWaiting();
+    if (!on) admitAllHeld();
+  }
+  function setWaitingRoom(on) {
+    if (state.waiting) return;
+    if (!isAdmin(state.self)) {
+      askRoot("the waiting room");
+      return;
+    }
+    const n = state.wait.n + 1;
+    state.wait = { on: !!on, n };
+    state.waitingRoom = !!on;
+    toSealed({ k: "wait", on: !!on, n });
+    paintWaiting();
+    if (!on) admitAllHeld();
+  }
+  function askRoot(why) {
+    for (const peer of state.peers.values()) {
+      if (peer.pass && peer.pass.done && !peer.waiting) handOver(peer, why);
+    }
+  }
+  function sealedAdmit(peer) {
+    if (!peer || state.waiting) return;
+    sealedSend(peer, { k: "admit" });
+  }
+  function admitAllHeld() {
+    if (state.waiting) return;
+    for (const peer of state.peers.values()) {
+      if (!peer.waiting) continue;
+      sealedAdmit(peer);
+      admitPeer(peer.id);
+    }
+  }
+  function maybeAdmitHeld(peer) {
+    if (!peer || !peer.waiting) return;
+    if (!state.waiting) {
+      if (!state.waitingRoom || peer.fp && state.insideFps.has(peer.fp)) {
+        sealedAdmit(peer);
+        admitPeer(peer.id);
+      }
+      return;
+    }
+    if (String(state.self) < String(peer.id)) {
+      admitPeer(state.self);
+      sealedAdmit(peer);
+      return;
+    }
+    askHeldAgain(peer);
+  }
+  function askHeldAgain(peer) {
+    if (!peer || !state.waiting) return;
+    if ((peer.heldAsks || 0) >= 6) return;
+    peer.heldAsks = (peer.heldAsks || 0) + 1;
+    const timer = setTimeout(() => {
+      peer.heldTimers = (peer.heldTimers || []).filter((t) => t !== timer);
+      if (state.leaving || !state.peers.has(peer.id) || !state.waiting) return;
+      sealedSend(peer, { k: "held" });
+    }, 2e3);
+    (peer.heldTimers = peer.heldTimers || []).push(timer);
+  }
+  function sealedOnHeld(peer) {
+    if (!peer) return;
+    if (!peer.waiting) {
+      peer.waiting = true;
+      paintWaiting();
+      paintHandQueue();
+    }
+    maybeAdmitHeld(peer);
+  }
+  function sealedOnAdmit(peer) {
+    if (!state.waiting || !peer) return;
+    admitPeer(state.self);
+    toSealed({ k: "in" });
+  }
+  function sealedOnIn(peer) {
+    if (state.waiting || !peer || !peer.waiting) return;
+    maybeAdmitHeld(peer);
+  }
+  function sealedKick(id) {
+    if (!id || id === state.self) return;
+    if (!isAdmin(state.self)) {
+      askRoot("removing a guest");
+      return;
+    }
+    const gone = state.peers.get(id);
+    if (gone && gone.fp) state.kickedFps.add(gone.fp);
+    toSealed({ k: "kick", of: id });
+    dropPeer(id);
+    state.admins.delete(id);
+    resealOnLeave(id);
+    markAdmins();
+    paintWaiting();
+  }
+  function sealedMute(id) {
+    if (!id || id === state.self) return;
+    if (!isAdmin(state.self)) {
+      askRoot("muting a guest");
+      return;
+    }
+    toSealed({ k: "mute", of: id });
+  }
+  function sealedOnKick(peer, obj) {
+    if (!isAdmin(peer.id) || typeof obj.of !== "string") return;
+    if (obj.of === state.self) {
+      leave("the host removed you from the room");
+      return;
+    }
+    const gone = state.peers.get(obj.of);
+    if (!gone) return;
+    if (gone.fp) state.kickedFps.add(gone.fp);
+    dropPeer(obj.of);
+    state.admins.delete(obj.of);
+    resealOnLeave(obj.of);
+    markAdmins();
+    paintWaiting();
+  }
+  function padsOn(peer) {
+    if (!state.worker || !peer || peer.padsOn) return;
+    peer.padsOn = true;
+    for (const kind of ["audio", "video"]) {
+      state.worker.postMessage({ type: "pad", pair: pairLabel(peer.id), kind, on: true });
+    }
+  }
+  function filterName(value) {
+    return value === "gtcrn" || value === "fastenhancer" || value === "off" ? value : "";
+  }
+  function sealedOnState(peer, obj) {
+    if (obj.pad) padsOn(peer);
+    if (obj.mic !== void 0) peer.mic = !!obj.mic;
+    if (obj.cam !== void 0) {
+      peer.cam = !!obj.cam;
+      if (peer.cam) paintPeerVideo(peer);
+      else dropPeerCamera(peer);
+    }
+    if (obj.deaf !== void 0) peer.deaf = !!obj.deaf;
+    if (obj.outFilter !== void 0) peer.outFilter = filterName(obj.outFilter);
+    if (obj.inFilter !== void 0) peer.inFilter = filterName(obj.inFilter);
+    if (obj.screen !== void 0) {
+      peer.screenShared = !!obj.screen;
+      if (peer.screenShared) paintPeerScreen(peer);
+      else dropPeerScreen(peer);
+    }
+    if (obj.hand !== void 0) {
+      const was = peer.hand;
+      peer.hand = !!obj.hand;
+      peer.handTs = peer.hand ? clamp(Number(obj.ts) || 0, 0, Date.now()) : 0;
+      if (peer.hand !== was) {
+        playSfx(peer.hand ? "pop" : "bonk");
+        if (peer.hand) setChrome(true);
+      }
+    }
+    applyFlags(peer.tile, peer.mic, peer.cam, isAdmin(peer.id));
+    if (peer.screenTile) applyFlags(peer.screenTile, peer.mic, true, isAdmin(peer.id));
+    paintRowDeaf(rowOf.get(peer.tile), peer.deaf);
+    paintHandQueue();
+  }
+  function renameSelf(raw) {
+    const name = cleanSealedName(raw);
+    if (!name || name === state.name) return false;
+    state.name = name;
+    store("name", name);
+    const self2 = ownTile();
+    if (self2) paintName(self2, name, true);
+    for (const peer of state.peers.values()) {
+      if (!peer.keys) continue;
+      peer.announcedName = "";
+      sealedAnnounceName(peer);
+    }
+    return true;
+  }
+  function sealedAnnounceName(peer) {
+    if (!peer.keys || !state.name || peer.announcedName === state.name) return;
+    peer.announcedName = state.name;
+    sealedSend(peer, { k: "name", n: state.name });
+  }
+  var PAD_KEY = "p";
+  var PAD_BUCKETS = [512, 2048, 8192];
+  var PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
+  function padPayload(obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY)) throw new Error("the padding key is reserved");
+    const withPad = Object.assign({}, obj, { [PAD_KEY]: "" });
+    const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
+    let target = PAD_BUCKETS.find((n) => n >= bytes);
+    if (!target) target = Math.ceil(bytes / PAD_LAST) * PAD_LAST;
+    const need = target - bytes;
+    if (need > 0) withPad[PAD_KEY] = "A".repeat(need);
+    return JSON.stringify(withPad);
+  }
+  function padRoundTripOk() {
+    const cases = [
+      { k: "name", n: "abc" },
+      { k: "chat", n: "a", x: "hello", ts: 1 },
+      { k: "chat", n: "b", x: "\xE9".repeat(400) },
+      { k: "file", a: "offer", x: "0123456789abcdef", n: "probe.bin", z: 4096, m: "" },
+      { k: "asr", n: "c", x: "z".repeat(9e3) }
+    ];
+    for (const c of cases) {
+      const raw = JSON.stringify(c);
+      const out = padPayload(c);
+      const bytes = sealUtf8.encode(out).length;
+      const onBucket = PAD_BUCKETS.includes(bytes) || bytes % PAD_LAST === 0;
+      const back = JSON.parse(out);
+      delete back[PAD_KEY];
+      if (!onBucket || JSON.stringify(back) !== raw) return false;
+    }
+    return true;
+  }
+  function roomW(pass, room) {
+    const secret = pass === "" ? "\0open room" : pass;
+    const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
+    if (!out || typeof out.w !== "string" || !out.w) throw new Error("the room key could not be derived");
+    return out.w;
+  }
+  function sealedSendSdp(peer, kind, sdp) {
+    if (!peer.keys || !sdp) return;
+    sealedSend(peer, { k: "sdp", d: kind, s: sdp });
+  }
+  function sealedSendCand(peer, cand) {
+    if (!peer.keys || !cand) return;
+    sealedSend(peer, { k: "cand", c: cand });
+  }
+  function sealedSend(peer, obj) {
+    if (!peer.keys) return;
+    const seq = peer.seqOut + 1;
+    const out = pqCall((json) => pqModule().seal(json), {
+      key: b64e(peer.keys.sendChat),
+      aad: b64e(chatAAD(peer.id, seq, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+      pt: b64e(sealUtf8.encode(padPayload(obj)))
+    });
+    if (!out || !out.b) return;
+    peer.seqOut = seq;
+    sealedSendOpaque(peer.id, { k: "app", q: seq, b: out.b });
+  }
+  function toSealed(obj) {
+    for (const peer of state.peers.values()) {
+      if (!peer.keys || peer.waiting) continue;
+      sealedSend(peer, obj);
+    }
+  }
+  function sendSealedChat() {
+    const input = $("chat-text");
+    const text = (input.value || "").trim();
+    if (!text || !state.self || state.waiting) return;
+    input.value = "";
+    canary(text);
+    addChatLine(state.name, text, Date.now());
+    state.chatSent++;
+    toSealed({ k: "chat", n: state.name, x: text, ts: Date.now() });
+  }
+  function sealedSetName(peer, raw) {
+    const name = cleanSealedName(raw);
+    if (!name || peer.name === name) return;
+    peer.name = name;
+    if (peer.tile) paintName(peer.tile, name, false);
+    if (peer.screenTile) paintName(peer.screenTile, `${name}, screen`, false);
+  }
+  function sealedSetE2E(peer, status) {
+    peer.ready = status;
+    updatePinCount();
+    if (!peer.tile) return;
+    peer.tile.dataset.e2e = status;
+    paintState(peer);
+    paintPin(peer);
+  }
+  function refreshCodeCard(host, peer) {
+    const menu = hostMenu(host);
+    if (!menu || menu.hidden) return;
+    if (menu.classList.contains("row-menu") && menu.dataset.peer !== (host.dataset.peer || ""))
+      return;
+    let card = menu.querySelector(".sas");
+    if (!peer.sas) {
+      if (card) card.remove();
+      return;
+    }
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "sas";
+      menu.appendChild(card);
+    }
+    card.replaceChildren(...sealedCodePanel(peer));
+  }
+  function paintState(peer) {
+    if (!peer.tile) return;
+    const badge = peer.tile.querySelector(".state");
+    if (!badge) return;
+    const known = peer.ready === "ready" && pinState(peer) === "known";
+    badge.hidden = known;
+    badge.dataset.e2e = known ? "known" : peer.ready === "ready" ? "unverified" : peer.ready === "failed" ? "failed" : "";
+    badge.textContent = known ? "" : peer.ready === "ready" ? "e2e unverified" : peer.ready === "failed" ? "e2e FAILED" : peer.ready || "";
+  }
+  function sealedCodePanel(peer) {
+    const code = peer.sas;
+    const head = document.createElement("span");
+    head.className = "sas-head";
+    head.textContent = "sealed code";
+    const row = document.createElement("span");
+    row.className = "sas-row";
+    for (const [emoji, name, hex] of verifyEmojis(code)) {
+      const cell = document.createElement("span");
+      cell.className = "sas-cell";
+      const img = document.createElement("img");
+      img.className = "sas-emoji";
+      img.src = `/openmoji/${hex}.svg`;
+      img.alt = emoji;
+      img.title = name;
+      const tip = document.createElement("span");
+      tip.className = "sas-tip";
+      tip.textContent = name;
+      cell.append(img, tip);
+      row.appendChild(cell);
+    }
+    const text = document.createElement("span");
+    text.className = "sas-code";
+    text.textContent = String(code || "").replace(/(.{4})(?=.)/g, "$1 ");
+    return [head, row, text, sealedIdentityRow(peer)];
+  }
+  function sealedIdentityRow(peer) {
+    const row = document.createElement("span");
+    row.className = "id-row";
+    const what = pinState(peer);
+    const state2 = document.createElement("span");
+    state2.className = "id-state";
+    state2.dataset.pin = what;
+    state2.textContent = what === "changed" ? "changed" : what === "rollback" ? "old key back" : "unverified";
+    const which = document.createElement("span");
+    which.className = "id-fp";
+    which.textContent = peer.fp || "no fingerprint yet";
+    if (what === "known") {
+      row.append(
+        pinButton(
+          pinLabelOf(peer) || "pinned",
+          () => renamePin(peer, prompt("new name for this device", pinLabelOf(peer)) || "")
+        )
+      );
+    } else row.append(state2);
+    row.append(which);
+    if (what === "new" && peer.fp) {
+      row.append(
+        pinButton(
+          "pin this device",
+          () => pinPeer(peer, prompt("label for this device", peer.name) || "")
+        )
+      );
+    } else if (what === "changed" || what === "rollback") {
+      row.append(pinButton("this device was reset", () => resetDevice(peer, peer.pinLabel)));
+    }
+    return row;
+  }
+  function pinButton(text, onclick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "pin-btn";
+    button.textContent = text;
+    button.addEventListener("click", onclick);
+    return button;
   }
 
   // src/board.ts
@@ -10511,6 +11986,9 @@
     }),
     selfTest: pqSelfTest,
     lab: runLab,
+    // The world of the room: the drawn map, the avatars, and a walk with the
+    // same rule a key press follows.
+    world: worldHook(),
     // The drawn camera is reported by the track each camera sender carries, so a
     // test can see the swap a hidden tab makes without reading a picture.
     effects: () => ({
@@ -10551,6 +12029,16 @@
       return lookRestart();
     }
   };
+  function adoptThisRoot(room) {
+    ensureIdentity().then(() => {
+      const key = state.idKey && state.idKey.fp || "";
+      if (!key) return false;
+      return adoptRoot(room, key).then((ok) => {
+        if (ok) setRoot(key);
+        return ok;
+      });
+    }).catch(() => false);
+  }
   function restorePrefs() {
     purgeNamedVolume();
     const fromHash = roomFromHash();
@@ -10602,13 +12090,15 @@
       event.preventDefault();
       ensurePlayback();
       const box = $("room");
-      const room = normalizeRoom(box.value) || newRoomID();
+      const opened = !normalizeRoom(box.value);
+      const room = normalizeRoom(box.value) || suggestRoom() || newRoomID();
       if (!ROOM_RE.test(room)) {
         say("room names use a-z 0-9 . _ - (1 to 64 characters)");
         return;
       }
       box.value = room;
       enterRoom(room, $("pass").value || "");
+      if (opened && !rootFingerprint(room)) adoptThisRoot(room);
     });
     $("chat-form").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -10813,6 +12303,20 @@
         const id = tileId(row);
         if (id) setSpotlight(id);
       });
+    }
+    const worldBtn = document.getElementById("world-btn");
+    if (worldBtn) {
+      const paint = () => {
+        const on = isWorld();
+        worldBtn.setAttribute("aria-pressed", String(on));
+        worldBtn.textContent = on ? "call grid" : "world";
+        worldBtn.title = on ? "show the call grid" : "show the world";
+      };
+      worldBtn.addEventListener("click", () => {
+        worldToggle();
+        paint();
+      });
+      paint();
     }
     document.addEventListener("click", closeMenus);
     document.addEventListener("keydown", (event) => {

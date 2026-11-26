@@ -19,27 +19,27 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 632 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
-| [src/state.ts](src/state.ts) | 202 | The client state, one object per page. |
+| [src/boot.ts](src/boot.ts) | 698 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/state.ts](src/state.ts) | 214 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 77 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
 | [src/trust.ts](src/trust.ts) | 37 | Script addresses under Trusted Types: the worker and worklet URLs. |
-| [src/util.ts](src/util.ts) | 101 | Small helpers that touch nothing but their arguments and storage. |
+| [src/util.ts](src/util.ts) | 102 | Small helpers that touch nothing but their arguments and storage. |
 | [src/buildtag.ts](src/buildtag.ts) | 18 | The build label in the corner, read from `/version.txt`. |
-| [src/dom.ts](src/dom.ts) | 94 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
+| [src/dom.ts](src/dom.ts) | 103 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
 | [src/globals.d.ts](src/globals.d.ts) | 20 | Optional globals the loader sets at run time: the wasm glue, the transcriber, the test hook. |
 
 ## Room, signalling and panels
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/room.ts](src/room.ts) | 271 | Create, join, wait, leave, and the lobby that drives them. |
+| [src/room.ts](src/room.ts) | 305 | Create, join, wait, leave, and the lobby that drives them. |
 | [src/signaling.ts](src/signaling.ts) | 186 | The websocket frames, both directions. |
-| [src/peers.ts](src/peers.ts) | 333 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
-| [src/gate.ts](src/gate.ts) | 643 | The room gate: the passphrase, the member list and the sealed claims. |
+| [src/peers.ts](src/peers.ts) | 347 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
+| [src/gate.ts](src/gate.ts) | 835 | The room gate: the passphrase, the member list and the sealed claims. |
 | [src/host.ts](src/host.ts) | 235 | The host controls in the call panel: waiting room, let in, member menus. |
 | [src/lobby.ts](src/lobby.ts) | 91 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
-| [src/menu.ts](src/menu.ts) | 207 | The drop-down menu bar. |
+| [src/menu.ts](src/menu.ts) | 213 | The drop-down menu bar. |
 | [src/phone.ts](src/phone.ts) | 37 | The phone frame: the stylesheet folds the app frame away and a tap brings it back. |
 
 ## Media
@@ -47,7 +47,7 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/media.ts](src/media.ts) | 164 | Camera and screen requests, the performance step, the sender bitrate and frame ceilings. |
-| [src/audio.ts](src/audio.ts) | 557 | The talking light, the remote audio graph and the noise suppression worklet. |
+| [src/audio.ts](src/audio.ts) | 688 | The talking light, the remote audio graph and the noise suppression worklet. |
 | [src/screen.ts](src/screen.ts) | 89 | Screen share: points the screen sender at the display track, never the camera sender. |
 | [src/volume.ts](src/volume.ts) | 149 | Per peer volume, remembered by identity when one is pinned. |
 | [src/sfx.ts](src/sfx.ts) | 197 | The page's own sound effects, decoded once and cached. |
@@ -58,10 +58,10 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/handshake.ts](src/handshake.ts) | 736 | The post-quantum handshake of a pair. |
-| [src/sealed.ts](src/sealed.ts) | 220 | Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair. |
+| [src/handshake.ts](src/handshake.ts) | 921 | The post-quantum handshake of a pair. |
+| [src/sealed.ts](src/sealed.ts) | 246 | Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair. |
 | [src/frame.ts](src/frame.ts) | 51 | The frame transform worker and its key install. |
-| [src/identity.ts](src/identity.ts) | 415 | The pinned identity of a peer and its fingerprint rows. |
+| [src/identity.ts](src/identity.ts) | 454 | The pinned identity of a peer and its fingerprint rows. |
 | [src/wasm.ts](src/wasm.ts) | 247 | Loading the post-quantum module, and its self test. |
 | [src/audit.ts](src/audit.ts) | 26 | The wire audit: no passphrase, name, chat line or file name leaves in the clear. |
 | [src/lab.ts](src/lab.ts) | 152 | The in-page proof of the cipher, driven by the browser test. |
@@ -70,15 +70,20 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/tiles.ts](src/tiles.ts) | 471 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
+| [src/tiles.ts](src/tiles.ts) | 476 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
+| [src/world.ts](src/world.ts) | 803 | The world: the Tiled map on one canvas, the collision grid, the spawn, the walking avatar and the camera. |
+| [src/zones.ts](src/zones.ts) | 186 | The named rectangles of a map, the cell cached hit test and the enter and leave of a walk. |
+| [src/proximity.ts](src/proximity.ts) | 141 | The bubbles: who is near enough to talk, with a leave radius and a dwell. |
+| [src/positions.ts](src/positions.ts) | 206 | Position frames at 5 Hz over the sealed files channel, and the lerp that draws them. |
+| [src/roomworld.ts](src/roomworld.ts) | 347 | Joining the world of a room, the position tick, and the switch between the map and the call grid. |
 | [src/chat.ts](src/chat.ts) | 99 | The room log and its links. |
 | [src/board.ts](src/board.ts) | 82 | The cue board: eight one shot notification cues, a volume and a stop. |
-| [src/stats.ts](src/stats.ts) | 955 | The stats panel: media metrics per guest and the wire and crypto counters. |
+| [src/stats.ts](src/stats.ts) | 970 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1273 | Local transcription, one language and many. |
-| [src/fawkes.ts](src/fawkes.ts) | 778 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |
-| [src/look.ts](src/look.ts) | 2422 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 808 | The device pickers of the join card and the toolbar. |
-| [src/files.ts](src/files.ts) | 880 | File offers and the data channel that carries the bytes. |
+| [src/fawkes.ts](src/fawkes.ts) | 1135 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |
+| [src/look.ts](src/look.ts) | 2445 | The drawn camera: the face mesh, the masks and the custom effect. |
+| [src/devices.ts](src/devices.ts) | 823 | The device pickers of the join card and the toolbar. |
+| [src/files.ts](src/files.ts) | 896 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory
 

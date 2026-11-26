@@ -113,7 +113,7 @@ func loadConfig(args []string) (*Config, error) {
 	fs.IntVar(&cfg.TurnTCPPort, "turn-tcp-port", envInt("TURN_TCP_PORT", 0), "optional TCP port for TURN (0 = off)")
 	fs.StringVar(&cfg.TurnRealm, "turn-realm", envStr("TURN_REALM", "stanze"), "TURN realm")
 	fs.StringVar(&cfg.TurnSecret, "turn-secret", envStr("TURN_SECRET", ""), "shared secret for ephemeral TURN credentials (env TURN_SECRET); empty makes a random one at each start")
-	fs.DurationVar(&cfg.TurnTTL, "turn-ttl", envDur("TURN_TTL", time.Hour), "lifetime of issued TURN credentials")
+	fs.DurationVar(&cfg.TurnTTL, "turn-ttl", envDur("TURN_TTL", 10*time.Minute), "lifetime of issued TURN credentials")
 	fs.Var(stringList{&turnURLs}, "turn-url", "extra TURN URL to advertise, e.g. turns:example.com:5349?transport=tcp (repeatable; env TURN_URLS)")
 	fs.IntVar(&cfg.TurnMinPort, "turn-min-port", envInt("TURN_MIN_PORT", 49200), "lowest relay port for TURN allocations")
 	fs.IntVar(&cfg.TurnMaxPort, "turn-max-port", envInt("TURN_MAX_PORT", 49300), "highest relay port for TURN allocations")
@@ -183,8 +183,39 @@ func (c *Config) validate() error {
 	if c.MaxMsgBytes < 4096 || c.MaxMsgBytes > 8*1024*1024 {
 		return fmt.Errorf("-max-msg-bytes must be between 4096 and 8388608 (got %d)", c.MaxMsgBytes)
 	}
+	// The relay range has to be a real one: the allocation manager narrows the
+	// two bounds to uint16, so a value outside a port would wrap into a range
+	// nobody asked for. The listening port is checked too: 0 asks the kernel for
+	// a free one, anything else must be a port, and a listening port inside the
+	// relay range would collide with allocations on the same host.
+	if c.TurnMinPort < 1 || c.TurnMinPort > 65535 {
+		return fmt.Errorf("-turn-min-port must be between 1 and 65535 (got %d)", c.TurnMinPort)
+	}
+	if c.TurnMaxPort < 1 || c.TurnMaxPort > 65535 {
+		return fmt.Errorf("-turn-max-port must be between 1 and 65535 (got %d)", c.TurnMaxPort)
+	}
 	if c.TurnMaxPort <= c.TurnMinPort {
 		return errors.New("-turn-max-port must be greater than -turn-min-port")
+	}
+	if c.TurnPort < 0 || c.TurnPort > 65535 {
+		return fmt.Errorf("-turn-port must be between 0 and 65535 (got %d)", c.TurnPort)
+	}
+	if c.TurnTCPPort < 0 || c.TurnTCPPort > 65535 {
+		return fmt.Errorf("-turn-tcp-port must be between 0 and 65535 (got %d)", c.TurnTCPPort)
+	}
+	if c.turnWanted() {
+		if c.TurnPort > 0 && c.TurnPort >= c.TurnMinPort && c.TurnPort <= c.TurnMaxPort {
+			return fmt.Errorf("-turn-port %d is inside the relay range %d-%d", c.TurnPort, c.TurnMinPort, c.TurnMaxPort)
+		}
+		if c.TurnTCPPort > 0 && c.TurnTCPPort >= c.TurnMinPort && c.TurnTCPPort <= c.TurnMaxPort {
+			return fmt.Errorf("-turn-tcp-port %d is inside the relay range %d-%d", c.TurnTCPPort, c.TurnMinPort, c.TurnMaxPort)
+		}
+	}
+	if c.TurnTTL <= 0 {
+		return fmt.Errorf("-turn-ttl must be positive (got %s)", c.TurnTTL)
+	}
+	if c.TurnTTL > time.Hour {
+		return fmt.Errorf("-turn-ttl above an hour makes the relay a lasting credential, refusing %s", c.TurnTTL)
 	}
 	return nil
 }

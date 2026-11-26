@@ -358,7 +358,12 @@ export function layoutStage() {
   }
   const alone = bigs.length === 1 ? 'yes' : 'no';
   if (main.dataset.alone !== alone) main.dataset.alone = alone;
-  main.hidden = bigs.length === 0;
+  // The world keeps the frame while it is in front, so the grid stays hidden
+  // and a grid that hid on its own never takes the width from the list beside
+  // it.
+  const world = document.getElementById('world-view');
+  const worldOn = !!world && !world.hidden;
+  main.hidden = bigs.length === 0 || worldOn;
 }
 
 // wirePipDrag lets the small preview follow the pointer and snap to the

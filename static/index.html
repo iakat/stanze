@@ -208,6 +208,7 @@
         <button id="deaf-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F507.svg" alt="" width="22" height="22"><span>deafen</span></button>
         <button id="share-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F5A5.svg" alt="" width="22" height="22"><span>share screen</span></button>
         <button id="hand-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F590.svg" alt="" width="22" height="22"><span>raise hand</span></button>
+        <button id="world-btn" type="button" class="ctrl" aria-pressed="true"><img class="ico" src="/openmoji/1F5BC.svg" alt="" width="22" height="22"><span>call grid</span></button>
         <button id="stats-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F4C9.svg" alt="" width="22" height="22"><span>stats</span></button>
         <button id="sfx-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F514.svg" alt="" width="22" height="22"><span>cues</span></button>
         <label class="pick perf-pick">performance
@@ -220,6 +221,10 @@
 
     <div class="room-row">
       <section id="grid" class="grid">
+        <div id="world-view" class="world-view" hidden>
+          <canvas id="world-canvas" class="world-canvas"></canvas>
+          <p id="world-note" class="world-note" hidden></p>
+        </div>
         <div id="stage-main" class="stage-main"></div>
         <div id="self-pip" class="self-pip" hidden></div>
       </section>

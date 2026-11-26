@@ -13,6 +13,10 @@ type Peer struct {
 	id   string
 	room *Room
 
+	// iceMinted is set once this connection was handed a relay credential. One
+	// join offers one credential, so a page cannot farm the relay.
+	iceMinted bool
+
 	// wmu serialises writes to the websocket. gorilla allows one concurrent
 	// writer, and both the write loop and the read loop (terminal errors)
 	// write on the same connection.
@@ -32,16 +36,21 @@ func newPeer() *Peer {
 	}
 }
 
-// enqueue queues a message without ever blocking the sender. A peer that
-// cannot keep up is disconnected instead of growing the queue.
-func (p *Peer) enqueue(msg []byte) {
+// enqueue queues a message without ever blocking the sender. A peer whose
+// queue is full is a receiver that cannot keep up: rather than grow the queue,
+// the frame is dropped for it. Closing it would disconnect the guest that is
+// merely slow while the sender that flooded it keeps its place, which is who an
+// overrun hurts; a peer that drops this long is closed when its socket timeout
+// fires, because its queue never drains.
+func (p *Peer) enqueue(msg []byte) bool {
 	if p == nil {
-		return
+		return false
 	}
 	select {
 	case p.send <- msg:
+		return true
 	default:
-		p.close()
+		return false
 	}
 }
 
@@ -89,12 +98,14 @@ type iceServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
-// clientMsg is the whole client to server vocabulary: join, enc, state, leave,
-// ping. A description and a candidate are not part of it; they travel inside
-// enc. A `state` frame is an old client's clear toggle: it is accepted and
-// dropped, because the toggles travel sealed now. There is no admin command
-// either: the role, the waiting room, the kick and the mute are sealed notices
-// between the guests, and the server can neither check nor forge one.
+// clientMsg is the whole client to server vocabulary: join, ice, enc, state,
+// leave, ping. A description and a candidate are not part of it; they travel
+// inside enc. An `ice` frame asks for a relay credential once a pair has proved
+// itself, and names that pair in To. A `state` frame is an old client's clear
+// toggle: it is accepted and dropped, because the toggles travel sealed now.
+// There is no admin command either: the role, the waiting room, the kick and
+// the mute are sealed notices between the guests, and the server can neither
+// check nor forge one.
 type clientMsg struct {
 	T    string `json:"t"`
 	Room string `json:"room,omitempty"`
@@ -106,18 +117,20 @@ type clientMsg struct {
 	B json.RawMessage `json:"b,omitempty"`
 }
 
-// serverMsg is the whole server to client vocabulary: joined, peer-joined,
-// peer-left, enc, error, pong. There is no description field, so the server
-// cannot send one, no toggle field, so it cannot echo a flag, and no role or
-// waiting field, so it cannot name a host or hold a guest at the door.
+// serverMsg is the whole server to client vocabulary: joined, ice,
+// peer-joined, peer-left, enc, error, pong. There is no description field, so
+// the server cannot send one, no toggle field, so it cannot echo a flag, no
+// role or waiting field, so it cannot name a host or hold a guest at the door,
+// and no roster field, so a one-line change cannot ship one either. The ice
+// list rides its own frame and is only ever minted for a pair that proved
+// itself.
 type serverMsg struct {
-	T     string      `json:"t"`
-	Self  string      `json:"self,omitempty"`
-	Peers []peerInfo  `json:"peers,omitempty"`
-	Peer  *peerInfo   `json:"peer,omitempty"`
-	From  string      `json:"from,omitempty"`
-	Code  string      `json:"code,omitempty"`
-	Ice   []iceServer `json:"ice,omitempty"`
+	T    string      `json:"t"`
+	Self string      `json:"self,omitempty"`
+	Peer *peerInfo   `json:"peer,omitempty"`
+	From string      `json:"from,omitempty"`
+	Code string      `json:"code,omitempty"`
+	Ice  []iceServer `json:"ice,omitempty"`
 }
 
 // tokenBucket is a small per-connection message limiter.
@@ -201,6 +214,66 @@ func (l *windowLimiter) pruneLocked(now time.Time) {
 			delete(l.hits, k)
 		}
 	}
+}
+
+// liveSockets caps the number of websockets one client address holds open at
+// once. The join window only counts the seconds around a join; a socket that is
+// never closed holds a slot, a goroutine and a place in a room for free. The
+// count goes back down when the connection closes, so the cap is a ceiling on
+// what one host ties up, not a lifetime quota.
+type liveSockets struct {
+	mu    sync.Mutex
+	max   int
+	byKey map[string]int
+	total int
+}
+
+func newLiveSockets(max int) *liveSockets {
+	return &liveSockets{max: max, byKey: make(map[string]int)}
+}
+
+// acquire reserves one socket for key. It reports false when the address is
+// already at its cap.
+func (l *liveSockets) acquire(key string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.byKey[key] >= l.max {
+		return false
+	}
+	l.byKey[key]++
+	l.total++
+	return true
+}
+
+// release returns one slot. A release without a matching acquire is a bug and
+// is ignored rather than allowed to make the count drift below zero.
+func (l *liveSockets) release(key string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n := l.byKey[key]; n > 1 {
+		l.byKey[key] = n - 1
+		l.total--
+	} else if n == 1 {
+		delete(l.byKey, key)
+		l.total--
+	}
+}
+
+// count is the number of live sockets for one key, or for every key when key is
+// empty. It is for tests.
+func (l *liveSockets) count(key string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if key == "" {
+		return l.total
+	}
+	return l.byKey[key]
 }
 
 func (p *Peer) writeLoop(conn *websocket.Conn, done <-chan struct{}) {

@@ -4,7 +4,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { clamp, isAdmin, setAdmins } from './util.js';
+import { clamp, isAdmin, say, setAdmins } from './util.js';
 import { ownTile, paintName, paintRowDeaf, rowOf } from './tiles.js';
 import { applyFlags } from './volume.js';
 import { admitPeer, hostMenu, markAdmins, paintWaiting } from './host.js';
@@ -37,29 +37,113 @@ import {
 import { canary } from './audit.js';
 import { store } from './prefs.js';
 import { setChrome } from './phone.js';
+import { setGuestFlags } from './presence.js';
 
 // ------------------------------------------------------ sealed room control
 //
 // Role, waiting switch, let in, kick and mute are sealed commits, one per pair:
 // the server relays a blob and learns nothing. A role list and a switch carry a
 // counter: the highest wins, the lower peer id breaks a tie.
+//
+// The claim wire format is `claim/2`. The 2 is the step-0 rule: a role list no
+// longer starts from whoever signs first. Steps 0 and 1 are both signed by the
+// identity of the page that holds the room, and that page is the one whose
+// fingerprint is in the room id:
+//
+//   <32 base32 chars, the room creator's identity fingerprint>-<room name>
+//
+// A room named without that prefix (a typed name, a link from an older build)
+// has no root, so nobody in it is an admin until the room is handed its root:
+// the waiting-room switch and a passphrase change then need the passphrase
+// itself instead (see below). The 1 was the UNROOTED format: a claim/1 signed
+// by any proven member was adopted as step 0, which let a member of an open
+// room take the role. A claim/1 or claim/1 line is no longer signed and no
+// longer adopted.
+
+// ROOTED is the room id shape this build mints: a fingerprint, a dash, a name.
+export const ROOTED = /^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-([a-z0-9._-]{1,40})$/;
+
+// rootFingerprint is the identity fingerprint that roots this room, or '' for a
+// room that has none yet. A room id this build mints carries it; a room named
+// any other way gets one from the page that created it, recorded locally
+// (identity.ts adoptRoot) and read into state.root at the join and when a claim
+// asks for it.
+export function rootFingerprint(room) {
+  const m = ROOTED.exec(String(room || ''));
+  if (m) return m[0].slice(0, 23);
+  return state.root || '';
+}
+
+// setRoot installs the root this page read from a room record, unless the page
+// already holds one.
+export function setRoot(fp) {
+  if (fp && !state.root) state.root = fp;
+}
+
+// roomNameOf is the human name of a room: the label after the root prefix, or
+// the whole id.
+export function roomNameOf(room) {
+  const m = ROOTED.exec(String(room || ''));
+  return m ? m[1] : String(room || '');
+}
+
 // claimText is the exact byte string a role claim signs. The room id binds the
-// claim to this room, and the counter orders two admins that act at once.
-function claimText(n, admins) {
-  return b64e(sealUtf8.encode(`stanze/claim/1|${state.room}|${n}|${admins.join(',')}`));
+// claim to this room (salt is the whole id), the counter orders two admins that
+// act at once, and ROOT binds a step to the identity that made the room, so a
+// claim signed for a rooted room can never be replayed into another one. The
+// signer is inside the text as well as in the signature, so a step names who
+// signed it even after that page is gone.
+// The text is UTF-8; sign() always takes base64 of these bytes (see botSign),
+// and the module decodes it once before it checks the signature, so the two
+// sides agree on exactly these bytes and on nothing else.
+export function claimText(n, admins, by = '') {
+  const who = by ? String(by) : '';
+  const root = rootFingerprint(state.room) || '-';
+  return `stanze/claim/2|${state.room}|${n}|${root}|${who}|${admins.join(',')}|`;
+}
+
+// botSign signs one message for the long-term identity and hands back base64.
+// The only encoding is here, once: a WebCrypto identity signs the decoded
+// bytes, a seed identity signs through the module, and both answer base64 of
+// that signature over exactly those bytes. A caller never holds the text it
+// signed, so a verify can not check a different encoding than the sign used.
+export async function botSign(msg) {
+  const bytes = b64e(sealUtf8.encode(String(msg || '')));
+  let sig;
+  try {
+    sig = await state.idKey.sign(bytes);
+  } catch {
+    return '';
+  }
+  return typeof sig === 'string' ? sig : '';
+}
+
+// botVerify checks one base64 signature over one text against a base64
+// identity. It is the verifier of every signed statement the page accepts.
+export function botVerify(id, msg, sig) {
+  if (!id || typeof sig !== 'string' || !sig) return false;
+  const res = pqCall((json) => pqModule().idverify(json), {
+    id,
+    msg: b64e(sealUtf8.encode(String(msg || ''))),
+    sig,
+  });
+  return !!(res && res.ok);
+}
+
+// isRootOwner answers whether this page holds the identity the room id names.
+// A page with no root (an unrooted room, an identity not yet loaded) is not the
+// owner, so it may not seed step 0 anywhere.
+export function isRootOwner(root) {
+  return !!root && !!state.idKey && state.idKey.fp === root;
 }
 
 // makeClaim signs one role list with the identity this page announced in the
 // handshake, so every page that holds that key can check it.
 async function makeClaim(n, admins) {
   if (!state.idKey) return null;
-  let sig;
-  try {
-    sig = await state.idKey.sign(claimText(n, admins));
-  } catch {
-    return null;
-  }
-  return sig ? { n, admins: admins.slice(), sig } : null;
+  const sig = await botSign(claimText(n, admins, state.self));
+  if (!sig) return null;
+  return { n, admins: admins.slice(), by: state.self, sig };
 }
 
 // adoptClaim installs a checked claim: the role list, its counter and the page
@@ -77,18 +161,23 @@ export async function issueClaim(n, admins) {
   if (!unique.length) return false;
   // Only a step beyond the claim this page holds is issued, and only by an
   // admin of that step. A room that has lost every admin can not mint one:
-  // that is a known limit of claim/1, not something this patch hides. Step 0
-  // is the seed of a room with no claim yet.
+  // that is a known limit of claim/2. Step 0 is the seed, and only the identity
+  // the room id names may seed it.
   if (n === 0) {
     if (state.auth.n >= 0) return false;
+    if (!isRootOwner(rootFingerprint(state.room))) return false;
+  } else if (n === 1) {
+    // The handover: the root turns its own step 0 into a room with members.
+    // Only the root, and only from its own step 0.
+    if (state.auth.n !== 0 || !isRootOwner(rootFingerprint(state.room))) return false;
   } else {
     if (state.auth.n < 0 || n !== state.auth.n + 1) return false;
     if (!state.admins.has(state.self)) return false;
   }
   const claim = await makeClaim(n, unique);
   if (!claim || state.leaving) return false;
-  adoptClaim({ ...claim, by: state.self });
-  toSealed({ k: 'claim', n: claim.n, admins: claim.admins, sig: claim.sig });
+  adoptClaim(claim);
+  toSealed({ k: 'claim', n: claim.n, admins: claim.admins, by: claim.by, sig: claim.sig });
   return true;
 }
 
@@ -96,74 +185,146 @@ export async function issueClaim(n, admins) {
 // the role. A page with no claim of its own has nothing to say.
 export function sealedSendClaim(peer) {
   if (state.auth.n < 0) return;
-  sealedSend(peer, { k: 'claim', n: state.auth.n, admins: state.auth.admins, sig: state.auth.sig });
+  sealedSend(peer, {
+    k: 'claim',
+    n: state.auth.n,
+    admins: state.auth.admins,
+    by: state.auth.by,
+    sig: state.auth.sig,
+  });
 }
 
-// sealedOnClaim checks one claim: the sender signs for its own announced
-// identity, names itself in the list, and — the part that matters — a claim
-// only takes effect if it is the next step after the one this page already
-// holds, and the page that signed is an admin in that previous step. A guest
-// can still sign one and name itself; it is ignored, because its own signature
-// is not an admin's. One admin signs the next step, and only that step.
+// stepOneAdmins is the list step 1 carries when the root hands over to the
+// members: the root itself, the member it was asked to give the role to, and
+// every other member present, up to five in all. The root stays in the list,
+// because only an admin of a step can sign the next one.
+export function stepOneAdmins(want) {
+  const list = [state.self];
+  if (want && want !== state.self) list.push(want);
+  for (const peer of state.peers.values()) {
+    if (list.length >= 5) break;
+    if (peer.proven && !peer.waiting && !list.includes(peer.id)) list.push(peer.id);
+  }
+  return list;
+}
+
+// handOver asks the root, if this page is not it, to make this page an admin of
+// step 1. Both frames travel sealed over a pair that proved the passphrase, so
+// it works in an open room and behind any passphrase the member holds. A page
+// asks twice at most: no answer is an answer too.
+export function handOver(peer, why) {
+  if (!peer || !peer.keys || peer.waiting) return;
+  const root = rootFingerprint(state.room);
+  if (!root || root === (state.idKey && state.idKey.fp)) return;
+  peer.handAsks = (peer.handAsks || 0) + 1;
+  if (peer.handAsks > 2) {
+    say('nobody here holds the key this room was made with, so nobody can change ' + why);
+    return;
+  }
+  sealedSend(peer, { k: 'handover', why: String(why || '').slice(0, 32) });
+}
+
+// onHandover is the root's answer to handOver: it moves its own step 0 to
+// step 1, naming the asking member. It is asked for by sealedOnCtl, on a pair
+// that proved the room, and answers nothing to a page that holds no role yet.
+export function onHandover(peer) {
+  if (state.auth.n !== 0 || !isRootOwner(rootFingerprint(state.room))) return;
+  if (peer.waiting || isAdmin(peer.id)) return;
+  void issueClaim(1, stepOneAdmins(peer.id));
+}
+
+// sealedOnClaim checks one claim. Every claim is a signature by one identity
+// over the claim text, and the sender must be that identity; what follows is
+// the step rule:
+//   step 0 must be signed by the page whose fingerprint the room id names, so
+//     the first admin is the page that made the room, never whoever joined
+//     first;
+//   step 1 must be signed by that same root and start from its own step 0, so
+//     the handover to members is still the root's decision;
+//   every later step goes up by one from the step this page holds, is signed
+//     by an admin of that step, and names that admin in its list.
+// A page that already holds a claim never takes a foreign one in place of it
+// except as the next step, so a second root claim can not overwrite the list.
 export function sealedOnClaim(peer, obj) {
   if (!peer.proven || !peer.pub || !peer.pub.id) return;
   const n = Number(obj.n);
   if (!Number.isSafeInteger(n) || n < 0 || n > 1e9) return;
   if (!Array.isArray(obj.admins) || !obj.admins.length || obj.admins.length > 64) return;
   if (obj.admins.some((id) => typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id))) return;
-  if (!obj.admins.includes(peer.id) || typeof obj.sig !== 'string') return;
-  const res = pqCall((json) => pqModule().idverify(json), {
-    id: peer.pub.id,
-    msg: claimText(n, obj.admins),
-    sig: obj.sig,
-  });
-  if (!res || !res.ok) return;
+  if (typeof obj.sig !== 'string' || !obj.sig) return;
+  // The sender is the signer: a page signs only for its own identity, so a
+  // claim in another's name is refused whatever its bytes say.
+  if (obj.by !== peer.id || !obj.admins.includes(peer.id)) return;
+  // The signed text names the signer too, so a signature made over another
+  // step cannot be lifted into this one.
+  if (!botVerify(peer.pub.id, claimText(n, obj.admins, obj.by), obj.sig)) return;
+  const root = rootFingerprint(state.room);
 
-  if (state.auth.n < 0) {
-    // No claim on this page yet: nothing to check a step against, so a seed
-    // (step 0) is the trust root for this call, exactly as before.
-    if (n !== 0) return;
-    adoptClaim({ ...obj, by: peer.id });
+  if (n === 0) {
+    if (!root || !isRootOwner(root)) return; // no root here, or not the root's page
+    if (peer.fp !== root) return; // step 0 belongs to the room's identity only
+    if (obj.by !== state.self || obj.admins.length !== 1 || obj.admins[0] !== state.self) return;
+    if (state.auth.n >= 0) return; // this page holds its own seed already
+    adoptClaim(obj);
     return;
   }
-  // Steps only ever go forward by one, and only an admin of the previous step
-  // may sign the next one. The role list is never empty, so this is a real
-  // boundary and not a formality.
+  if (n === 1) {
+    if (!root || !isRootOwner(root) || peer.fp !== root) return;
+    if (state.auth.n !== 0 || state.auth.by !== state.self) return;
+    if (obj.by !== state.self) return;
+    adoptClaim(obj);
+    return;
+  }
+  if (state.auth.n < 0) return; // a step above the seed needs a step to follow
   if (n !== state.auth.n + 1) return;
   if (!state.admins.has(peer.id)) return;
   if (obj.admins.join(',') === state.auth.admins.join(',')) return;
-  adoptClaim({ ...obj, by: peer.id });
+  adoptClaim(obj);
 }
 
-// startAuthSeed gives a room with no member a first admin. A page that hears a
-// claim first keeps it; pages that seed at once agree through the counter and
-// the peer id, so one list survives.
+// startAuthSeed lets a page into a room it is alone in, and gives a rooted room
+// a first admin before anyone else joins: the page that made the room. The two
+// are separate decisions. Admission to an empty room is a waiting-room matter
+// and happens for any page; the first role is a root matter, so a page whose
+// identity is not in the room id seeds no claim and asks the root for one
+// instead (see startRootAsk). An unrooted room therefore has no admin until it
+// is handed a root, and README says so.
 export function startAuthSeed() {
   if (state.authTimer) clearTimeout(state.authTimer);
   state.authTimer = setTimeout(() => {
     state.authTimer = null;
     if (state.leaving || !state.self) return;
     // A room with nobody else in it has no member to let this page in, so the
-    // first guest takes the room and seeds the first role.
+    // first guest takes the room.
     if (!state.peers.size && state.waiting) admitPeer(state.self);
     if (state.auth.n >= 0) return;
+    if (!isRootOwner(rootFingerprint(state.room))) return;
     void issueClaim(0, [state.self]);
   }, 1200);
 }
 
+// startRootAsk is the guest half of the seed: when the member that made the
+// room speaks on a proved pair, ask it for a role. A room with no root never
+// asks, and no page answers.
+export function startRootAsk(peer) {
+  const root = rootFingerprint(state.room);
+  if (!root || state.auth.n >= 0 || !peer || peer.waiting) return;
+  peer.handAsks = 0;
+  handOver(peer, 'the waiting room');
+}
+
 // resealOnLeave drops a member that left from the role list. The first admin
 // left in the list signs the new claim, so one page does it. A room with no
-// admin left lets every page offer itself.
+// admin left keeps the last step: a claim never falls back below 2, because a
+// step 1 signed by the root would otherwise be reachable again.
 export function resealOnLeave(id) {
   if (!state.auth.admins.includes(id)) return;
   const rest = state.auth.admins.filter((other) => other !== id);
-  if (!rest.length) {
-    if (!state.waiting) void issueClaim(state.auth.n + 1, [state.self]);
-    return;
-  }
+  if (!rest.length) return;
   if (rest[0] !== state.self) return;
   void issueClaim(state.auth.n + 1, rest);
 }
+
 
 // sealedOnWait takes the room switch from an admin's pair. The counter orders
 // two changes, and the peer id breaks a tie, the same rule as the gate value.
@@ -183,15 +344,29 @@ export function sealedOnWait(peer, obj) {
 }
 
 // setWaitingRoom is the admin switch: one sealed commit to every pair. A page
-// with no role can not move it, and no page obeys a sender that holds none.
+// with no role can not move it, and no page obeys a sender that holds none. It
+// asks the page that made the room for the role first, so a member of a rooted
+// room is never locked out of its own switch.
 export function setWaitingRoom(on) {
-  if (!isAdmin(state.self) || state.waiting) return;
+  if (state.waiting) return;
+  if (!isAdmin(state.self)) {
+    askRoot('the waiting room');
+    return;
+  }
   const n = state.wait.n + 1;
   state.wait = { on: !!on, n };
   state.waitingRoom = !!on;
   toSealed({ k: 'wait', on: !!on, n });
   paintWaiting();
   if (!on) admitAllHeld();
+}
+
+// askRoot sends the hand-over request over every proved pair: only the page
+// with the room's identity answers it, and it answers with a role claim.
+export function askRoot(why) {
+  for (const peer of state.peers.values()) {
+    if (peer.pass && peer.pass.done && !peer.waiting) handOver(peer, why);
+  }
 }
 
 // sealedAdmit lets one held guest in. Any member may do it: the gate proof
@@ -282,7 +457,11 @@ export function sealedOnIn(peer) {
 // talks to nobody. Its identity goes on the refused list, so the key can not
 // come back.
 export function sealedKick(id) {
-  if (!isAdmin(state.self) || !id || id === state.self) return;
+  if (!id || id === state.self) return;
+  if (!isAdmin(state.self)) {
+    askRoot('removing a guest');
+    return;
+  }
   const gone = state.peers.get(id);
   if (gone && gone.fp) state.kickedFps.add(gone.fp);
   toSealed({ k: 'kick', of: id });
@@ -297,7 +476,11 @@ export function sealedKick(id) {
 // reach its own track, so this is a request over its proven pair and not a
 // command the relay could carry.
 export function sealedMute(id) {
-  if (!isAdmin(state.self) || !id || id === state.self) return;
+  if (!id || id === state.self) return;
+  if (!isAdmin(state.self)) {
+    askRoot('muting a guest');
+    return;
+  }
   toSealed({ k: 'mute', of: id });
 }
 
@@ -349,6 +532,9 @@ export function sealedOnState(peer, obj) {
     if (peer.cam) paintPeerVideo(peer);
     else dropPeerCamera(peer);
   }
+  // The camera and microphone lamps of the presence line are the guest's own
+  // word, and they are what a name tag shows.
+  setGuestFlags(peer.id, { cam: obj.cam !== undefined ? !!obj.cam : undefined, mic: obj.mic !== undefined ? !!obj.mic : undefined });
   if (obj.deaf !== undefined) peer.deaf = !!obj.deaf;
   // The two noise models the guest reports: its microphone filter and the one
   // it runs on the stream this pair sends to it. An older guest sends neither.
@@ -462,7 +648,7 @@ export function roomW(pass, room) {
   // label, so an open room and a passphrase room look alike on the wire.
   const secret = pass === '' ? '\u0000open room' : pass;
   const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
-  if (!out || !out.w) throw new Error('the room key could not be derived');
+  if (!out || typeof out.w !== 'string' || !out.w) throw new Error('the room key could not be derived');
   return out.w;
 }
 
@@ -484,7 +670,7 @@ export function sealedSend(peer, obj) {
   const seq = peer.seqOut + 1;
   const out = pqCall((json) => pqModule().seal(json), {
     key: b64e(peer.keys.sendChat),
-    aad: b64e(chatAAD(peer.id, seq)),
+    aad: b64e(chatAAD(peer.id, seq, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
     pt: b64e(sealUtf8.encode(padPayload(obj))),
   });
   if (!out || !out.b) return;

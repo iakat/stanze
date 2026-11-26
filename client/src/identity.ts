@@ -26,6 +26,45 @@ import { paintState, refreshCodeCard } from './gate.js';
 // server. A browser that can not keep a key gets a fresh one per page and says so.
 const ID_DB = 'stanze-identity';
 
+// The root a room was handed, per identity. A room named without a root (a
+// typed name, a link from an older build) gets a recorded root from the page
+// that created it: the record is kept for that room under this browser's own
+// identity, and no other identity can act on it. The record lives in the same
+// local database as the identity and the pins; it holds a fingerprint, which is
+// public.
+
+// adoptRoot records this page as the root of an unrooted room, unless the room
+// already has a root that is another identity. True means the room now has a
+// root this page may seed. It returns true for a room this browser can not
+// record (no database, private window): there the root is this page alone, for
+// as long as the call lasts.
+export function adoptRoot(room, fp) {
+  if (!room || !fp) return Promise.resolve(false);
+  if (!idDbReady()) return Promise.resolve(true);
+  return idbGet('roots', room)
+    .then((rec) => {
+      if (rec && rec.fp === fp) return true;
+      // A room keeps the root it was handed. A second identity that created
+      // the room again can not take it over.
+      if (rec && rec.fp && rec.fp !== fp) return false;
+      return idbPut('roots', room, { fp, at: Date.now() }).then(() => true);
+    })
+    .catch(() => true);
+}
+
+// roomRoot reads the recorded root of one room, or ''.
+export function roomRoot(room) {
+  if (!room) return Promise.resolve('');
+  if (!idDbReady()) return Promise.resolve('');
+  return idbGet('roots', room)
+    .then((rec) => (rec && typeof rec.fp === 'string' ? rec.fp : ''))
+    .catch(() => '');
+}
+
+function idDbReady() {
+  return typeof indexedDB !== 'undefined';
+}
+
 const ID_CHALLENGE = 'stanze identity';
 
 const ID_NOTE = {
@@ -45,9 +84,9 @@ function idStore() {
       reject(new Error('no indexeddb'));
       return;
     }
-    const req = indexedDB.open(ID_DB, 1);
+    const req = indexedDB.open(ID_DB, 2);
     req.onupgradeneeded = () => {
-      for (const name of ['id', 'pins', 'revoked']) {
+      for (const name of ['id', 'pins', 'revoked', 'roots']) {
         if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
       }
     };

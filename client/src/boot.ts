@@ -7,6 +7,8 @@ import { $ } from './dom.js';
 import { paintBuildTag } from './buildtag.js';
 import { state } from './state.js';
 import { isAdmin, newRoomID, say } from './util.js';
+import { rootFingerprint, setRoot } from './gate.js';
+import { adoptRoot, ensureIdentity } from './identity.js';
 import { load, store } from './prefs.js';
 import {
   menuClose,
@@ -73,6 +75,9 @@ import { initLobbyWindow } from './lobby.js';
 import { renameSelf, sendSealedChat, setWaitingRoom } from './gate.js';
 import { runLab } from './lab.js';
 import { applyImmersive, phoneQuery, setChrome } from './phone.js';
+import { isWorld, talksFrame, worldHook, worldToggle } from './roomworld.js';
+import { forgetRoute, paintPresence, setGuestFlags, setTalks } from './presence.js';
+import { AVATARS, loadSheets, setAvatar } from './world.js';
 
 // window.e2eApp is the hook the browser test drives; a person never needs it.
 // It exposes the counters of a sealed call from the one client.
@@ -156,6 +161,9 @@ win().e2eApp = {
   }),
   selfTest: pqSelfTest,
   lab: runLab,
+  // The world of the room: the drawn map, the avatars, and a walk with the
+  // same rule a key press follows.
+  world: worldHook(),
   // The drawn camera is reported by the track each camera sender carries, so a
   // test can see the swap a hidden tab makes without reading a picture.
   effects: () => ({
@@ -196,6 +204,27 @@ win().e2eApp = {
     return lookRestart();
   },
 };
+
+// ---------------------------------------------------------------- room root
+// adoptThisRoot records this page as the root of a room it just opened itself.
+// It is called only when this click chose the name, never when the field held
+// a name somebody typed earlier or a link arrived with one: a room a visitor
+// merely joined has no root on this page, and its joiners cannot seed step 0.
+// The record is read back at the join, before the socket opens.
+function adoptThisRoot(room) {
+  // The identity may still be loading when the join is clicked; the record is
+  // written once it is there, and the join reads it back.
+  ensureIdentity()
+    .then(() => {
+      const key = (state.idKey && state.idKey.fp) || '';
+      if (!key) return false;
+      return adoptRoot(room, key).then((ok) => {
+        if (ok) setRoot(key);
+        return ok;
+      });
+    })
+    .catch(() => false);
+}
 
 // ---------------------------------------------------------------- boot
 
@@ -277,14 +306,19 @@ function wireJoinCard() {
     // suspended context and the room stays silent while the video plays.
     ensurePlayback();
     const box = $('room');
-    // Nothing typed: the suggested id is used.
-    const room = normalizeRoom(box.value) || newRoomID();
+    // An empty field is a new room, so this page makes it. A name that was
+    // already in the field is one it joined, and it stays unrooted here.
+    const opened = !normalizeRoom(box.value);
+    const room = normalizeRoom(box.value) || suggestRoom() || newRoomID();
     if (!ROOM_RE.test(room)) {
       say('room names use a-z 0-9 . _ - (1 to 64 characters)');
       return;
     }
     box.value = room;
     enterRoom(room, $('pass').value || '');
+    // The page that opens a room is its root: a rooted id already says so, and
+    // a typed name gets the identity recorded here before anyone joins.
+    if (opened && !rootFingerprint(room)) adoptThisRoot(room);
   });
 
   $('chat-form').addEventListener('submit', (event) => {
@@ -554,6 +588,22 @@ function wireStage() {
       const id = tileId(row as HTMLElement);
       if (id) setSpotlight(id);
     });
+  }
+  // The world and the call grid trade the frame. The stored choice decides
+  // which one a guest lands in; the menu item is the same switch.
+  const worldBtn = document.getElementById('world-btn');
+  if (worldBtn) {
+    const paint = () => {
+      const on = isWorld();
+      worldBtn.setAttribute('aria-pressed', String(on));
+      worldBtn.textContent = on ? 'call grid' : 'world';
+      worldBtn.title = on ? 'show the call grid' : 'show the world';
+    };
+    worldBtn.addEventListener('click', () => {
+      worldToggle();
+      paint();
+    });
+    paint();
   }
   document.addEventListener('click', closeMenus);
   document.addEventListener('keydown', (event) => {

@@ -24,14 +24,16 @@ import { fileClearAll } from './files.js';
 import { ensureSfx, preloadSfx, sfxCache, stopLost } from './sfx.js';
 import { clearStatsPanel, stopStats } from './stats.js';
 import { b64d, b64e, cleanSealedName, pqModule, sealingAvailable } from './sealed.js';
-import { deviceNote, updatePinCount } from './identity.js';
-import { paintGate, wipeIdentity } from './handshake.js';
+import { deviceNote, roomRoot, updatePinCount } from './identity.js';
+import { deriveRoomW, paintGate, wipeIdentity } from './handshake.js';
+import { rootFingerprint, setRoot } from './gate.js';
 import { startSealedWorker } from './frame.js';
 import { ensureReady } from './wasm.js';
 import { asrStop, omniStop } from './asr.js';
 import { canary } from './audit.js';
 import { roomW } from './gate.js';
 import { applyImmersive } from './phone.js';
+import { worldEnter, worldLeave } from './roomworld.js';
 
 // ---------------------------------------------------------------- room flow
 export async function enterRoom(room, pass) {
@@ -74,14 +76,35 @@ export async function enterRoom(room, pass) {
     }
 
     // The passphrase becomes the SPAKE2 scalar before the socket opens; the
-    // join frame carries the room id and no secret.
+    // join frame carries the room id and no secret. The typed value never goes
+    // to the server, and the derivation runs off this thread (see deriveRoomW).
     $('sealed-note').textContent = 'deriving the room key';
     canary(pass);
-    state.w = roomW(pass, room);
+    state.w = '';
+    try {
+      const derived = await deriveRoomW(pass, room);
+      state.w = typeof derived === 'string' ? derived : '';
+    } catch {
+      state.w = roomW(pass, room);
+    }
     // The typed passphrase is the first gate value; an admin change comes
     // sealed down the pair.
     state.gate = { v: pass, n: 0 };
     paintGate();
+    // The module is warm by now, so the pacing of the passphrase exchanges has
+    // a real clock to answer: see deriveRoomW and handshake.ts.
+    state.warmed = true;
+    // A room with no root in its id may have one recorded by the page that
+    // opened it (boot.ts adoptThisRoot). Read it before the socket opens, so
+    // the claim rule of step 0 already knows whose room this is.
+    if (!rootFingerprint(room)) {
+      try {
+        const fp = await roomRoot(room);
+        if (fp) setRoot(fp);
+      } catch {
+        /* no record here: an unrooted room */
+      }
+    }
     startSealedWorker();
     const made = JSON.parse(pqModule().gen());
     // The secret halves stay Uint8Arrays, so leave can zero them.
@@ -124,6 +147,9 @@ export async function enterRoom(room, pass) {
       say(state.sealFault + '; you joined without microphone and camera');
     }
     connectWS();
+    // The world loads beside the mesh: it is a map over HTTP, and a room
+    // without one keeps the call grid.
+    worldEnter(room).catch(() => {});
   } catch (err) {
     leave('');
     state.leaving = false;
@@ -164,6 +190,12 @@ export function leave(message) {
   }
   wipeIdentity();
   state.w = '';
+  state.warmed = false;
+  state.root = '';
+  state.passTries = 0;
+  state.passRefusals = 0;
+  state.passLast = 0;
+  state.seqGaps = 0;
   state.gate = { v: null, n: 0 };
   state.auth = { n: -1, admins: [], by: '', sig: '' };
   if (state.authTimer) clearTimeout(state.authTimer);
@@ -234,6 +266,7 @@ export function leave(message) {
   $('stats-btn').setAttribute('aria-pressed', 'false');
   state.spotlight = '';
   setLocalTile(null);
+  worldLeave();
   $('stage-main').replaceChildren();
   $('self-pip').replaceChildren();
   $('self-pip').hidden = true;

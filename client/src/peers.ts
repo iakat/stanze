@@ -16,6 +16,8 @@ import { updatePinCount } from './identity.js';
 import { wipeKeys } from './handshake.js';
 import { sealedSendCand, sealedSendSdp } from './gate.js';
 import { paintRelay } from './badge.js';
+import { worldDrop } from './roomworld.js';
+import { forgetRoute, paintPresence, routeNow, setGuestFlags, setTalks } from './presence.js';
 
 // ---------------------------------------------------------------- peers
 // A direct only path drops the TURN servers. A relay path needs no filter:
@@ -50,6 +52,9 @@ export function ensurePeer(id) {
     waiting: !!state.waitingRoom && !state.waiting, // held outside the room
     hand: false, // a raised hand
     handTs: 0,
+    camOn: true, // the guest's own camera flag, sealed to this pair
+    micOn: true, // the guest's own microphone flag, sealed to this pair
+    talks: [], // the ids the guest says it is talking to, sealed to this pair
     screenShared: false, // a live share, until the sealed state says otherwise
     vol: 100,
     pc: null,
@@ -148,7 +153,7 @@ export function connectPeer(id, initiator) {
       await pc.setLocalDescription();
       sealedSendSdp(peer, 'offer', pc.localDescription.sdp);
     } catch (err) {
-      console.warn('negotiation failed', err);
+      console.warn('negotiation failed', errName(err));
     } finally {
       peer.makingOffer = false;
     }
@@ -226,6 +231,13 @@ export function connectPeer(id, initiator) {
   return peer;
 }
 
+// errName is what a console line carries about a browser error: its name, never
+// its message. A WebRTC message quotes the description, and a console keeps
+// what it is given, sealed call or not.
+function errName(err) {
+  return (err && (err.name || (err.constructor && err.constructor.name))) || 'error';
+}
+
 function setPeerState(peer, text) {
   peer.state = text;
   // The badge names the key state, so the link state lives in the data
@@ -245,7 +257,7 @@ async function flushPending(peer) {
     try {
       await peer.pc.addIceCandidate(cand);
     } catch (err) {
-      if (!peer.ignoreOffer) console.warn('candidate rejected', err);
+      if (!peer.ignoreOffer) console.warn('candidate rejected', errName(err));
     }
   }
 }
@@ -294,9 +306,12 @@ async function applyDescription(peer, type, sdp) {
   } catch (err) {
     peer.settingAnswer = false;
     // A rejected description leaves the pair at "new": no media, no retry,
-    // nothing on screen. Say it and keep the detail.
-    const why = err && err.message ? err.message : String(err);
-    state.workerErrors.push('description failed for ' + shortPeer(peer.id) + ': ' + why);
+    // nothing on screen. The browser's own text is not kept: it quotes the SDP,
+    // and the stats panel and the console would then hold the call's addresses
+    // in the clear under the seal. The error name is enough to tell one failure
+    // from another.
+    const kind = (err && (err.name || err.constructor && err.constructor.name)) || 'error';
+    state.workerErrors.push('description failed for ' + shortPeer(peer.id) + ': ' + kind);
     say('the ' + type + ' with ' + shortPeer(peer.id) + ' failed; the link has no media');
   }
 }
@@ -310,7 +325,7 @@ export async function onCandidate(peer, candidate) {
   try {
     await peer.pc.addIceCandidate(candidate);
   } catch (err) {
-    if (!peer.ignoreOffer) console.warn('candidate rejected', err);
+    if (!peer.ignoreOffer) console.warn('candidate rejected', errName(err));
   }
 }
 
@@ -319,6 +334,9 @@ export function dropPeer(id) {
   if (!peer) return;
 
   dropAudio(peer);
+  worldDrop(id);
+  forgetRoute(id);
+  paintPresence();
   fileDropPeer(peer);
   if (peer.pc) peer.pc.close();
   const row = peer.tile ? rowOf.get(peer.tile) : null;

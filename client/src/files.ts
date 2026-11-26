@@ -9,6 +9,8 @@ import { CHAT_MAX, addChatLine, chatTime } from './chat.js';
 import { b64d, b64e, fileAAD, pqCall, pqModule, shortPeer } from './sealed.js';
 import { canary } from './audit.js';
 import { sealedSend } from './gate.js';
+import { posOnMessage } from './positions.js';
+import { worldOnPos } from './roomworld.js';
 
 // ------------------------------------------------------------ chat files
 //
@@ -435,7 +437,12 @@ function fileOnDone(peer, msg) {
   fileFinishIn(rec, 'done');
 }
 
-function fileOnChunk(peer, raw) {
+// fileOnFrame routes one message of the ordered channel of a pair. A frame
+// with no kind is a file chunk, which is what the channel carried before any
+// other use, so an older page still works. A position frame is opened sealed
+// and never touches the file bookkeeping, and a position frame is not a
+// chunk: one dropped chunk can be re-read, one dropped position is one tick.
+function fileOnFrame(peer, raw) {
   if (typeof raw !== 'string') return;
   let frame;
   try {
@@ -443,6 +450,15 @@ function fileOnChunk(peer, raw) {
   } catch {
     return;
   }
+  if (!frame || typeof frame !== 'object') return;
+  if (frame.t !== undefined) {
+    if (frame.t === 'pos' && posOnMessage(peer, frame)) worldOnPos(peer);
+    return;
+  }
+  fileOnChunk(peer, frame);
+}
+
+function fileOnChunk(peer, frame) {
   if (!frame || typeof frame.b !== 'string') return;
   const rec = state.filesIn.get(peer.id + '|' + String(frame.x || ''));
   if (!rec || rec.status !== 'receiving' || !peer.keys) return;
@@ -455,7 +471,7 @@ function fileOnChunk(peer, raw) {
   }
   const out = pqCall((json) => pqModule().open(json), {
     key: b64e(peer.keys.recvChat),
-    aad: b64e(fileAAD(peer.id, peer.id, rec.x, q)),
+    aad: b64e(fileAAD(peer.id, peer.id, rec.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
     b: frame.b,
   });
   if (!out || out.error) {
@@ -518,7 +534,7 @@ async function filePump(out, st) {
     if (st.dead || out.cancelled) return;
     const sealed = pqCall((json) => pqModule().seal(json), {
       key: b64e(peer.keys.sendChat),
-      aad: b64e(fileAAD(peer.id, state.self, out.x, q)),
+      aad: b64e(fileAAD(peer.id, state.self, out.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
       pt: b64e(buf),
     });
     if (!sealed || !sealed.b) {
@@ -619,7 +635,7 @@ export function fileBindChannel(peer, dc) {
     peer.dc.onerror = null;
   }
   peer.dc = dc;
-  dc.onmessage = (event) => fileOnChunk(peer, typeof event.data === 'string' ? event.data : '');
+  dc.onmessage = (event) => fileOnFrame(peer, typeof event.data === 'string' ? event.data : '');
   dc.onclose = () => {
     if (peer.dc !== dc) return;
     peer.dc = null;

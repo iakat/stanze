@@ -46,21 +46,15 @@ func check(name string, ok bool, detail string) {
 	fmt.Println()
 }
 
-type peerInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
 type sigMsg struct {
-	T     string     `json:"t"`
-	Self  string     `json:"self"`
-	Peers []peerInfo `json:"peers"`
-	From  string     `json:"from"`
-	B     string     `json:"b"`
-	Text  string     `json:"text"`
-	Kind  string     `json:"kind"`
-	Code  string     `json:"code"`
-	Chat  []struct {
+	T    string `json:"t"`
+	Self string `json:"self"`
+	From string `json:"from"`
+	B    string `json:"b"`
+	Text string `json:"text"`
+	Kind string `json:"kind"`
+	Code string `json:"code"`
+	Chat []struct {
 		Kind string `json:"kind"`
 		Name string `json:"name"`
 		Text string `json:"text"`
@@ -240,17 +234,19 @@ func main() {
 	}
 	check("three peers joined", a.id != "" && b.id != "" && eve.id != "", a.id+","+b.id+","+eve.id)
 
-	// The server must not know any peer name, and must not keep a chat line. The
-	// field is empty because the client never sends a name at all.
+	// The join is the whole server to client vocabulary now. There is no
+	// roster any more (not even a name field), no chat history and no relay
+	// list: the wire has no place for a name to land in.
 	joinedB, _ := b.until(func(m sigMsg) bool { return m.T == "joined" }, 2*time.Second)
-	namesOK := len(joinedB.Peers) == 1
-	for _, p := range joinedB.Peers {
-		if p.Name != "" {
-			namesOK = false
-		}
+	var raw map[string]any
+	if data, err := json.Marshal(joinedB); err == nil {
+		_ = json.Unmarshal(data, &raw)
 	}
-	check("peer list carries no names", namesOK, fmt.Sprintf("%v", joinedB.Peers))
-	check("join history is empty", len(joinedB.Chat) == 0, fmt.Sprintf("%d lines", len(joinedB.Chat)))
+	_, hasPeers := raw["peers"]
+	_, hasChat := raw["chat"]
+	_, hasIce := raw["ice"]
+	check("the join carries no roster, no chat history and no relay list", !hasPeers && !hasChat && !hasIce,
+		fmt.Sprintf("peers=%v chat=%v ice=%v", hasPeers, hasChat, hasIce))
 
 	// A plaintext chat message must be dropped entirely in this mode.
 	_ = eve.send(map[string]any{"t": "chat", "text": canary})

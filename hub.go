@@ -6,9 +6,27 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 )
 
 var errRoomUnavailable = errors.New("room unavailable")
+
+// roomHeadroom is the fraction of maxRooms at which a new room is refused. A
+// room that already exists keeps admitting: a call in progress never loses a
+// guest to a cap, while the map can no longer be filled by an empty knock. The
+// last twenty percent stays a working margin for calls that are already up.
+var roomHeadroom = struct{ num, den int }{8, 10}
+
+// roomIdleTimeout is how long a room may stay open with no frame from any of
+// its peers before it is dropped and its guests are disconnected. The peers
+// ping every 25 s and a joining socket has 90 s, so a live room is never idle
+// for this long; a socket that went silent without a close frame is. It is a
+// variable so a test can shorten it.
+var roomIdleTimeout = 5 * time.Minute
+
+// roomSweepEvery is how often the sweep looks for idle rooms. Sweeping on a
+// timer rather than at join time keeps the cost off the join path.
+const roomSweepEvery = 30 * time.Second
 
 // roomNameMax is the longest accepted room name. Custom names are allowed on
 // purpose (a room can be named after a topic), so a name is only checked for
@@ -63,21 +81,41 @@ func (r *Room) freePeerID() (string, error) {
 type Room struct {
 	id    string
 	peers map[string]*Peer
+	// lastSeen is when this room last carried a frame. It is written under
+	// the hub lock, from any peer of the room, and read by the sweep.
+	lastSeen time.Time
+	// started is when the room was made, so a room whose peers never send a
+	// frame still ages out.
+	started time.Time
 }
 
 type Hub struct {
-	mu       sync.Mutex
-	rooms    map[string]*Room
-	maxPeers int
-	maxRooms int
+	mu        sync.Mutex
+	rooms     map[string]*Room
+	maxPeers  int
+	maxRooms  int
+	lastWarn  time.Time // when the headroom warning last reached the log
+	warnEvery time.Duration
+	log       func(roomCount, cap int) // nil in tests; the server installs one
 }
 
 func newHub(cfg *Config) *Hub {
+	now := time.Now()
 	return &Hub{
-		rooms:    make(map[string]*Room),
-		maxPeers: cfg.MaxPeers,
-		maxRooms: cfg.MaxRooms,
+		rooms:     make(map[string]*Room),
+		maxPeers:  cfg.MaxPeers,
+		maxRooms:  cfg.MaxRooms,
+		warnEvery: time.Minute,
+		lastWarn:  now.Add(-time.Minute),
 	}
+}
+
+// roomLimit is the number of rooms above which a new room is refused. It is
+// rounded up, because a fraction of a room would refuse the second one on a
+// tiny limit as surely as it refuses the third.
+func (h *Hub) roomLimit() int {
+	products := h.maxRooms * roomHeadroom.num
+	return (products + roomHeadroom.den - 1) / roomHeadroom.den
 }
 
 // join attaches a peer to a room. A room that does not exist yet is created by
@@ -97,17 +135,25 @@ func (h *Hub) join(roomID string, p *Peer) (*Room, error) {
 	room, ok := h.rooms[roomID]
 	created := false
 	if !ok {
-		if len(h.rooms) >= h.maxRooms {
+		// A new room costs a slot; an existing one only costs a seat. The
+		// headroom keeps a flood of one-socket rooms from evicting the calls
+		// that are already inside the cap.
+		if len(h.rooms) >= h.roomLimit() {
+			h.warnLocked()
 			return nil, errRoomUnavailable
 		}
+		now := time.Now()
 		room = &Room{
-			id:    roomID,
-			peers: make(map[string]*Peer),
+			id:       roomID,
+			peers:    make(map[string]*Peer),
+			lastSeen: now,
+			started:  now,
 		}
 		h.rooms[roomID] = room
 		created = true
 	}
-	// Full rooms fail exactly like malformed ids.
+	// Full rooms fail exactly like malformed ids. An unset cap is an empty
+	// room: no seat fits, and the join fails rather than trivially passing.
 	if len(room.peers) >= h.maxPeers {
 		if created {
 			delete(h.rooms, roomID)
@@ -126,8 +172,77 @@ func (h *Hub) join(roomID string, p *Peer) (*Room, error) {
 		p.id = id
 	}
 	room.peers[p.id] = p
+	room.lastSeen = time.Now()
 	p.room = room
 	return room, nil
+}
+
+// warnLocked logs that the headroom threshold was reached. The line names a
+// count and a cap and nothing else: no room id, no address, no peer.
+func (h *Hub) warnLocked() {
+	if h.log == nil {
+		return
+	}
+	now := time.Now()
+	if now.Sub(h.lastWarn) < h.warnEvery {
+		return
+	}
+	h.lastWarn = now
+	h.log(len(h.rooms), h.roomLimit())
+}
+
+// touch records that a room carried a frame, so the sweep does not take a
+// quiet-but-live call. It is called from the read path, so it does not take the
+// hub lock for a room that has nothing to update.
+func (h *Hub) touch(room *Room) {
+	if room == nil {
+		return
+	}
+	h.mu.Lock()
+	room.lastSeen = time.Now()
+	h.mu.Unlock()
+}
+
+// sweepIdle drops every room that has carried no frame for roomIdleTimeout and
+// closes its peers, which tells the guests and frees their sockets. It returns
+// the number of rooms dropped. A room that leaves one bad connection behind
+// cannot hold a slot for good this way.
+func (h *Hub) sweepIdle(now time.Time) int {
+	var stale []*Room
+	h.mu.Lock()
+	for id, room := range h.rooms {
+		if now.Sub(room.lastSeen) < roomIdleTimeout {
+			continue
+		}
+		delete(h.rooms, id)
+		for _, p := range room.peers {
+			p.room = nil
+		}
+		stale = append(stale, room)
+	}
+	h.mu.Unlock()
+	// Close outside the lock: a close runs the onClose hook, which leaves the
+	// hub again.
+	for _, room := range stale {
+		for _, p := range room.peers {
+			p.close()
+		}
+	}
+	return len(stale)
+}
+
+// runSweeper sweeps until stop is closed.
+func (h *Hub) runSweeper(stop <-chan struct{}) {
+	t := time.NewTicker(roomSweepEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case now := <-t.C:
+			h.sweepIdle(now)
+		}
+	}
 }
 
 // leave removes the peer from its room and returns that room, or nil when the
@@ -179,8 +294,9 @@ func (h *Hub) peersOf(room *Room, skip string) []*Peer {
 }
 
 // relay forwards a message to a peer in the same room. Lookups never leave the
-// sender's room, so a peer id from another room is simply unknown.
-func (h *Hub) relay(p *Peer, to string, payload []byte) {
+// sender's room, so a peer id from another room is simply unknown. It reports
+// whether the frame reached the queue of its target.
+func (h *Hub) relay(p *Peer, to string, payload []byte) bool {
 	h.mu.Lock()
 	room := p.room
 	var target *Peer
@@ -191,9 +307,9 @@ func (h *Hub) relay(p *Peer, to string, payload []byte) {
 	}
 	h.mu.Unlock()
 	if target == nil {
-		return
+		return false
 	}
-	target.enqueue(payload)
+	return target.enqueue(payload)
 }
 
 // peerOf looks one peer up inside a room.
@@ -213,13 +329,18 @@ func (h *Hub) broadcastTo(room *Room, payload []byte) {
 	}
 }
 
-// broadcast sends one message to every other peer in the room.
-func (h *Hub) broadcast(p *Peer, payload []byte) {
+// broadcast sends one message to every other peer in the room. It reports how
+// many peers took it.
+func (h *Hub) broadcast(p *Peer, payload []byte) int {
 	room := h.roomOf(p)
 	if room == nil {
-		return
+		return 0
 	}
+	n := 0
 	for _, other := range h.peersOf(room, p.id) {
-		other.enqueue(payload)
+		if other.enqueue(payload) {
+			n++
+		}
 	}
+	return n
 }

@@ -6,9 +6,10 @@ import { B32 } from './config.js';
 import { $ } from './dom.js';
 import { state } from './state.js';
 
-// newRoomID builds a 128 bit room id in the client, so the lobby can suggest
-// one without asking the server.
-export function newRoomID() {
+// newRoomID builds a 128 bit room name in the client, so the lobby can suggest
+// one without asking the server. With a fingerprint it is a rooted id: the
+// fingerprint, a dash, then the name (see gate.ts ROOTED).
+export function newRoomID(fp = '') {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   let bits = 0;
   let value = 0;
@@ -22,7 +23,7 @@ export function newRoomID() {
     }
   }
   if (bits > 0) out += B32[(value << (5 - bits)) & 31];
-  return out;
+  return fp ? String(fp).toLowerCase() + '-' + out : out;
 }
 
 export function say(text) {

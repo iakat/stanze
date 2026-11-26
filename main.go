@@ -73,6 +73,13 @@ func main() {
 
 	hub := newHub(cfg)
 	srv := newServer(cfg, hub, log)
+	// A warning when the room cap is reached names a count and a cap, never a
+	// room, and only once a minute.
+	hub.log = func(rooms, limit int) {
+		log.Warn("room cap reached: new rooms refused until a room closes", "rooms", rooms, "limit", limit)
+	}
+	stopSweep := make(chan struct{})
+	go hub.runSweeper(stopSweep)
 
 	var turnSrv interface{ Close() error }
 	if cfg.turnWanted() {
@@ -118,7 +125,13 @@ func main() {
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelShutdown()
+	// A websocket is not closed by Shutdown: the handler goroutines are left
+	// running until the process exits. Closing the live sockets hands each
+	// page a close frame, so a tab notices the call is over instead of finding
+	// a dead socket later.
+	srv.closeAll()
 	httpSrv.Shutdown(shutdownCtx)
+	close(stopSweep)
 	if turnSrv != nil {
 		turnSrv.Close()
 	}
@@ -241,6 +254,8 @@ func buildHandler(cfg *Config, srv *server) (http.Handler, error) {
 	mux.HandleFunc("/vosk/", voskHandler(cfg.VoskDir))
 	mux.HandleFunc("/omni/", omniHandler(cfg.OmniDir))
 
+	// A local run is plain http and a local run is never behind the proxy, so
+	// BehindProxy is the flag that says the public name is https.
 	return securityHeaders(mux, srv.log, cfg.VoskDir != "" || cfg.OmniDir != "", cfg.BehindProxy), nil
 }
 
@@ -442,34 +457,44 @@ func loadOpenmoji(dir string, out map[string][]byte) error {
 }
 
 // loadFolder reads one static subdirectory into the asset map: the landmarker
-// files, or the drawings a mask wears. They are read by name from the one
-// folder, and the folder may be absent: without the landmarker the client keeps
-// its colour based face patch, and without a drawing a mask falls back to its
-// own vector, so an extra is never a reason to fail.
+// files, the drawings a mask wears, the world beside them. They are read by
+// name from the one folder, and the folder may be absent: without the
+// landmarker the client keeps its colour based face patch, without a drawing a
+// mask falls back to its own vector, and without a map a room keeps its call
+// grid, so an extra is never a reason to fail.
 func loadFolder(dir, name string, out map[string][]byte) error {
-	names, err := filepath.Glob(filepath.Join(dir, name, "*"))
-	if err != nil {
-		return err
-	}
-	for _, file := range names {
-		info, err := os.Stat(file)
-		if err != nil || info.IsDir() {
-			continue
+	root := filepath.Join(dir, name)
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
 		}
-		b, err := os.ReadFile(file)
+		if entry.IsDir() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		out[name+"/"+filepath.Base(file)] = b
-	}
-	return nil
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		// The key is the path under static/ with forward slashes, which is the
+		// name the page asks for: world/maps/office.json, never a native
+		// separator and never a name outside the one folder.
+		out[filepath.ToSlash(rel)] = b
+		return nil
+	})
 }
 
 // folderNames is every static subdirectory the client may load a file from:
-// the landmarker, the drawing a mask wears and the sound cues. The short code
-// drawings are the fourth, read by a glob of their own.
+// the landmarker, the drawing a mask wears, the sound cues and the world. The
+// short code drawings are the fifth, read by a glob of their own.
 func folderNames() []string {
-	return []string{"facemesh", "miku", "sfx"}
+	return []string{"facemesh", "miku", "sfx", "world"}
 }
 
 func assetNames() []string {
@@ -485,9 +510,10 @@ func assetNames() []string {
 		// node and worker that run it.
 		"fe.wasm", "fe.q8", "fe-NOTICE.txt",
 		"fastenhancer-worklet.js", "fastenhancer-worker.js",
-		// The sealed half of the one client: the frame worker and the
-		// WebAssembly build of the key agreement. The old e2e page is gone.
-		"e2e-transform.js", "wasm_exec.js", "pq.wasm",
+		// The sealed half of the one client: the frame worker, the off-thread
+		// derivation of the room key, and the WebAssembly build of the key
+		// agreement. The old e2e page is gone.
+		"e2e-transform.js", "wasm-derive.js", "wasm_exec.js", "pq.wasm",
 		// The four cues are Opus for size; the mp3 stays as a fallback.
 		"sfx/pop.webm", "sfx/bonk.webm", "sfx/timp.webm", "sfx/hammer.webm",
 		"sfx/pop.ogg", "sfx/bonk.ogg", "sfx/timp.ogg", "sfx/hammer.ogg",
@@ -611,7 +637,12 @@ func securityHeaders(next http.Handler, log *slog.Logger, asr, tlsOnly bool) htt
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Embedder-Policy", "require-corp")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
-		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		// A local run is plain http: an HSTS header on it would pin a name to
+		// https that the server cannot answer. Behind the https proxy the
+		// public name is https, and the header belongs there.
+		if tlsOnly {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 
 		if log.Enabled(r.Context(), slog.LevelDebug) {
 			start := time.Now()

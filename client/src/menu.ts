@@ -162,8 +162,14 @@ export function wireMenuBar() {
   });
 }
 
+// suggestRoom fills the field with a room this page makes: the id carries this
+// identity's fingerprint, so the room has a root nobody has to hand it later. It
+// answers the name too, because the caller is about to join it.
 export function suggestRoom() {
-  $('room').value = newRoomID();
+  const fp = state.idKey && state.idKey.fp ? state.idKey.fp : '';
+  const room = newRoomID(fp);
+  $('room').value = room;
+  return room;
 }
 
 // normalizeRoom turns whatever was pasted into a room name: a full link, a

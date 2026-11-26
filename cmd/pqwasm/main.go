@@ -273,6 +273,13 @@ func proved(_ js.Value, args []js.Value) any {
 	return reply(map[string]any{"ok": true})
 }
 
+// signingBytes is the one encoding rule of a signed message: what a caller
+// hands over is base64 of the exact bytes that were signed, and the signature
+// is checked over those bytes. It is the only way idsign and idverify read a
+// message, so the two can never disagree, and a signer outside this module
+// (WebCrypto Ed25519 in the page) signs the same bytes.
+func signingBytes(msg string) ([]byte, error) { return b64d(msg) }
+
 func idgen(js.Value, []js.Value) any {
 	key, err := pq.NewSigningKey()
 	if err != nil {
@@ -299,7 +306,7 @@ func idsign(_ js.Value, args []js.Value) any {
 	if err != nil {
 		return fail(err)
 	}
-	msg, err := b64d(in.Msg)
+	msg, err := signingBytes(in.Msg)
 	if err != nil {
 		return fail(err)
 	}
@@ -323,7 +330,7 @@ func idverify(_ js.Value, args []js.Value) any {
 	if err != nil {
 		return reply(map[string]any{"ok": false, "error": err.Error()})
 	}
-	msg, err := b64d(in.Msg)
+	msg, err := signingBytes(in.Msg)
 	if err != nil {
 		return reply(map[string]any{"ok": false, "error": err.Error()})
 	}
@@ -410,12 +417,37 @@ func open(_ js.Value, args []js.Value) any {
 // ---------------------------------------------------------------- spake2
 
 // spakeRuns holds the exchanges in flight, so the scalar of a run stays in this
-// module and never reaches the page. The page only sees an id.
+// module and never reaches the page. The page only sees an id. The map is a
+// local resource, but a page that starts an exchange and never finishes it
+// would still grow it for as long as the tab lives, so it is capped and the
+// oldest run is evicted first. A run that is evicted fails its finish with
+// "no such exchange" instead of being kept forever.
+const spakeRunsMax = 256
+
 var (
 	spakeMu   sync.Mutex
 	spakeSeq  int
 	spakeRuns = map[int]*spake2.Side{}
+	spakeFifo []int
 )
+
+// spakeKeep adds one run and evicts the oldest while the map is over the cap.
+// Entries whose run is gone are dropped from the front on the way.
+func spakeKeep(id int, side *spake2.Side) {
+	spakeMu.Lock()
+	defer spakeMu.Unlock()
+	spakeRuns[id] = side
+	spakeFifo = append(spakeFifo, id)
+	for len(spakeFifo) > 0 {
+		if _, live := spakeRuns[spakeFifo[0]]; live {
+			if len(spakeRuns) <= spakeRunsMax {
+				break
+			}
+			delete(spakeRuns, spakeFifo[0])
+		}
+		spakeFifo = spakeFifo[1:]
+	}
+}
 
 // spakew derives w from the room passphrase. The salt is the room id, so the
 // same passphrase in another room gives another scalar.
@@ -480,11 +512,13 @@ func spakeStart(_ js.Value, args []js.Value) any {
 	spakeMu.Lock()
 	spakeSeq++
 	id := spakeSeq
-	spakeRuns[id] = side
 	spakeMu.Unlock()
+	spakeKeep(id, side)
 	return reply(map[string]any{"id": id, "msg": b64e(side.Message())})
 }
 
+// spakeLookup returns one run by id. The caller uses it outside the lock; the
+// side refuses a second Finish or Verify on its own.
 func spakeLookup(id int) (*spake2.Side, error) {
 	spakeMu.Lock()
 	defer spakeMu.Unlock()
@@ -498,6 +532,8 @@ func spakeLookup(id int) (*spake2.Side, error) {
 func spakeDrop(id int) {
 	spakeMu.Lock()
 	delete(spakeRuns, id)
+	// The fifo entry stays: it names a run that is gone, and the next eviction
+	// skips it, so the queue is trimmed from the front only.
 	spakeMu.Unlock()
 }
 
@@ -515,6 +551,9 @@ func spakeFinish(_ js.Value, args []js.Value) any {
 	}
 	msg, err := b64d(in.Msg)
 	if err != nil {
+		// A run whose peer message does not decode is dropped too: it can
+		// never finish, and keeping it would only hold its slot.
+		spakeDrop(in.ID)
 		return fail(err)
 	}
 	ke, conf, err := side.Finish(msg)

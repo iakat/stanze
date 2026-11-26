@@ -6,10 +6,9 @@ import { state } from './state.js';
 import { isAdmin, say } from './util.js';
 import { send } from './menu.js';
 import { paintVolume, storedVolume } from './volume.js';
-import { disableMic } from './devices.js';
+import { disableMic, preparePeer } from './devices.js';
 import { sealedSendState, setHand } from './audio.js';
 import { connectPeer, ensurePeer, onCandidate, onDescription } from './peers.js';
-import { leave } from './room.js';
 import { addChatLine } from './chat.js';
 import { fileDropPeer, fileOnMessage } from './files.js';
 import {
@@ -27,6 +26,8 @@ import {
   shortPeer,
 } from './sealed.js';
 import { fingerprint, paintPin, pinState, updatePinCount } from './identity.js';
+import { scriptURL } from './trust.js';
+import { setTalks } from './presence.js';
 import { asrAnnounce, asrOnMessage } from './asr.js';
 import {
   PAD_KEY,
@@ -34,6 +35,7 @@ import {
   roomW,
   sealedAnnounceName,
   sealedKick,
+  onHandover,
   sealedOnAdmit,
   sealedOnClaim,
   sealedOnHeld,
@@ -86,17 +88,45 @@ function sealedRefuse(peer, why) {
   updatePinCount();
 }
 
-// sealedRefusePass is sealedRefuse for a guest that failed the room proof, so a
-// wrong passphrase costs one handshake. A member kicks the guest everywhere; a
-// guest that was never let in goes back to the lobby.
-function sealedRefusePass(peer) {
-  sealedRefuse(peer, 'does not know the room passphrase');
-  if (state.waiting) {
-    // Out of the message handler: the pair state is being torn down here, and
-    // leaving the room rewrites all of it.
-    setTimeout(() => leave('the room refused the passphrase'), 0);
+// sealedGapReset is M3 on the receiving side: a sequence gap means one frame of
+// this pair was lost on the way, and the socket is ordered, so every later frame
+// would fail the counter for the rest of the call. The pair starts again
+// instead: new keys in the worker, and one side opens a fresh handshake over the
+// live socket. Media is stopped first so nothing keeps flowing on the keys the
+// new handshake replaces.
+const GAP_RESETS_MAX = 3;
+
+function sealedGapReset(peer) {
+  peer.gapResets = (peer.gapResets || 0) + 1;
+  if (peer.gapResets > GAP_RESETS_MAX) {
+    // A pair that keeps losing frames is not repaired by starting again.
+    sealedRefuse(peer, 'keeps losing sealed frames');
     return;
   }
+  if (peer.pc) {
+    peer.pc.close();
+    peer.pc = null;
+  }
+  sealedRestart(peer, true);
+  say(shortPeer(peer.id) + ': one sealed frame went missing, so the link starts again');
+}
+
+// sealedRefusePass closes a pair that failed the room proof, so a wrong
+// passphrase costs one handshake. Only a member kicks, and only an admin kicks
+// at all; a page that waits outside stays. A spakeok from a pair that proved no
+// passphrase is never a reason to leave the room.
+export function sealedRefusePass(peer) {
+  // A failed proof is not an identity failure: it must not read as an attack on
+  // the identity pins, so it closes the pair without touching the pin count.
+  if (!state.peers.has(peer.id)) return;
+  if (peer.pc) {
+    peer.pc.close();
+    peer.pc = null;
+  }
+  wipeKeys(peer);
+  sealedSetE2E(peer, 'failed');
+  say(shortPeer(peer.id) + ' does not know the room passphrase; the link stays closed');
+  if (state.waiting) return;
   if (!isAdmin(state.self) || isAdmin(peer.id)) return;
   sealedKick(peer.id);
 }
@@ -132,6 +162,10 @@ export function sealedRestart(peer, resend) {
   peer.appHeld = [];
   peer.pass = null;
   peer.passEarly = [];
+  // The budget does not restart with the pair: it is spent by the page, and a
+  // page that restarted its own pair must not get its tries back.
+  if (peer.passTimer) clearTimeout(peer.passTimer);
+  peer.passTimer = null;
   peer.ctlPending = [];
   fileDropPeer(peer);
   if (peer.pc) {
@@ -153,10 +187,23 @@ function sealedOnPub(peer, msg) {
     sealedRefuse(peer, 'sent no identity');
     return;
   }
+  // The lower peer id went looking for this bundle, so its hello goes now; the
+  // other side answers it in sealedRespond, which installs the keys.
   if (!peer.keys && !peer.keyPromise && String(state.self) < String(peer.id)) {
+    peer.sentPub = true;
     sealedInitiate(peer).catch(() => sealedRefuse(peer, 'handshake failed'));
   }
   sealedDrainCtl(peer);
+}
+
+// startPassNow answers whether this page may begin the passphrase exchange of
+// this pair now: keys installed, no exchange yet, nothing spent, and the last
+// start older than one window. The pacing lives here, at the bundle, because a
+// peer that re-sends its bundle would otherwise drive an exchange per frame.
+function startPassNow(peer) {
+  if (!peer.keys || peer.keyPromise || peer.pass || peer.passSpent) return false;
+  if (state.passTries >= PASS_PAGE_TRIES) return false;
+  return passMayStart(Date.now());
 }
 
 // sealedProved records that the peer's signature over this transcript checked
@@ -407,7 +454,9 @@ async function sealedOnProof(peer, msg) {
   Promise.resolve(peer.keyPromise).then((ok) => {
     if (!ok || !state.peers.has(peer.id) || state.leaving) return;
     sealedFlushApp(peer);
-    sealedStartPass(peer);
+    // The bundle decides who begins; this call arrives after both sides have
+    // installed their keys, so it is the one place an answer starts an exchange.
+    if (startPassNow(peer)) sealedOfferPass(peer);
   });
 }
 
@@ -420,13 +469,55 @@ function sealedFlushApp(peer) {
   for (const msg of held) sealedHandleOpaque(peer.id, encOpaque(msg));
 }
 
-// sealedStartPass proves the room passphrase to this peer. A handshake binds two
-// ends, but anyone can run one; the proof is what makes the room a room.
-function sealedStartPass(peer) {
+// The passphrase exchange of one pair costs the module a P-256 run, and every
+// frame a peer sends decides a pass or a fail for this page. Both sides are
+// capped, so a page that answers with fresh points forever gets a few frames
+// here and no more: PASS_TRIES per pair, PASS_PAGE_TRIES for the whole page per
+// call (a peer id is cheap to mint, a page is not), and PASS_SPEND_MS between
+// the exchanges a page starts, so a driver of joins can not run them back to
+// back.
+const PASS_TRIES = 3;
+
+const PASS_PAGE_TRIES = 24;
+
+const PASS_SPEND_MS = 3000;
+
+// sealedPassBudget spends one try of one pair; false means neither this pair
+// nor this page has any left, and the pair is closed.
+function sealedPassBudget(peer) {
+  peer.passTries = (peer.passTries || 0) + 1;
+  state.passTries += 1;
+  // A peer that never sends its bundle pays for the exchange it is answered
+  // with; a peer we never saw pays for nothing we did not talk to.
+  if (!peer.pub && !peer.pass) return true;
+  if (peer.passTries <= PASS_TRIES && state.passTries <= PASS_PAGE_TRIES) return true;
+  state.passRefusals += 1;
+  sealedRefuse(peer, 'made too many passphrase attempts');
+  return false;
+}
+
+// passMayStart is the one clock of the page's exchanges: a fresh one may begin
+// only a window after the last. A page that spent its budget begins nothing.
+function passMayStart(now) {
+  if (state.passTries >= PASS_PAGE_TRIES) return false;
+  return now - state.passLast >= PASS_SPEND_MS;
+}
+
+// sealedOfferPass begins the exchange of one pair and records the clock. The
+// decision is startPassNow's; this is only the call that spends it.
+function sealedOfferPass(peer) {
   if (!state.w) {
     sealedRefuse(peer, 'this page holds no room key');
     return;
   }
+  if (!passMayStart(Date.now())) return;
+  state.passLast = Date.now();
+  sealedStartPass(peer);
+}
+
+// sealedStartPass sends the first proof frame of this pair. A handshake binds
+// two ends, but anyone can run one; the proof is what makes the room a room.
+function sealedStartPass(peer) {
   const first = String(state.self) < String(peer.id);
   const a = b64e(sealUtf8.encode(first ? state.self : peer.id));
   const b = b64e(sealUtf8.encode(first ? peer.id : state.self));
@@ -450,16 +541,31 @@ function sealedStartPass(peer) {
 function sealedDrainPass(peer) {
   const held = peer.passEarly || [];
   peer.passEarly = [];
-  for (const msg of held) sealedOnPassFrame(peer, msg);
+  for (const msg of held) {
+    if (!peer.pass || peer.pass.done) break;
+    sealedOnPassFrame(peer, msg);
+  }
 }
 
+// sealedOnPassFrame takes one frame of the room proof. The exchange of one pair
+// is paid for up to PASS_TRIES times; after that the pair is closed and this
+// page starts no further exchange with it in this call. Every attempt is one
+// guess at the room passphrase, and this budget is what keeps a member from
+// turning a peer into a guess probe that runs as long as the call does.
 function sealedOnPassFrame(peer, msg) {
   if (!peer.pass) {
     (peer.passEarly = peer.passEarly || []).push(msg);
     return;
   }
+  if (peer.pass.done) {
+    // A pair that proved the passphrase acts on no further proof frame: both
+    // sides already hold the same secret, and a fresh exchange could only be
+    // an attempt to take the pair back.
+    return;
+  }
   if (msg.k === 'spake') {
     if (peer.pass.finished) return;
+    if (!sealedPassBudget(peer)) return;
     const out = pqCall((json) => pqModule().spakefinish(json), { id: peer.pass.id, msg: msg.m });
     if (!out || !out.conf) {
       sealedRefuse(peer, 'the passphrase exchange failed');
@@ -473,6 +579,7 @@ function sealedOnPassFrame(peer, msg) {
     return;
   }
   // spakeok: the peer's confirmation of the key our side derived.
+  if (!sealedPassBudget(peer)) return;
   const out = pqCall((json) => pqModule().spakeverify(json), { id: peer.pass.id, tag: msg.c });
   if (!out || !out.ok) {
     sealedRefusePass(peer);
@@ -508,10 +615,17 @@ function sealedPassDone(peer) {
   // A held guest stays held until a member lets it in. With the switch off, or
   // a proven key this page already saw inside, that happens at once.
   if (peer.waiting) maybeAdmitHeld(peer);
+  // Held application frames go out only now, and only behind the proof: this
+  // is the one place they are released, and the pass flag above is set before
+  // it runs. A frame that arrived without any pass is never dispatched, because
+  // nothing else calls this.
   const held = peer.appHeld || [];
   peer.appHeld = [];
-  for (const obj of held) sealedDispatchApp(peer, obj);
+  for (const obj of held) if (peer.pass && peer.pass.done) sealedDispatchApp(peer, obj);
   if (!peer.pc && String(state.self) < String(peer.id)) connectPeer(peer.id, true);
+  // A prepare that arrived before the proof was held, not applied; this is
+  // where the transceivers and the tracks are built.
+  if (peer.prepareHeld && peer.pc && !peer.tx) preparePeer(peer);
 }
 
 // sealedHoldCtl keeps a handshake frame that arrived before the state it needs.
@@ -561,8 +675,11 @@ export function sealedHandleOpaque(from, b) {
       break;
     case 'key':
       // One request, one answer: ask our own worker for a key frame on the
-      // video sender of this pair.
-      if (state.worker) state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id) });
+      // video sender of this pair. Only a pair that passed the room proof is
+      // answered: a key frame on a pair that proved nothing would let any
+      // proven stranger make this page encode for media nobody admitted.
+      if (peer.pass && peer.pass.done && peer.keys && state.worker)
+        state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id) });
       break;
     case 'app': {
       if (!msg.b) return;
@@ -574,11 +691,21 @@ export function sealedHandleOpaque(from, b) {
         return;
       }
       // Both directions have their own counter. The socket is ordered, so the
-      // next number is the only one that can be current; anything else is a
-      // replay, a reorder or a forgery, and it is dropped before decryption.
+      // next number is the only one that can be current. A number the pair has
+      // already read is a replay or a reorder and is dropped before decryption.
       const seq = Number(msg.q);
-      if (!Number.isSafeInteger(seq) || seq !== peer.seqIn + 1) {
+      if (!Number.isSafeInteger(seq) || seq <= peer.seqIn) {
         state.replayDrops++;
+        return;
+      }
+      if (seq !== peer.seqIn + 1) {
+        // A gap is not a replay: one frame went missing on the way, and every
+        // later frame of the pair would fail this counter for the rest of the
+        // call, so the pair itself would be silently dead. The pair restarts
+        // instead (new keys in the worker, a fresh handshake over the live
+        // socket), and this frame is dropped with the generation it belongs to.
+        state.seqGaps++;
+        sealedGapReset(peer);
         return;
       }
       sealedOnApp(peer, msg.b, seq);
@@ -592,7 +719,7 @@ export function sealedHandleOpaque(from, b) {
 function sealedOnApp(peer, b, seq) {
   const out = pqCall((json) => pqModule().open(json), {
     key: b64e(peer.keys.recvChat),
-    aad: b64e(chatAAD(peer.id, seq)),
+    aad: b64e(chatAAD(peer.id, seq, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
     b,
   });
   if (!out || out.error) return;
@@ -653,6 +780,10 @@ function sealedDispatchApp(peer, obj) {
     if (!peer.waiting) asrOnMessage(peer, obj);
   } else if (obj.k === 'state') {
     sealedOnState(peer, obj);
+  } else if (obj.k === 'talks') {
+    // The guest's own word about whom it talks to, for the presence line. It
+    // never routes anything: the rule of this page decides that.
+    setTalks(peer.id, obj.ids);
   } else if (obj.k === 'lower') {
     // Only an admin may ask, and only the guest that owns the hand lowers it.
     if (isAdmin(peer.id) && state.hand) setHand(false);
@@ -665,6 +796,10 @@ function sealedDispatchApp(peer, obj) {
     sealedOnGate(peer, obj);
   } else if (obj.k === 'claim') {
     sealedOnClaim(peer, obj);
+  } else if (obj.k === 'handover') {
+    // A member asks the page that made the room for a role. Only that page
+    // answers, and only with the next claim.
+    onHandover(peer);
   } else if (obj.k === 'claimq') {
     // A page that just proved the room asks who holds the role. The answer is
     // the current claim, signed, and nothing else.
@@ -709,14 +844,69 @@ function sealedOnGate(peer, obj) {
 // adoptGate installs a value and derives its scalar again, so the next pair
 // proves the new word. A pair that is already open keeps its keys: the value
 // gates the door, it is not a key schedule.
-function adoptGate(v, n) {
+//
+// The derivation is Argon2id inside the module and costs the tab a visible
+// stall, so it runs in the sealed worker: the passphrase enters the page, goes
+// straight to the worker with a generation, and only the scalar comes back. The
+// newest request wins, because a second change while the first derives must not
+// be undone by the slower answer.
+export function adoptGate(v, n) {
   state.gate = { v, n };
-  try {
-    state.w = roomW(v, state.room);
-  } catch {
-    state.w = '';
-  }
+  // Work inside the promise chains stays untyped at the edge of the module: the
+  // scalar is whatever the derive answered, checked where it is used.
+  const gen = ++state.wGen;
+  state.w = '';
+  Promise.resolve(deriveRoomW(v, state.room))
+    .then((w) => {
+      if (state.leaving || state.wGen !== gen) return;
+      state.w = typeof w === 'string' ? w : '';
+    })
+    .catch(() => {
+      if (state.wGen === gen) state.w = '';
+    });
   paintGate();
+}
+
+// deriveRoomW turns a passphrase into the SPAKE2 scalar. It asks a worker of
+// its own, so the Argon2id run behind it never stalls the page; the worker is
+// created per change and torn down after, because each one loads the wasm
+// module. A browser with no worker derives here instead, which is the old stall
+// and never a wrong value.
+export function deriveRoomW(pass, room) {
+  const secret = pass === '' ? '\u0000open room' : pass;
+  return new Promise((resolve, reject) => {
+    if (typeof Worker !== 'function') {
+      try {
+        resolve(roomW(pass, room));
+      } catch (err) {
+        reject(err);
+      }
+      return;
+    }
+    let worker;
+    try {
+      worker = new Worker(scriptURL('/wasm-derive.js'));
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const done = (w, err) => {
+      try {
+        worker.terminate();
+      } catch {
+        /* already gone */
+      }
+      if (err) reject(err);
+      else resolve(w);
+    };
+    worker.onmessage = (ev) => {
+      const msg = ev.data || {};
+      if (msg.error || typeof msg.w !== 'string') done('', new Error(msg.error || 'derive'));
+      else done(msg.w, null);
+    };
+    worker.onerror = () => done('', new Error('the room key could not be derived'));
+    worker.postMessage({ pass: secret, salt: room });
+  });
 }
 
 // paintGate says whether the room has a passphrase now, and never the value.

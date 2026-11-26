@@ -9,6 +9,7 @@ import { detachMedia, disconnectQuietly, isAdmin, joinWords, say, stopQuietly } 
 import { store } from './prefs.js';
 import { layoutStage, makeTile, ownTile, paintRowDeaf, setLocalTile } from './tiles.js';
 import { applyFlags, paintVolume } from './volume.js';
+import { isRouted } from './presence.js';
 import { paintWaiting } from './host.js';
 import { MIC_AUDIO, applyQuality, ask, camVideo, capVideoSender } from './media.js';
 import {
@@ -458,10 +459,21 @@ function sealOne(peer, side, dir, kind) {
   return true;
 }
 
-// preparePeer seals one transceiver per kind both ways and attaches the live track
-// before the offer leaves. Screen has its own, so a share needs no renegotiation.
+// preparePeer seals one transceiver per kind both ways and attaches the live
+// track before the offer leaves. Screen has its own, so a share needs no
+// renegotiation.
+//
+// It is called only on a pair that passed the room proof (handshake.ts
+// sealedPassDone, and the description that follows it): nothing here is a
+// permission, but a negotiated connection is work the page does, and an
+// unproven pair must not make it do that work. A caller that arrives early is
+// held, not dropped: the pair is re-prepared at the proof.
 export function preparePeer(peer) {
   if (peer.tx) return;
+  if (!peer.pass || !peer.pass.done) {
+    peer.prepareHeld = true;
+    return;
+  }
   peer.tx = {};
   peer.sealed = true;
   const used = new Set();
@@ -498,6 +510,9 @@ export function preparePeer(peer) {
 // already exist, so a track change needs no renegotiation.
 export function attachTrack(peer, track) {
   if (peer.sealed === false || peer.waiting) return;
+  // The track goes on only after the room proof: a transceiver built by a held
+  // prepare carries no media until the pair passed.
+  if (!peer.pass || !peer.pass.done) return;
   const tr = peer.tx && peer.tx[track.kind];
   if (!tr) return;
   tr.sender.replaceTrack(track).catch(() => {});
@@ -508,6 +523,7 @@ export function attachTrack(peer, track) {
 // camera keeps its own track.
 export function attachScreen(peer) {
   if (peer.sealed === false || peer.waiting) return;
+  if (!peer.pass || !peer.pass.done) return;
   const tr = peer.tx && peer.tx.screen;
   const track = state.screen && state.screen.getVideoTracks()[0];
   if (tr && track) tr.sender.replaceTrack(track).catch(() => {});
@@ -598,7 +614,9 @@ export function paintPeerVideo(peer) {
   const video = peer.tile && peer.tile.querySelector('video');
   if (!video) return;
   const track = peer.videoTrack;
-  const live = track && track.readyState === 'live' && !track.muted && peer.cam !== false;
+  // The picture is drawn for a guest in the conversation and for nobody else:
+  // the presence line names every guest this page draws.
+  const live = track && track.readyState === 'live' && !track.muted && peer.cam !== false && isRouted(peer.id);
   if (!state.deaf && live) {
     setVideoTrack(video, track);
     peer.tile.classList.add('playing');
@@ -644,7 +662,7 @@ function makeScreenTile(peer) {
 export function paintPeerScreen(peer) {
   const track = peer.screenTrack;
   if (!track) return;
-  if (!state.deaf && peer.screenShared !== false && track.readyState === 'live' && !track.muted) {
+  if (!state.deaf && isRouted(peer.id) && peer.screenShared !== false && track.readyState === 'live' && !track.muted) {
     const tile = makeScreenTile(peer);
     const video = tile.querySelector('video');
     setVideoTrack(video, track);

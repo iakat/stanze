@@ -27,7 +27,7 @@ func TestTurnOnByDefault(t *testing.T) {
 	if strings.Contains(cfg.TurnSecret, "google") || len(cfg.TurnSecret) < 32 {
 		t.Fatalf("bad generated secret %q", cfg.TurnSecret)
 	}
-	ice, err := iceServersFor(cfg)
+	ice, err := iceServersFor(cfg, randomUserTag())
 	if err != nil || len(ice) != 2 || ice[1].Username == "" {
 		t.Fatalf("ice list = %v (%v)", ice, err)
 	}
@@ -84,7 +84,7 @@ func TestTurnPortZeroTakesBoundPort(t *testing.T) {
 	if len(cfg.StunURLs) != 1 || cfg.StunURLs[0] != want {
 		t.Fatalf("stun urls = %v, want %s", cfg.StunURLs, want)
 	}
-	ice, err := iceServersFor(cfg)
+	ice, err := iceServersFor(cfg, randomUserTag())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestTurnPortUnbound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ice, err := iceServersFor(cfg)
+	ice, err := iceServersFor(cfg, randomUserTag())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestTurnDisabledNoICE(t *testing.T) {
 	if cfg.turnEnabled() {
 		t.Fatal("turn enabled with the relay off")
 	}
-	ice, err := iceServersFor(cfg)
+	ice, err := iceServersFor(cfg, randomUserTag())
 	if err != nil || len(ice) != 0 {
 		t.Fatalf("ice list = %v (%v), want none", ice, err)
 	}

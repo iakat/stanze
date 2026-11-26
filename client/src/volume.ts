@@ -7,6 +7,7 @@ import { load, store } from './prefs.js';
 import { layoutStage, paintRowHand, rowOf } from './tiles.js';
 import { handPlace } from './audio.js';
 import { clamp } from './util.js';
+import { isRouted } from './presence.js';
 
 // ---------------------------------------------------------------- volume
 // The volume of one participant is a percent from 0 (silent) to 200. It is kept
@@ -81,7 +82,9 @@ export function paintVolume(peer) {
     num.textContent = `${peer.vol}%`;
     range.value = String(peer.vol);
   }
-  const g = state.deaf ? 0 : volGain(peer.vol);
+  // A guest out of the conversation is silent whatever its slider says: the
+  // routing of the presence owns the zero.
+  const g = state.deaf || !isRouted(peer.id) ? 0 : volGain(peer.vol);
   if (peer.gain) peer.gain.gain.value = g;
   // The element path is only a fallback and can not go over unity.
   if (peer.audioEl) peer.audioEl.volume = Math.min(g, 1);

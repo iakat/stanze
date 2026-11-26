@@ -133,21 +133,47 @@ export function verifyText(code) {
     .join(' ');
 }
 
-// The associated data names the protocol version, the pair and the sequence
-// number of the frame, so a blob sealed for one pair can not be replayed into
-// another, and one captured frame can not be shown twice.
-export function chatAAD(peerId, seq) {
-  return sealUtf8.encode('pq-e2e v2 chat ' + pairLabel(peerId) + ' ' + seq);
+// Both ends of a pair write the AAD in the same order, so each side names the
+// two long-term identities by their fingerprints in one fixed order (low, high
+// as strings, which the pair already uses to pick who initiates). A transcript
+// captured from one pair therefore can not be opened by a pair with any other
+// identity, even one that shares a peer id, and the order can not be swapped on
+// a receiver that is not sure who is who.
+function identityNames(peerId, selfId, peerIdKey) {
+  const a = String(selfId || '?');
+  const b = String(peerIdKey || '?');
+  return a < b ? a + ' ' + b : b + ' ' + a;
+}
+
+// The associated data names the protocol version, the pair, both identities and
+// the sequence number of the frame, so a blob sealed for one pair can not be
+// replayed into another, one captured frame can not be shown twice, and a
+// peer's sealed line can not be lifted onto a pair where that peer id names a
+// different identity.
+export function chatAAD(peerId, seq, selfId, peerIdKey) {
+  return sealUtf8.encode(
+    'pq-e2e v2 chat ' + pairLabel(peerId) + ' id ' + identityNames(peerId, selfId, peerIdKey) + ' ' + seq,
+  );
 }
 
 // A file chunk uses the chat key of the pair and the same shape of associated
-// data: the version, the pair, the sender, the transfer id and the chunk
-// number. The sender id is written the same way on both sides, so a chunk can
-// not be moved to another pair or another transfer, and the chunk number must
-// rise by one in the order the data channel delivers it.
-export function fileAAD(peerId, fromId, xfer, seq) {
+// data: the version, the pair, both identities, the sender, the transfer id and
+// the chunk number. The sender id is written the same way on both sides, so a
+// chunk can not be moved to another pair, another transfer or another identity,
+// and the chunk number must rise by one in the order the data channel delivers
+// it.
+export function fileAAD(peerId, fromId, xfer, seq, selfId, peerIdKey) {
   return sealUtf8.encode(
-    'pq-e2e v2 file ' + pairLabel(peerId) + ' from ' + String(fromId) + ' ' + xfer + ' ' + seq,
+    'pq-e2e v2 file ' +
+      pairLabel(peerId) +
+      ' id ' +
+      identityNames(peerId, selfId, peerIdKey) +
+      ' from ' +
+      String(fromId) +
+      ' ' +
+      xfer +
+      ' ' +
+      seq,
   );
 }
 

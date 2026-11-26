@@ -261,8 +261,39 @@ func join(room string) (*joinedPeer, error) {
 		return nil, fmt.Errorf("expected joined, got %q", m.T)
 	}
 	c.self = m.Self
-	c.ice = m.Ice
-	return &joinedPeer{c: c, self: m.Self, ice: m.Ice}, nil
+	// Relay credentials are not in the join any more: they are minted on
+	// request, after a pair of this connection proved itself. A probe that
+	// only needs a direct mesh asks for them here.
+	ice, err := c.askIce("")
+	if err != nil {
+		c.close()
+		return nil, err
+	}
+	c.ice = ice
+	return &joinedPeer{c: c, self: m.Self, ice: ice}, nil
+}
+
+// askIce asks the server for relay credentials and waits for the answer. An
+// error reply comes back as an error, so a probe says why it has no relay.
+func (c *sigClient) askIce(to string) ([]iceCfg, error) {
+	req := map[string]any{"t": "ice"}
+	if to != "" {
+		req["to"] = to
+	}
+	if err := c.send(req); err != nil {
+		return nil, err
+	}
+	m, err := c.wait("", 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if m.T == "error" {
+		return nil, fmt.Errorf("ice rejected: %s", m.Code)
+	}
+	if m.T != "ice" {
+		return nil, fmt.Errorf("expected ice, got %q", m.T)
+	}
+	return m.Ice, nil
 }
 
 // ---------------------------------------------------------------- tests
@@ -1080,23 +1111,30 @@ func testWebRTCMesh() {
 	defer b.c.close()
 	a.c.wait("peer-joined", 3*time.Second)
 
-	conf := iceFromServer(a.ice)
+	// A relay credential is minted for a pair, so B asks for one naming A and
+	// both halves of the mesh use the same relay.
+	relay, err := b.c.askIce(a.self)
+	if err != nil {
+		report("turn credentials issued on request", err)
+		return
+	}
 	turnFound := false
-	for _, s := range a.ice {
+	for _, s := range relay {
 		for _, u := range s.URLs {
 			if strings.HasPrefix(u, "turn:") {
 				turnFound = true
 				if s.Username == "" || s.Credential == "" {
-					report("turn credentials issued", errors.New("turn url without ephemeral credential"))
+					report("turn credentials issued on request", errors.New("turn url without ephemeral credential"))
 				}
 			}
 		}
 	}
 	if turnFound {
-		report("turn credentials issued with the ice list", nil)
+		report("turn credentials issued on request", nil)
 	} else {
-		report("turn credentials issued with the ice list", errors.New("no turn: url in the ice list (server started without TURN?)"))
+		report("turn credentials issued on request", errors.New("no turn: url in the ice list (server started without TURN?)"))
 	}
+	conf := iceFromServer(relay)
 
 	p, err := newPair(conf, a.c, b.c, a.self, b.self)
 	if err != nil {
@@ -1135,7 +1173,12 @@ func testTURNRelay() {
 	defer b.c.close()
 	a.c.wait("peer-joined", 3*time.Second)
 
-	conf := iceFromServer(a.ice)
+	relay, err := b.c.askIce(a.self)
+	if err != nil {
+		report("relay-only p2p through embedded turn", err)
+		return
+	}
+	conf := iceFromServer(relay)
 	if len(conf.ICEServers) == 0 {
 		report("relay-only p2p through embedded turn", errors.New("no ice servers"))
 		return

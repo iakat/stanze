@@ -119,9 +119,16 @@ export const state = {
   device: '', // kept, fresh (stored record would not reopen) or session (nothing kept)
   sid: '', // session id of this call, public, never a secret
   w: '', // SPAKE2 scalar of the room passphrase, never sent
+  wGen: 0, // the generation of the derivation in flight, so the newest one wins
   gate: { v: null, n: 0 }, // the room passphrase the members hold now, with a counter
   auth: { n: -1, admins: [], by: '', sig: '' }, // the signed role claim this page holds
-  authTimer: null, // the one timer that gives a room with no member a first admin
+  root: '', // the identity fingerprint that roots this room, '' while it is unknown
+  authTimer: null, // the one timer that seeds step 0 on the page that made the room
+  warmed: false, // the module is loaded and the room key derived
+  passTries: 0, // passphrase guesses this page paid for in this call
+  passRefusals: 0, // pairs closed for exceeding that budget
+  passLast: 0, // when this page last started an exchange, for the pacing
+  seqGaps: 0, // sealed frames that arrived with a gap in their counter
   wait: { on: false, n: 0 }, // the sealed waiting-room switch, with a counter
   kickedFps: new Set(), // identities this page removed for good in this call
   pins: new Map(), // local label -> {label, fp, first, last}

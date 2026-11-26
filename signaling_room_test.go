@@ -47,6 +47,14 @@ func (c *wireClient) send(v any) {
 	}
 }
 
+// stop ends the reader goroutine and closes the socket. A test that wants a
+// peer that no longer drains its queue must stop reading, then close the
+// client end, so the server's queue fills and stays full while its socket is
+// still open from the server's side.
+func (c *wireClient) stop() {
+	c.conn.Close()
+}
+
 // next reads until a message of type want arrives. It returns ok=false on a
 // timeout, so a test can also assert that nothing came.
 func (c *wireClient) next(want string, wait time.Duration) (map[string]any, bool) {
