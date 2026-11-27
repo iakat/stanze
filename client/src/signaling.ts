@@ -14,6 +14,7 @@ import { sealedHandleOpaque, sealedSendPub } from './handshake.js';
 import { asrProbe, omniProbe } from './asr.js';
 import { auditWire } from './audit.js';
 import { resealOnLeave, startAuthSeed } from './gate.js';
+import { isWorld, routeAll } from './roomworld.js';
 
 // ---------------------------------------------------------------- signaling
 export function dropPeers() {
@@ -176,6 +177,10 @@ export function handle(msg) {
       paintWaiting();
       paintHandQueue();
       sealedSendPub(peer);
+      // A room with no map yet, or with none at all, has no walker to judge a
+      // distance with: every pair is in the conversation, so this guest is
+      // heard and seen now instead of after the map loads.
+      if (!isWorld()) routeAll([...state.peers.values()]);
       playSfx('joined');
       break;
     }

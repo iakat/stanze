@@ -156,8 +156,10 @@ export async function worldEnter(room: string, start?: string) {
   } catch (err) {
     if (gen !== generation) return;
     // A room with no map is a call, not a broken page: the grid stays and the
-    // note says where the map should have been.
+    // note says where the map should have been. Every pair is in one
+    // conversation here, because there is no place to judge them against.
     worldSet(false);
+    routeAll([...state.peers.values()]);
     const why = err && (err as Error).message ? (err as Error).message : String(err);
     note.hidden = false;
     note.textContent = 'no world for this room (' + why + '), the call grid is shown instead';
@@ -422,6 +424,23 @@ export function route(peers: any[], nearIds: string[]) {
   }
   paintPresence();
   stageLayoutSoon();
+}
+
+// route is the pair rule of a room with no map: every peer is in the
+// conversation. A room loads its map after the join, so the first seconds of a
+// call and a room whose map failed to load have no walker at all. Without this
+// the whole mesh stayed unrouted (a silent gain and no picture) until a map
+// arrived, and a room with no map never routed anybody.
+export function routeAll(peers: any[]) {
+  const ids: string[] = [];
+  for (const peer of peers) {
+    if (!peer || !peer.id) continue;
+    ids.push(peer.id);
+    if (isRouted(peer.id) !== true) setRouted(peer.id, true);
+  }
+  paintPresence();
+  stageLayoutSoon();
+  return ids;
 }
 
 // worldOnPos is the one entry the files channel calls for a position frame. It
