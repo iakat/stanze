@@ -62,15 +62,22 @@ export type World = {
   above: Above | null;
 };
 
-// Above is the overhead paint, cut into one band per map row. The band of a
-// row is drawn only when a guest's foot line has already left that row, so a
-// plant covers the guest behind it and never the guest standing in front.
+// Above is the overhead paint, cut into one band per map row. A guest is drawn
+// before every band its sprite reaches into and after every band below it, so
+// a plant covers the guest behind it and nothing of the guest is left painted
+// over a leaf. A band goes between two guests only when neither reaches into
+// it.
 export type Above = {
   rows: HTMLCanvasElement;
   band: number;
   heightPx: number;
-  // row is the band index of a foot line.
+  // row is the index of the band that holds a foot line.
   row(x: number, y: number): number;
+  // cover is the index of the band the sprite ends in: the first band a guest
+  // standing at this foot line has to be drawn before. A sprite never reaches
+  // below the band its foot is in, so cover is never above row and never below
+  // the last band of the map.
+  cover(x: number, y: number, h: number): number;
 };
 
 // OVERHEAD names a layer that is drawn over a guest: WorkAdventure's own
@@ -773,6 +780,22 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
           if (!Number.isFinite(y)) return 0;
           return Math.max(0, Math.min(height - 1, Math.floor(y / th)));
         },
+        cover(x: number, y: number, h: number) {
+          if (!Number.isFinite(y)) return 0;
+          // The sprite ends at the foot line, so the band it ends in is the one
+          // that holds the last drawn pixel above it, not the band after it: a
+          // foot that lands exactly on a row boundary belongs to the row above,
+          // and a band of overhead paint never covers a pixel of a guest whose
+          // foot is on its floor. The rest of the height only has to keep a
+          // sprite from being drawn before a band it cannot reach, and one tile
+          // tall is what the character sheet is.
+          const rail = Math.max(1, Math.round(h / th));
+          const last = Math.max(0, Math.floor(y - 1));
+          // A sprite one tile tall is in this band; a taller one starts higher,
+          // and the last band of the map is as low as a guest can be drawn.
+          const bandAt = Math.floor(last / th) - (rail - 1);
+          return Math.max(0, Math.min(height - 1, bandAt));
+        },
       };
     }
   }
@@ -1051,13 +1074,15 @@ export class WorldView {
   // near is the bubble set of the proximity layer, drawn beside the name of a
   // guest that hears this page.
   near = new Set<string>();
-  private ctx: CanvasRenderingContext2D;
+  // ctx, scale and the camera are read by the browser test, which judges a
+  // pixel of this canvas against the map under it; nothing else reads them.
+  ctx: CanvasRenderingContext2D;
   private held = new Set<string>();
   private dirty = true;
   private raf = 0;
-  private scale = 1;
-  private camX = 0;
-  private camY = 0;
+  scale = 1;
+  camX = 0;
+  camY = 0;
   private last = 0;
   // pad is the four arrow buttons a touch screen walks with; a mouse never
   // sees it.
@@ -1255,11 +1280,22 @@ export class WorldView {
           band++;
         }
       };
-      for (const one of list) {
-        flush(above.row(one.x, one.y));
+      // A guest is drawn before the band its sprite ends in, so the overhead
+      // paint goes down first and the guest lands on top of whatever it stands
+      // in front of. Sorting by the foot cannot say this: two guests in one band
+      // at different foot lines still have to be on the same side of the band
+      // between them. Band by band, then by foot line, is what a guest sees.
+      const where = new Map<Avatar, number>();
+      for (const one of list) where.set(one, above.cover(one.x, one.y, CHAR_H));
+      const ordered = [...list].sort(
+        (a, b) => (where.get(a) as number) - (where.get(b) as number) || at(a) - at(b) || (a.id < b.id ? -1 : 1),
+      );
+      for (const one of ordered) {
+        flush(where.get(one) as number);
         this.drawAvatar(one);
       }
-      flush(above.row(0, above.heightPx));
+      flush(above.row(0, above.heightPx) + 1);
+      flush(height);
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.frames++;
@@ -1316,6 +1352,13 @@ export class WorldView {
       ctx.fillRect(Math.round(one.x - wide / 2) - 6, top - 8, 4, 3);
       ctx.fillRect(Math.round(one.x - wide / 2) - 1, top - 7, 1, 1);
     }
+  }
+
+  // debug hands the map and the view to the browser test, so a pixel of the
+  // canvas can be judged against what the map holds there. It reads; it never
+  // changes a draw.
+  debug(): { map: World; view: WorldView } {
+    return { map: this.world, view: this };
   }
 
   // marks takes the camera flag of every remote, so a name tag says when a

@@ -504,6 +504,16 @@ export function worldHook() {
       view?.mark();
       return { x: Math.round(walker.x), y: Math.round(walker.y) };
     },
+    // step is one position tick by hand: the place was set, this makes the
+    // pair rule and the frame that carries it run now instead of up to a fifth
+    // of a second later.
+    step: () => {
+      step();
+      return walker ? { x: Math.round(walker.x), y: Math.round(walker.y) } : null;
+    },
+    // debug hands the map and the view to a browser test that judges a pixel of
+    // the canvas against the map under it. It reads and never draws.
+    debug: () => (view ? view.debug() : null),
     near: () => (view ? [...near] : []),
     // reason names the way a pair was judged: meeting, near, bubble, silent,
     // full or far. It is the proximity word and nothing more.
