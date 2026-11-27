@@ -79,7 +79,6 @@ export async function enterRoom(room, pass) {
     // The passphrase becomes the SPAKE2 scalar before the socket opens; the
     // join frame carries the room id and no secret. The typed value never goes
     // to the server, and the derivation runs off this thread (see deriveRoomW).
-    $('sealed-note').textContent = 'deriving the room key';
     canary(pass);
     state.w = '';
     try {

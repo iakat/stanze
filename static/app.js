@@ -11534,7 +11534,6 @@
         say("cannot open a sealed room: " + why);
         return;
       }
-      $("sealed-note").textContent = "deriving the room key";
       canary(pass);
       state.w = "";
       try {
