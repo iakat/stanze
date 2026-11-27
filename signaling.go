@@ -342,12 +342,16 @@ func (s *server) mintFor(p *Peer, conn *websocket.Conn) {
 	if p.iceMinted {
 		return
 	}
-	p.iceMinted = true
 	ice := s.mint(randomUserTag())
 	if len(ice) == 0 {
+		// The mark is only spent on a credential that was actually handed out:
+		// setting it first locked a peer out of the relay for the life of its
+		// socket whenever one mint failed, with relay-exhausted as the only
+		// answer to every later ask.
 		p.writeNow(conn, serverMsg{T: "error", Code: "relay-off"})
 		return
 	}
+	p.iceMinted = true
 	p.writeNow(conn, serverMsg{T: "ice", Ice: ice})
 }
 

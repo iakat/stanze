@@ -14,7 +14,6 @@ import { Above, CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } 
 import { Guest, Proximity } from './proximity.js';
 import { Zone, ZoneGrid, ZoneWatch } from './zones.js';
 import { ROOM_RE } from './config.js';
-import { say } from './util.js';
 import {
   posAt,
   posFrame,
@@ -156,8 +155,10 @@ export async function worldEnter(room: string, start?: string) {
   } catch (err) {
     if (gen !== generation) return;
     // A room with no map is a call, not a broken page: the grid stays and the
-    // note says where the map should have been.
+    // note says where the map should have been. Every pair is in one
+    // conversation here, because there is no place to judge them against.
     worldSet(false);
+    routeAll([...state.peers.values()]);
     const why = err && (err as Error).message ? (err as Error).message : String(err);
     note.hidden = false;
     note.textContent = 'no world for this room (' + why + '), the call grid is shown instead';
@@ -262,7 +263,7 @@ function guestOf(x: number, y: number, load: Map<string, number>): Guest {
 // map of the target room ('conference.tmj#from-office'), a link to the world, or
 // a full address; a link is the same host's page and so the same call, and a
 // remote host is not a door this page can walk through.
-export function roomOfExit(exit: string, here: string): string | null {
+export function roomOfExit(exit: string): string | null {
   const raw = String(exit || '').trim();
   if (!raw) return null;
   // WorkAdventure names a door three ways: a map beside this one
@@ -278,9 +279,12 @@ export function roomOfExit(exit: string, here: string): string | null {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(seg)) return '';
     return seg.replace(/\.(tmj|json|png)$/i, '').toLowerCase();
   };
-  let target = '';
-  if (/^(https?:)?\/\//i.test(raw)) {
-    let url: URL | null = null;
+  // A full address is the only form that has to name this host; the check is a
+  // plain prefix and a parse rather than a regex, because the regex was the one
+  // the linter could not prove linear.
+  let target: string;
+  if (raw.startsWith('//') || raw.toLowerCase().startsWith('http://') || raw.toLowerCase().startsWith('https://')) {
+    let url: URL;
     try {
       url = new URL(raw, location.href);
     } catch {
@@ -312,7 +316,7 @@ function door(enter: Zone[], leave: Zone[]) {
   if (!zone || !view || !state.room) return;
   doorOn = zone.id;
   if (now < doorCool) return;
-  const to = roomOfExit(zone.exit as string, state.room);
+  const to = roomOfExit(zone.exit as string);
   if (!to) {
     proxNote('door ' + zone.id + ' names a room this page cannot walk to: ' + zone.exit);
     return;
@@ -422,6 +426,23 @@ export function route(peers: any[], nearIds: string[]) {
   }
   paintPresence();
   stageLayoutSoon();
+}
+
+// route is the pair rule of a room with no map: every peer is in the
+// conversation. A room loads its map after the join, so the first seconds of a
+// call and a room whose map failed to load have no walker at all. Without this
+// the whole mesh stayed unrouted (a silent gain and no picture) until a map
+// arrived, and a room with no map never routed anybody.
+export function routeAll(peers: any[]) {
+  const ids: string[] = [];
+  for (const peer of peers) {
+    if (!peer || !peer.id) continue;
+    ids.push(peer.id);
+    if (isRouted(peer.id) !== true) setRouted(peer.id, true);
+  }
+  paintPresence();
+  stageLayoutSoon();
+  return ids;
 }
 
 // worldOnPos is the one entry the files channel calls for a position frame. It
@@ -625,7 +646,7 @@ export function worldHook() {
       view
         ? view.world.zones
             .filter((one) => !!one.exit)
-            .map((one) => ({ id: one.id, room: roomOfExit(one.exit as string, view ? view.world.room : '') }))
+            .map((one) => ({ id: one.id, room: roomOfExit(one.exit as string) }))
         : [],
     // start is the zone this room lands a guest on, if the map names one.
     start: () => (view ? view.world.zones.filter((one) => one.start).map((one) => one.id) : []),

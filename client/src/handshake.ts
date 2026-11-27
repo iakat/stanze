@@ -10,6 +10,7 @@ import { disableMic, preparePeer } from './devices.js';
 import { sealedSendState, setHand } from './audio.js';
 import { connectPeer, ensurePeer, onCandidate, onDescription } from './peers.js';
 import { addChatLine } from './chat.js';
+import { leave } from './room.js';
 import { playSfx } from './sfx.js';
 import { fileDropPeer, fileOnMessage } from './files.js';
 import {
@@ -117,10 +118,16 @@ function sealedGapReset(peer) {
 // passphrase costs one handshake. Only a member kicks, and only an admin kicks
 // at all; a page that waits outside stays. A spakeok from a pair that proved no
 // passphrase is never a reason to leave the room.
+//
+// The guest that does not know the passphrase is the one case the page can act
+// on: every pair of the room fails the same proof, one after the other, so a
+// page that saw every pair refuse is the page holding the wrong passphrase, and
+// it goes back to the lobby with the reason instead of sitting in a silent call.
 export function sealedRefusePass(peer) {
   // A failed proof is not an identity failure: it must not read as an attack on
   // the identity pins, so it closes the pair without touching the pin count.
   if (!state.peers.has(peer.id)) return;
+  peer.passFailed = true;
   if (peer.pc) {
     peer.pc.close();
     peer.pc = null;
@@ -128,11 +135,29 @@ export function sealedRefusePass(peer) {
   wipeKeys(peer);
   sealedSetE2E(peer, 'failed');
   say(shortPeer(peer.id) + ' does not know the room passphrase; the link stays closed');
-  if (state.waiting) return;
+  if (state.waiting) {
+    refuseIfAlone();
+    return;
+  }
   // The admin removes the identity, not the socket, so the same guest can not
   // come back on a fresh pair in this call.
   if (!isAdmin(state.self) || isAdmin(peer.id)) return;
   sealedKick(peer.id);
+}
+
+// refuseIfAlone leaves the room when every pair refused the same proof: the
+// passphrase this page holds is the wrong one. One refusal is a guest with the
+// wrong passphrase, and the page keeps waiting for a member that will let it in.
+function refuseIfAlone() {
+  let seen = 0;
+  for (const one of state.peers.values()) {
+    if (!one.passFailed) return;
+    seen++;
+  }
+  if (!seen) return;
+  // Out of the message handler: the pair state is being torn down here, and
+  // leaving the room rewrites all of it.
+  setTimeout(() => leave('the room refused the passphrase'), 0);
 }
 
 // sealedRestart drops a pair's state so a new handshake can run: a deliberate

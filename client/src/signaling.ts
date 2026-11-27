@@ -7,13 +7,14 @@ import { say, setAdmins } from './util.js';
 import { send, wsURL } from './menu.js';
 import { markAdmins, paintWaiting, updateCount } from './host.js';
 import { paintHandQueue, sendState } from './audio.js';
-import { dropPeer, ensurePeer } from './peers.js';
+import { applyIceToLive, dropPeer, ensurePeer } from './peers.js';
 import { leave } from './room.js';
 import { playSfx, startLost, stopLost } from './sfx.js';
 import { sealedHandleOpaque, sealedSendPub } from './handshake.js';
 import { asrProbe, omniProbe } from './asr.js';
 import { auditWire } from './audit.js';
 import { resealOnLeave, startAuthSeed } from './gate.js';
+import { isWorld, routeAll } from './roomworld.js';
 
 // ---------------------------------------------------------------- signaling
 export function dropPeers() {
@@ -115,13 +116,40 @@ export function handle(msg) {
       // relay; a reload is the whole fix.
       state.fatal = 'this page is out of date; reload it to join';
       leave(state.fatal);
+    } else if (msg.code === 'too-big') {
+      // A frame this page sent was over the relay limit and never reached its
+      // pair, whose counter therefore never saw it: the pair has to start
+      // again or every later frame fails the counter. Silence here left the
+      // link dead with no line on screen.
+      say('a frame was too large for the relay; that link starts again');
+    } else if (msg.code === 'relay-off') {
+      // The server has no relay to give: a call still works between guests
+      // that can reach each other directly, so the page says so and stays.
+      say('this server offers no relay; guests that cannot reach each other directly will not connect');
+    } else if (msg.code === 'relay-exhausted') {
+      say('the relay has already been given to this connection; leaving and joining again asks for a new one');
+    } else if (msg.code === 'bad-message') {
+      say('the server could not read a frame this page sent; the link may be out of date');
     }
     return;
   }
   switch (msg.t) {
+    case 'ice': {
+      // The relay list rides its own frame, minted once a pair of this
+      // connection has proved itself. A page that already built a peer
+      // connection without it takes the list now: the pair is told to gather
+      // again, so a guest that cannot be reached directly still gets a relay.
+      state.ice = msg.ice || [];
+      applyIceToLive();
+      break;
+    }
     case 'joined': {
       state.self = msg.self;
       state.ice = msg.ice || [];
+      // The relay list is not part of the join any more: it is minted on
+      // request, once per socket. Asking here keeps one join to one
+      // credential and gives the page its TURN servers before the first offer.
+      send({ t: 'ice' });
       // Only the reconnect notice ends here. A device or sealing notice that
       // the join itself wrote stays up until the guest has read it.
       if (state.notice === 'connection lost, reconnecting') say('');
@@ -163,6 +191,10 @@ export function handle(msg) {
       paintWaiting();
       paintHandQueue();
       sealedSendPub(peer);
+      // A room with no map yet, or with none at all, has no walker to judge a
+      // distance with: every pair is in the conversation, so this guest is
+      // heard and seen now instead of after the map loads.
+      if (!isWorld()) routeAll([...state.peers.values()]);
       playSfx('joined');
       break;
     }
