@@ -178,25 +178,46 @@ jobs:
           npm ci --prefix client
           mkdir -p /tmp/pw
           npm install --prefix /tmp/pw --no-save playwright-core@1.47.2
-          node /tmp/pw/node_modules/playwright-core/cli.js install --with-deps chromium
+          node /tmp/pw/node_modules/playwright-core/cli.js install --with-deps chromium firefox
 
-      - name: build and run
-        env:
-          PW: /tmp/pw/node_modules/playwright-core
-          ROOMSBASE: http://127.0.0.1:8095
-          OUTDIR: shots
+      # A server, its own port per suite, each suite a step of its own so one
+      # failure names itself. Every suite is the browser a person has: the
+      # homepage join, the smoke of one room, the mixed engines, and the world.
+      - name: build
         run: |
           node client/build.mjs
           GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
           # the server embeds packed/static.tgz, a build artifact
           go run -trimpath -buildvcs=false ./cmd/pack
           go build -trimpath -buildvcs=false -ldflags "-s -w" -o /tmp/stanze .
-          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 &
-          for i in $(seq 1 30); do
-            curl -fsS -o /dev/null http://127.0.0.1:8095/ && break
-            sleep 1
-          done
-          node tools/smoke.js
+
+      - name: smoke
+        env: {PW: /tmp/pw/node_modules/playwright-core, ROOMSBASE: "http://127.0.0.1:8095", OUTDIR: shots}
+        run: |
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 & pid=$!
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
+          node tools/smoke.js; code=$?; kill $pid || true; exit $code
+
+      - name: join
+        env: {PW: /tmp/pw/node_modules/playwright-core, ROOMSBASE: "http://127.0.0.1:8095", OUTDIR: shots}
+        run: |
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 & pid=$!
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
+          node tools/join-e2e.js; code=$?; kill $pid || true; exit $code
+
+      - name: mixed engines
+        env: {PW: /tmp/pw/node_modules/playwright-core, ROOMSBASE: "http://127.0.0.1:8095", OUTDIR: shots}
+        run: |
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 & pid=$!
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
+          node tools/mixed-browser-e2e.js; code=$?; kill $pid || true; exit $code
+
+      - name: world
+        env: {PW: /tmp/pw/node_modules/playwright-core, ROOMSBASE: "http://127.0.0.1:8095", OUTDIR: shots}
+        run: |
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 & pid=$!
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
+          node tools/wam-e2e.js; code=$?; kill $pid || true; exit $code
 
   image:
     name: image

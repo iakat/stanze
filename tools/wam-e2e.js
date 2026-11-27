@@ -6,7 +6,7 @@
 'use strict';
 
 const fs = require('fs');
-const { chromium } = require(process.env.PW);
+const chromium = require(process.env.PW).chromium;
 
 const BASE = (process.env.ROOMSBASE || 'http://127.0.0.1:8095').replace(/\/+$/, '');
 const OUT = process.env.OUTDIR || '';
@@ -59,10 +59,10 @@ async function until(page, fn, arg, timeout, label) {
     await page.goto(BASE + '/#r=wamtest', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#enter-btn', { state: 'visible' });
     await page.click('#enter-btn');
-    // The call grid is the default view; the map is one menu click away.
-    if (await page.evaluate(() => document.getElementById('world-view').hidden)) {
-      await page.click('#world-btn');
-    }
+    // The world is the front view on a first visit. world-btn goes the other
+    // way (it asks for the call grid), so it is never clicked when the world
+    // is what this test came to see.
+
     const state = await until(
       page,
       () => {
