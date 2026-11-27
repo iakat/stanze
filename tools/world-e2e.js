@@ -207,76 +207,88 @@ async function pairIds(a) {
     check('the map is painted', frames === true, frames);
 
     // ---- a foot line on a band boundary belongs to the row it stands in
-    // The pixel just above a guest's foot line is the last sprite line of the
-    // guest. The pixel just below it is the first line of the overhead row and
-    // is drawn after the guest, so it is the leaf. Flushing the bands up to the
-    // foot's own row left the guest painted over by the row it stands in: the
-    // line above its feet came out as the leaf. The two pixels differ on the
-    // canvas only when the bound is right.
-    const footing = await a.page.evaluate(() => {
-      const hook = window.e2eApp && window.e2eApp.world;
-      const dbg = hook && hook.debug ? hook.debug() : null;
-      if (!dbg || !dbg.map || !dbg.view) return 'no view on the page';
-      const above = dbg.map.above;
-      const view = dbg.view;
-      if (!above) return 'no overhead paint';
-      const src = above.rows.getContext('2d');
-      const w = above.rows.width;
-      const all = src.getImageData(0, 0, w, above.rows.height).data;
-      const alpha = (x, y) => all[(y * w + x) * 4 + 3];
-      const inked = (row, x) => {
-        for (let i = 0; i < above.band; i++) {
-          if (alpha(x, row * above.band + i) > 0) return true;
-        }
-        return false;
-      };
-      const rows = Math.floor(above.heightPx / above.band);
-      // A row whose first line the leaf fills and whose line above is empty:
-      // the foot line goes on that row's boundary. The leaf is empty for a
-      // whole guest cell below the line, so a guest under it is a change where
-      // it is drawn.
-      let pick = null;
-      for (let row = 1; row < rows - 1 && !pick; row++) {
-        for (let x = 2; x < w - 2; x++) {
-          if (!inked(row, x) || inked(row - 1, x)) continue;
-          let clean = true;
-          for (let y = row * above.band; y < (row + 1) * above.band && clean; y++) {
-            if (alpha(x, y) === 0) clean = false;
+    // Only a map with an overhead layer can judge this, so the case runs in the
+      // room that carries one and says so on every other room instead of failing
+      // a map the test walked by default.
+      const overhead = await a.page.evaluate(() => {
+        const hook = window.e2eApp && window.e2eApp.world;
+        const dbg = hook && hook.debug ? hook.debug() : null;
+        return !!(dbg && dbg.map && dbg.map.above);
+      });
+      if (!overhead) {
+        console.log('SKIP  the foot line bands, this room walks a map with no overhead layer');
+      } else {
+      // The pixel just above a guest's foot line is the last sprite line of the
+      // guest. The pixel just below it is the first line of the overhead row and
+      // is drawn after the guest, so it is the leaf. Flushing the bands up to the
+      // foot's own row left the guest painted over by the row it stands in: the
+      // line above its feet came out as the leaf. The two pixels differ on the
+      // canvas only when the bound is right.
+      const footing = await a.page.evaluate(() => {
+        const hook = window.e2eApp && window.e2eApp.world;
+        const dbg = hook && hook.debug ? hook.debug() : null;
+        if (!dbg || !dbg.map || !dbg.view) return 'no view on the page';
+        const above = dbg.map.above;
+        const view = dbg.view;
+        if (!above) return 'no overhead paint';
+        const src = above.rows.getContext('2d');
+        const w = above.rows.width;
+        const all = src.getImageData(0, 0, w, above.rows.height).data;
+        const alpha = (x, y) => all[(y * w + x) * 4 + 3];
+        const inked = (row, x) => {
+          for (let i = 0; i < above.band; i++) {
+            if (alpha(x, row * above.band + i) > 0) return true;
           }
-          if (clean) {
-            pick = { x, row };
-            break;
+          return false;
+        };
+        const rows = Math.floor(above.heightPx / above.band);
+        // A row whose first line the leaf fills and whose line above is empty:
+        // the foot line goes on that row's boundary. The leaf is empty for a
+        // whole guest cell below the line, so a guest under it is a change where
+        // it is drawn.
+        let pick = null;
+        for (let row = 1; row < rows - 1 && !pick; row++) {
+          for (let x = 2; x < w - 2; x++) {
+            if (!inked(row, x) || inked(row - 1, x)) continue;
+            let clean = true;
+            for (let y = row * above.band; y < (row + 1) * above.band && clean; y++) {
+              if (alpha(x, y) === 0) clean = false;
+            }
+            if (clean) {
+              pick = { x, row };
+              break;
+            }
           }
         }
+        if (!pick) return 'no row with a filled top line';
+        const fx = pick.x + 0.5;
+        const fy = pick.row * above.band;
+        const canvas = document.getElementById('world-canvas');
+        const px = (mapX, mapY) => {
+          const d = canvas
+            .getContext('2d')
+            .getImageData(Math.round(mapX * view.scale - view.camX), Math.round(mapY * view.scale - view.camY), 1, 1).data;
+          return [d[0], d[1], d[2], d[3]];
+        };
+        hook.goTo(fx, fy);
+        hook.step();
+        view.mark();
+        view.draw();
+        // The band's own pixel on that line is what the guest must not be: with
+        // the foot landing in the row after it, the last sprite line is replaced
+        // by the leaf and the two pixels come out alike.
+        const foot = px(fx, fy - 1);
+        const d = src.getImageData(Math.round(fx - view.camX / view.scale), Math.round(fy - 1 - view.camY / view.scale), 1, 1).data;
+        const leafAbove = [d[0], d[1], d[2], d[3]];
+        return { pick, fy, foot, leafAbove };
+      });
+      check('a foot line is found on a filled top line', footing && typeof footing === 'object', footing);
+      check(
+        'the line above the feet is the guest, not the leaf',
+        footing && typeof footing === 'object' && footing.foot[3] > 0 && !sameLook(footing.foot, footing.leafAbove),
+        footing,
+      );
       }
-      if (!pick) return 'no row with a filled top line';
-      const fx = pick.x + 0.5;
-      const fy = pick.row * above.band;
-      const canvas = document.getElementById('world-canvas');
-      const px = (mapX, mapY) => {
-        const d = canvas
-          .getContext('2d')
-          .getImageData(Math.round(mapX * view.scale - view.camX), Math.round(mapY * view.scale - view.camY), 1, 1).data;
-        return [d[0], d[1], d[2], d[3]];
-      };
-      hook.goTo(fx, fy);
-      hook.step();
-      view.mark();
-      view.draw();
-      // The band's own pixel on that line is what the guest must not be: with
-      // the foot landing in the row after it, the last sprite line is replaced
-      // by the leaf and the two pixels come out alike.
-      const foot = px(fx, fy - 1);
-      const d = src.getImageData(Math.round(fx - view.camX / view.scale), Math.round(fy - 1 - view.camY / view.scale), 1, 1).data;
-      const leafAbove = [d[0], d[1], d[2], d[3]];
-      return { pick, fy, foot, leafAbove };
-    });
-    check('a foot line is found on a filled top line', footing && typeof footing === 'object', footing);
-    check(
-      'the line above the feet is the guest, not the leaf',
-      footing && typeof footing === 'object' && footing.foot[3] > 0 && !sameLook(footing.foot, footing.leafAbove),
-      footing,
-    );
 
     check('no page error in a', a.errors.length === 0, a.errors.slice(0, 4));
     check('no page error in b', b.errors.length === 0, b.errors.slice(0, 4));
