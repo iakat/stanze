@@ -93,6 +93,7 @@ export const state = {
   noiseWanted: true, // the microphone filter is on
   noiseEngine: 'gtcrn', // the model that filter uses, the incoming side is not touched
   leaving: false,
+  entering: false, // a join is loading; a second submit is refused
   reconnectTimer: null,
   reconnectDelay: 500,
   fatal: '',

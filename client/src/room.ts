@@ -38,125 +38,140 @@ import { clearChat } from './chat.js';
 
 // ---------------------------------------------------------------- room flow
 export async function enterRoom(room, pass) {
-  ensureSfx();
-  preloadSfx();
-  cancelReconnect();
-  state.fatal = '';
-  state.room = room;
-  state.name = cleanSealedName($('name').value) || 'guest';
-  state.path = $('path').value;
-  state.noiseWanted = $('noise').checked;
-  state.mirror = true;
-  state.leaving = false;
-  // The call starts with what the visitor chose last time.
-  state.mic = load('mic') !== '0';
-  state.cam = load('cam') !== '0';
-  store('name', state.name);
-  store('room', state.room);
-  store('path', state.path);
-  store('noise', state.noiseWanted ? 1 : 0);
-
-  // The post-quantum module loads before the stage appears, so a browser that
-  // cannot seal stays in the lobby with a reason.
-  // The join click is the gesture the audio output needs.
-  ensurePlayback();
-  $('enter-btn').disabled = true;
-  $('sealed-note').hidden = false;
-  $('sealed-note').textContent = 'loading the post-quantum module';
+  // A second submit while the first join is still loading would start the room
+  // twice and leave the first pass holding a worker nobody owns any more.
+  if (state.entering || state.ws) return;
+  state.entering = true;
   try {
-    try {
-      await ensureReady();
-      $('sealed-note').textContent = 'pq-e2e ready, ' + deviceNote();
-    } catch (err) {
-      const why = err && err.message ? err.message : String(err);
-      $('sealed-note').textContent = 'the sealed client did not start: ' + why;
-      // No silent fallback to an unsealed room: the lobby says what failed.
-      state.room = '';
-      say('cannot open a sealed room: ' + why);
-      return;
-    }
-
-    // The passphrase becomes the SPAKE2 scalar before the socket opens; the
-    // join frame carries the room id and no secret. The typed value never goes
-    // to the server, and the derivation runs off this thread (see deriveRoomW).
-    canary(pass);
-    state.w = '';
-    try {
-      const derived = await deriveRoomW(pass, room);
-      state.w = typeof derived === 'string' ? derived : '';
-    } catch {
-      state.w = roomW(pass, room);
-    }
-    // The typed passphrase is the first gate value; an admin change comes
-    // sealed down the pair.
-    state.gate = { v: pass, n: 0 };
-    paintGate();
-    // The module is warm by now, so the pacing of the passphrase exchanges has
-    // a real clock to answer: see deriveRoomW and handshake.ts.
-    state.warmed = true;
-    // A room with no root in its id may have one recorded by the page that
-    // opened it (boot.ts adoptThisRoot). Read it before the socket opens, so
-    // the claim rule of step 0 already knows whose room this is.
-    if (!rootFingerprint(room)) {
-      try {
-        const fp = await roomRoot(room);
-        if (fp) setRoot(fp);
-      } catch {
-        /* no record here: an unrooted room */
-      }
-    }
-    startSealedWorker();
-    const made = JSON.parse(pqModule().gen());
-    // The secret halves stay Uint8Arrays, so leave can zero them.
-    state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
-    state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
-    canary(state.name);
-    if (!sealingAvailable()) {
-      state.sealFault = 'this browser cannot seal media frames, so no media is sent';
-      state.mic = false;
-      state.cam = false;
-    }
-
-    $('lobby').hidden = true;
-    $('stage').hidden = false;
-    // A phone folds the call to the picture; a tap brings the frame back.
-    $('stage').classList.remove('chrome');
-    applyImmersive();
-    document.title = 'stanze - ' + room;
-    $('chat-note').hidden = false;
-    updatePinCount();
-    setHash(room);
-    startCallClock();
-    startSpeaking();
-
-    prepareLocal();
-    // The optional FastEnhancer model is fetched now, while the devices and the
-    // socket come up, so picking that model later does not wait on it.
-    prefetchNoise();
-    if (sealingAvailable()) {
-      // Devices are asked for before the signaling socket opens, so the first
-      // offer already carries both tracks.
-      try {
-        await requestLocal();
-      } catch {
-        // Devices are optional; joining the room is not.
-      }
-    } else {
-      updateButtons();
-      say(state.sealFault + '; you joined without microphone and camera');
-    }
-    connectWS();
-    // The world loads beside the mesh: it is a map over HTTP, and a room
-    // without one keeps the call grid.
-    worldEnter(room).catch(() => {});
-  } catch (err) {
-    leave('');
+    ensureSfx();
+    preloadSfx();
+    cancelReconnect();
+    // The lobby that asked for this room may still sit in the reconnect tail
+    // of the previous socket, whose pad keeps ticking.
+    stopLost();
+    state.fatal = '';
+    state.room = room;
+    state.name = cleanSealedName($('name').value) || 'guest';
+    state.path = $('path').value;
+    state.noiseWanted = $('noise').checked;
+    state.mirror = true;
     state.leaving = false;
-    say('cannot open a sealed room: ' + (err && err.message ? err.message : String(err)));
-  } finally {
-    $('enter-btn').disabled = false;
+    // The call starts with what the visitor chose last time.
+    state.mic = load('mic') !== '0';
+    state.cam = load('cam') !== '0';
+    store('name', state.name);
+    store('room', state.room);
+    store('path', state.path);
+    store('noise', state.noiseWanted ? 1 : 0);
+
+    // The post-quantum module loads before the stage appears, so a browser that
+    // cannot seal stays in the lobby with a reason.
+    // The join click is the gesture the audio output needs.
+    ensurePlayback();
+    $('enter-btn').disabled = true;
+    $('sealed-note').hidden = false;
+    $('sealed-note').textContent = 'loading the post-quantum module';
+    try {
+      try {
+        await ensureReady();
+        $('sealed-note').textContent = 'pq-e2e ready, ' + deviceNote();
+      } catch (err) {
+        const why = err && err.message ? err.message : String(err);
+        $('sealed-note').textContent = 'the sealed client did not start: ' + why;
+        // No silent fallback to an unsealed room: the lobby says what failed.
+        state.room = '';
+        say('cannot open a sealed room: ' + why);
+        return;
+      }
+
+      // The passphrase becomes the SPAKE2 scalar before the socket opens; the
+      // join frame carries the room id and no secret. The typed value never goes
+      // to the server, and the derivation runs off this thread (see deriveRoomW).
+      canary(pass);
+      state.w = '';
+      try {
+        const derived = await deriveRoomW(pass, room);
+        state.w = typeof derived === 'string' ? derived : '';
+      } catch {
+        state.w = roomW(pass, room);
+      }
+      // The typed passphrase is the first gate value; an admin change comes
+      // sealed down the pair.
+      state.gate = { v: pass, n: 0 };
+      paintGate();
+      // The module is warm by now, so the pacing of the passphrase exchanges has
+      // a real clock to answer: see deriveRoomW and handshake.ts.
+      state.warmed = true;
+      // A room with no root in its id may have one recorded by the page that
+      // opened it (boot.ts adoptThisRoot). Read it before the socket opens, so
+      // the claim rule of step 0 already knows whose room this is.
+      if (!rootFingerprint(room)) {
+        try {
+          const fp = await roomRoot(room);
+          if (fp) setRoot(fp);
+        } catch {
+          /* no record here: an unrooted room */
+        }
+      }
+      startSealedWorker();
+      const made = JSON.parse(pqModule().gen());
+      // The secret halves stay Uint8Arrays, so leave can zero them.
+      state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
+      state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
+      canary(state.name);
+      if (!sealingAvailable()) {
+        state.sealFault = 'this browser cannot seal media frames, so no media is sent';
+        state.mic = false;
+        state.cam = false;
+      }
+
+      $('lobby').hidden = true;
+      $('stage').hidden = false;
+      // A phone folds the call to the picture; a tap brings the frame back.
+      $('stage').classList.remove('chrome');
+      applyImmersive();
+      document.title = 'stanze - ' + room;
+      $('chat-note').hidden = false;
+      updatePinCount();
+      setHash(room);
+      startCallClock();
+      startSpeaking();
+
+      prepareLocal();
+      // The optional FastEnhancer model is fetched now, while the devices and the
+      // socket come up, so picking that model later does not wait on it.
+      prefetchNoise();
+      if (sealingAvailable()) {
+        // Devices are asked for before the signaling socket opens, so the first
+        // offer already carries both tracks.
+        try {
+          await requestLocal();
+        } catch {
+          // Devices are optional; joining the room is not.
+        }
+      } else {
+        updateButtons();
+        say(state.sealFault + '; you joined without microphone and camera');
+      }
+      connectWS();
+      // The world loads beside the mesh: it is a map over HTTP, and a room
+      // without one keeps the call grid.
+      worldEnter(room).catch(() => {});
+    } catch (err) {
+      leave('');
+      state.leaving = false;
+      say('cannot open a sealed room: ' + (err && err.message ? err.message : String(err)));
+    } finally {
+      state.entering = false;
+      const button = $('enter-btn');
+      if (button) button.disabled = false;
+    }
+  } catch (err) {
+      // The guard clears on every way out of the outer try.
+      state.entering = false;
+      throw err;
+    }
   }
-}
 
 export function leave(message) {
   const was = state.room;
