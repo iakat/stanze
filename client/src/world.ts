@@ -51,7 +51,6 @@ export type World = {
   widthPx: number;
   heightPx: number;
   tiles: HTMLCanvasElement;
-  walls: HTMLCanvasElement;
   collision(x: number, y: number): boolean;
   zones: Zone[];
   zoneAt(x: number, y: number): Zone[];
@@ -114,8 +113,11 @@ function gidOf(cell: number): number {
   return cell & 0x1fffffff;
 }
 
-// isWallLayer names the layers that both collide and stand as walls: the
-// README of the assets says which one is the walls layer.
+// isWallLayer names the layers that collide: the README of the assets says
+// which one is the walls layer. It decides what stops a body, never what is
+// drawn: a wall layer is painted with every other layer, in map order, over
+// the floor it stands on. Drawing it into a canvas of its own painted the
+// walls nowhere, so a surrounded floor showed through as a gap.
 function isWallLayer(layer: any): boolean {
   return layer && layer.type === 'tilelayer' && /wall|collide|block/i.test(String(layer.name || ''));
 }
@@ -658,13 +660,8 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   floor.width = px;
   floor.height = py;
   const fctx = floor.getContext('2d');
-  const wallCanvas = document.createElement('canvas');
-  wallCanvas.width = px;
-  wallCanvas.height = py;
-  const wctx = wallCanvas.getContext('2d');
-  if (!fctx || !wctx) throw new Error('no 2d context');
+  if (!fctx) throw new Error('no 2d context');
   fctx.imageSmoothingEnabled = false;
-  wctx.imageSmoothingEnabled = false;
 
   // The collision grid is built once: a wall layer collides whole, and a tile
   // on any layer collides when its tileset tile says so.
@@ -713,17 +710,18 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
 
   for (const layer of tiles) {
     const data = await layerData(layer);
-    const wall = isWallLayer(layer);
     const cells = Math.min(data.length, width * height);
     for (let i = 0; i < cells; i++) {
       const gid = gidOf(Number(data[i]) || 0);
       if (!gid) continue;
-      if (wall || flags.has(gid)) blocked[i] = 1;
+      if (isWallLayer(layer) || flags.has(gid)) blocked[i] = 1;
     }
     // A hidden layer collides like a shown one: it is the usual way a map
     // keeps an invisible collision layer.
     if (layer.visible === false) continue;
-    paint(wall ? wctx : fctx, layer, data);
+    // The order of the map is the order of the paint, the walls group
+    // included: a wall stands on the floor it was drawn over.
+    paint(fctx, layer, data);
   }
 
   const grid = new ZoneGrid(zones);
@@ -732,7 +730,6 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     widthPx: px,
     heightPx: py,
     tiles: floor,
-    walls: wallCanvas,
     collision(x: number, y: number) {
       return bodyBlocked(blocked, width, height, tw, th, x, y);
     },

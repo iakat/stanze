@@ -4103,13 +4103,8 @@
     floor.width = px;
     floor.height = py;
     const fctx = floor.getContext("2d");
-    const wallCanvas = document.createElement("canvas");
-    wallCanvas.width = px;
-    wallCanvas.height = py;
-    const wctx = wallCanvas.getContext("2d");
-    if (!fctx || !wctx) throw new Error("no 2d context");
+    if (!fctx) throw new Error("no 2d context");
     fctx.imageSmoothingEnabled = false;
-    wctx.imageSmoothingEnabled = false;
     const blocked = new Uint8Array(width * height);
     const draw = [];
     const lookup = (gid) => {
@@ -4150,15 +4145,14 @@
     };
     for (const layer of tiles) {
       const data = await layerData(layer);
-      const wall = isWallLayer(layer);
       const cells = Math.min(data.length, width * height);
       for (let i = 0; i < cells; i++) {
         const gid = gidOf(Number(data[i]) || 0);
         if (!gid) continue;
-        if (wall || flags.has(gid)) blocked[i] = 1;
+        if (isWallLayer(layer) || flags.has(gid)) blocked[i] = 1;
       }
       if (layer.visible === false) continue;
-      paint(wall ? wctx : fctx, layer, data);
+      paint(fctx, layer, data);
     }
     const grid = new ZoneGrid(zones2);
     return {
@@ -4166,7 +4160,6 @@
       widthPx: px,
       heightPx: py,
       tiles: floor,
-      walls: wallCanvas,
       collision(x, y) {
         return bodyBlocked(blocked, width, height, tw, th, x, y);
       },
@@ -4938,6 +4931,13 @@
           zones: world.zones.length,
           avatars: view.avatars.size
         };
+      },
+      // step is one position tick by hand: the place was set, this makes the
+      // pair rule and the frame that carries it run now instead of up to a fifth
+      // of a second later.
+      step: () => {
+        step();
+        return view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y) } : null;
       },
       // walk holds one key for a number of milliseconds, the way a person holds
       // it, so the walker takes real steps through real collision.

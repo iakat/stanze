@@ -449,6 +449,13 @@ export function worldHook() {
         avatars: view.avatars.size,
       };
     },
+    // step is one position tick by hand: the place was set, this makes the
+    // pair rule and the frame that carries it run now instead of up to a fifth
+    // of a second later.
+    step: () => {
+      step();
+      return view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y) } : null;
+    },
     // walk holds one key for a number of milliseconds, the way a person holds
     // it, so the walker takes real steps through real collision.
     walk: async (key: string, ms = 400) => {

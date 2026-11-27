@@ -58,7 +58,7 @@ async function join(browser, name) {
   await page.click('#enter-btn');
   await until(
     page,
-    () => window.e2eApp && window.e2eApp.world && window.e2eApp.world().loaded > 0,
+    () => window.e2eApp && window.e2eApp.world && window.e2eApp.world.stats().loaded > 0,
     null,
     60000,
     'the world of ' + name,
@@ -71,7 +71,9 @@ async function join(browser, name) {
 async function place(page, x, y) {
   await page.evaluate(
     ({ x, y }) => {
-      window.e2eApp.place(x, y);
+      const w = window.e2eApp.world;
+      w.goTo(x, y);
+      return w.step();
     },
     { x, y },
   );
@@ -83,7 +85,7 @@ async function heard(page, peerId) {
     page,
     (id) => {
       const app = window.e2eApp;
-      return app.reason(id) || null;
+      return app.world.reason(id) || null;
     },
     peerId,
     15000,
@@ -119,19 +121,67 @@ async function pairIds(a) {
     const bId = ids[0];
 
     // ---- spawn
-    const spawn = await a.page.evaluate(() => window.e2eApp.posAt());
+    const spawn = await a.page.evaluate(() => window.e2eApp.world.pos());
     check('a guest spawns on the map on join', spawn && typeof spawn.x === 'number' && spawn.y >= 0, spawn);
 
     // ---- the bubble: two guests beside each other talk
     await place(a.page, 100, 100);
     await place(b.page, 120, 100);
-    const bubble = await heard(a.page, bId);
+    // The reason is asked until it agrees: the pair rule runs on the next
+    // position tick, and a tick already in flight may still carry the place
+    // from before the move.
+    const bubble = await until(
+      a.page,
+      (id) => {
+        const why = window.e2eApp.world.reason(id);
+        return why && why !== 'far' ? why : null;
+      },
+      bId,
+      15000,
+      'the pair rule to hear the neighbour',
+    ).catch(() => 'far');
     check('a guest beside another is in the conversation', bubble === 'bubble' || bubble === 'near' || bubble === 'meeting', bubble);
 
     // ---- far apart: no conversation
     await place(b.page, 900, 700);
-    const far = await heard(a.page, bId);
+    const far = await until(
+      a.page,
+      (id) => {
+        const why = window.e2eApp.world.reason(id);
+        return why === 'far' || why === 'full' || why === 'silent' ? why : null;
+      },
+      bId,
+      15000,
+      'the pair rule to drop the neighbour',
+    ).catch(() => 'bubble');
     check('a guest across the map is out of the conversation', far === 'far' || far === 'full' || far === 'silent', far);
+
+    // ---- the map is painted whole: every tile layer, walls included
+    // A floor that is walled all round on its top rows is drawn as that floor.
+    // The walls group of a WorkAdventure map is a layer like the others: drawn
+    // into a canvas of its own it reached the screen nowhere, and the floor
+    // it stands on showed as a transparent gap in a band along the top.
+    const top = await a.page.evaluate(() => {
+      const c = document.getElementById('world-canvas');
+      const ctx = c.getContext('2d');
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      // The top band of the visible window, as the share of pixels that are
+      // not the page background and not the avatar disc.
+      let dark = 0;
+      let odd = 0;
+      for (let y = 0; y < 6; y++) {
+        for (let x = 0; x < c.width; x++) {
+          const i = (y * c.width + x) * 4;
+          const r = d[i];
+          const g = d[i + 1];
+          const b = d[i + 2];
+          if (r === 0x1d && g === 0x1d && b === 0x20) dark++;
+          else if (r === 0xff && g === 0x00 && b === 0x00) odd++;
+        }
+      }
+      return { dark, odd, width: c.width };
+    });
+    check('the map reaches the top edge of the window', top.odd === 0, top);
 
     // ---- the world loop runs and paints
     const frames = await until(
