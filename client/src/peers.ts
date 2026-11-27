@@ -233,6 +233,24 @@ export function connectPeer(id, initiator) {
   return peer;
 }
 
+// applyIceToLive hands the relay list that arrived late to every peer
+// connection already built. A pair whose offer left before the list did is
+// gathering with no TURN servers, so the pair is told to gather again: an ICE
+// restart with the new list is the only way a direct link that failed gets a
+// relayed one without a new socket.
+export function applyIceToLive() {
+  for (const peer of state.peers.values()) {
+    const pc = peer.pc;
+    if (!pc) continue;
+    try {
+      pc.setConfiguration(rtcConfig());
+      if (pc.iceConnectionState === 'failed' || pc.iceGatheringState === 'complete') pc.restartIce();
+    } catch {
+      /* a closed pair takes the restart of the next rejoin */
+    }
+  }
+}
+
 // errName is what a console line carries about a browser error: its name, never
 // its message. A WebRTC message quotes the description, and a console keeps
 // what it is given, sealed call or not.
