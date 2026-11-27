@@ -330,6 +330,17 @@ export function mapPath(room: string): string {
   return room === '' ? '/world/map.json' : '/world/maps/' + room + '.json';
 }
 
+// mapCandidates is mapPath in the order it is tried. Tiled saves a JSON map as
+// .json or .tmj depending on the file the author typed, and WorkAdventure's own
+// maps are .tmj; both are the same document. The .json comes first so the
+// shipped tree costs no extra request, and the .tmj is one 404 for a room that
+// has none. A room with neither is still no room.
+function mapCandidates(room: string): string[] {
+  const own = mapPath(room);
+  const stem = own.replace(/\.json$/, '');
+  return own === DEFAULT_MAP ? [own] : [own, stem + '.tmj'];
+}
+
 // DEFAULT_MAP is the map of a room that ships none.
 const DEFAULT_MAP = '/world/map.json';
 
@@ -379,7 +390,11 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   if (!ROOM_RE.test(room)) throw new Error('bad room name');
   const base = '/world/';
   const own = mapPath(room);
-  let map = await loadJSON(own, signal, own !== DEFAULT_MAP);
+  let map: any = null;
+  for (const path of mapCandidates(room)) {
+    map = await loadJSON(path, signal, true);
+    if (map) break;
+  }
   if (!map && own !== DEFAULT_MAP) map = await loadJSON(DEFAULT_MAP, signal);
   if (!map || typeof map !== 'object') throw new Error('no map for ' + room);
   const width = Math.max(1, Math.floor(Number(map.width)) || 1);
