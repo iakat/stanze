@@ -28,7 +28,7 @@ export function iceServers() {
   return all.filter((server) => !/^turns?:/i.test(String(server.urls)));
 }
 
-function rtcConfig(): RTCConfiguration {
+export function rtcConfig(): RTCConfiguration {
   return {
     iceServers: iceServers(),
     iceTransportPolicy: (state.path === 'relay' ? 'relay' : 'all') as RTCIceTransportPolicy,

@@ -10,6 +10,7 @@ import { disableMic, preparePeer } from './devices.js';
 import { sealedSendState, setHand } from './audio.js';
 import { connectPeer, ensurePeer, onCandidate, onDescription } from './peers.js';
 import { addChatLine } from './chat.js';
+import { leave } from './room.js';
 import { playSfx } from './sfx.js';
 import { fileDropPeer, fileOnMessage } from './files.js';
 import {
@@ -121,6 +122,7 @@ export function sealedRefusePass(peer) {
   // A failed proof is not an identity failure: it must not read as an attack on
   // the identity pins, so it closes the pair without touching the pin count.
   if (!state.peers.has(peer.id)) return;
+  peer.passFailed = true;
   if (peer.pc) {
     peer.pc.close();
     peer.pc = null;
@@ -128,7 +130,12 @@ export function sealedRefusePass(peer) {
   wipeKeys(peer);
   sealedSetE2E(peer, 'failed');
   say(shortPeer(peer.id) + ' does not know the room passphrase; the link stays closed');
-  if (state.waiting) return;
+  // Every pair refused the same proof, so this page holds the wrong
+  // passphrase: it goes back to the lobby. One refusal is a guest's problem.
+  if (state.waiting) {
+    if ([...state.peers.values()].every((one) => one.passFailed)) setTimeout(() => leave('the room refused the passphrase'), 0);
+    return;
+  }
   // The admin removes the identity, not the socket, so the same guest can not
   // come back on a fresh pair in this call.
   if (!isAdmin(state.self) || isAdmin(peer.id)) return;

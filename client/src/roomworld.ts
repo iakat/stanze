@@ -14,7 +14,6 @@ import { Above, CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } 
 import { Guest, Proximity } from './proximity.js';
 import { Zone, ZoneGrid, ZoneWatch } from './zones.js';
 import { ROOM_RE } from './config.js';
-import { say } from './util.js';
 import {
   posAt,
   posFrame,
@@ -158,6 +157,7 @@ export async function worldEnter(room: string, start?: string) {
     // A room with no map is a call, not a broken page: the grid stays and the
     // note says where the map should have been.
     worldSet(false);
+    route([...state.peers.values()]);
     const why = err && (err as Error).message ? (err as Error).message : String(err);
     note.hidden = false;
     note.textContent = 'no world for this room (' + why + '), the call grid is shown instead';
@@ -262,7 +262,7 @@ function guestOf(x: number, y: number, load: Map<string, number>): Guest {
 // map of the target room ('conference.tmj#from-office'), a link to the world, or
 // a full address; a link is the same host's page and so the same call, and a
 // remote host is not a door this page can walk through.
-export function roomOfExit(exit: string, here: string): string | null {
+export function roomOfExit(exit: string): string | null {
   const raw = String(exit || '').trim();
   if (!raw) return null;
   // WorkAdventure names a door three ways: a map beside this one
@@ -278,9 +278,10 @@ export function roomOfExit(exit: string, here: string): string | null {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(seg)) return '';
     return seg.replace(/\.(tmj|json|png)$/i, '').toLowerCase();
   };
-  let target = '';
-  if (/^(https?:)?\/\//i.test(raw)) {
-    let url: URL | null = null;
+  let target: string;
+  const lower = raw.toLowerCase();
+  if (raw.startsWith('//') || lower.startsWith('http://') || lower.startsWith('https://')) {
+    let url: URL;
     try {
       url = new URL(raw, location.href);
     } catch {
@@ -312,7 +313,7 @@ function door(enter: Zone[], leave: Zone[]) {
   if (!zone || !view || !state.room) return;
   doorOn = zone.id;
   if (now < doorCool) return;
-  const to = roomOfExit(zone.exit as string, state.room);
+  const to = roomOfExit(zone.exit as string);
   if (!to) {
     proxNote('door ' + zone.id + ' names a room this page cannot walk to: ' + zone.exit);
     return;
@@ -414,7 +415,9 @@ function step() {
 // route turns the strands on and off and keeps the presence line true. A pair
 // whose media is routed is a pair the line names. The whole batch asks for one
 // stage layout, on the next frame, and not one per pair.
-export function route(peers: any[], nearIds: string[]) {
+export function route(peers: any[], nearIds: string[] = peers.map((one) => one.id)) {
+  // With no list every peer is in the conversation: a room with no map has no
+  // walker to judge a distance with.
   const on = new Set(nearIds);
   for (const peer of peers) {
     const wanted = on.has(peer.id);
@@ -485,12 +488,6 @@ export function worldDrop(peerId: string) {
   posForget(peerId);
 }
 
-// topLeft is where the visible window stands in map pixels.
-export function viewTopLeft(): { x: number; y: number } {
-  if (!view) return { x: 0, y: 0 };
-  return view.topLeft();
-}
-
 // viewSize is the drawn size of the window in map pixels.
 export function viewSize(): { w: number; h: number } {
   if (!view) return { w: 0, h: 0 };
@@ -502,23 +499,6 @@ export function viewSize(): { w: number; h: number } {
 export function worldDrawn(): { drawn: number; ink: number } {
   if (!view) return { drawn: 0, ink: 0 };
   return { drawn: view.frames, ink: view.ink() };
-}
-
-export function worldAvatars(): {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  local: boolean;
-}[] {
-  if (!view) return [];
-  return [...view.avatars.values()].map((one) => ({
-    id: one.id,
-    name: one.name,
-    x: Math.round(one.x),
-    y: Math.round(one.y),
-    local: !!one.local,
-  }));
 }
 
 // aboveFilled counts the map rows that the overhead paint puts pixels in: a
@@ -625,7 +605,7 @@ export function worldHook() {
       view
         ? view.world.zones
             .filter((one) => !!one.exit)
-            .map((one) => ({ id: one.id, room: roomOfExit(one.exit as string, view ? view.world.room : '') }))
+            .map((one) => ({ id: one.id, room: roomOfExit(one.exit as string) }))
         : [],
     // start is the zone this room lands a guest on, if the map names one.
     start: () => (view ? view.world.zones.filter((one) => one.start).map((one) => one.id) : []),

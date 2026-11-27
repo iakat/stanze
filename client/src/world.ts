@@ -18,7 +18,6 @@ export const TILE = 32;
 export const CHAR_W = 32;
 export const CHAR_H = 32;
 export const CHAR_ORIGIN_Y = 32;
-export const CHAR_LAYERS = 4;
 // The sheet is 4 rows top to bottom: S (front), W (side), E (side), N (back).
 // A runtime direction is 0=down, 1=left, 2=right, 3=up.
 const SHEET_ROW = [0, 1, 2, 3];
@@ -44,12 +43,6 @@ const BODY_BASE = 2;
 
 // The four facings, in the order a position frame carries them.
 export const DIR = ['down', 'left', 'right', 'up'];
-
-// The edge strip: a band of one avatar cell along the four edges of the window,
-// holding a marker per guest the camera does not hold. A guest is thus always
-// on screen and always named, however far the map carries them; the marker
-// says which edge, and an arrow under it says which way that guest lies.
-export const EDGE = CHAR_W;
 
 export type World = {
   room: string;
@@ -1144,6 +1137,7 @@ export class WorldView {
   // pad is the four arrow buttons a touch screen walks with; a mouse never
   // sees it.
   private pad: HTMLElement | null = null;
+  private observer: ResizeObserver | null = null;
   private onKeyDown = (event: KeyboardEvent) => this.key(event, true);
   private onKeyUp = (event: KeyboardEvent) => this.key(event, false);
 
@@ -1164,6 +1158,7 @@ export class WorldView {
         this.dirty = true;
       });
       observe.observe(canvas);
+      this.observer = observe;
     }
     this.raf = requestAnimationFrame((t) => this.tick(t));
   }
@@ -1190,6 +1185,9 @@ export class WorldView {
     this.raf = 0;
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    // A view is rebuilt on every join: a connected observer keeps the old canvas.
+    if (this.observer) this.observer.disconnect();
+    this.observer = null;
     if (this.pad && this.pad.parentNode) this.pad.parentNode.removeChild(this.pad);
     this.pad = null;
     this.avatars.clear();
