@@ -4022,7 +4022,13 @@
     }
     const atlas = await atlasFrames(signal);
     let atlasImage = null;
-    if (atlas && atlas.frames.size) atlasImage = await image(atlas.image);
+    if (atlas && atlas.frames.size) {
+      try {
+        atlasImage = await image(atlas.image);
+      } catch {
+        atlasImage = null;
+      }
+    }
     const flags = /* @__PURE__ */ new Set();
     for (const set of tilesets) {
       const firstgid = Math.floor(Number(set && set.firstgid)) || 1;
@@ -4057,7 +4063,7 @@
         const dx = i % width * tw;
         const dy = Math.floor(i / width) * th;
         target.globalAlpha = alpha;
-        const frame = atlasImage && atlas ? atlas.frames.get(gid) : null;
+        const frame = atlasImage && atlas && atlas.frames.size ? atlas.frames.get(gid) || null : null;
         if (frame) {
           target.drawImage(atlasImage, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
           continue;
@@ -4653,6 +4659,10 @@
       const why = err && err.message ? err.message : String(err);
       note.hidden = false;
       note.textContent = "no world for this room (" + why + "), the call grid is shown instead";
+      try {
+        window.__worldError = String(err && err.stack ? err.stack : err);
+      } catch {
+      }
     }
   }
   function worldLeave() {

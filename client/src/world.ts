@@ -408,7 +408,13 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // a matching frame falls through to its Tiled tileset.
   const atlas = await atlasFrames(signal);
   let atlasImage: HTMLImageElement | null = null;
-  if (atlas && atlas.frames.size) atlasImage = await image(atlas.image);
+  if (atlas && atlas.frames.size) {
+    try {
+      atlasImage = await image(atlas.image);
+    } catch {
+      atlasImage = null;
+    }
+  }
 
   // The collides property is declared on a tileset tile, as a property or as
   // the newer class of the same name.
@@ -453,7 +459,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       const dx = (i % width) * tw;
       const dy = Math.floor(i / width) * th;
       target.globalAlpha = alpha;
-      const frame = atlasImage && atlas ? atlas.frames.get(gid) : null;
+      const frame = atlasImage && atlas && atlas.frames.size ? atlas.frames.get(gid) || null : null;
       if (frame) {
         target.drawImage(atlasImage as HTMLImageElement, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
         continue;

@@ -113,7 +113,8 @@ export async function worldEnter(room: string) {
     worldSet(false);
     const why = err && (err as Error).message ? (err as Error).message : String(err);
     note.hidden = false;
-    note.textContent = 'no world for this room (' + why + '), the call grid is shown instead';
+    note.textContent = "no world for this room (" + why + "), the call grid is shown instead";
+    try { (window as any).__worldError = String(err && (err as any).stack ? (err as any).stack : err); } catch { /* the probe is a debug aid */ }
   }
 }
 
