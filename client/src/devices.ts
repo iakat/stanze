@@ -502,6 +502,9 @@ export function preparePeer(peer) {
     if (!track) continue;
     // A waiting guest gets no media until it is let in.
     if (peer.waiting) continue;
+    // The group opened by replaceTrack applies from the next description; a new
+    // sender has none yet, and a sender that already holds the track is done.
+    if (isAttached(peer, kind, track)) continue;
     tr.sender.replaceTrack(track).catch(() => {});
     if (kind === 'video') capVideoSender(tr.sender);
   }
@@ -515,7 +518,7 @@ export function attachTrack(peer, track) {
   // prepare carries no media until the pair passed.
   if (!peer.pass || !peer.pass.done) return;
   const tr = peer.tx && peer.tx[track.kind];
-  if (!tr) return;
+  if (!tr || isAttached(peer, track.kind, track)) return;
   tr.sender.replaceTrack(track).catch(() => {});
   if (track.kind === 'video') capVideoSender(tr.sender);
 }
@@ -527,7 +530,7 @@ export function attachScreen(peer) {
   if (!peer.pass || !peer.pass.done) return;
   const tr = peer.tx && peer.tx.screen;
   const track = state.screen && state.screen.getVideoTracks()[0];
-  if (tr && track) tr.sender.replaceTrack(track).catch(() => {});
+  if (tr && track && !isAttached(peer, 'screen', track)) tr.sender.replaceTrack(track).catch(() => {});
 }
 
 // publishTrack hands one new track to every connection that has transceivers; a
@@ -537,6 +540,20 @@ function publishTrack(track) {
   for (const peer of state.peers.values()) {
     if (peer.pc) attachTrack(peer, track);
   }
+}
+
+// isAttached answers whether the senders of that kind already carry the track.
+// A Firefox sender that is given the track it already holds raises a rejected
+// replaceTrack instead of doing nothing, and the picture blink it would cause
+// is not wanted anyway, so that call is not made. A sender without encodings
+// has not negotiated yet, and its track is installed with the description, so
+// it counts as attached too.
+function isAttached(peer, kind, track) {
+  const tr = peer.tx && peer.tx[kind];
+  if (!tr) return true;
+  const params = tr.sender.getParameters();
+  if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return true;
+  return tr.sender.track === track;
 }
 
 // adoptMic makes one microphone track the live input: GTCRN and the gain feed the

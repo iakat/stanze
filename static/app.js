@@ -8871,6 +8871,7 @@
       const track = kind === "screen" ? state.screen && state.screen.getVideoTracks()[0] : state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
       if (!track) continue;
       if (peer.waiting) continue;
+      if (isAttached(peer, kind, track)) continue;
       tr.sender.replaceTrack(track).catch(() => {
       });
       if (kind === "video") capVideoSender(tr.sender);
@@ -8880,7 +8881,7 @@
     if (peer.sealed === false || peer.waiting) return;
     if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx[track.kind];
-    if (!tr) return;
+    if (!tr || isAttached(peer, track.kind, track)) return;
     tr.sender.replaceTrack(track).catch(() => {
     });
     if (track.kind === "video") capVideoSender(tr.sender);
@@ -8890,7 +8891,7 @@
     if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx.screen;
     const track = state.screen && state.screen.getVideoTracks()[0];
-    if (tr && track) tr.sender.replaceTrack(track).catch(() => {
+    if (tr && track && !isAttached(peer, "screen", track)) tr.sender.replaceTrack(track).catch(() => {
     });
   }
   function publishTrack(track) {
@@ -8898,6 +8899,13 @@
     for (const peer of state.peers.values()) {
       if (peer.pc) attachTrack(peer, track);
     }
+  }
+  function isAttached(peer, kind, track) {
+    const tr = peer.tx && peer.tx[kind];
+    if (!tr) return true;
+    const params = tr.sender.getParameters();
+    if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return true;
+    return tr.sender.track === track;
   }
   async function adoptMic(track) {
     if (!track) return;
