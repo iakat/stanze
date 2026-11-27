@@ -3710,6 +3710,8 @@
   var CHAR_MOVE_MS = 1e3 / CHAR_FPS;
   var WALK_SPEED2 = 200;
   var AVATAR_SORT_OFFSET = 0;
+  var HALO_RX = 10;
+  var HALO_RY = 4;
   var BODY_W = 20;
   var BODY_H = 16;
   var BODY_BASE = 2;
@@ -4196,12 +4198,18 @@
             if (!Number.isFinite(y)) return 0;
             return Math.max(0, Math.min(height - 1, Math.floor(y / th)));
           },
-          cover(x, y, h) {
+          // The bottom of a guest is the lowest pixel it draws, which is the foot
+          // line plus the rim of the halo under it. A sprite reaches h pixels up
+          // from the foot and that only matters to the top of a taller sheet, so
+          // the band named here is the one that holds that lowest pixel: the guest
+          // is drawn after the bands above it, and a plant in this band covers the
+          // guest standing behind it. Reading the band of the foot line alone put
+          // the guest under the row it was standing in, which is the one pixel of
+          // the sprite and the halo that went over the thing that should cover it.
+          cover(x, y, h, halo) {
             if (!Number.isFinite(y)) return 0;
-            const rail = Math.max(1, Math.round(h / th));
-            const last = Math.max(0, Math.floor(y - 1));
-            const bandAt = Math.floor(last / th) - (rail - 1);
-            return Math.max(0, Math.min(height - 1, bandAt));
+            const bottom = Math.floor(y + Math.max(0, Math.round(halo)));
+            return Math.max(0, Math.min(height - 1, Math.floor(bottom / th)));
           }
         };
       }
@@ -4593,7 +4601,7 @@
           }
         };
         const where2 = /* @__PURE__ */ new Map();
-        for (const one of list) where2.set(one, above.cover(one.x, one.y, CHAR_H));
+        for (const one of list) where2.set(one, above.cover(one.x, one.y, CHAR_H, HALO_RY));
         const ordered = [...list].sort(
           (a, b) => where2.get(a) - where2.get(b) || at(a) - at(b) || (a.id < b.id ? -1 : 1)
         );
@@ -4622,7 +4630,7 @@
         ctx.globalAlpha = 0.35;
         ctx.fillStyle = "#ffffff";
         ctx.beginPath();
-        ctx.ellipse(Math.round(one.x), Math.round(one.y), 10, 4, 0, 0, Math.PI * 2);
+        ctx.ellipse(Math.round(one.x), Math.round(one.y), HALO_RX, HALO_RY, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
@@ -7758,6 +7766,9 @@
     session: "this browser keeps no identity: a new key each load, the device stays unverified"
   };
   var idDb = null;
+  function dropDb(db) {
+    if (idDb && db && idDb === db) idDb = null;
+  }
   function idStore() {
     if (idDb) return idDb;
     idDb = new Promise((resolve, reject) => {
@@ -7771,7 +7782,15 @@
           if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
         }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        db.onversionchange = () => {
+          db.close();
+          dropDb(db);
+        };
+        db.onclose = () => dropDb(db);
+        resolve(db);
+      };
       req.onerror = () => reject(req.error || new Error("indexeddb refused"));
     });
     idDb.catch(() => {
@@ -7779,14 +7798,31 @@
     });
     return idDb;
   }
-  function idbRequest(store2, mode, fn) {
+  function isStale(err) {
+    const name = err && err.name;
+    return name === "InvalidStateError" || name === "TransactionInactiveError" || name === "NotFoundError";
+  }
+  function idbOnce(store2, mode, fn) {
     return idStore().then(
       (db) => new Promise((resolve, reject) => {
-        const req = fn(db.transaction(store2, mode).objectStore(store2));
+        let req;
+        try {
+          req = fn(db.transaction(store2, mode).objectStore(store2));
+        } catch (err) {
+          dropDb(db);
+          reject(err);
+          return;
+        }
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       })
     );
+  }
+  function idbRequest(store2, mode, fn) {
+    return idbOnce(store2, mode, fn).catch((err) => {
+      if (isStale(err)) return idbOnce(store2, mode, fn);
+      throw err;
+    });
   }
   function idbGet(store2, key) {
     return idbRequest(store2, "readonly", (s) => s.get(key));
@@ -7821,7 +7857,11 @@
       pub,
       fp: fingerprint(pub),
       sign: (msg) => crypto.subtle.sign({ name: "Ed25519" }, key, b64d(msg)).then(b64e),
-      store: () => ({ kind: "webcrypto", key, pub })
+      // Only the public half is written. A live CryptoKey in a record makes the
+      // read of that record stall in Firefox once a second tab of the same
+      // browser shares the profile, and a join then never starts. The key stays
+      // in this page; a reload that cannot rebuild it makes a fresh one.
+      store: () => ({ kind: "public", pub })
     };
   }
   function seedIdentity(seed, pub, kind) {
@@ -7856,22 +7896,23 @@
       return made && made.pub && made.seed ? seedIdentity(b64d(made.seed), made.pub, "sealed") : null;
     });
   }
+  var identityInPage = null;
+  var identityInPagePub = "";
   async function reopenIdentity(rec) {
+    if (identityInPage && rec && rec.pub && rec.pub === identityInPagePub) return identityInPage;
     if (!rec || !rec.pub) return null;
-    let key = null;
-    try {
-      if (rec.kind === "webcrypto" && rec.key) {
-        key = subtleIdentity(rec.key, rec.pub);
-      } else if (rec.kind === "sealed" && rec.wrap && rec.iv && rec.ct) {
+    if (rec.kind === "sealed" && rec.wrap && rec.iv && rec.ct) {
+      try {
         const seed = new Uint8Array(
           await crypto.subtle.decrypt({ name: "AES-GCM", iv: rec.iv }, rec.wrap, rec.ct)
         );
-        key = seedIdentity(seed, rec.pub, "sealed");
+        const kept = seedIdentity(seed, rec.pub, "sealed");
+        return await provesKey(rec.pub, kept.sign) ? kept : null;
+      } catch {
+        return null;
       }
-    } catch {
-      return null;
     }
-    return key && await provesKey(rec.pub, key.sign) ? key : null;
+    return null;
   }
   function loadPins() {
     return Promise.all([idbAll("pins"), idbAll("revoked")]).then(([pins, revoked]) => {
@@ -7897,6 +7938,8 @@
         key = await createIdentity();
         if (!key) throw new Error("no identity key");
         state.device = rec ? "fresh" : "kept";
+        identityInPage = key;
+        identityInPagePub = key.pub;
         try {
           await idbPut("id", "self", await key.store());
           if (navigator.storage && typeof navigator.storage.persist === "function") {

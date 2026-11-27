@@ -75,6 +75,12 @@ const ID_NOTE = {
 
 let idDb = null;
 
+// dropDb forgets the open handle. A handle is dropped when the database behind
+// it goes away, because every later transaction on it throws.
+function dropDb(db) {
+  if (idDb && db && idDb === db) idDb = null;
+}
+
 // idStore opens the one local database: the identity, the pins this guest made
 // and the fingerprints a pin replaced. No session material is written.
 function idStore() {
@@ -90,7 +96,22 @@ function idStore() {
         if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // A second tab of the same browser opens the same database. When it
+      // asks for a version this handle does not have, the handle has to let
+      // go or that tab waits for ever; and when this tab is the one that
+      // waited, the handle it holds is the one that went stale. Either way
+      // the next request opens a fresh one.
+      db.onversionchange = () => {
+        db.close();
+        dropDb(db);
+      };
+      db.onclose = () => dropDb(db);
+      resolve(db);
+    };
+    // A blocked open is not a failure: it waits for the other tab to let go.
+    // The request carries on by itself once that tab closes its handle.
     req.onerror = () => reject(req.error || new Error('indexeddb refused'));
   });
   // A failed open is not remembered, so a later attempt can work.
@@ -100,15 +121,40 @@ function idStore() {
   return idDb;
 }
 
-function idbRequest(store, mode, fn) {
+// isStale names the error a closed or vanished database throws. It is the one
+// case worth a second try, because the fix is a fresh handle and not a change
+// of what was asked.
+function isStale(err) {
+  const name = err && err.name;
+  return name === 'InvalidStateError' || name === 'TransactionInactiveError' ||
+    name === 'NotFoundError';
+}
+
+function idbOnce(store, mode, fn) {
   return idStore().then(
     (db) =>
       new Promise((resolve, reject) => {
-        const req = fn(db.transaction(store, mode).objectStore(store));
+        let req;
+        try {
+          req = fn(db.transaction(store, mode).objectStore(store));
+        } catch (err) {
+          dropDb(db);
+          reject(err);
+          return;
+        }
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       }),
   );
+}
+
+// idbRequest retries once on a stale handle: the first try may run on a
+// database another tab has just replaced.
+function idbRequest(store, mode, fn) {
+  return idbOnce(store, mode, fn).catch((err) => {
+    if (isStale(err)) return idbOnce(store, mode, fn);
+    throw err;
+  });
 }
 
 function idbGet(store, key) {
@@ -156,7 +202,11 @@ function subtleIdentity(key, pub) {
     pub,
     fp: fingerprint(pub),
     sign: (msg) => crypto.subtle.sign({ name: 'Ed25519' }, key, b64d(msg)).then(b64e),
-    store: () => ({ kind: 'webcrypto', key, pub }),
+    // Only the public half is written. A live CryptoKey in a record makes the
+    // read of that record stall in Firefox once a second tab of the same
+    // browser shares the profile, and a join then never starts. The key stays
+    // in this page; a reload that cannot rebuild it makes a fresh one.
+    store: () => ({ kind: 'public', pub }),
   };
 }
 
@@ -184,6 +234,7 @@ function seedIdentity(seed, pub, kind) {
   };
 }
 
+
 function createIdentity() {
   return Promise.resolve()
     .then(() => crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']))
@@ -203,22 +254,30 @@ function createIdentity() {
     });
 }
 
+// identityInPage is the key this page made, kept while the page lives so a
+// join and a later join of the same page are the same device.
+let identityInPage = null;
+let identityInPagePub = '';
+
+// reopenIdentity hands back the key this page already made, and otherwise looks
+// for one the browser kept. Only a sealed seed can be rebuilt: the public half
+// of a WebCrypto key cannot sign, so that shape needs the handle the record no
+// longer carries and is reported as unusable.
 async function reopenIdentity(rec) {
+  if (identityInPage && rec && rec.pub && rec.pub === identityInPagePub) return identityInPage;
   if (!rec || !rec.pub) return null;
-  let key = null;
-  try {
-    if (rec.kind === 'webcrypto' && rec.key) {
-      key = subtleIdentity(rec.key, rec.pub);
-    } else if (rec.kind === 'sealed' && rec.wrap && rec.iv && rec.ct) {
+  if (rec.kind === 'sealed' && rec.wrap && rec.iv && rec.ct) {
+    try {
       const seed = new Uint8Array(
         await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv }, rec.wrap, rec.ct),
       );
-      key = seedIdentity(seed, rec.pub, 'sealed');
+      const kept = seedIdentity(seed, rec.pub, 'sealed');
+      return (await provesKey(rec.pub, kept.sign)) ? kept : null;
+    } catch {
+      return null;
     }
-  } catch {
-    return null;
   }
-  return key && (await provesKey(rec.pub, key.sign)) ? key : null;
+  return null;
 }
 
 function loadPins() {
@@ -251,7 +310,10 @@ export function ensureIdentity() {
     } else {
       key = await createIdentity();
       if (!key) throw new Error('no identity key');
+      // A record was there: its key could not be used, so this is a new one.
       state.device = rec ? 'fresh' : 'kept';
+      identityInPage = key;
+      identityInPagePub = key.pub;
       try {
         await idbPut('id', 'self', await key.store());
         if (navigator.storage && typeof navigator.storage.persist === 'function') {
