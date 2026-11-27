@@ -214,9 +214,23 @@ function zoneObjects(objects: any[]): any[] {
   const out: any[] = [];
   for (const layer of objects) {
     for (const obj of layer.objects) {
-      if (!obj || (obj.class !== ZONE_CLASS && obj.class !== 'area')) continue;
+      if (!obj) continue;
       const props: Record<string, any> = {};
       for (const p of obj.properties || []) if (p && p.name) props[p.name] = p.value;
+      // A WorkAdventure area is an object with no class of its own: what it is
+      // lives in its properties (silent, jitsiRoom), and one whose properties
+      // say nothing about a zone is a decoration with a name and is left out.
+      const wa =
+        obj.class === undefined &&
+        (typeof props.silent === 'boolean' ||
+          props.silent === 'true' ||
+          props.jitsiRoom !== undefined ||
+          props.jitsiRoomProperty !== undefined);
+      if (!wa && obj.class !== ZONE_CLASS && obj.class !== 'area') continue;
+      // The two WorkAdventure names that mean what this tree means, and nothing
+      // else: silent is a zone without a word, a jitsiRoom is a meeting room.
+      let kind = String(props.kind || '');
+      if (wa && !kind) kind = typeof props.silent === 'boolean' || props.silent === 'true' ? 'silent' : 'meeting';
       let rects: { x: number; y: number; w: number; h: number }[];
       const shape = obj.polygon || obj.polyline;
       if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
@@ -227,7 +241,7 @@ function zoneObjects(objects: any[]): any[] {
         // The property bag of a Tiled zone is {kind, proximity, maxUsers}; the
         // runtime form is {kind, proximity, capacity}, and without these lines
         // a meeting room is a plain area that carries no talk.
-        kind: String(props.kind || ''),
+        kind,
         proximity: props.proximity,
         capacity: props.maxUsers !== undefined ? props.maxUsers : props.capacity,
         rects,
@@ -321,26 +335,26 @@ async function startLayerRect(
   return { x: minX, y: minY, w: Math.max(tw, maxX - minX + tw), h: Math.max(th, maxY - minY + th) };
 }
 
+// The maps this tree ships are WorkAdventure's own .tmj files, byte for byte,
+// and they keep that suffix: the file on disk is the map, and a room called
+// office opens office.tmj.
+const OWN_MAPS = /^(office|conference)$/;
+
 // mapPath is the one room to one map rule of §5: a room with a map of its own
 // gets it, and every other room walks the default office, the way a WorkAdventure
 // deployment serves its one world to every room. A map is geometry and zones;
 // it carries no guest and no position, so two rooms on one map leak nothing.
 export function mapPath(room: string): string {
-  return room === '' ? '/world/map.json' : '/world/maps/' + room + '.json';
+  if (OWN_MAPS.test(room)) return '/world/maps/' + room + '.tmj';
+  return '/world/maps/' + room + '.json';
 }
 
-// mapCandidates is the one file of a room: the map it names, or the default
-// office for every other room. There is no probing: a miss would be a 404 in
-// the console of every join, which a person reads as a broken room.
-//
-// The maps this tree ships are WorkAdventure's own .tmj files, byte for byte,
-// so a room opens a WorkAdventure map today; a room with none is the default
-// office, unchanged.
-const OWN_MAPS = /^(office|conference)\.tmj$/;
-
+// mapCandidates is the one file of a room: the .tmj of a room this tree ships
+// a map for, or the default office for every other room. There is no probing: a
+// miss would be a 404 in the console of every join, which a person reads as a
+// broken room.
 function mapCandidates(room: string): string[] {
-  const own = mapPath(room);
-  return OWN_MAPS.test(own.slice(own.lastIndexOf('/') + 1)) ? [own] : [DEFAULT_MAP];
+  return OWN_MAPS.test(room) ? [mapPath(room)] : [DEFAULT_MAP];
 }
 
 // isWam tells a WorkAdventure world from a Tiled map: a world names a mapUrl
@@ -501,8 +515,12 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
 
   // The sidecar is the authored zone list; the object layer of the map is the
   // other legal source and comes second, and the areas of a .wam come after it,
-  // so a world keeps both its object zones and its areas.
-  const sidecar = own !== DEFAULT_MAP ? await loadJSON(own.replace(/\.\w+$/, '') + '.zones.json', signal, true) : null;
+  // so a world keeps both its object zones and its areas. A map of this tree's
+  // own kind, a .wam, or the default office all carry theirs in the map, and a
+  // request for a sidecar that cannot exist logs a 404 on every join; only a
+  // room map asked for as <room>.json may have one beside it.
+  const sidecarPath = own.replace(/\.\w+$/, '') + '.zones.json';
+  const sidecar = own !== DEFAULT_MAP && !OWN_MAPS.test(room) ? await loadJSON(sidecarPath, signal, true) : null;
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
   const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
   const zones = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
@@ -527,11 +545,30 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     }
     return found;
   };
+  // sheet loads one tileset image from the map's folder, and from the world
+  // folder when that file is not there, the way a path the editor wrote beside
+  // the world is meant. A sheet whose absolute path is dead is retried under
+  // base once and then left out: one missing sheet must not cost a join.
+  const sheet = async (abs: string) => {
+    try {
+      return await image(abs);
+    } catch (err) {
+      const at = abs.lastIndexOf('/');
+      const plain = at >= 0 ? abs.slice(at + 1) : abs;
+      if (!plain || abs === base + plain) throw err;
+      return image(base + plain);
+    }
+  };
 
   // An external tileset is the normal Tiled authoring: the map names a .tsj or
   // a .tsx and the tiles live in that file. It is read here so the map draws
   // whatever an author saved, and a file that does not load leaves the map a
   // floor of nothing rather than a failed join.
+  //
+  // A WorkAdventure map carries its tilesets inline, which is why its source
+  // names every sheet relative to the map, and one of them is spelled beside
+  // the world the editor exported from, not beside the map: the sheet is then
+  // looked for again beside the world folder before the load is given up.
   const tilesets: any[] = [];
   for (const raw of Array.isArray(map.tilesets) ? map.tilesets : []) {
     if (raw && raw.source) {
@@ -547,14 +584,31 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       }
       continue;
     }
-    tilesets.push(raw);
+    // A map states its tilesets inline, and the image it names is a path beside
+    // the map, never beside the world folder: resolving it against base asked
+    // every sheet with a folder in its path at /world/tilesets/ and lost them.
+    const pic = raw && typeof raw.image === 'string' ? raw.image : '';
+    const abs = !pic || pic.startsWith('/') ? pic : roomBase + pic.replace(/^\.\//, '');
+    tilesets.push(raw && typeof raw === 'object' ? { ...raw, image: abs } : raw);
   }
 
   const sets: TileSet[] = [];
+  // A sheet that cannot be loaded is left out and named, so a map draws every
+  // sheet it has instead of one missing file costing the map its floor.
+  const lost: string[] = [];
   for (const raw of tilesets) {
     if (!raw || !raw.image) continue;
     const firstgid = Math.floor(Number(raw.firstgid));
     if (!Number.isSafeInteger(firstgid) || firstgid < 1) continue;
+    let pic: HTMLImageElement;
+    try {
+      // A tileset image is a path beside its own file, so an external file
+      // keeps the folder it came from.
+      pic = await sheet(String(raw.image));
+    } catch {
+      lost.push(String(raw.image));
+      continue;
+    }
     sets.push({
       firstgid,
       columns: Math.max(1, Math.floor(Number(raw.columns)) || 1),
@@ -562,11 +616,10 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       tileHeight: Math.max(1, Math.floor(Number(raw.tileheight)) || th),
       margin: Math.max(0, Math.floor(Number(raw.margin)) || 0),
       spacing: Math.max(0, Math.floor(Number(raw.spacing)) || 0),
-      // A tileset image is a path beside its own file, so an external file
-      // keeps the folder it came from.
-      image: await image(raw.image ? String(raw.image) : ''),
+      image: pic,
     });
   }
+  if (lost.length) console.warn('tileset image missing: ' + lost.join(', '));
 
   // The named atlas is the shipped way to draw a cell: a gid is a small number
   // naming a frame, and the atlas says where that frame stands. A map without

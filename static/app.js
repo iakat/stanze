@@ -3816,9 +3816,13 @@
     const out = [];
     for (const layer of objects) {
       for (const obj of layer.objects) {
-        if (!obj || obj.class !== ZONE_CLASS && obj.class !== "area") continue;
+        if (!obj) continue;
         const props = {};
         for (const p of obj.properties || []) if (p && p.name) props[p.name] = p.value;
+        const wa = obj.class === void 0 && (typeof props.silent === "boolean" || props.silent === "true" || props.jitsiRoom !== void 0 || props.jitsiRoomProperty !== void 0);
+        if (!wa && obj.class !== ZONE_CLASS && obj.class !== "area") continue;
+        let kind = String(props.kind || "");
+        if (wa && !kind) kind = typeof props.silent === "boolean" || props.silent === "true" ? "silent" : "meeting";
         let rects;
         const shape = obj.polygon || obj.polyline;
         if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
@@ -3829,7 +3833,7 @@
           // The property bag of a Tiled zone is {kind, proximity, maxUsers}; the
           // runtime form is {kind, proximity, capacity}, and without these lines
           // a meeting room is a plain area that carries no talk.
-          kind: String(props.kind || ""),
+          kind,
           proximity: props.proximity,
           capacity: props.maxUsers !== void 0 ? props.maxUsers : props.capacity,
           rects
@@ -3894,13 +3898,13 @@
     if (!Number.isFinite(minX)) return null;
     return { x: minX, y: minY, w: Math.max(tw, maxX - minX + tw), h: Math.max(th, maxY - minY + th) };
   }
+  var OWN_MAPS = /^(office|conference)$/;
   function mapPath(room) {
-    return room === "" ? "/world/map.json" : "/world/maps/" + room + ".json";
+    if (OWN_MAPS.test(room)) return "/world/maps/" + room + ".tmj";
+    return "/world/maps/" + room + ".json";
   }
-  var OWN_MAPS = /^(office|conference)\.tmj$/;
   function mapCandidates(room) {
-    const own = mapPath(room);
-    return OWN_MAPS.test(own.slice(own.lastIndexOf("/") + 1)) ? [own] : [DEFAULT_MAP];
+    return OWN_MAPS.test(room) ? [mapPath(room)] : [DEFAULT_MAP];
   }
   function isWam(doc) {
     return !!doc && typeof doc === "object" && typeof doc.mapUrl === "string" && !Array.isArray(doc.layers);
@@ -4006,7 +4010,8 @@
     const objects = [];
     walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
     const roomBase = mapPathUsed.slice(0, mapPathUsed.lastIndexOf("/") + 1);
-    const sidecar = own !== DEFAULT_MAP ? await loadJSON(own.replace(/\.\w+$/, "") + ".zones.json", signal, true) : null;
+    const sidecarPath = own.replace(/\.\w+$/, "") + ".zones.json";
+    const sidecar = own !== DEFAULT_MAP && !OWN_MAPS.test(room) ? await loadJSON(sidecarPath, signal, true) : null;
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
     const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
     const zones2 = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
@@ -4021,6 +4026,16 @@
       }
       return found;
     };
+    const sheet = async (abs) => {
+      try {
+        return await image(abs);
+      } catch (err) {
+        const at = abs.lastIndexOf("/");
+        const plain = at >= 0 ? abs.slice(at + 1) : abs;
+        if (!plain || abs === base + plain) throw err;
+        return image(base + plain);
+      }
+    };
     const tilesets = [];
     for (const raw of Array.isArray(map.tilesets) ? map.tilesets : []) {
       if (raw && raw.source) {
@@ -4029,19 +4044,29 @@
         const body = await loadJSON(path, signal, true);
         if (body && typeof body === "object") {
           const here = path.slice(0, path.lastIndexOf("/") + 1);
-          const pic = typeof body.image === "string" ? body.image : "";
-          const abs = !pic ? "" : pic.startsWith("/") ? pic : here + pic.replace(/^\.\//, "");
-          tilesets.push({ ...body, firstgid: raw.firstgid, image: abs });
+          const pic2 = typeof body.image === "string" ? body.image : "";
+          const abs2 = !pic2 ? "" : pic2.startsWith("/") ? pic2 : here + pic2.replace(/^\.\//, "");
+          tilesets.push({ ...body, firstgid: raw.firstgid, image: abs2 });
         }
         continue;
       }
-      tilesets.push(raw);
+      const pic = raw && typeof raw.image === "string" ? raw.image : "";
+      const abs = !pic || pic.startsWith("/") ? pic : roomBase + pic.replace(/^\.\//, "");
+      tilesets.push(raw && typeof raw === "object" ? { ...raw, image: abs } : raw);
     }
     const sets = [];
+    const lost = [];
     for (const raw of tilesets) {
       if (!raw || !raw.image) continue;
       const firstgid = Math.floor(Number(raw.firstgid));
       if (!Number.isSafeInteger(firstgid) || firstgid < 1) continue;
+      let pic;
+      try {
+        pic = await sheet(String(raw.image));
+      } catch {
+        lost.push(String(raw.image));
+        continue;
+      }
       sets.push({
         firstgid,
         columns: Math.max(1, Math.floor(Number(raw.columns)) || 1),
@@ -4049,11 +4074,10 @@
         tileHeight: Math.max(1, Math.floor(Number(raw.tileheight)) || th),
         margin: Math.max(0, Math.floor(Number(raw.margin)) || 0),
         spacing: Math.max(0, Math.floor(Number(raw.spacing)) || 0),
-        // A tileset image is a path beside its own file, so an external file
-        // keeps the folder it came from.
-        image: await image(raw.image ? String(raw.image) : "")
+        image: pic
       });
     }
+    if (lost.length) console.warn("tileset image missing: " + lost.join(", "));
     const atlas = await atlasFrames(signal);
     let atlasImage = null;
     if (atlas && atlas.frames.size) {
