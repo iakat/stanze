@@ -265,6 +265,41 @@ func TestRelayMintedOnRequestOnlyOnce(t *testing.T) {
 	}
 }
 
+// A mint that fails must not spend the connection's one credential: the peer
+// asks again and gets a real one. Setting the mark before the mint answered
+// relay-exhausted to every later ask, for the life of the socket.
+func TestRelayMintFailureDoesNotSpendTheCredential(t *testing.T) {
+	cfg := &Config{Turn: true, TurnSecret: "s3cret", TurnPublicIP: "203.0.113.7",
+		TurnPort: 3478, TurnMinPort: 49200, TurnMaxPort: 49300, TurnRealm: "stanze",
+		TurnTTL: 10 * time.Minute}
+	srv, url := newTestServer(t, cfg)
+	fail := true
+	srv.mint = func(tag string) []iceServer {
+		if fail {
+			return nil
+		}
+		return []iceServer{{URLs: []string{"turn:203.0.113.7:3478?transport=udp"}, Username: tag, Credential: "x"}}
+	}
+
+	a, _ := wireJoin(t, url, "mint-room")
+	b, _ := wireJoin(t, url, "mint-room")
+	a.next("peer-joined", 2*time.Second)
+
+	// The first ask fails: the page is told there is no relay now, not that
+	// its credential is spent.
+	a.send(map[string]any{"t": "ice", "to": b.self})
+	if m, ok := a.next("error", 2*time.Second); !ok || m["code"] != "relay-off" {
+		t.Fatalf("a failed mint was not reported as relay-off: %v", m)
+	}
+
+	// The second ask, now that the mint works, is answered.
+	fail = false
+	a.send(map[string]any{"t": "ice", "to": b.self})
+	if m, ok := a.next("ice", 2*time.Second); !ok || m["ice"] == nil {
+		t.Fatalf("the connection never got its credential after a failed mint: %v", m)
+	}
+}
+
 // ---------------------------------------------------------------- R6
 
 // The room cap keeps a margin: a flood of one-socket rooms is refused before
