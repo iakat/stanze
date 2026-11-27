@@ -97,7 +97,13 @@ type Hub struct {
 	lastWarn  time.Time // when the headroom warning last reached the log
 	warnEvery time.Duration
 	log       func(roomCount, cap int) // nil in tests; the server installs one
+	// sweepWg counts the sweeper goroutine, so a shutdown waits for it before
+	// it closes the sockets.
+	sweepWg sync.WaitGroup
 }
+
+// waitSweeper blocks until a stopped sweeper has returned.
+func (h *Hub) waitSweeper() { h.sweepWg.Wait() }
 
 func newHub(cfg *Config) *Hub {
 	now := time.Now()
@@ -233,6 +239,8 @@ func (h *Hub) sweepIdle(now time.Time) int {
 
 // runSweeper sweeps until stop is closed.
 func (h *Hub) runSweeper(stop <-chan struct{}) {
+	h.sweepWg.Add(1)
+	defer h.sweepWg.Done()
 	t := time.NewTicker(roomSweepEvery)
 	defer t.Stop()
 	for {
@@ -261,9 +269,11 @@ func (h *Hub) leave(p *Peer) *Room {
 		if h.rooms[room.id] == room {
 			delete(h.rooms, room.id)
 		}
+		p.leaveRoom = room.id
 		p.room = nil
 		return nil
 	}
+	p.leaveRoom = room.id
 	p.room = nil
 	return room
 }

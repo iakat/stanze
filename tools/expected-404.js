@@ -29,7 +29,9 @@ function expectedMiss(msg) {
   if (!at || !at.url) return false;
   if (EXPECTED.some((path) => at.url.endsWith(path))) return true;
   if (ZONES.test(at.url.split('?')[0])) return true;
-  return at.url.indexOf('/world/maps/') >= 0 && at.url.indexOf('/tilesets/') < 0;
+  // No wildcard over /world/maps/: a script or worker error that happens to be
+  // located under a map URL is a real fault, and it used to be swallowed.
+  return false;
 }
 
 module.exports = { expectedMiss };
