@@ -479,7 +479,9 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   }
 
   // The collides property is declared on a tileset tile, as a property or as
-  // the newer class of the same name.
+  // the newer class of the same name. Tiled renamed class to tileclass (and
+  // objectclass for objects) in 1.9, so both spellings are read: a map saved
+  // by an older Tiled says class and one saved by a newer says tileclass.
   const flags = new Set<number>();
   for (const set of tilesets) {
     const firstgid = Math.floor(Number(set && set.firstgid)) || 1;
@@ -488,6 +490,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       const props = Array.isArray(tile.properties) ? tile.properties : [];
       const hit =
         tile.class === 'collides' ||
+        tile.tileclass === 'collides' ||
         props.some((p) => p && p.name === 'collides' && (p.value === true || p.value === 'true'));
       if (hit) flags.add(firstgid + Math.floor(Number(tile.id) || 0));
     }
