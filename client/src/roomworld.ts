@@ -9,7 +9,7 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { load, store } from './prefs.js';
-import { CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } from './world.js';
+import { Above, CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } from './world.js';
 import { Guest, Proximity } from './proximity.js';
 import { ZoneGrid, ZoneWatch } from './zones.js';
 import {
@@ -424,6 +424,26 @@ export function worldAvatars(): {
   }));
 }
 
+// aboveFilled counts the map rows that the overhead paint puts pixels in: a
+// map with the above layers of an office has some, and the browser test uses
+// the count to prove the depth bands were cut.
+function aboveFilled(above: Above): number {
+  const ctx = above.rows.getContext('2d');
+  if (!ctx) return 0;
+  let filled = 0;
+  const rows = Math.max(1, Math.round(above.heightPx / above.band));
+  for (let r = 0; r < rows; r++) {
+    const d = ctx.getImageData(0, r * above.band, above.rows.width, above.band).data;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i]) {
+        filled++;
+        break;
+      }
+    }
+  }
+  return filled;
+}
+
 // worldHook is the object the browser test drives. It never changes what the
 // world does: it reads and it walks.
 export function worldHook() {
@@ -447,6 +467,11 @@ export function worldHook() {
         heightPx: world.heightPx,
         zones: world.zones.length,
         avatars: view.avatars.size,
+        // aboveRows counts the map rows the overhead paint fills, and
+        // aboveBand is the height of one of them:
+        // the browser test reads them to prove the depth bands exist.
+        aboveRows: world.above ? aboveFilled(world.above) : 0,
+        aboveBand: world.above ? world.above.band : 0,
       };
     },
     // step is one position tick by hand: the place was set, this makes the

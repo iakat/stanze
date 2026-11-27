@@ -974,9 +974,12 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
    argument of its own. A map in front keeps the column; the list beside it
    still takes the width it freed. */
 .room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) #grid { display: none; }
-.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) .side { flex: 1 1 auto; }
-.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) #grid:has(#world-view:not([hidden])) { display: flex; }
-.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]):has(#grid:has(#world-view:not([hidden]))) .side { flex: 0 0 290px; }
+/* The column keeps the width of .side itself, in the call grid and in the
+   world alike: a stretched column is the one thing that made the list beside
+   the map differ from the list beside the pictures. The stage takes the room
+   that the pictures freed, and the column takes none. */
+.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) .side { flex: 0 0 auto; }
+.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) #grid:has(#world-view:not([hidden])) { display: flex; flex: 1 1 auto; }
 /* The own picture as a small preview in the corner of the stage. The node is
    moved, never copied, so the preview keeps the own stream and its mirror. */
 .self-pip {

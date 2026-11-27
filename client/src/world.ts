@@ -56,7 +56,33 @@ export type World = {
   zoneAt(x: number, y: number): Zone[];
   startPoint(): { x: number; y: number };
   images: Map<string, HTMLImageElement>;
+  // above is the overhead paint of the map, cut into one band per map row: a
+  // guest is drawn between the band of the row it stands in and the band
+  // below it. A map with no overhead layer holds null and costs nothing.
+  above: Above | null;
 };
+
+// Above is the overhead paint, cut into one band per map row. The band of a
+// row is drawn only when a guest's foot line has already left that row, so a
+// plant covers the guest behind it and never the guest standing in front.
+export type Above = {
+  rows: HTMLCanvasElement;
+  band: number;
+  heightPx: number;
+  // row is the band index of a foot line.
+  row(x: number, y: number): number;
+};
+
+// OVERHEAD names a layer that is drawn over a guest: WorkAdventure's own
+// convention is a group or a layer whose name says above or overhead, or a
+// layer whose property above says true. A map that names none of them draws
+// every guest on top, as before.
+export function isOverhead(layer: any): boolean {
+  if (!layer || (layer.type !== 'tilelayer' && layer.type !== 'group')) return false;
+  const props = Array.isArray(layer.properties) ? layer.properties : [];
+  if (props.some((p: any) => p && p.name === 'above' && (p.value === true || p.value === 'true'))) return true;
+  return /above|overhead/i.test(String(layer.name || ''));
+}
 
 type TileSet = {
   firstgid: number;
@@ -724,6 +750,33 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     paint(fctx, layer, data);
   }
 
+  // The overhead paint, cut once into a band per map row, so the view can put a
+  // guest between the rows above its feet and the rows below them. The map is
+  // still painted whole above (a hidden row must not leave a hole in the
+  // floor), so this is a second canvas and costs nothing when no layer is
+  // named above.
+  const over = tiles.filter((layer) => layer.visible !== false && isOverhead(layer));
+  let above: Above | null = null;
+  if (over.length) {
+    const rows = document.createElement('canvas');
+    rows.width = px;
+    rows.height = py;
+    const actx = rows.getContext('2d');
+    if (actx) {
+      actx.imageSmoothingEnabled = false;
+      for (const layer of over) paint(actx, layer, await layerData(layer));
+      above = {
+        rows,
+        band: th,
+        heightPx: py,
+        row(x: number, y: number) {
+          if (!Number.isFinite(y)) return 0;
+          return Math.max(0, Math.min(height - 1, Math.floor(y / th)));
+        },
+      };
+    }
+  }
+
   const grid = new ZoneGrid(zones);
   return {
     room,
@@ -741,6 +794,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       return spawn(startRect, blocked, width, height, tw, th);
     },
     images,
+    above,
   };
 }
 
@@ -1180,10 +1234,33 @@ export class WorldView {
       ctx.drawImage(this.world.tiles, x0, y0, x1 - x0, y1 - y0, x0 * this.scale - this.camX, y0 * this.scale - this.camY, (x1 - x0) * this.scale, (y1 - y0) * this.scale);
     }
     ctx.setTransform(this.scale, 0, 0, this.scale, -this.camX, -this.camY);
+    // The sort is by foot line, and the overhead paint goes between the guests:
+    // the band of a map row is drawn before the first guest whose foot line has
+    // left that row, so a plant covers the guest behind it and never the guest
+    // standing in front of it. With no overhead layer one plain loop runs.
+    const at = (one: Avatar) => one.y + AVATAR_SORT_OFFSET;
     const list = [...this.avatars.values()]
       .filter((one) => one.x + CHAR_W >= view.x0 && one.x - CHAR_W <= view.x1 && one.y >= view.y0 && one.y - CHAR_H <= view.y1)
-      .sort((a, b) => a.y + AVATAR_SORT_OFFSET - (b.y + AVATAR_SORT_OFFSET) || (a.id < b.id ? -1 : 1));
-    for (const one of list) this.drawAvatar(one);
+      .sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1));
+    const above = this.world.above;
+    if (!above) {
+      for (const one of list) this.drawAvatar(one);
+    } else {
+      const w = this.world.widthPx;
+      let band = 0;
+      const flush = (row: number) => {
+        while (band < row) {
+          const y = band * above.band;
+          ctx.drawImage(above.rows, 0, y, w, above.band, 0, y, w, above.band);
+          band++;
+        }
+      };
+      for (const one of list) {
+        flush(above.row(one.x, one.y));
+        this.drawAvatar(one);
+      }
+      flush(above.row(0, above.heightPx));
+    }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.frames++;
   }

@@ -3711,6 +3711,12 @@
   var BODY_H = 16;
   var BODY_BASE = 2;
   var DIR = ["down", "left", "right", "up"];
+  function isOverhead(layer) {
+    if (!layer || layer.type !== "tilelayer" && layer.type !== "group") return false;
+    const props = Array.isArray(layer.properties) ? layer.properties : [];
+    if (props.some((p) => p && p.name === "above" && (p.value === true || p.value === "true"))) return true;
+    return /above|overhead/i.test(String(layer.name || ""));
+  }
   function loadImage(src, signal) {
     return new Promise((resolve, reject) => {
       const image = new Image();
@@ -4154,6 +4160,27 @@
       if (layer.visible === false) continue;
       paint(fctx, layer, data);
     }
+    const over = tiles.filter((layer) => layer.visible !== false && isOverhead(layer));
+    let above = null;
+    if (over.length) {
+      const rows = document.createElement("canvas");
+      rows.width = px;
+      rows.height = py;
+      const actx = rows.getContext("2d");
+      if (actx) {
+        actx.imageSmoothingEnabled = false;
+        for (const layer of over) paint(actx, layer, await layerData(layer));
+        above = {
+          rows,
+          band: th,
+          heightPx: py,
+          row(x, y) {
+            if (!Number.isFinite(y)) return 0;
+            return Math.max(0, Math.min(height - 1, Math.floor(y / th)));
+          }
+        };
+      }
+    }
     const grid = new ZoneGrid(zones2);
     return {
       room,
@@ -4170,7 +4197,8 @@
       startPoint() {
         return spawn(startRect, blocked, width, height, tw, th);
       },
-      images
+      images,
+      above
     };
   }
   function bodyBlocked(blocked, width, height, tileW, tileH, x, y) {
@@ -4517,8 +4545,27 @@
         ctx.drawImage(this.world.tiles, x0, y0, x1 - x0, y1 - y0, x0 * this.scale - this.camX, y0 * this.scale - this.camY, (x1 - x0) * this.scale, (y1 - y0) * this.scale);
       }
       ctx.setTransform(this.scale, 0, 0, this.scale, -this.camX, -this.camY);
-      const list = [...this.avatars.values()].filter((one) => one.x + CHAR_W >= view2.x0 && one.x - CHAR_W <= view2.x1 && one.y >= view2.y0 && one.y - CHAR_H <= view2.y1).sort((a, b) => a.y + AVATAR_SORT_OFFSET - (b.y + AVATAR_SORT_OFFSET) || (a.id < b.id ? -1 : 1));
-      for (const one of list) this.drawAvatar(one);
+      const at = (one) => one.y + AVATAR_SORT_OFFSET;
+      const list = [...this.avatars.values()].filter((one) => one.x + CHAR_W >= view2.x0 && one.x - CHAR_W <= view2.x1 && one.y >= view2.y0 && one.y - CHAR_H <= view2.y1).sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1));
+      const above = this.world.above;
+      if (!above) {
+        for (const one of list) this.drawAvatar(one);
+      } else {
+        const w = this.world.widthPx;
+        let band = 0;
+        const flush = (row) => {
+          while (band < row) {
+            const y = band * above.band;
+            ctx.drawImage(above.rows, 0, y, w, above.band, 0, y, w, above.band);
+            band++;
+          }
+        };
+        for (const one of list) {
+          flush(above.row(one.x, one.y));
+          this.drawAvatar(one);
+        }
+        flush(above.row(0, above.heightPx));
+      }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       this.frames++;
     }
@@ -4912,6 +4959,22 @@
     if (view) view.avatars.delete(peerId);
     posForget(peerId);
   }
+  function aboveFilled(above) {
+    const ctx = above.rows.getContext("2d");
+    if (!ctx) return 0;
+    let filled = 0;
+    const rows = Math.max(1, Math.round(above.heightPx / above.band));
+    for (let r = 0; r < rows; r++) {
+      const d = ctx.getImageData(0, r * above.band, above.rows.width, above.band).data;
+      for (let i = 3; i < d.length; i += 4) {
+        if (d[i]) {
+          filled++;
+          break;
+        }
+      }
+    }
+    return filled;
+  }
   function worldHook() {
     return {
       stats: () => ({ ...worldStats, frames: view ? view.frames : 0 }),
@@ -4929,7 +4992,12 @@
           widthPx: world.widthPx,
           heightPx: world.heightPx,
           zones: world.zones.length,
-          avatars: view.avatars.size
+          avatars: view.avatars.size,
+          // aboveRows counts the map rows the overhead paint fills, and
+          // aboveBand is the height of one of them:
+          // the browser test reads them to prove the depth bands exist.
+          aboveRows: world.above ? aboveFilled(world.above) : 0,
+          aboveBand: world.above ? world.above.band : 0
         };
       },
       // step is one position tick by hand: the place was set, this makes the

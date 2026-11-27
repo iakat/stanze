@@ -198,6 +198,24 @@ async function pairIds(a) {
     );
     check('the map is painted', frames === true, frames);
 
+    // ---- a guest is drawn between the overhead rows
+    // The above layers of an office map are the plants and the wall tops, and
+    // they must cover only whoever stands behind their foot line. The whole
+    // overhead map over every guest failed this: a guest in front of a plant
+    // was painted over by it.
+    const depth = await a.page.evaluate(() => {
+      const hook = window.e2eApp && window.e2eApp.world;
+      if (!hook) return 'no world hook on the page';
+      const map = hook.map();
+      if (!map) return 'no map on the page';
+      return { rows: map.aboveRows, band: map.aboveBand };
+    });
+    check(
+      'the overhead rows are filled',
+      depth && typeof depth === 'object' && depth.rows > 1 && depth.band > 1,
+      depth,
+    );
+
     check('no page error in a', a.errors.length === 0, a.errors.slice(0, 4));
     check('no page error in b', b.errors.length === 0, b.errors.slice(0, 4));
     if (OUT) {
