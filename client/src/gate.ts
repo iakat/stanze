@@ -553,7 +553,7 @@ export function sealedOnState(peer, obj) {
     peer.hand = !!obj.hand;
     peer.handTs = peer.hand ? clamp(Number(obj.ts) || 0, 0, Date.now()) : 0;
     if (peer.hand !== was) {
-      playSfx(peer.hand ? 'pop' : 'bonk');
+      playSfx(peer.hand ? 'raisehand' : 'left');
       // A hand that goes up on a phone brings the frame back, or nobody would
       // see the queue on a screen that shows only the picture.
       if (peer.hand) setChrome(true);

@@ -9,14 +9,14 @@ import { ensureSfx, playSfx, stopSfx } from './sfx.js';
 
 // The order is the order of the buttons and of the number keys.
 const CUES = [
-  { name: 'discord', label: 'discord' },
-  { name: 'knock2', label: 'knock' },
-  { name: 'imsg-out', label: 'imessage out' },
-  { name: 'imsg-in', label: 'imessage in' },
-  { name: 'signal-call', label: 'signal call' },
-  { name: 'tg-call', label: 'telegram call' },
-  { name: 'ios', label: 'ios' },
-  { name: 'vineboom', label: 'boom' },
+  { name: 'joined', label: 'joined' },
+  { name: 'left', label: 'left' },
+  { name: 'knock', label: 'knock' },
+  { name: 'raisehand', label: 'raise hand' },
+  { name: 'msg', label: 'message' },
+  { name: 'unmuted', label: 'mic on' },
+  { name: 'muted', label: 'mic off' },
+  { name: 'lost', label: 'lost' },
 ];
 
 // How loud a cue is against the page's own cues; the slider moves this.

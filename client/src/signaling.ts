@@ -163,7 +163,7 @@ export function handle(msg) {
       paintWaiting();
       paintHandQueue();
       sealedSendPub(peer);
-      playSfx('pop');
+      playSfx('joined');
       break;
     }
     case 'peer-left': {
@@ -172,7 +172,7 @@ export function handle(msg) {
       resealOnLeave(msg.from);
       markAdmins();
       paintWaiting();
-      playSfx('bonk');
+      playSfx('left');
       break;
     }
     case 'enc': {

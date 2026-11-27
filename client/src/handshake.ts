@@ -10,6 +10,7 @@ import { disableMic, preparePeer } from './devices.js';
 import { sealedSendState, setHand } from './audio.js';
 import { connectPeer, ensurePeer, onCandidate, onDescription } from './peers.js';
 import { addChatLine } from './chat.js';
+import { playSfx } from './sfx.js';
 import { fileDropPeer, fileOnMessage } from './files.js';
 import {
   b64d,
@@ -813,6 +814,8 @@ function sealedDispatchApp(peer, obj) {
     return;
   } else if (obj.k === 'chat') {
     state.chatRecv++;
+    // The one cue the room had no sound for: a line from another guest.
+    playSfx('msg');
     addChatLine(peerName(peer), String(obj.x || ''), Date.now());
   } else if (obj.k === 'asr') {
     if (!peer.waiting) asrOnMessage(peer, obj);

@@ -5716,6 +5716,137 @@
     state.fileCancelled = 0;
   }
 
+  // src/sfx.ts
+  var SFX_NAMES = ["joined", "left", "knock", "raisehand", "msg", "unmuted", "muted", "timp", "hammer", "lost"];
+  var SFX_RATE = 0.35;
+  var LOST_RATE = 0.2;
+  var LOST_LOOP_START = 0.16;
+  var LOST_LOOP_END = 8.16;
+  var sfxCache = /* @__PURE__ */ new Map();
+  var sfxExt = "";
+  function pickSfxExt() {
+    if (sfxExt) return sfxExt;
+    const probe = document.createElement("audio");
+    const tries = [
+      ["ogg", "audio/ogg; codecs=opus"],
+      ["webm", "audio/webm; codecs=opus"],
+      ["mp3", "audio/mpeg"]
+    ];
+    for (const [ext, type] of tries) {
+      if (probe.canPlayType && probe.canPlayType(type)) {
+        sfxExt = ext;
+        return ext;
+      }
+    }
+    sfxExt = "webm";
+    return sfxExt;
+  }
+  function ensureSfx() {
+    if (!state.sfxCtx) state.sfxCtx = newAudioCtx();
+  }
+  function preloadSfx() {
+    ensureSfx();
+    const ctx = state.sfxCtx;
+    if (!ctx) return;
+    const ext = pickSfxExt();
+    for (const name of SFX_NAMES) {
+      if (sfxCache.has(name)) continue;
+      fetch(`sfx/${name}.${ext}`).then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)).then((buffer) => {
+        sfxCache.set(name, buffer);
+        if (name === "lost" && state.lostWanted) startLost();
+      }).catch(() => {
+      });
+    }
+  }
+  function playSfx(name, rate2 = 1) {
+    if (!state.sounds) return;
+    if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
+    const ctx = state.sfxCtx;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {
+    });
+    const buffer = sfxCache.get(name);
+    if (!buffer) {
+      return;
+    }
+    stopSfx();
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      const gain = ctx.createGain();
+      gain.gain.value = SFX_RATE * Math.max(0, Math.min(1, rate2));
+      src.connect(gain);
+      gain.connect(ctx.destination);
+      src.onended = () => {
+        if (state.sfxSource === src) state.sfxSource = null;
+      };
+      state.sfxSource = src;
+      src.start();
+    } catch {
+    }
+  }
+  function stopSfx() {
+    if (!state.sfxSource) return;
+    stopQuietly(state.sfxSource);
+    state.sfxSource = null;
+  }
+  function startLost() {
+    state.lostWanted = true;
+    if (!state.sounds) return;
+    if (state.lostSource) return;
+    const ctx = state.sfxCtx;
+    const buffer = sfxCache.get("lost");
+    if (!ctx || !buffer) return;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {
+    });
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      if (buffer.duration >= LOST_LOOP_END) {
+        src.loopStart = LOST_LOOP_START;
+        src.loopEnd = LOST_LOOP_END;
+      }
+      const gain = ctx.createGain();
+      gain.gain.value = LOST_RATE;
+      src.connect(gain);
+      gain.connect(ctx.destination);
+      src.start();
+      state.lostSource = src;
+      state.lostGain = gain;
+    } catch {
+      state.lostSource = null;
+      state.lostGain = null;
+    }
+  }
+  function setSounds(on) {
+    state.sounds = on;
+    const box = $("sounds");
+    if (box) box.checked = on;
+    if (!on) {
+      if (state.sfxSource) {
+        stopQuietly(state.sfxSource);
+        state.sfxSource = null;
+      }
+      const wanted = state.lostWanted;
+      stopLost();
+      state.lostWanted = wanted;
+    } else if (state.lostWanted) {
+      startLost();
+    }
+  }
+  function stopLost() {
+    state.lostWanted = false;
+    const src = state.lostSource;
+    state.lostSource = null;
+    if (state.lostGain) {
+      disconnectQuietly(state.lostGain);
+      state.lostGain = null;
+    }
+    if (!src) return;
+    stopQuietly(src);
+    disconnectQuietly(src);
+  }
+
   // src/asr.ts
   var ASR_MODELS = "/vosk/models";
   var ASR_LIB = "/vosk/vosk.js";
@@ -7269,6 +7400,7 @@
       return;
     } else if (obj.k === "chat") {
       state.chatRecv++;
+      playSfx("msg");
       addChatLine(peerName(peer), String(obj.x || ""), Date.now());
     } else if (obj.k === "asr") {
       if (!peer.waiting) asrOnMessage(peer, obj);
@@ -8366,151 +8498,6 @@
     updateButtons();
   }
 
-  // src/sfx.ts
-  var SFX_NAMES = [
-    "pop",
-    "bonk",
-    "timp",
-    "hammer",
-    "lost",
-    "discord",
-    "knock2",
-    "imsg-out",
-    "imsg-in",
-    "signal-call",
-    "tg-call",
-    "ios",
-    "vineboom"
-  ];
-  var SFX_RATE = 0.35;
-  var LOST_RATE = 0.2;
-  var LOST_LOOP_START = 0.16;
-  var LOST_LOOP_END = 8.16;
-  var sfxCache = /* @__PURE__ */ new Map();
-  var sfxExt = "";
-  function pickSfxExt() {
-    if (sfxExt) return sfxExt;
-    const probe = document.createElement("audio");
-    const tries = [
-      ["ogg", "audio/ogg; codecs=opus"],
-      ["webm", "audio/webm; codecs=opus"],
-      ["mp3", "audio/mpeg"]
-    ];
-    for (const [ext, type] of tries) {
-      if (probe.canPlayType && probe.canPlayType(type)) {
-        sfxExt = ext;
-        return ext;
-      }
-    }
-    sfxExt = "webm";
-    return sfxExt;
-  }
-  function ensureSfx() {
-    if (!state.sfxCtx) state.sfxCtx = newAudioCtx();
-  }
-  function preloadSfx() {
-    ensureSfx();
-    const ctx = state.sfxCtx;
-    if (!ctx) return;
-    const ext = pickSfxExt();
-    for (const name of SFX_NAMES) {
-      if (sfxCache.has(name)) continue;
-      fetch(`sfx/${name}.${ext}`).then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)).then((buffer) => {
-        sfxCache.set(name, buffer);
-        if (name === "lost" && state.lostWanted) startLost();
-      }).catch(() => {
-      });
-    }
-  }
-  function playSfx(name, rate2 = 1) {
-    if (!state.sounds) return;
-    if (!state.sfxCtx || !SFX_NAMES.includes(name)) return;
-    const ctx = state.sfxCtx;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {
-    });
-    const buffer = sfxCache.get(name);
-    if (!buffer) {
-      return;
-    }
-    stopSfx();
-    try {
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      const gain = ctx.createGain();
-      gain.gain.value = SFX_RATE * Math.max(0, Math.min(1, rate2));
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      src.onended = () => {
-        if (state.sfxSource === src) state.sfxSource = null;
-      };
-      state.sfxSource = src;
-      src.start();
-    } catch {
-    }
-  }
-  function stopSfx() {
-    if (!state.sfxSource) return;
-    stopQuietly(state.sfxSource);
-    state.sfxSource = null;
-  }
-  function startLost() {
-    state.lostWanted = true;
-    if (!state.sounds) return;
-    if (state.lostSource) return;
-    const ctx = state.sfxCtx;
-    const buffer = sfxCache.get("lost");
-    if (!ctx || !buffer) return;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {
-    });
-    try {
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      src.loop = true;
-      if (buffer.duration >= LOST_LOOP_END) {
-        src.loopStart = LOST_LOOP_START;
-        src.loopEnd = LOST_LOOP_END;
-      }
-      const gain = ctx.createGain();
-      gain.gain.value = LOST_RATE;
-      src.connect(gain);
-      gain.connect(ctx.destination);
-      src.start();
-      state.lostSource = src;
-      state.lostGain = gain;
-    } catch {
-      state.lostSource = null;
-      state.lostGain = null;
-    }
-  }
-  function setSounds(on) {
-    state.sounds = on;
-    const box = $("sounds");
-    if (box) box.checked = on;
-    if (!on) {
-      if (state.sfxSource) {
-        stopQuietly(state.sfxSource);
-        state.sfxSource = null;
-      }
-      const wanted = state.lostWanted;
-      stopLost();
-      state.lostWanted = wanted;
-    } else if (state.lostWanted) {
-      startLost();
-    }
-  }
-  function stopLost() {
-    state.lostWanted = false;
-    const src = state.lostSource;
-    state.lostSource = null;
-    if (state.lostGain) {
-      disconnectQuietly(state.lostGain);
-      state.lostGain = null;
-    }
-    if (!src) return;
-    stopQuietly(src);
-    disconnectQuietly(src);
-  }
-
   // src/devices.ts
   var DEVICE_NOUN = { video: "camera", audio: "microphone" };
   function devicePickers(kind) {
@@ -9076,14 +9063,14 @@
     if (!state.micTrack && !await openInput("audio")) return;
     state.mic = true;
     store("mic", 1);
-    playSfx("timp");
+    playSfx("unmuted");
     if (state.micGain) state.micGain.gain.value = 1;
     if (state.micTrack) state.micTrack.enabled = true;
     updateButtons();
     sendState();
   }
   function disableMic(persist = true) {
-    playSfx("hammer");
+    playSfx("muted");
     state.mic = false;
     if (persist) store("mic", 0);
     if (state.micGain) state.micGain.gain.value = 0;
@@ -9891,7 +9878,7 @@
       }
       sendState();
       paintWaiting();
-      playSfx("pop");
+      playSfx("joined");
       return;
     }
     const peer = state.peers.get(id);
@@ -10452,7 +10439,7 @@
         paintWaiting();
         paintHandQueue();
         sealedSendPub(peer);
-        playSfx("pop");
+        playSfx("joined");
         break;
       }
       case "peer-left": {
@@ -10461,7 +10448,7 @@
         resealOnLeave(msg.from);
         markAdmins();
         paintWaiting();
-        playSfx("bonk");
+        playSfx("left");
         break;
       }
       case "enc": {
@@ -12047,7 +12034,7 @@
       peer.hand = !!obj.hand;
       peer.handTs = peer.hand ? clamp(Number(obj.ts) || 0, 0, Date.now()) : 0;
       if (peer.hand !== was) {
-        playSfx(peer.hand ? "pop" : "bonk");
+        playSfx(peer.hand ? "raisehand" : "left");
         if (peer.hand) setChrome(true);
       }
     }
@@ -12259,14 +12246,14 @@
 
   // src/board.ts
   var CUES = [
-    { name: "discord", label: "discord" },
-    { name: "knock2", label: "knock" },
-    { name: "imsg-out", label: "imessage out" },
-    { name: "imsg-in", label: "imessage in" },
-    { name: "signal-call", label: "signal call" },
-    { name: "tg-call", label: "telegram call" },
-    { name: "ios", label: "ios" },
-    { name: "vineboom", label: "boom" }
+    { name: "joined", label: "joined" },
+    { name: "left", label: "left" },
+    { name: "knock", label: "knock" },
+    { name: "raisehand", label: "raise hand" },
+    { name: "msg", label: "message" },
+    { name: "unmuted", label: "mic on" },
+    { name: "muted", label: "mic off" },
+    { name: "lost", label: "lost" }
   ];
   var rate = 0.8;
   function boardOpen() {

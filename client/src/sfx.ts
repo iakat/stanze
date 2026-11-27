@@ -8,24 +8,16 @@ import { disconnectQuietly, stopQuietly } from './util.js';
 import { newAudioCtx } from './audio.js';
 
 // ---------------------------------------------------------------- sound effects
-// Thirteen one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus
-// a lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3
+// The one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
+// lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3
 // copy last for a browser that can not decode either.
-const SFX_NAMES = [
-  'pop',
-  'bonk',
-  'timp',
-  'hammer',
-  'lost',
-  'discord',
-  'knock2',
-  'imsg-out',
-  'imsg-in',
-  'signal-call',
-  'tg-call',
-  'ios',
-  'vineboom',
-];
+//
+// Seven of them are the Jitsi Meet cues, so a room sounds like the one a guest
+// knows: joining and leaving, a knock at the lobby, a hand going up, a chat
+// line, and a microphone that turns on or off. The Jitsi files carry no sound
+// for a connection that drops, so the pad and the two device cues below stay
+// this page's own.
+const SFX_NAMES = ['joined', 'left', 'knock', 'raisehand', 'msg', 'unmuted', 'muted', 'timp', 'hammer', 'lost'];
 
 const SFX_RATE = 0.35;
 

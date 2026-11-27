@@ -19,9 +19,9 @@ func TestSfxFolderIsRouted(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sfx/ios.ogg", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sfx/msg.ogg", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("/sfx/ios.ogg = %d, want 200", rec.Code)
+		t.Fatalf("/sfx/msg.ogg = %d, want 200", rec.Code)
 	}
 	if got := rec.Header().Get("Content-Type"); got != "audio/ogg" {
 		t.Fatalf("cue type = %q, want audio/ogg", got)

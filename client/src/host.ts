@@ -188,7 +188,7 @@ export function admitPeer(id) {
     // The flags were held back too; every pair gets them now.
     sendState();
     paintWaiting();
-    playSfx('pop');
+    playSfx('joined');
     return;
   }
   const peer = state.peers.get(id);

@@ -514,12 +514,19 @@ func assetNames() []string {
 		// derivation of the room key, and the WebAssembly build of the key
 		// agreement. The old e2e page is gone.
 		"e2e-transform.js", "wasm-derive.js", "wasm_exec.js", "pq.wasm",
-		// The four cues are Opus for size; the mp3 stays as a fallback.
-		"sfx/pop.webm", "sfx/bonk.webm", "sfx/timp.webm", "sfx/hammer.webm",
-		"sfx/pop.ogg", "sfx/bonk.ogg", "sfx/timp.ogg", "sfx/hammer.ogg",
-		"sfx/pop.mp3", "sfx/bonk.mp3", "sfx/timp.mp3", "sfx/hammer.mp3",
-		// The lost connection pad is a loop, encoded the same way.
-		"sfx/lost.webm", "sfx/lost.ogg", "sfx/lost.mp3",
+		// The cues are Opus for size; the mp3 stays as a fallback. The first
+		// seven are the Jitsi Meet sounds, the rest are this page's own.
+		"sfx/joined.webm", "sfx/joined.ogg", "sfx/joined.mp3",
+		"sfx/left.webm", "sfx/left.ogg", "sfx/left.mp3",
+		"sfx/knock.webm", "sfx/knock.ogg", "sfx/knock.mp3",
+		"sfx/raisehand.webm", "sfx/raisehand.ogg", "sfx/raisehand.mp3",
+		"sfx/msg.webm", "sfx/msg.ogg", "sfx/msg.mp3",
+		"sfx/unmuted.webm", "sfx/unmuted.ogg", "sfx/unmuted.mp3",
+		"sfx/muted.webm", "sfx/muted.ogg", "sfx/muted.mp3",
+		"sfx/timp.webm", "sfx/hammer.webm", "sfx/lost.webm",
+		"sfx/timp.ogg", "sfx/hammer.ogg", "sfx/lost.ogg",
+		"sfx/timp.mp3", "sfx/hammer.mp3", "sfx/lost.mp3",
+		"sfx-NOTICE.txt",
 	}
 }
 

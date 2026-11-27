@@ -752,7 +752,7 @@ export async function enableMic() {
   if (!state.micTrack && !(await openInput('audio'))) return;
   state.mic = true;
   store('mic', 1);
-  playSfx('timp');
+  playSfx('unmuted');
   if (state.micGain) state.micGain.gain.value = 1;
   if (state.micTrack) state.micTrack.enabled = true;
   updateButtons();
@@ -762,7 +762,7 @@ export async function enableMic() {
 // disableMic mutes the microphone. A mute the guest chose is remembered, a mute
 // the host forced is not, or the guest joins muted for ever after one request.
 export function disableMic(persist = true) {
-  playSfx('hammer');
+  playSfx('muted');
   state.mic = false;
   if (persist) store('mic', 0);
   if (state.micGain) state.micGain.gain.value = 0;
