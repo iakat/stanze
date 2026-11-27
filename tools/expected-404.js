@@ -15,6 +15,10 @@
 
 const EXPECTED = ['/vosk/models', '/omni/models'];
 
+// The zone sidecar is the authored zone list beside a map, and a map may be
+// authored without one: the object layer of the map then carries the zones.
+const ZONES = /\/world\/maps\/[^/]+\.zones\.json$/;
+
 function expectedMiss(msg) {
   let at = null;
   try {
@@ -24,6 +28,7 @@ function expectedMiss(msg) {
   }
   if (!at || !at.url) return false;
   if (EXPECTED.some((path) => at.url.endsWith(path))) return true;
+  if (ZONES.test(at.url.split('?')[0])) return true;
   return at.url.indexOf('/world/maps/') >= 0 && at.url.indexOf('/tilesets/') < 0;
 }
 

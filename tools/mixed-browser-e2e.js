@@ -66,9 +66,8 @@ function watch(page, tag, errors) {
   page.on('pageerror', (e) => errors.push(tag + ' pageerror: ' + (e && e.message ? e.message : e)));
   page.on('console', (m) => {
     if (m.type() !== 'error') return;
-    const t = m.text();
-    if (expectedMiss(t)) return;
-    errors.push(tag + ' console: ' + t);
+    if (expectedMiss(m)) return;
+    errors.push(tag + ' console: ' + m.text());
   });
 }
 
@@ -152,6 +151,7 @@ function watch(page, tag, errors) {
           if (ready.length >= 2) return list.length;
           return { list: list.map((p) => p.pc + '/' + p.ready) };
         },
+        null,
         90000,
         g.tag + ' sees two guests',
       );

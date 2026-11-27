@@ -219,6 +219,15 @@ jobs:
           for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
           node tools/wam-e2e.js; code=$?; kill $pid || true; exit $code
 
+      # Four guests in one room: six links, every pair agreed on by both ends,
+      # and the mesh still whole after all four mics open.
+      - name: quartet
+        env: {PW: /tmp/pw/node_modules/playwright-core, ROOMSBASE: "http://127.0.0.1:8095", OUTDIR: shots}
+        run: |
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 & pid=$!
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
+          node tools/quartet-e2e.js; code=$?; kill $pid || true; exit $code
+
   image:
     name: image
     runs-on: ubuntu-latest
