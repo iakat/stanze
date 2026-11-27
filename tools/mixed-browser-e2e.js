@@ -177,7 +177,7 @@ function watch(page, tag, errors) {
         const el = document.getElementById('stage-error');
         return el && !el.hidden ? el.textContent.trim() : '';
       });
-      check(g.tag + ' seals its media', !seal || !/cannot seal/i.test(seal), seal);
+      check(g.tag + ' seals its media', !(seal && /seal|transform|insertable/i.test(seal)), seal);
     }
     // The mic from each guest reaches the other two.
     for (const g of guests) {
