@@ -395,13 +395,112 @@
     }
   }
 
+  // src/chat.ts
+  var CHAT_MAX = 200;
+  function chatTime(ts = null) {
+    const d = ts ? new Date(ts) : /* @__PURE__ */ new Date();
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  var LINK_RE = /https?:\/\/[^\s<>"']+/gi;
+  function splitLink(raw) {
+    let url = raw;
+    let tail = "";
+    for (; ; ) {
+      const last = url[url.length - 1];
+      if (!last) break;
+      let cut = `.,;:!?'"`.includes(last);
+      if (!cut && (last === ")" || last === "]" || last === "}")) {
+        const open = { ")": "(", "]": "[", "}": "{" }[last];
+        cut = url.split(last).length > url.split(open).length;
+      }
+      if (!cut) break;
+      tail = last + tail;
+      url = url.slice(0, -1);
+    }
+    return { url, tail };
+  }
+  function safeLink(text) {
+    let u;
+    try {
+      u = new URL(text);
+    } catch {
+      return null;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (!u.hostname || u.username || u.password) return null;
+    return u;
+  }
+  function linkify(text) {
+    const out = document.createDocumentFragment();
+    let at = 0;
+    for (const m of text.matchAll(LINK_RE)) {
+      const { url } = splitLink(m[0]);
+      const u = safeLink(url);
+      if (!u) continue;
+      if (m.index > at) out.appendChild(document.createTextNode(text.slice(at, m.index)));
+      const a = document.createElement("a");
+      a.textContent = url;
+      a.href = u.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer nofollow";
+      a.referrerPolicy = "no-referrer";
+      a.title = `opens ${u.href}`;
+      a.className = "chat-link";
+      out.appendChild(a);
+      at = m.index + url.length;
+    }
+    if (at < text.length) out.appendChild(document.createTextNode(text.slice(at)));
+    return out;
+  }
+  function addChatLine(name, text, ts) {
+    const log = $("chat-log");
+    if (!log) return;
+    const li = document.createElement("li");
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = chatTime(ts);
+    li.appendChild(when);
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = `${name || "guest"}:`;
+    li.appendChild(who);
+    li.appendChild(document.createTextNode(" "));
+    li.appendChild(linkify(String(text)));
+    log.appendChild(li);
+    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+  }
+
   // src/presence.ts
   var routed = /* @__PURE__ */ new Map();
   var talks = /* @__PURE__ */ new Map();
+  var PROX_DEBUG = true;
+  var proxNoteAt = 0;
+  function short(id) {
+    return String(id || "").slice(0, 6);
+  }
+  function where(peer) {
+    if (!peer) return " (no peer)";
+    const x = Number.isFinite(peer.x) ? Math.round(peer.x) : -1;
+    const y = Number.isFinite(peer.y) ? Math.round(peer.y) : -1;
+    return " at " + x + "," + y + (peer.waiting ? " waiting" : "");
+  }
+  function presenceDebug(text) {
+    if (!PROX_DEBUG) return;
+    addChatLine("debug", text, Date.now());
+  }
+  function proxNote(text) {
+    if (!PROX_DEBUG) return;
+    const now = Date.now();
+    if (now - proxNoteAt < 1500) return;
+    proxNoteAt = now;
+    addChatLine("debug", text, now);
+  }
   function setRouted(peerId, on) {
     if (routed.get(peerId) === on) return;
     routed.set(peerId, on);
     const peer = state.peers.get(peerId);
+    presenceDebug("route " + short(peerId) + " " + (on ? "on" : "off") + where(peer));
     if (!peer) return;
     applyGain(peer);
     paintPeerVideo(peer);
@@ -415,6 +514,7 @@
     const before = talks.get(peerId) || [];
     if (before.length === list.length && before.every((one, i) => one === list[i])) return;
     talks.set(peerId, list);
+    presenceDebug("talks " + short(peerId) + " says " + (list.length ? list.map(short).join(",") : "nobody"));
     paintPresence();
   }
   function applyGain(peer) {
@@ -3268,12 +3368,12 @@
     const s = String(value || "");
     if (s.length >= 4) state.canaries.add(s);
   }
-  function auditWire(where, raw) {
+  function auditWire(where2, raw) {
     const text = typeof raw === "string" ? raw : String(raw);
     state.wireFrames++;
     for (const c of state.canaries) {
       if (text.includes(c) && state.wireLeaks.length < 20) {
-        state.wireLeaks.push({ where, canary: c });
+        state.wireLeaks.push({ where: where2, canary: c });
       }
     }
     if (/"sdp"|"candidate"|v=0|a=fingerprint/.test(text)) state.clearSignaling++;
@@ -3441,82 +3541,6 @@
     const raw = JSON.stringify(msg);
     auditWire("out", raw);
     if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(raw);
-  }
-
-  // src/chat.ts
-  var CHAT_MAX = 200;
-  function chatTime(ts = null) {
-    const d = ts ? new Date(ts) : /* @__PURE__ */ new Date();
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  }
-  var LINK_RE = /https?:\/\/[^\s<>"']+/gi;
-  function splitLink(raw) {
-    let url = raw;
-    let tail = "";
-    for (; ; ) {
-      const last = url[url.length - 1];
-      if (!last) break;
-      let cut = `.,;:!?'"`.includes(last);
-      if (!cut && (last === ")" || last === "]" || last === "}")) {
-        const open = { ")": "(", "]": "[", "}": "{" }[last];
-        cut = url.split(last).length > url.split(open).length;
-      }
-      if (!cut) break;
-      tail = last + tail;
-      url = url.slice(0, -1);
-    }
-    return { url, tail };
-  }
-  function safeLink(text) {
-    let u;
-    try {
-      u = new URL(text);
-    } catch {
-      return null;
-    }
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    if (!u.hostname || u.username || u.password) return null;
-    return u;
-  }
-  function linkify(text) {
-    const out = document.createDocumentFragment();
-    let at = 0;
-    for (const m of text.matchAll(LINK_RE)) {
-      const { url } = splitLink(m[0]);
-      const u = safeLink(url);
-      if (!u) continue;
-      if (m.index > at) out.appendChild(document.createTextNode(text.slice(at, m.index)));
-      const a = document.createElement("a");
-      a.textContent = url;
-      a.href = u.href;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer nofollow";
-      a.referrerPolicy = "no-referrer";
-      a.title = `opens ${u.href}`;
-      a.className = "chat-link";
-      out.appendChild(a);
-      at = m.index + url.length;
-    }
-    if (at < text.length) out.appendChild(document.createTextNode(text.slice(at)));
-    return out;
-  }
-  function addChatLine(name, text, ts) {
-    const log = $("chat-log");
-    if (!log) return;
-    const li = document.createElement("li");
-    const when = document.createElement("span");
-    when.className = "when";
-    when.textContent = chatTime(ts);
-    li.appendChild(when);
-    const who = document.createElement("span");
-    who.className = "who";
-    who.textContent = `${name || "guest"}:`;
-    li.appendChild(who);
-    li.appendChild(document.createTextNode(" "));
-    li.appendChild(linkify(String(text)));
-    log.appendChild(li);
-    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
-    log.scrollTop = log.scrollHeight;
   }
 
   // src/positions.ts
@@ -4765,6 +4789,10 @@
     near = next;
     worldStats.near = next.length;
     route(peers, next);
+    const ownZones = zones ? zones.at(walker.x, walker.y).map((z) => z.id).join("+") : "";
+    proxNote(
+      "prox self " + Math.round(walker.x) + "," + Math.round(walker.y) + (ownZones ? " [" + ownZones + "]" : "") + " | peers " + peers.length + " | seen " + points.size + " | near " + (next.length ? next.map((id) => String(id).slice(0, 6)).join(",") : "nobody")
+    );
     const mine = next.slice(0, 16);
     for (const peer of peers) {
       if (!peer.talks || peer.talks.join(",") !== mine.join(",")) {
@@ -6251,9 +6279,9 @@
     if (!omni.busy) return;
     const total = Number(msg.total) || omni.size;
     const got = Number(msg.got) || 0;
-    const where = msg.cached ? "reading the transcription model from the browser cache" : "downloading the transcription model";
+    const where2 = msg.cached ? "reading the transcription model from the browser cache" : "downloading the transcription model";
     asrNote(
-      total ? `${where}: ${mb(got)} of ${mb(total)} (${Math.floor(got * 100 / total)}%)` : `${where}: ${mb(got)}`
+      total ? `${where2}: ${mb(got)} of ${mb(total)} (${Math.floor(got * 100 / total)}%)` : `${where2}: ${mb(got)}`
     );
   }
   function omniFail(text) {
@@ -6389,7 +6417,7 @@
     let rec = null;
     let decoding = false;
     let lastProgress = 0;
-    function short(err) {
+    function short2(err) {
       const text = String(err && err.message || err || "the engine stopped");
       return text.slice(0, 200);
     }
@@ -6630,7 +6658,7 @@
         text = String((rec.getResult(stream) || {}).text || "").trim();
         stream.free();
       } catch (err) {
-        post({ ev: "error", text: short(err) });
+        post({ ev: "error", text: short2(err) });
         return;
       } finally {
         decoding = false;
@@ -6647,7 +6675,7 @@
       };
     }
     listen();
-    start().catch((err) => post({ ev: "error", text: short(err) }));
+    start().catch((err) => post({ ev: "error", text: short2(err) }));
   }
 
   // src/handshake.ts

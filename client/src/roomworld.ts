@@ -15,7 +15,7 @@ import { ZoneGrid, ZoneWatch } from './zones.js';
 import { posAt, posFrame, posForget, posReset, posSend, POSITION_DELAY, remoteDir, remoteMoving, remotePoints } from './positions.js';
 import { layoutStage } from './tiles.js';
 import { updateCount } from './host.js';
-import { isRouted, paintPresence, setRouted } from './presence.js';
+import { isRouted, paintPresence, proxNote, setRouted } from './presence.js';
 import { sealedSend } from './gate.js';
 
 // The nodes of the world, built on demand and kept across a call: a view that
@@ -241,6 +241,15 @@ function step() {
   near = next;
   worldStats.near = next.length;
   route(peers, next);
+  // The proximity decision as one log line, at most every 1.5 s: the own
+  // place, every remote place, the area the own guest stands in, and the pairs
+  // the rule routed. A guest reading "hearing: nobody" here sees the distance.
+  const ownZones = zones ? zones.at(walker.x, walker.y).map((z) => z.id).join('+') : '';
+  proxNote(
+    'prox self ' + Math.round(walker.x) + ',' + Math.round(walker.y) + (ownZones ? ' [' + ownZones + ']' : '') +
+      ' | peers ' + peers.length + ' | seen ' + points.size +
+      ' | near ' + (next.length ? next.map((id) => String(id).slice(0, 6)).join(',') : 'nobody'),
+  );
   // The one word of this page about its own conversation, sealed to each pair.
   const mine = next.slice(0, 16);
   for (const peer of peers) {

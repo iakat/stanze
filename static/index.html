@@ -242,16 +242,6 @@
         <div id="self-pip" class="self-pip" hidden></div>
       </section>
 
-      <!-- Who this page talks to, one line: nobody hears a guest that is not
-           named here, and every guest this page hears is named. -->
-      <section id="presence" class="presence" aria-label="who you are talking to">
-        <div class="presence-row">
-          <span id="presence-room" class="presence-room">room: you alone</span>
-          <span id="presence-near" class="presence-near">hearing: nobody</span>
-        </div>
-        <div id="presence-via" class="presence-via" hidden></div>
-      </section>
-
       <aside id="stats-panel" class="stats" hidden aria-label="call statistics">
         <div class="stats-head">
           <span>stats</span>
@@ -295,6 +285,16 @@
       </aside>
 
       <aside id="stage-rail" class="stage-rail" aria-label="every member of the room"></aside>
+
+      <!-- Who this page talks to, one line: nobody hears a guest that is not
+           named here, and every guest this page hears is named. -->
+      <section id="presence" class="presence" aria-label="who you are talking to">
+        <div class="presence-row">
+          <span id="presence-room" class="presence-room">room: you alone</span>
+          <span id="presence-near" class="presence-near">hearing: nobody</span>
+        </div>
+        <div id="presence-via" class="presence-via" hidden></div>
+      </section>
 
       <aside class="chat" id="chat-panel">
         <div class="chat-head">chat <span id="chat-note" class="muted" hidden>(sealed, no server history)</span></div>

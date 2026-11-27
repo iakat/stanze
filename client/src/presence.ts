@@ -15,11 +15,41 @@ import { $ } from './dom.js';
 import { state } from './state.js';
 import { applyFlags, volGain } from './volume.js';
 import { paintPeerVideo } from './devices.js';
+import { addChatLine } from './chat.js';
 
 const routed = new Map<string, boolean>();
 // The pair this page is on, as the guest on the other side reported it. It names
 // peer ids, and the line turns them into names for a guest this page can see.
 const talks = new Map<string, string[]>();
+
+// presenceDebug writes one line of the proximity decision into the room log,
+// so a guest can see why a neighbour is heard or not: who arrived, which
+// facing pairs are routed, and where each guest stands. It is the same
+// decision the presence line shows, with the numbers behind it.
+const PROX_DEBUG = true;
+let proxNoteAt = 0;
+function short(id: string | undefined): string {
+  return String(id || '').slice(0, 6);
+}
+function where(peer: any): string {
+  if (!peer) return ' (no peer)';
+  const x = Number.isFinite(peer.x) ? Math.round(peer.x) : -1;
+  const y = Number.isFinite(peer.y) ? Math.round(peer.y) : -1;
+  return ' at ' + x + ',' + y + (peer.waiting ? ' waiting' : '');
+}
+export function presenceDebug(text: string) {
+  if (!PROX_DEBUG) return;
+  addChatLine('debug', text, Date.now());
+}
+// proxNote is the rate limited line: a moving guest would otherwise write a
+// line per frame.
+export function proxNote(text: string) {
+  if (!PROX_DEBUG) return;
+  const now = Date.now();
+  if (now - proxNoteAt < 1500) return;
+  proxNoteAt = now;
+  addChatLine('debug', text, now);
+}
 
 // setRouted turns the audio and the pictures of one pair on or off. It is the
 // only place a remote stream reaches its output, so a guest out of the
@@ -28,6 +58,7 @@ export function setRouted(peerId: string, on: boolean) {
   if (routed.get(peerId) === on) return;
   routed.set(peerId, on);
   const peer = state.peers.get(peerId);
+  presenceDebug('route ' + short(peerId) + ' ' + (on ? 'on' : 'off') + where(peer));
   if (!peer) return;
   applyGain(peer);
   paintPeerVideo(peer);
@@ -45,6 +76,7 @@ export function setTalks(peerId: string, ids: unknown) {
   const before = talks.get(peerId) || [];
   if (before.length === list.length && before.every((one, i) => one === list[i])) return;
   talks.set(peerId, list);
+  presenceDebug('talks ' + short(peerId) + ' says ' + (list.length ? list.map(short).join(',') : 'nobody'));
   paintPresence();
 }
 
