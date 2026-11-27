@@ -228,8 +228,13 @@ export function updateCount() {
   const total = state.peers.size + 1;
   const live = [...state.peers.values()].filter((p) => p.state === 'connected').length + 1;
   const held = [...state.peers.values()].filter((p) => p.waiting).length;
-  document.title =
-    (total === 1 ? '1 peer' : `${live}/${total} peers`) +
-    (held && !state.waiting ? `, ${held} waiting` : '');
+  // The count is beside the title, not the title: a room's name is what a
+  // person reads in the tab, and their browser history.
+  const count = $('peer-count');
+  if (count) {
+    count.textContent =
+      (total === 1 ? '1 peer' : `${live}/${total} peers`) +
+      (held && !state.waiting ? `, ${held} waiting` : '');
+  }
   updatePinCount();
 }

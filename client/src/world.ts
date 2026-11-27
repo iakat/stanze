@@ -91,10 +91,13 @@ function loadImage(src: string, signal?: AbortSignal): Promise<HTMLImageElement>
   });
 }
 
-async function loadJSON(src: string, signal?: AbortSignal, optional = false): Promise<any> {
+// loadJSON reads one JSON file. how is the method of the first request: a
+// candidate is asked for with HEAD, so a room with no map of its own costs a
+// header and not a 404 in the console, and the file is then read for real.
+async function loadJSON(src: string, signal?: AbortSignal, optional = false, how = 'GET'): Promise<any> {
   let res: Response;
   try {
-    res = await fetch(src, { signal, credentials: 'same-origin' });
+    res = await fetch(src, { signal, credentials: 'same-origin', method: how });
   } catch {
     if (optional) return null;
     throw new Error('fetch failed: ' + src);
@@ -103,6 +106,7 @@ async function loadJSON(src: string, signal?: AbortSignal, optional = false): Pr
     if (optional && res.status === 404) return null;
     throw new Error(res.status + ': ' + src);
   }
+  if (how === 'HEAD') return loadJSON(src, signal, optional);
   return res.json();
 }
 
@@ -463,7 +467,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   let wam: any = null;
   let mapPathUsed = own;
   for (const path of mapCandidates(room)) {
-    const doc = await loadJSON(path, signal, true);
+    const doc = path === own ? await loadJSON(path, signal, true) : await loadJSON(path, signal, true, 'HEAD');
     if (!doc) continue;
     // A world is followed to its map; a map is itself.
     if (isWam(doc)) {
@@ -499,7 +503,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // The sidecar is the authored zone list; the object layer of the map is the
   // other legal source and comes second, and the areas of a .wam come after it,
   // so a world keeps both its object zones and its areas.
-  const sidecar = await loadJSON(room === '' ? '' : base + 'maps/' + room + '.zones.json', signal, true);
+  const sidecar = room === '' ? null : await loadJSON(base + 'maps/' + room + '.zones.json', signal, true, 'HEAD');
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
   const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
   const zones = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);

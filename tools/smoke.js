@@ -10,7 +10,8 @@
 'use strict';
 
 const fs = require('fs');
-const { chromium } = require(process.env.PW);
+const pw = require(process.env.PW);
+const chromium = pw.chromium;
 const { expectedMiss } = require('./expected-404');
 
 const BASE = (process.env.ROOMSBASE || 'http://127.0.0.1:8095').replace(/\/+$/, '');

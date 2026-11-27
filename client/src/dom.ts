@@ -17,6 +17,7 @@ export interface Elements {
   'lobby-error': HTMLElement;
   stage: HTMLElement;
   'copy-btn': HTMLButtonElement;
+  'peer-count': HTMLElement;
   grid: HTMLElement;
   'stage-main': HTMLElement;
   'stage-rail': HTMLElement;
