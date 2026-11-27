@@ -31,6 +31,11 @@ export function say(text) {
   state.notice = text;
   box.textContent = text;
   box.hidden = !text;
+  // A word the guest has to read takes the focus: in the lobby it sits above
+  // the enter button, so the reason of a failed join is never off the screen.
+  // The stage notice is read by the reader alone, so a keyboard guest keeps
+  // the place it was in.
+  if (text && !state.room) box.focus();
 }
 
 // isAdmin answers whether this peer holds the role. Safe before the first

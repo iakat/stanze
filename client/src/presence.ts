@@ -16,6 +16,7 @@ import { state } from './state.js';
 import { applyFlags, volGain } from './volume.js';
 import { paintPeerVideo } from './devices.js';
 import { addChatLine } from './chat.js';
+import { layoutStage } from './tiles.js';
 
 const routed = new Map<string, boolean>();
 // The pair this page is on, as the guest on the other side reported it. It names
@@ -25,9 +26,14 @@ const talks = new Map<string, string[]>();
 // presenceDebug writes one line of the proximity decision into the room log,
 // so a guest can see why a neighbour is heard or not: who arrived, which
 // facing pairs are routed, and where each guest stands. It is the same
-// decision the presence line shows, with the numbers behind it.
-const PROX_DEBUG = true;
+// decision the presence line shows, with the numbers behind it. The lines are
+// off in a person's page: they fill the room log, which is the sealed chat.
+// The browser test turns them on through window.e2eApp.presenceDebug.
 let proxNoteAt = 0;
+function proxDebugOn(): boolean {
+  const w = window as any;
+  return !!(w && w.e2eApp && w.e2eApp.presenceDebug);
+}
 function short(id: string | undefined): string {
   return String(id || '').slice(0, 6);
 }
@@ -38,17 +44,32 @@ function where(peer: any): string {
   return ' at ' + x + ',' + y + (peer.waiting ? ' waiting' : '');
 }
 export function presenceDebug(text: string) {
-  if (!PROX_DEBUG) return;
+  if (!proxDebugOn()) return;
   addChatLine('debug', text, Date.now());
 }
 // proxNote is the rate limited line: a moving guest would otherwise write a
 // line per frame.
 export function proxNote(text: string) {
-  if (!PROX_DEBUG) return;
+  if (!proxDebugOn()) return;
   const now = Date.now();
   if (now - proxNoteAt < 1500) return;
   proxNoteAt = now;
   addChatLine('debug', text, now);
+}
+
+// stageLayoutSoon marks the stage for one layout on the next frame. A routing
+// change paints a tile and a painted tile asks for a layout, so a batch of them
+// costs one layout and not one per pair.
+let stageDirty = false;
+export function stageLayoutSoon() {
+  if (stageDirty) return;
+  stageDirty = true;
+  const run = () => {
+    stageDirty = false;
+    layoutStage();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 0);
 }
 
 // setRouted turns the audio and the pictures of one pair on or off. It is the
@@ -62,6 +83,7 @@ export function setRouted(peerId: string, on: boolean) {
   if (!peer) return;
   applyGain(peer);
   paintPeerVideo(peer);
+  stageLayoutSoon();
 }
 
 export function isRouted(peerId: string): boolean {

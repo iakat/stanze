@@ -718,7 +718,12 @@ export function sealedHandleOpaque(from, b) {
       // the only copy, and a drop would desync both counters for the whole
       // pair, so hold it and fire it once the keys are in.
       if (!peer.keys || !peer.keysInstalled) {
-        if ((peer.appPending = peer.appPending || []).length < 64) peer.appPending.push(msg);
+        // A full queue is a gap the pair can not recover from: the frame is
+        // lost and every later counter of the pair is out of step. The pair
+        // restarts here, before the frames after this one pile up.
+        if (!peer.appPending) peer.appPending = [];
+        if (peer.appPending.length < 64) peer.appPending.push(msg);
+        else sealedGapReset(peer);
         return;
       }
       // Both directions have their own counter. The socket is ordered, so the
@@ -771,7 +776,11 @@ function sealedOnApp(peer, b, seq) {
     obj.k !== 'kick' &&
     !(peer.pass && peer.pass.done)
   ) {
-    if ((peer.appHeld = peer.appHeld || []).length < 256) peer.appHeld.push(obj);
+    if (!peer.appHeld) peer.appHeld = [];
+    // The same rule as the queue above: a frame that does not fit is a lost
+    // frame, so the pair restarts now instead of meeting the gap later.
+    if (peer.appHeld.length < 256) peer.appHeld.push(obj);
+    else sealedGapReset(peer);
     return;
   }
   sealedDispatchApp(peer, obj);

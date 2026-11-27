@@ -12,10 +12,20 @@ import { load, store } from './prefs.js';
 import { CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } from './world.js';
 import { Guest, Proximity } from './proximity.js';
 import { ZoneGrid, ZoneWatch } from './zones.js';
-import { posAt, posFrame, posForget, posReset, posSend, POSITION_DELAY, remoteDir, remoteMoving, remotePoints } from './positions.js';
+import {
+  posAt,
+  posFrame,
+  posForget,
+  posReset,
+  posSend,
+  POSITION_DELAY,
+  remoteDir,
+  remoteMoving,
+  remotePoints,
+} from './positions.js';
 import { layoutStage } from './tiles.js';
 import { updateCount } from './host.js';
-import { isRouted, paintPresence, proxNote, setRouted } from './presence.js';
+import { isRouted, paintPresence, proxNote, setRouted, stageLayoutSoon } from './presence.js';
 import { sealedSend } from './gate.js';
 
 // The nodes of the world, built on demand and kept across a call: a view that
@@ -27,14 +37,23 @@ let zones: ZoneGrid | null = null;
 let watch: ZoneWatch | null = null;
 let sheets: CharSheet[] = [];
 let raf = 0;
-let lastFrame = 0;
+// lastPosAt is the time of the last position tick. The tick length itself is
+// POSITION_DELAY, imported from the position frames.
+let lastPosAt = 0;
 let generation = 0;
 // The conversation set as the last tick judged it, for the test hook and for
 // the change detection that keeps a still room from repainting.
 let near: string[] = [];
 // worldStats counts the maps that loaded and the frames that went and came, so
 // a browser test can prove the world drew before it walks.
-export const worldStats = { loaded: 0, sent: 0, recv: 0, frames: 0, near: 0, zones: [] as string[] };
+export const worldStats = {
+  loaded: 0,
+  sent: 0,
+  recv: 0,
+  frames: 0,
+  near: 0,
+  zones: [] as string[],
+};
 
 // worldAvatar is the pick of the own avatar: the boot raises it when the menu
 // changes, and the view redraws with the new sheet.
@@ -46,10 +65,16 @@ export function worldAvatar() {
 }
 
 // isWorld answers whether the world view is the one in front of the visitor.
-// The call grid is the default, so a guest lands in the grid and the world is
-// one menu click away.
+// The world is the default: no stored value means on, and a stored off is what
+// the visitor asked for last time.
 export function isWorld(): boolean {
-  return load('world') === '1';
+  return load('world') !== '0';
+}
+
+// worldPainted tells the page that the view in front has changed, so the
+// button that names it is painted from the state and not from the click.
+function worldPainted() {
+  document.dispatchEvent(new CustomEvent('worldview'));
 }
 
 // worldNode is the one node that holds the canvas and its status line.
@@ -98,10 +123,15 @@ export async function worldEnter(room: string) {
     } as any);
     worldStats.loaded++;
     worldStats.frames = 0;
-    lastFrame = 0;
-    worldSet(true);
-    note.hidden = false;
-    note.textContent = 'walk with the arrow keys or w a s d; the room is on the presence line';
+    lastPosAt = 0;
+    // A map that arrived after the visitor asked for the grid again never
+    // takes the frame back: the stored choice is read once more.
+    const on = isWorld();
+    if (on) {
+      worldSet(true);
+      note.textContent = 'walk with the arrow keys or w a s d; the room is on the presence line';
+    }
+    note.hidden = !on;
     // The own tile exists by now in a room with others, and the world took
     // the frame: one layout puts the pictures where they belong.
     layoutStage();
@@ -113,8 +143,12 @@ export async function worldEnter(room: string) {
     worldSet(false);
     const why = err && (err as Error).message ? (err as Error).message : String(err);
     note.hidden = false;
-    note.textContent = "no world for this room (" + why + "), the call grid is shown instead";
-    try { (window as any).__worldError = String(err && (err as any).stack ? (err as any).stack : err); } catch { /* the probe is a debug aid */ }
+    note.textContent = 'no world for this room (' + why + '), the call grid is shown instead';
+    try {
+      (window as any).__worldError = String(err && (err as any).stack ? (err as any).stack : err);
+    } catch {
+      /* the probe is a debug aid */
+    }
   }
 }
 
@@ -149,20 +183,18 @@ export function worldSet(on: boolean) {
   if (view && on) view.mark();
   layoutStage();
   if (!on) updateCount();
+  worldPainted();
 }
 
+// worldToggle puts the other view in front. It paints what the switch does, even
+// when the map of the room is still loading underneath it.
 export function worldToggle() {
   const on = !isWorld();
   store('world', on ? 1 : 0);
-  const { box } = worldNode();
-  if (on && !view) {
-    worldEnter(state.room).catch(() => {});
-    return;
-  }
-  box.hidden = !on;
-  $('stage-main').hidden = on;
-  if (view) view.mark();
-  layoutStage();
+  worldSet(on);
+  // A map that was never loaded is loaded now; it takes the frame only if the
+  // choice is still the world when it arrives.
+  if (on && !view) worldEnter(state.room).catch(() => {});
 }
 
 // ---------------------------------------------------------------- the loop
@@ -173,8 +205,8 @@ function startLoop() {
   const run = () => {
     if (!view || !walker || state.leaving) return;
     const now = performance.now();
-    if (now - lastFrame >= POSITION_DELAY) {
-      lastFrame = now;
+    if (now - lastPosAt >= POSITION_DELAY) {
+      lastPosAt = now;
       step();
     }
     raf = requestAnimationFrame(run);
@@ -244,11 +276,24 @@ function step() {
   // The proximity decision as one log line, at most every 1.5 s: the own
   // place, every remote place, the area the own guest stands in, and the pairs
   // the rule routed. A guest reading "hearing: nobody" here sees the distance.
-  const ownZones = zones ? zones.at(walker.x, walker.y).map((z) => z.id).join('+') : '';
+  const ownZones = zones
+    ? zones
+        .at(walker.x, walker.y)
+        .map((z) => z.id)
+        .join('+')
+    : '';
   proxNote(
-    'prox self ' + Math.round(walker.x) + ',' + Math.round(walker.y) + (ownZones ? ' [' + ownZones + ']' : '') +
-      ' | peers ' + peers.length + ' | seen ' + points.size +
-      ' | near ' + (next.length ? next.map((id) => String(id).slice(0, 6)).join(',') : 'nobody'),
+    'prox self ' +
+      Math.round(walker.x) +
+      ',' +
+      Math.round(walker.y) +
+      (ownZones ? ' [' + ownZones + ']' : '') +
+      ' | peers ' +
+      peers.length +
+      ' | seen ' +
+      points.size +
+      ' | near ' +
+      (next.length ? next.map((id) => String(id).slice(0, 6)).join(',') : 'nobody'),
   );
   // The one word of this page about its own conversation, sealed to each pair.
   const mine = next.slice(0, 16);
@@ -269,7 +314,8 @@ function step() {
 }
 
 // route turns the strands on and off and keeps the presence line true. A pair
-// whose media is routed is a pair the line names.
+// whose media is routed is a pair the line names. The whole batch asks for one
+// stage layout, on the next frame, and not one per pair.
 export function route(peers: any[], nearIds: string[]) {
   const on = new Set(nearIds);
   for (const peer of peers) {
@@ -277,6 +323,7 @@ export function route(peers: any[], nearIds: string[]) {
     if (isRouted(peer.id) !== wanted) setRouted(peer.id, wanted);
   }
   paintPresence();
+  stageLayoutSoon();
 }
 
 // worldOnPos is the one entry the files channel calls for a position frame. It
@@ -359,7 +406,13 @@ export function worldDrawn(): { drawn: number; ink: number } {
   return { drawn: view.frames, ink: view.ink() };
 }
 
-export function worldAvatars(): { id: string; name: string; x: number; y: number; local: boolean }[] {
+export function worldAvatars(): {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  local: boolean;
+}[] {
   if (!view) return [];
   return [...view.avatars.values()].map((one) => ({
     id: one.id,
@@ -377,7 +430,12 @@ export function worldHook() {
     stats: () => ({ ...worldStats, frames: view ? view.frames : 0 }),
     pos: () =>
       view && view.local
-        ? { x: Math.round(view.local.x), y: Math.round(view.local.y), dir: view.local.dir, moving: !!view.local.moving }
+        ? {
+            x: Math.round(view.local.x),
+            y: Math.round(view.local.y),
+            dir: view.local.dir,
+            moving: !!view.local.moving,
+          }
         : null,
     map: () => {
       if (!view) return null;
@@ -400,7 +458,9 @@ export function worldHook() {
       await new Promise((done) => setTimeout(done, ms));
       held.delete(key);
       view?.mark();
-      return view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y) } : null;
+      return view && view.local
+        ? { x: Math.round(view.local.x), y: Math.round(view.local.y) }
+        : null;
     },
     // goTo puts this page at a place the way a teleport would: it is for the
     // browser test to stand two pages on a known spot, never a person's move.
@@ -417,7 +477,12 @@ export function worldHook() {
     points: () => {
       const out: any[] = [];
       for (const [id, at] of remotePoints()) {
-        out.push({ id, x: at.x, y: at.y, zones: zones ? zones.at(at.x, at.y).map((z) => z.id + ':' + z.kind) : [] });
+        out.push({
+          id,
+          x: at.x,
+          y: at.y,
+          zones: zones ? zones.at(at.x, at.y).map((z) => z.id + ':' + z.kind) : [],
+        });
       }
       return out;
     },

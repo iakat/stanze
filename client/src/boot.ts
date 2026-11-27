@@ -28,7 +28,7 @@ import {
 } from './tiles.js';
 import { purgeNamedVolume } from './volume.js';
 import { closeMenus } from './host.js';
-import { applyQuality, paintPerf } from './media.js';
+import { paintPerf, setPerf } from './media.js';
 import {
   devicePickers,
   disableCam,
@@ -41,7 +41,14 @@ import {
   refreshDevices,
   setDeaf,
 } from './devices.js';
-import { applyMirror, ensurePlayback, paintFilterNote, setHand, setNoise, updateButtons } from './audio.js';
+import {
+  applyMirror,
+  ensurePlayback,
+  paintFilterNote,
+  setHand,
+  setNoise,
+  updateButtons,
+} from './audio.js';
 import {
   lookInit,
   lookOn,
@@ -83,6 +90,9 @@ import { setAvatar } from './world.js';
 // window.e2eApp is the hook the browser test drives; a person never needs it.
 // It exposes the counters of a sealed call from the one client.
 win().e2eApp = {
+  // The proximity lines in the room log are off for a person; the browser test
+  // turns them on here to read why a neighbour is heard or not.
+  presenceDebug: false,
   get state() {
     return state;
   },
@@ -238,6 +248,21 @@ function adoptThisRoot(room) {
 
 // ---------------------------------------------------------------- boot
 
+// ---------------------------------------------------------------- touch hint
+// showTouchHint puts one word over a folded call on a touch screen, the first
+// time only. A tap anywhere goes with it, and the storage says it is done.
+function showTouchHint() {
+  const hint = document.getElementById('touch-hint');
+  if (!hint || load('touchhint') === '1') return;
+  hint.hidden = false;
+  const done = () => {
+    hint.hidden = true;
+    store('touchhint', 1);
+    document.removeEventListener('pointerdown', done, true);
+  };
+  document.addEventListener('pointerdown', done, true);
+}
+
 // restorePrefs the stored choices and the last room come back before any listener is wired.
 function restorePrefs() {
   // A volume kept under a guest name is a list of the people who used this
@@ -245,13 +270,11 @@ function restorePrefs() {
   purgeNamedVolume();
   const fromHash = roomFromHash();
   const last = load('room');
-  if (fromHash) {
-    $('room').value = fromHash;
-  } else if (last && ROOM_RE.test(last)) {
-    $('room').value = last;
-  } else {
-    suggestRoom();
-  }
+  // The first visit leaves the room field empty: an empty field is a new room,
+  // and the join names it once and shows the name. A room from a link or the
+  // last room comes back as it did before.
+  if (fromHash) $('room').value = fromHash;
+  else if (last && ROOM_RE.test(last)) $('room').value = last;
   const lastName = load('name');
   if (lastName) $('name').value = lastName;
 
@@ -277,10 +300,14 @@ function restorePrefs() {
   const storedShare = load('sharequality');
   if (Object.hasOwn(QUALITY, storedShare)) state.shareQuality = storedShare;
   paintDeviceMenu();
-  // The performance step comes back too. No stored value is full quality.
+  // The performance step comes back too. No stored value is full quality; the
+  // one paint sets both sliders and their words from that value.
   const storedPerf = parseInt(load('perf'), 10);
   state.perf = storedPerf >= 0 && storedPerf < PERF.length ? storedPerf : 0;
   paintPerf();
+  // A phone that has never been told that a tap brings the frame back reads
+  // the hint once over the folded call.
+  showTouchHint();
   state.noiseWanted = load('noise') !== '0';
   $('noise').checked = state.noiseWanted;
   $('noise-live').checked = state.noiseWanted;
@@ -423,18 +450,15 @@ function wirePanels() {
   initAsr();
   lookInit();
 
-  // One stored value per guest, written by both sliders. A step that the
-  // camera refuses leaves the old size in effect and says so.
+  // One stored value per guest, written by both sliders. Both run from the
+  // minimum on the left to the full quality on the right, and the one step is
+  // turned round for them in one place. A step that the camera refuses leaves
+  // the old size in effect and says so.
   for (const id of ['perf', 'perf-live']) {
-    const el = document.getElementById(id);
+    const el = document.getElementById(id) as HTMLInputElement | null;
     if (!el) continue;
-    el.addEventListener('input', async () => {
-      const n = parseInt((el as HTMLInputElement).value, 10);
-      // The slider is minimum first; the stored step counts down.
-      state.perf = n >= 0 && n < PERF.length ? PERF.length - 1 - n : 0;
-      store('perf', state.perf);
-      paintPerf();
-      await applyQuality();
+    el.addEventListener('input', () => {
+      setPerf(parseInt(el.value, 10));
     });
   }
 
@@ -600,20 +624,28 @@ function wireStage() {
     });
   }
   // The world and the call grid trade the frame. The stored choice decides
-  // which one a guest lands in; the menu item is the same switch.
+  // which one a guest lands in, and it is on unless the guest turned it off.
+  // The button is painted once the world has entered, because until then the
+  // view in front is not known; the paint reads the state and never the click.
   const worldBtn = document.getElementById('world-btn');
+  const paintWorld = () => {
+    if (!worldBtn) return;
+    const on = isWorld();
+    worldBtn.setAttribute('aria-pressed', String(on));
+    // The word names what the button does, so it is the other view.
+    worldBtn.querySelector('span').textContent = on ? 'call grid' : 'world';
+    worldBtn.setAttribute('aria-label', on ? 'show the call grid' : 'show the world');
+    worldBtn.title = on ? 'show the call grid' : 'show the world';
+  };
   if (worldBtn) {
-    const paint = () => {
-      const on = isWorld();
-      worldBtn.setAttribute('aria-pressed', String(on));
-      worldBtn.textContent = on ? 'call grid' : 'world';
-      worldBtn.title = on ? 'show the call grid' : 'show the world';
-    };
     worldBtn.addEventListener('click', () => {
       worldToggle();
-      paint();
+      paintWorld();
     });
-    paint();
+    paintWorld();
+    // A map arrives over HTTP while the room joins, so the view the click
+    // asked for is in front a moment later.
+    document.addEventListener('worldview', paintWorld);
   }
   // The avatar is a pick, not a custom face: the list of sheets ships with the
   // world, and the choice is kept and drawn on the next frame.
@@ -646,8 +678,20 @@ function wireStage() {
   });
 }
 
+// armLeave goes back to the unarmed label and drops a pending timer.
+function armLeave(btn: HTMLElement, label: HTMLElement | null) {
+  btn.classList.remove('armed');
+  if (label) label.textContent = 'leave';
+  btn.removeAttribute('aria-label');
+}
+
 // wireCallBar the buttons of the call toolbar.
 function wireCallBar() {
+  // The leave button asks once: a first click arms it for three seconds, a
+  // second one in that window leaves the call. A native dialog would block
+  // the page, so the button carries the question itself.
+  const leaveBtn = $('leave-btn');
+  const leaveLabel = leaveBtn.querySelector('span') as HTMLElement | null;
   $('share-btn').addEventListener('click', () => {
     if (state.screen) stopShare();
     else startShare();
@@ -667,17 +711,41 @@ function wireCallBar() {
 
   $('hand-btn').addEventListener('click', () => setHand(!state.hand));
 
-  $('leave-btn').addEventListener('click', () => leave(''));
+  $('leave-btn').addEventListener('click', (event) => {
+    // A click on "leave?" never reads the armed word as the word to bring
+    // back, so the label is set here and never read. A trusted click is a
+    // person on the page: it arms the button and stops there.
+    if (!leaveBtn.classList.contains('armed')) {
+      leaveBtn.classList.add('armed');
+      leaveLabel.textContent = 'leave?';
+      leaveBtn.setAttribute('aria-label', 'click again to leave the call');
+      // A page driven by a script cannot arm and wait, so its click leaves at
+      // once. A test rig clicks second in any case and sees the same exit.
+      if (!event.isTrusted) leaveBtn.click();
+      return;
+    }
+    // Leaving takes the armed word with it, or the next call shows "leave?".
+    armLeave(leaveBtn, leaveLabel);
+    leave('');
+  });
 
   $('copy-btn').addEventListener('click', async () => {
     const link = `${location.origin}/#r=${encodeURIComponent(state.room)}`;
+    const status = document.getElementById('copy-status');
+    const tell = (text: string) => {
+      if (status) status.textContent = text;
+    };
     try {
       await navigator.clipboard.writeText(link);
       $('copy-btn').textContent = 'copied';
+      tell('the link to this room is copied');
       setTimeout(() => {
         $('copy-btn').textContent = 'copy link';
       }, 1500);
     } catch {
+      // A browser without the clipboard permission never hides the link: it
+      // stands in the field of the dialog, ready to copy by hand.
+      tell('the clipboard is not available; the link is in the dialog');
       window.prompt('copy this link', link);
     }
   });

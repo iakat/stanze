@@ -5,7 +5,7 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { clamp, say } from './util.js';
-import { CHAT_MAX, addChatLine, chatTime } from './chat.js';
+import { CHAT_MAX, addChatLine, chatEmpty, chatTime } from './chat.js';
 import { b64d, b64e, fileAAD, pqCall, pqModule, shortPeer } from './sealed.js';
 import { canary } from './audit.js';
 import { sealedSend } from './gate.js';
@@ -145,6 +145,7 @@ function addFileRow(who, name, size) {
   log.appendChild(li);
   while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
+  chatEmpty(log);
   return { li, bar, fill, status, acts };
 }
 
@@ -471,7 +472,9 @@ function fileOnChunk(peer, frame) {
   }
   const out = pqCall((json) => pqModule().open(json), {
     key: b64e(peer.keys.recvChat),
-    aad: b64e(fileAAD(peer.id, peer.id, rec.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+    aad: b64e(
+      fileAAD(peer.id, peer.id, rec.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id),
+    ),
     b: frame.b,
   });
   if (!out || out.error) {
@@ -534,7 +537,16 @@ async function filePump(out, st) {
     if (st.dead || out.cancelled) return;
     const sealed = pqCall((json) => pqModule().seal(json), {
       key: b64e(peer.keys.sendChat),
-      aad: b64e(fileAAD(peer.id, state.self, out.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+      aad: b64e(
+        fileAAD(
+          peer.id,
+          state.self,
+          out.x,
+          q,
+          state.idKey && state.idKey.pub,
+          peer.pub && peer.pub.id,
+        ),
+      ),
       pt: b64e(buf),
     });
     if (!sealed || !sealed.b) {

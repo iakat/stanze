@@ -25,17 +25,27 @@ const SPEAK_HOLD_MS = 400;
 
 const speakBufs = new WeakMap();
 
+// The talking light needs one number ten times a second, not a waveform. The
+// tap is set to the smallest window an analyser takes, 256 samples, and only
+// its peak is read: a peak over the threshold lights the tile, and the hold
+// keeps it lit between syllables, so the light behaves as it did.
+export const SPEAK_FFT = 256;
+
 function analyserLevel(a) {
   if (!a) return 0;
+  if (a.fftSize !== SPEAK_FFT) a.fftSize = SPEAK_FFT;
   let buf = speakBufs.get(a);
   if (!buf || buf.length !== a.fftSize) {
     buf = new Float32Array(a.fftSize);
     speakBufs.set(a, buf);
   }
   a.getFloatTimeDomainData(buf);
-  let sum = 0;
-  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-  return Math.sqrt(sum / buf.length);
+  let peak = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const v = buf[i] < 0 ? -buf[i] : buf[i];
+    if (v > peak) peak = v;
+  }
+  return peak;
 }
 
 // paintSpeaking turns the light on for a level over the threshold and keeps it
@@ -419,7 +429,7 @@ export function routeAudio(peer, track) {
   // The talking light reads the source, before the gain, so a guest turned down
   // to zero still shows that they speak.
   peer.meter = ctx.createAnalyser();
-  peer.meter.fftSize = 1024;
+  peer.meter.fftSize = SPEAK_FFT;
   peer.audioSrc.connect(peer.meter);
   // A guest whose noise cancel was asked for before this track existed gets it
   // now, without a second toggle.

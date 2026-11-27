@@ -56,6 +56,7 @@ export function setStatsOpen(open) {
 }
 
 export function clearStatsPanel() {
+  keptRows.clear();
   const body = $('stats-body');
   if (body) body.replaceChildren();
   const sum = $('stats-sum');
@@ -763,6 +764,86 @@ function drawStatsGraphs() {
   );
 }
 
+// keptRows holds the card of each guest once it is built. Every round after the
+// first writes the new numbers into the same nodes; a new card per second costs
+// a reflow of the panel and loses the focus of anything inside it.
+const keptRows = new Map();
+
+// setText writes a value into a node only when it changed, so the browser does
+// not mark an unchanged node for painting.
+function setText(node, text) {
+  const s = String(text);
+  if (node.textContent !== s) node.textContent = s;
+}
+function setClass(node, name, on) {
+  if (node.classList.contains(name) !== !!on) node.classList.toggle(name, !!on);
+}
+
+// writeCells writes the cells of one value into the span statCells made. The
+// shapes of a guest card are fixed across rounds: a route, a link and two rates,
+// plus the words of the row under the values.
+function writeCells(span, value, metrics) {
+  const parts = Array.isArray(value) ? value : [value];
+  if (span.children.length !== parts.length) {
+    span.replaceChildren(...statCells(value, metrics).childNodes);
+    return;
+  }
+  for (let i = 0; i < parts.length; i++) {
+    const raw = parts[i];
+    const p = Array.isArray(raw) ? raw : [raw];
+    const cell = span.children[i];
+    const word = p.length > 1 ? p[2] : p[0];
+    // A metric cell keeps its label and writes the number under it; any other
+    // cell writes the last text node it holds.
+    const text = cell.lastElementChild;
+    if (text) setText(text, word === null || word === undefined ? '' : String(word));
+    setClass(cell, 'good', p[3] === true);
+    setClass(cell, 'bad', p[3] === false);
+  }
+}
+
+// meterInto moves the fill of one meter line, and its label with it.
+function meterInto(line, meter) {
+  const bar = line.querySelector('.meter');
+  const fill = bar && bar.querySelector('i');
+  if (!bar || !fill || typeof meter !== 'number') return;
+  const pct = `${Math.round(meter * 100)}%`;
+  if (fill.style.width !== pct) fill.style.width = pct;
+  const word = `level ${Math.round(meter * 100)} percent`;
+  if (bar.getAttribute('aria-label') !== word) bar.setAttribute('aria-label', word);
+}
+
+// writeGuestRow follows one kept card of a guest: the verdict chip, then one
+// line per pair of the current report. A chip that appears or goes away is the
+// only node this function adds or removes.
+function writeGuestRow(row, pairs, level) {
+  const head = row.querySelector('.sname');
+  let chip = head && head.querySelector('.sbadge');
+  if (head) {
+    if (level && !chip) {
+      chip = document.createElement('span');
+      chip.className = 'sbadge';
+      head.appendChild(chip);
+    }
+    if (chip) {
+      if (level) {
+        chip.dataset.level = level;
+        setText(chip, level);
+      } else chip.remove();
+    }
+  }
+  const lines = row.children;
+  for (let i = 0; i < pairs.length; i++) {
+    const line = lines[i + 1];
+    if (!line) break;
+    const p = pairs[i];
+    writeCells(line.querySelector('.sv'), p[1], p[3] === 'metrics');
+    setClass(line, 'good', p[2] === true);
+    setClass(line, 'bad', p[2] === false);
+    if (typeof p[4] === 'number') meterInto(line, p[4]);
+  }
+}
+
 // updateStats draws one round: alarms and verdict, the graphs, one card per guest,
 // the own card and the crypto counters.
 export async function updateStats() {
@@ -773,41 +854,46 @@ export async function updateStats() {
   try {
     const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
     const live = [];
-    const guests = [];
-    for (const peer of state.peers.values()) {
-      const s = await peerStats(peer);
+    const peers = [...state.peers.values()];
+    // One report per pair, all of them at once: a serial wait adds one round
+    // trip per guest and the panel falls behind the clock.
+    const reports = await Promise.all(peers.map((peer) => peerStats(peer)));
+    const guests = peers.map((peer, i) => {
+      const s = reports[i];
       if (s) {
         live.push(s);
         for (const dir of ['up', 'down']) {
           for (const kind of ['audio', 'video']) total[dir][kind] += s[dir][kind];
         }
       }
-      guests.push({ peer, s });
-    }
-    const rows = [];
+      return { peer, s };
+    });
     recordStatsHistory(total, live);
+    const rows = [];
     // With one guest that card is the whole call, so no call card repeats it.
     if (state.peers.size > 1) {
       const call = callPairs(live, total);
       if (call.length) rows.push(statsRow('call', call));
     }
+    // The first round builds the card of a guest; every round after writes into it.
+    const seen = new Set();
     for (const { peer, s } of guests) {
       // The route can change mid call, so the tile mark follows the current report.
       if (s && s.path && peer.tile)
         peer.tile.dataset.relay = s.path.startsWith('relay') ? 'yes' : 'no';
       const level = linkLevel(s);
       const pairs = peerPairs(peer, s);
-      if (pairs.length) {
-        rows.push(
-          statsRow(
-            peer.name || shortPeer(peer.id),
-            pairs,
-            undefined,
-            level ? { level, text: level } : null,
-          ),
-        );
+      if (!pairs.length) continue;
+      seen.add(peer.id);
+      let row = keptRows.get(peer.id);
+      if (!row) {
+        row = statsRow(peer.name || shortPeer(peer.id), pairs, undefined, level ? { level, text: level } : null);
+        keptRows.set(peer.id, row);
       }
+      writeGuestRow(row, pairs, level);
+      rows.push(row);
     }
+    for (const key of [...keptRows.keys()]) if (!seen.has(key)) keptRows.delete(key);
     rows.push(statsRow('you', ownPairs(total)));
     // Alarms and verdict sit above the graphs, so a red line is the first thing
     // on the panel.

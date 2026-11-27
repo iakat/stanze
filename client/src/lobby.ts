@@ -16,6 +16,8 @@ const LOBBY_STEP = 16;
 function lobbyPlace(win, x, y) {
   const w = win.offsetWidth;
   const h = win.offsetHeight;
+  // A window wider than the viewport still leaves its left edge at the rim and
+  // its right edge reachable.
   const maxX = Math.max(0, document.documentElement.clientWidth - w);
   const maxY = Math.max(0, window.innerHeight - h);
   const cx = clamp(Math.round(x), 0, maxX);
@@ -66,12 +68,29 @@ export function initLobbyWindow() {
     grab = null;
     win.classList.remove('dragging');
     keep(at());
+    // A mouse that left the bar during the drag leaves it out of the tab order.
+    if (!bar.matches(':hover')) focusable(false);
   };
   bar.addEventListener('pointerup', drop);
   bar.addEventListener('pointercancel', drop);
 
-  bar.tabIndex = 0;
-  bar.setAttribute('aria-label', 'stanze window, move it with the arrow keys');
+  // The bar takes the focus from a pointer, and lets it go again, so a guest
+  // who grabs the window can move it with the arrow keys. It is not a tab stop:
+  // the tab order starts at the skip link and the form, never at the frame.
+  const focusable = (on: boolean) => {
+    if (on) {
+      bar.tabIndex = 0;
+      bar.setAttribute('aria-label', 'stanze window, move it with the arrow keys');
+    } else {
+      bar.removeAttribute('tabindex');
+      bar.removeAttribute('aria-label');
+    }
+  };
+  focusable(false);
+  bar.addEventListener('pointerenter', () => focusable(true));
+  bar.addEventListener('pointerleave', () => {
+    if (!grab) focusable(false);
+  });
   bar.addEventListener('keydown', (event: KeyboardEvent) => {
     const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[
       event.key
@@ -81,11 +100,23 @@ export function initLobbyWindow() {
     const here = at();
     keep(lobbyPlace(win, here.x + d[0] * LOBBY_STEP, here.y + d[1] * LOBBY_STEP));
   });
-
-  // A smaller viewport pulls the window back in.
-  window.addEventListener('resize', () => {
-    if (!win.classList.contains('moved') || win.hidden) return;
+  // A smaller viewport, or a rotation, pulls the window back in. On a phone the
+  // window takes its own place again: a fixed left and top from a wide screen
+  // has nothing to clamp against in a narrow one.
+  const small = typeof matchMedia === 'function' ? matchMedia('(max-width: 700px)') : null;
+  const fit = () => {
+    if (win.hidden || !win.classList.contains('moved')) return;
+    if (small && small.matches) {
+      win.classList.remove('moved');
+      win.style.left = '';
+      win.style.top = '';
+      keep(null);
+      return;
+    }
     const here = at();
     lobbyPlace(win, here.x, here.y);
-  });
+  };
+  if (small) small.addEventListener('change', fit);
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', fit);
 }

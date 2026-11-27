@@ -9,7 +9,8 @@ import { detachMedia, disconnectQuietly, isAdmin, joinWords, say, stopQuietly } 
 import { store } from './prefs.js';
 import { layoutStage, makeTile, ownTile, paintRowDeaf, setLocalTile } from './tiles.js';
 import { applyFlags, paintVolume } from './volume.js';
-import { isRouted } from './presence.js';
+import { SPEAK_FFT } from './audio.js';
+import { isRouted, stageLayoutSoon } from './presence.js';
 import { paintWaiting } from './host.js';
 import { MIC_AUDIO, applyQuality, ask, camVideo, capVideoSender } from './media.js';
 import {
@@ -605,7 +606,7 @@ export function paintSelfCam(on) {
     self.classList.remove('playing');
     detachMedia(video);
   }
-  layoutStage();
+  stageLayoutSoon();
 }
 
 // paintPeerVideo shows or hides one guest picture. A deafened guest draws none,
@@ -624,7 +625,7 @@ export function paintPeerVideo(peer) {
   } else {
     dropPeerCamera(peer);
   }
-  layoutStage();
+  stageLayoutSoon();
 }
 
 // dropPeerCamera empties the element and lets the tile fall back to its name. The
@@ -673,7 +674,7 @@ export function paintPeerScreen(peer) {
     peer.screenTile.classList.remove('playing');
     detachMedia(video);
   }
-  layoutStage();
+  stageLayoutSoon();
 }
 
 // dropPeerScreen removes the tile and its frozen last frame. The receiver track
@@ -685,7 +686,7 @@ export function dropPeerScreen(peer) {
   detachMedia(video);
   peer.screenTile.remove();
   peer.screenTile = null;
-  layoutStage();
+  stageLayoutSoon();
 }
 
 // clearFreeze drops the frozen still and unticks its switch, so the live camera
@@ -821,6 +822,6 @@ async function buildAudio() {
 function startMeter() {
   if (!state.audioCtx || !state.micSource || state.micAnalyser) return;
   state.micAnalyser = state.audioCtx.createAnalyser();
-  state.micAnalyser.fftSize = 1024;
+  state.micAnalyser.fftSize = SPEAK_FFT;
   state.micSource.connect(state.micAnalyser);
 }

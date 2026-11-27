@@ -499,7 +499,7 @@ func folderNames() []string {
 
 func assetNames() []string {
 	return []string{
-		"index.html", "app.js", "style.css", "favicon.svg",
+		"index.html", "app.js", "brand.js", "style.css", "favicon.svg",
 		// The commit the page was built from, written by build.sh or the image.
 		"version.txt",
 		// The house typeface: Arial metrics, shipped with the page so every

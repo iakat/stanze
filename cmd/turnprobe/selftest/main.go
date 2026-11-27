@@ -307,7 +307,7 @@ func testHTTPSurface() {
 		bytes.Contains(body, []byte("http://")), "external resource found"))
 
 	for _, path := range []string{
-		"/app.js", "/style.css", "/favicon.svg",
+		"/app.js", "/brand.js", "/style.css", "/favicon.svg",
 		// The version query is ignored by the route and must still be served,
 		// so a cache buster never costs a 404.
 		"/app.js?v=test", "/style.css?v=test",

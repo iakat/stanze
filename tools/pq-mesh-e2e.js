@@ -338,6 +338,7 @@ async function dump(page, label, errors) {
     // A guest leaves: one pair remains, so the chip counts one guest and that
     // guest keeps its own code on its tile.
     await c.page.click('#leave-btn');
+    await c.page.click('#leave-btn');
     for (const g of [a, b]) {
       await until(g.page, () => window.e2eApp.peers().length === 1 && window.e2eApp.peers()[0].ready === 'ready',
         null, 60000, 'one peer left').catch(() => null);

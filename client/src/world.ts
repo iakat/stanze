@@ -44,10 +44,6 @@ export const DIR = ['down', 'left', 'right', 'up'];
 // on screen and always named, however far the map carries them; the marker
 // says which edge, and an arrow under it says which way that guest lies.
 export const EDGE = CHAR_W;
-// EDGE_INSET is how far from the rim a marker sits, in screen pixels.
-const EDGE_INSET = 3;
-// EDGE_GAP is the room between two markers of one edge.
-const EDGE_GAP = 4;
 
 export type World = {
   room: string;
@@ -617,6 +613,21 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // on any layer collides when its tileset tile says so.
   const blocked = new Uint8Array(width * height);
 
+  // One lookup per gid, built before the draw: the atlas frame of a cell, or the
+  // tileset that holds it and its place in that sheet. A floor of a thousand
+  // cells asks once per gid instead of scanning the atlas and the tilesets per
+  // cell. A gid this map can not draw is left out of the table.
+  const draw: { frame: any; set: TileSet | null }[] = [];
+  const lookup = (gid: number) => {
+    if (draw[gid]) return draw[gid];
+    const frame = atlasImage && atlas ? atlas.frames.get(gid) || null : null;
+    let set: TileSet | null = null;
+    if (!frame) for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
+    const hit = frame || set ? { frame, set } : null;
+    draw[gid] = hit;
+    return hit;
+  };
+
   const paint = (target: CanvasRenderingContext2D, layer: any, data: number[]) => {
     const opacity = layer.opacity === undefined ? 1 : Number(layer.opacity);
     const alpha = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
@@ -627,13 +638,13 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       const dx = (i % width) * tw;
       const dy = Math.floor(i / width) * th;
       target.globalAlpha = alpha;
-      const frame = atlasImage && atlas && atlas.frames.size ? atlas.frames.get(gid) || null : null;
+      const hit = lookup(gid);
+      if (!hit) continue;
+      const { frame, set } = hit;
       if (frame) {
         target.drawImage(atlasImage as HTMLImageElement, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
         continue;
       }
-      let set: TileSet | null = null;
-      for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
       if (!set) continue;
       const index = gid - set.firstgid;
       const sx = set.margin + (index % set.columns) * (set.tileWidth + set.spacing);

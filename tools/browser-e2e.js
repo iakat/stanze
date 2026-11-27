@@ -628,6 +628,7 @@ async function stats(page) {
 
     // ---- relay only path from the browser, over whatever this server speaks
     await pageA.click('#leave-btn');
+    await pageA.click('#leave-btn');
     await until(pageA, () => !document.getElementById('lobby').hidden, null, 20000, 'A back in the lobby');
     await pageA.evaluate(() => {
       const pick = document.getElementById('path');

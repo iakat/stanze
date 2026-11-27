@@ -5,12 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>stanze</title>
+<script type="module" src="/brand.js"></script>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/lsans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/lsans-bold.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css?v=20261125g">
 </head>
 <body>
+
+<a class="skip-link" href="#name">skip to the join form</a>
 
 <main id="lobby" class="window lobby">
   <div class="titlebar">
@@ -19,6 +22,7 @@
     <span class="tbbuttons"><span class="tbcap"></span><span class="tbcap"></span><span class="tbcap close">×</span></span>
   </div>
   <div class="window-body">
+    <h1 class="lobby-title">stanze</h1>
     <p class="hint">Peer to peer video and audio, sealed in the browser. Nothing is recorded.</p>
 
     <form id="join-form" autocomplete="off">
@@ -30,13 +34,11 @@
           </label>
           <label class="field"><span>room</span>
             <span class="with-button">
-              <input id="room" maxlength="64" placeholder="new room" spellcheck="false" autocapitalize="off">
-              <button id="newid-btn" type="button" title="suggest another random room id">new</button>
+              <input id="room" maxlength="64" placeholder="new room" spellcheck="false" autocapitalize="off" aria-describedby="room-hint">
+              <button id="newid-btn" type="button" title="suggest another room id">new</button>
             </span>
           </label>
-          <label class="field"><span>passphrase</span>
-            <input id="pass" type="password" maxlength="128" placeholder="if the room has one">
-          </label>
+          <p id="room-hint" class="field-hint">leave empty to make a new room</p>
           <label class="check"><input id="noise" type="checkbox" checked> noise cancel</label>
         </fieldset>
 
@@ -60,10 +62,29 @@
             </select>
           </label>
           <label class="field"><span>quality</span>
-            <input id="perf" type="range" min="0" max="3" step="1" value="0" aria-describedby="perf-text">
+            <input id="perf" type="range" min="0" max="3" step="1" value="3" aria-describedby="perf-text">
           </label>
+          <div class="field"><span>step</span>
+            <output id="perf-out" class="perf-out" for="perf">full quality</output>
+          </div>
         </fieldset>
       </div>
+
+      <details class="advanced">
+        <summary>advanced</summary>
+        <div class="advanced-body">
+          <label class="field"><span>room passphrase (if the room has one)</span>
+            <input id="pass" type="password" maxlength="128" placeholder="empty for an open room">
+          </label>
+          <label class="field"><span>path</span>
+            <select id="path">
+              <option value="auto">automatic</option>
+              <option value="p2p">direct</option>
+              <option value="relay">relay</option>
+            </select>
+          </label>
+        </div>
+      </details>
 
       <p id="perf-text" class="note"></p>
       <p id="sealed-note" class="note" hidden></p>
@@ -71,11 +92,11 @@
         forwards sealed blobs only. Compare the emoji code with the others. Path: automatic relays when it helps,
         direct never, relay hides your address.</p>
 
+  <p id="lobby-error" class="error" tabindex="-1" role="alert" aria-live="assertive" hidden></p>
       <div class="join-foot">
         <button id="enter-btn" type="submit">enter</button>
         <span class="foot"><a href="/QUEUE.md">queue</a> | <a href="/DONE.md">done</a> | emoji: OpenMoji, CC BY-SA 4.0</span>
       </div>
-      <p id="lobby-error" class="error" hidden></p>
     </form>
   </div>
 </main>
@@ -210,6 +231,7 @@
     </div>
     <div class="menubar-slot menubar-right">
       <button id="copy-btn" class="menubar-item" type="button">copy link</button>
+      <span id="copy-status" class="visually-hidden" role="status" aria-live="polite"></span>
     </div>
   </div>
 
@@ -221,11 +243,11 @@
         <button id="deaf-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F507.svg" alt="" width="22" height="22"><span>deafen</span></button>
         <button id="share-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F5A5.svg" alt="" width="22" height="22"><span>share screen</span></button>
         <button id="hand-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F590.svg" alt="" width="22" height="22"><span>raise hand</span></button>
-        <button id="world-btn" type="button" class="ctrl" aria-pressed="true"><img class="ico" src="/openmoji/1F5BC.svg" alt="" width="22" height="22"><span>call grid</span></button>
+        <button id="world-btn" type="button" class="ctrl" aria-pressed="true" aria-label="show the call grid"><img class="ico" src="/openmoji/1F5BC.svg" alt="" width="22" height="22"><span>call grid</span></button>
         <button id="stats-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F4C9.svg" alt="" width="22" height="22"><span>stats</span></button>
         <button id="sfx-btn" type="button" class="ctrl" aria-pressed="false"><img class="ico" src="/openmoji/1F514.svg" alt="" width="22" height="22"><span>cues</span></button>
         <label class="pick perf-pick">performance
-          <input id="perf-live" type="range" min="0" max="3" step="1" value="0" aria-label="performance: picture quality against bandwidth and compute">
+          <input id="perf-live" type="range" min="0" max="3" step="1" value="3" aria-label="performance: picture quality against bandwidth and compute" aria-describedby="perf-live-text">
           <span id="perf-live-text" class="perf-name"></span>
         </label>
         <button id="leave-btn" type="button" class="ctrl danger"><img class="ico" src="/openmoji/1F6AA.svg" alt="" width="22" height="22"><span>leave</span></button>
@@ -303,6 +325,7 @@
       <aside class="chat" id="chat-panel">
         <div class="chat-head">chat <span id="chat-note" class="muted" hidden>(sealed, no server history)</span></div>
         <ol id="chat-log" class="chat-log"></ol>
+        <p id="chat-empty" class="chat-empty">no messages</p>
         <form id="chat-form" class="chat-form" autocomplete="off">
           <input id="chat-text" maxlength="500" placeholder="say something" spellcheck="false" autocomplete="off">
           <button id="file-btn" type="button" title="offer a file to the room, peer to peer">file</button>
@@ -317,9 +340,10 @@
   </div>
 
   <button id="chrome-btn" class="chrome-handle" type="button" aria-label="show the menus and the controls" aria-expanded="false">▴</button>
+  <p id="touch-hint" class="touch-hint" role="status" aria-live="polite" hidden>tap the screen for controls</p>
   <p id="buildtag" class="buildtag" hidden></p>
 </main>
 
-<script src="/app.js?v=20261125h"></script>
+<script src="/app.js?v=20261127a"></script>
 </body>
 </html>

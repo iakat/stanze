@@ -339,6 +339,7 @@
     state.notice = text;
     box.textContent = text;
     box.hidden = !text;
+    if (text && !state.room) box.focus();
   }
   function isAdmin(id) {
     return !!(id && state.admins && state.admins.has(id));
@@ -452,6 +453,11 @@
     if (at < text.length) out.appendChild(document.createTextNode(text.slice(at)));
     return out;
   }
+  function chatEmpty(log) {
+    const empty = document.getElementById("chat-empty");
+    if (!empty) return;
+    empty.hidden = log.children.length > 0;
+  }
   function addChatLine(name, text, ts) {
     const log = $("chat-log");
     if (!log) return;
@@ -469,13 +475,23 @@
     log.appendChild(li);
     while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
     log.scrollTop = log.scrollHeight;
+    chatEmpty(log);
+  }
+  function clearChat() {
+    const log = $("chat-log");
+    if (!log) return;
+    log.replaceChildren();
+    chatEmpty(log);
   }
 
   // src/presence.ts
   var routed = /* @__PURE__ */ new Map();
   var talks = /* @__PURE__ */ new Map();
-  var PROX_DEBUG = true;
   var proxNoteAt = 0;
+  function proxDebugOn() {
+    const w = window;
+    return !!(w && w.e2eApp && w.e2eApp.presenceDebug);
+  }
   function short(id) {
     return String(id || "").slice(0, 6);
   }
@@ -486,15 +502,26 @@
     return " at " + x + "," + y + (peer.waiting ? " waiting" : "");
   }
   function presenceDebug(text) {
-    if (!PROX_DEBUG) return;
+    if (!proxDebugOn()) return;
     addChatLine("debug", text, Date.now());
   }
   function proxNote(text) {
-    if (!PROX_DEBUG) return;
+    if (!proxDebugOn()) return;
     const now = Date.now();
     if (now - proxNoteAt < 1500) return;
     proxNoteAt = now;
     addChatLine("debug", text, now);
+  }
+  var stageDirty = false;
+  function stageLayoutSoon() {
+    if (stageDirty) return;
+    stageDirty = true;
+    const run = () => {
+      stageDirty = false;
+      layoutStage();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 0);
   }
   function setRouted(peerId, on) {
     if (routed.get(peerId) === on) return;
@@ -504,6 +531,7 @@
     if (!peer) return;
     applyGain(peer);
     paintPeerVideo(peer);
+    stageLayoutSoon();
   }
   function isRouted(peerId) {
     return routed.get(peerId) === true;
@@ -3287,15 +3315,26 @@
     return `${p.name}: camera ${v.width.ideal}x${v.height.ideal} at ${v.frameRate.ideal} frames, up to ${Math.round(q.max * p.bits / 1e3)} kbit/s. Sound is not changed.`;
   }
   function paintPerf() {
+    const step2 = state.perf >= 0 && state.perf < PERF.length ? state.perf : 0;
+    const index = PERF.length - 1 - step2;
     for (const id of ["perf", "perf-live"]) {
       const el2 = document.getElementById(id);
-      if (el2) el2.value = String(PERF.length - 1 - state.perf);
+      if (!el2) continue;
+      el2.value = String(index);
+      el2.setAttribute("aria-valuetext", PERF[index].name);
     }
-    for (const id of ["perf-text", "perf-live-text"]) {
+    for (const id of ["perf-text", "perf-live-text", "perf-out"]) {
       const el2 = document.getElementById(id);
       if (!el2) continue;
-      el2.textContent = id === "perf-text" ? perfText() : perfNow().name;
+      el2.textContent = id === "perf-text" ? perfText() : PERF[index].name;
     }
+  }
+  async function setPerf(index) {
+    const n = Math.min(Math.max(Math.round(index), 0), PERF.length - 1);
+    state.perf = PERF.length - 1 - n;
+    store("perf", state.perf);
+    paintPerf();
+    await applyQuality();
   }
   async function ask(constraints) {
     try {
@@ -3506,13 +3545,18 @@
     document.addEventListener("click", (event) => {
       const target = event.target;
       if (target.closest("#menubar")) return;
+      const inside2 = document.activeElement && document.activeElement.closest(".menubar-menu");
       menuSet(false);
+      const owner = inside2 ? inside2.closest(".menubar-slot") : null;
+      const btn = owner && owner.querySelector(".menubar-item");
+      if (btn) btn.focus();
     });
   }
   function suggestRoom() {
     const fp = state.idKey && state.idKey.fp ? state.idKey.fp : "";
     const room = newRoomID(fp);
-    $("room").value = room;
+    const box = $("room");
+    box.setRangeText(room, 0, box.value.length, "select");
     return room;
   }
   function normalizeRoom(raw) {
@@ -4177,6 +4221,18 @@
     fctx.imageSmoothingEnabled = false;
     wctx.imageSmoothingEnabled = false;
     const blocked = new Uint8Array(width * height);
+    const draw = [];
+    const lookup = (gid) => {
+      if (draw[gid]) return draw[gid];
+      const frame = atlasImage && atlas ? atlas.frames.get(gid) || null : null;
+      let set = null;
+      if (!frame) {
+        for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
+      }
+      const hit = frame || set ? { frame, set } : null;
+      draw[gid] = hit;
+      return hit;
+    };
     const paint = (target, layer, data) => {
       const opacity = layer.opacity === void 0 ? 1 : Number(layer.opacity);
       const alpha = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
@@ -4187,13 +4243,13 @@
         const dx = i % width * tw;
         const dy = Math.floor(i / width) * th;
         target.globalAlpha = alpha;
-        const frame = atlasImage && atlas && atlas.frames.size ? atlas.frames.get(gid) || null : null;
+        const hit = lookup(gid);
+        if (!hit) continue;
+        const { frame, set } = hit;
         if (frame) {
           target.drawImage(atlasImage, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
           continue;
         }
-        let set = null;
-        for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
         if (!set) continue;
         const index = gid - set.firstgid;
         const sx = set.margin + index % set.columns * (set.tileWidth + set.spacing);
@@ -4719,10 +4775,17 @@
   var watch = null;
   var sheets = [];
   var raf = 0;
-  var lastFrame = 0;
+  var lastPosAt = 0;
   var generation = 0;
   var near = [];
-  var worldStats = { loaded: 0, sent: 0, recv: 0, frames: 0, near: 0, zones: [] };
+  var worldStats = {
+    loaded: 0,
+    sent: 0,
+    recv: 0,
+    frames: 0,
+    near: 0,
+    zones: []
+  };
   function worldAvatar() {
     if (!view || !sheets.length) return;
     const self2 = view.avatars.get("self");
@@ -4730,7 +4793,10 @@
     view.mark();
   }
   function isWorld() {
-    return load("world") === "1";
+    return load("world") !== "0";
+  }
+  function worldPainted() {
+    document.dispatchEvent(new CustomEvent("worldview"));
   }
   function worldNode() {
     const box = document.getElementById("world-view");
@@ -4771,10 +4837,13 @@
       });
       worldStats.loaded++;
       worldStats.frames = 0;
-      lastFrame = 0;
-      worldSet(true);
-      note.hidden = false;
-      note.textContent = "walk with the arrow keys or w a s d; the room is on the presence line";
+      lastPosAt = 0;
+      const on = isWorld();
+      if (on) {
+        worldSet(true);
+        note.textContent = "walk with the arrow keys or w a s d; the room is on the presence line";
+      }
+      note.hidden = !on;
       layoutStage();
       startLoop();
     } catch (err) {
@@ -4813,28 +4882,22 @@
     if (view && on) view.mark();
     layoutStage();
     if (!on) updateCount();
+    worldPainted();
   }
   function worldToggle() {
     const on = !isWorld();
     store("world", on ? 1 : 0);
-    const { box } = worldNode();
-    if (on && !view) {
-      worldEnter(state.room).catch(() => {
-      });
-      return;
-    }
-    box.hidden = !on;
-    $("stage-main").hidden = on;
-    if (view) view.mark();
-    layoutStage();
+    worldSet(on);
+    if (on && !view) worldEnter(state.room).catch(() => {
+    });
   }
   function startLoop() {
     stopLoop();
     const run = () => {
       if (!view || !walker || state.leaving) return;
       const now = performance.now();
-      if (now - lastFrame >= POSITION_DELAY) {
-        lastFrame = now;
+      if (now - lastPosAt >= POSITION_DELAY) {
+        lastPosAt = now;
         step();
       }
       raf = requestAnimationFrame(run);
@@ -4914,6 +4977,7 @@
       if (isRouted(peer.id) !== wanted) setRouted(peer.id, wanted);
     }
     paintPresence();
+    stageLayoutSoon();
   }
   function worldOnPos(peer) {
     if (!view || !peer) return;
@@ -4968,7 +5032,12 @@
   function worldHook() {
     return {
       stats: () => ({ ...worldStats, frames: view ? view.frames : 0 }),
-      pos: () => view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y), dir: view.local.dir, moving: !!view.local.moving } : null,
+      pos: () => view && view.local ? {
+        x: Math.round(view.local.x),
+        y: Math.round(view.local.y),
+        dir: view.local.dir,
+        moving: !!view.local.moving
+      } : null,
       map: () => {
         if (!view) return null;
         const world = view.world;
@@ -5007,7 +5076,12 @@
       points: () => {
         const out = [];
         for (const [id, at] of remotePoints()) {
-          out.push({ id, x: at.x, y: at.y, zones: zones ? zones.at(at.x, at.y).map((z) => z.id + ":" + z.kind) : [] });
+          out.push({
+            id,
+            x: at.x,
+            y: at.y,
+            zones: zones ? zones.at(at.x, at.y).map((z) => z.id + ":" + z.kind) : []
+          });
         }
         return out;
       },
@@ -5130,6 +5204,7 @@
     log.appendChild(li);
     while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
     log.scrollTop = log.scrollHeight;
+    chatEmpty(log);
     return { li, bar, fill, status, acts };
   }
   function fileSetBar(el2, show, frac) {
@@ -5402,7 +5477,9 @@
     }
     const out = pqCall((json) => pqModule().open(json), {
       key: b64e(peer.keys.recvChat),
-      aad: b64e(fileAAD(peer.id, peer.id, rec.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+      aad: b64e(
+        fileAAD(peer.id, peer.id, rec.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)
+      ),
       b: frame.b
     });
     if (!out || out.error) {
@@ -5458,7 +5535,16 @@
       if (st.dead || out.cancelled) return;
       const sealed = pqCall((json) => pqModule().seal(json), {
         key: b64e(peer.keys.sendChat),
-        aad: b64e(fileAAD(peer.id, state.self, out.x, q, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+        aad: b64e(
+          fileAAD(
+            peer.id,
+            state.self,
+            out.x,
+            q,
+            state.idKey && state.idKey.pub,
+            peer.pub && peer.pub.id
+          )
+        ),
         pt: b64e(buf)
       });
       if (!sealed || !sealed.b) {
@@ -5794,7 +5880,9 @@
     timer: 0,
     recs: /* @__PURE__ */ new Map(),
     // peer id -> { rec, proc, src, sink }
-    lib: null
+    lib: null,
+    retired: []
+    // [{ model, timer }] no longer the model, worker freed after 2 s
   };
   var omni = {
     probed: false,
@@ -6152,6 +6240,19 @@
   function asrSync() {
     syncTaps(asr, asrTap, asrUntap);
   }
+  function asrRetire(model) {
+    const one = { model, timer: 0 };
+    one.timer = setTimeout(() => {
+      const i = asr.retired.indexOf(one);
+      if (i < 0) return;
+      asr.retired.splice(i, 1);
+      try {
+        model.terminate();
+      } catch {
+      }
+    }, 2e3);
+    asr.retired.push(one);
+  }
   function asrStop() {
     if (asr.abort) asr.abort.abort();
     asr.abort = null;
@@ -6161,13 +6262,7 @@
     asr.timer = 0;
     for (const id of [...asr.recs.keys()]) asrUntap(id);
     if (asr.model) {
-      const model = asr.model;
-      setTimeout(() => {
-        try {
-          model.terminate();
-        } catch {
-        }
-      }, 2e3);
+      asrRetire(asr.model);
       asr.model = null;
     }
     asr.busy = false;
@@ -6195,16 +6290,17 @@
       asrNote("starting the transcription engine");
       const Vosk = await asrLoadLib();
       const url = URL.createObjectURL(blob);
+      let made = null;
       try {
-        asr.model = await Vosk.createModel(url);
+        made = await Vosk.createModel(url);
       } finally {
         setTimeout(() => URL.revokeObjectURL(url), 1e3);
       }
       if (signal.aborted) {
-        asr.model.terminate();
-        asr.model = null;
+        asrRetire(made);
         return;
       }
+      asr.model = made;
       asr.on = true;
       asr.busy = false;
       asr.abort = null;
@@ -7244,7 +7340,9 @@
       case "app": {
         if (!msg.b) return;
         if (!peer.keys || !peer.keysInstalled) {
-          if ((peer.appPending = peer.appPending || []).length < 64) peer.appPending.push(msg);
+          if (!peer.appPending) peer.appPending = [];
+          if (peer.appPending.length < 64) peer.appPending.push(msg);
+          else sealedGapReset(peer);
           return;
         }
         const seq = Number(msg.q);
@@ -7280,7 +7378,9 @@
     peer.seqIn = seq;
     if (obj[PAD_KEY] !== void 0) delete obj[PAD_KEY];
     if (obj.k !== "spake" && obj.k !== "spakeok" && obj.k !== "kick" && !(peer.pass && peer.pass.done)) {
-      if ((peer.appHeld = peer.appHeld || []).length < 256) peer.appHeld.push(obj);
+      if (!peer.appHeld) peer.appHeld = [];
+      if (peer.appHeld.length < 256) peer.appHeld.push(obj);
+      else sealedGapReset(peer);
       return;
     }
     sealedDispatchApp(peer, obj);
@@ -7975,13 +8075,13 @@
   }
   async function flushPending(peer) {
     const queued = peer.pending.splice(0);
-    for (const cand of queued) {
-      try {
-        await peer.pc.addIceCandidate(cand);
-      } catch (err) {
-        if (!peer.ignoreOffer) console.warn("candidate rejected", errName(err));
-      }
-    }
+    await Promise.allSettled(
+      queued.map(
+        (cand) => peer.pc.addIceCandidate(cand).catch((err) => {
+          if (!peer.ignoreOffer) console.warn("candidate rejected", errName(err));
+        })
+      )
+    );
   }
   function onDescription(peer, type, sdp) {
     const run = () => applyDescription(peer, type, sdp);
@@ -8017,10 +8117,20 @@
       say("the " + type + " with " + shortPeer(peer.id) + " failed; the link has no media");
     }
   }
+  var PENDING_MAX = 100;
+  var pendingWarned = false;
   async function onCandidate(peer, candidate) {
     if (!candidate) return;
     if (!peer.pc || !peer.pc.remoteDescription) {
-      peer.pending.push(candidate);
+      if (peer.pending.length < PENDING_MAX) {
+        peer.pending.push(candidate);
+        return;
+      }
+      peer.pendingDropped = (peer.pendingDropped || 0) + 1;
+      if (!pendingWarned) {
+        pendingWarned = true;
+        console.warn("a candidate queue is full, further candidates are dropped and counted");
+      }
       return;
     }
     try {
@@ -8197,6 +8307,12 @@
       });
     }
   }
+  var shareEnded = null;
+  function releaseShareEnded(video) {
+    if (!shareEnded || !video) return;
+    video.removeEventListener("ended", shareEnded);
+    shareEnded = null;
+  }
   async function startShare() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
       say("screen sharing is not supported by this browser");
@@ -8218,7 +8334,9 @@
     const video = display.getVideoTracks()[0];
     if (video) {
       video.contentHint = "detail";
-      video.addEventListener("ended", () => stopShare());
+      releaseShareEnded(video);
+      shareEnded = () => stopShare();
+      video.addEventListener("ended", shareEnded, { once: true });
       await replaceScreenTrack(video);
       const tile = makeTile(state.name, state.name, true, true);
       tile.dataset.state = "connected";
@@ -8244,6 +8362,8 @@
   }
   async function stopShare() {
     if (!state.screen) return;
+    const video = state.screen.getVideoTracks()[0];
+    releaseShareEnded(video);
     stopTracks(state.screen);
     if (state.screenSource) {
       disconnectQuietly(state.screenSource);
@@ -8859,7 +8979,7 @@
       self2.classList.remove("playing");
       detachMedia(video);
     }
-    layoutStage();
+    stageLayoutSoon();
   }
   function paintPeerVideo(peer) {
     const video = peer.tile && peer.tile.querySelector("video");
@@ -8874,7 +8994,7 @@
     } else {
       dropPeerCamera(peer);
     }
-    layoutStage();
+    stageLayoutSoon();
   }
   function dropPeerCamera(peer) {
     const video = peer.tile && peer.tile.querySelector("video");
@@ -8911,7 +9031,7 @@
       peer.screenTile.classList.remove("playing");
       detachMedia(video);
     }
-    layoutStage();
+    stageLayoutSoon();
   }
   function dropPeerScreen(peer) {
     if (!peer.screenTile) return;
@@ -8920,7 +9040,7 @@
     detachMedia(video);
     peer.screenTile.remove();
     peer.screenTile = null;
-    layoutStage();
+    stageLayoutSoon();
   }
   function clearFreeze() {
     if (!state.freeze) return;
@@ -9026,7 +9146,7 @@
   function startMeter() {
     if (!state.audioCtx || !state.micSource || state.micAnalyser) return;
     state.micAnalyser = state.audioCtx.createAnalyser();
-    state.micAnalyser.fftSize = 1024;
+    state.micAnalyser.fftSize = SPEAK_FFT;
     state.micSource.connect(state.micAnalyser);
   }
 
@@ -9035,17 +9155,22 @@
   var SPEAK_ON = 0.03;
   var SPEAK_HOLD_MS = 400;
   var speakBufs = /* @__PURE__ */ new WeakMap();
+  var SPEAK_FFT = 256;
   function analyserLevel(a) {
     if (!a) return 0;
+    if (a.fftSize !== SPEAK_FFT) a.fftSize = SPEAK_FFT;
     let buf = speakBufs.get(a);
     if (!buf || buf.length !== a.fftSize) {
       buf = new Float32Array(a.fftSize);
       speakBufs.set(a, buf);
     }
     a.getFloatTimeDomainData(buf);
-    let sum = 0;
-    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-    return Math.sqrt(sum / buf.length);
+    let peak = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = buf[i] < 0 ? -buf[i] : buf[i];
+      if (v > peak) peak = v;
+    }
+    return peak;
   }
   function paintSpeaking(tile, level, hold) {
     if (!tile) return;
@@ -9336,7 +9461,7 @@
     peer.audioSrc.connect(peer.gain);
     peer.gain.connect(ctx.destination);
     peer.meter = ctx.createAnalyser();
-    peer.meter.fftSize = 1024;
+    peer.meter.fftSize = SPEAK_FFT;
     peer.audioSrc.connect(peer.meter);
     if (peer.inNoise)
       void setPeerNoise(peer, true, peer.inEngine === "gtcrn" ? "gtcrn" : "fastenhancer");
@@ -10387,6 +10512,7 @@
     else stopStats();
   }
   function clearStatsPanel() {
+    keptRows.clear();
     const body = $("stats-body");
     if (body) body.replaceChildren();
     const sum = $("stats-sum");
@@ -10932,6 +11058,67 @@
       lossMax > 0 ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}` : `loss none, ${secs}`
     );
   }
+  var keptRows = /* @__PURE__ */ new Map();
+  function setText(node, text) {
+    const s = String(text);
+    if (node.textContent !== s) node.textContent = s;
+  }
+  function setClass(node, name, on) {
+    if (node.classList.contains(name) !== !!on) node.classList.toggle(name, !!on);
+  }
+  function writeCells(span, value, metrics) {
+    const parts = Array.isArray(value) ? value : [value];
+    if (span.children.length !== parts.length) {
+      span.replaceChildren(...statCells(value, metrics).childNodes);
+      return;
+    }
+    for (let i = 0; i < parts.length; i++) {
+      const raw = parts[i];
+      const p = Array.isArray(raw) ? raw : [raw];
+      const cell = span.children[i];
+      const word = p.length > 1 ? p[2] : p[0];
+      const text = cell.lastElementChild;
+      if (text) setText(text, word === null || word === void 0 ? "" : String(word));
+      setClass(cell, "good", p[3] === true);
+      setClass(cell, "bad", p[3] === false);
+    }
+  }
+  function meterInto(line, meter) {
+    const bar = line.querySelector(".meter");
+    const fill = bar && bar.querySelector("i");
+    if (!bar || !fill || typeof meter !== "number") return;
+    const pct = `${Math.round(meter * 100)}%`;
+    if (fill.style.width !== pct) fill.style.width = pct;
+    const word = `level ${Math.round(meter * 100)} percent`;
+    if (bar.getAttribute("aria-label") !== word) bar.setAttribute("aria-label", word);
+  }
+  function writeGuestRow(row, pairs, level) {
+    const head = row.querySelector(".sname");
+    let chip = head && head.querySelector(".sbadge");
+    if (head) {
+      if (level && !chip) {
+        chip = document.createElement("span");
+        chip.className = "sbadge";
+        head.appendChild(chip);
+      }
+      if (chip) {
+        if (level) {
+          chip.dataset.level = level;
+          setText(chip, level);
+        } else chip.remove();
+      }
+    }
+    const lines = row.children;
+    for (let i = 0; i < pairs.length; i++) {
+      const line = lines[i + 1];
+      if (!line) break;
+      const p = pairs[i];
+      writeCells(line.querySelector(".sv"), p[1], p[3] === "metrics");
+      setClass(line, "good", p[2] === true);
+      setClass(line, "bad", p[2] === false);
+      if (typeof p[4] === "number") meterInto(line, p[4]);
+    }
+  }
   async function updateStats() {
     if (!statsOpen() || state.statsBusy) return;
     const body = $("stats-body");
@@ -10940,39 +11127,41 @@
     try {
       const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
       const live = [];
-      const guests = [];
-      for (const peer of state.peers.values()) {
-        const s = await peerStats(peer);
+      const peers = [...state.peers.values()];
+      const reports = await Promise.all(peers.map((peer) => peerStats(peer)));
+      const guests = peers.map((peer, i) => {
+        const s = reports[i];
         if (s) {
           live.push(s);
           for (const dir of ["up", "down"]) {
             for (const kind of ["audio", "video"]) total[dir][kind] += s[dir][kind];
           }
         }
-        guests.push({ peer, s });
-      }
-      const rows = [];
+        return { peer, s };
+      });
       recordStatsHistory(total, live);
+      const rows = [];
       if (state.peers.size > 1) {
         const call = callPairs(live, total);
         if (call.length) rows.push(statsRow("call", call));
       }
+      const seen = /* @__PURE__ */ new Set();
       for (const { peer, s } of guests) {
         if (s && s.path && peer.tile)
           peer.tile.dataset.relay = s.path.startsWith("relay") ? "yes" : "no";
         const level = linkLevel(s);
         const pairs = peerPairs(peer, s);
-        if (pairs.length) {
-          rows.push(
-            statsRow(
-              peer.name || shortPeer(peer.id),
-              pairs,
-              void 0,
-              level ? { level, text: level } : null
-            )
-          );
+        if (!pairs.length) continue;
+        seen.add(peer.id);
+        let row = keptRows.get(peer.id);
+        if (!row) {
+          row = statsRow(peer.name || shortPeer(peer.id), pairs, void 0, level ? { level, text: level } : null);
+          keptRows.set(peer.id, row);
         }
+        writeGuestRow(row, pairs, level);
+        rows.push(row);
       }
+      for (const key of [...keptRows.keys()]) if (!seen.has(key)) keptRows.delete(key);
       rows.push(statsRow("you", ownPairs(total)));
       $("stats-sum").replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
       const legend = document.createElement("p");
@@ -11571,7 +11760,7 @@
     state.cam = false;
     setAdmins([]);
     state.peers.clear();
-    if ($("chat-log")) $("chat-log").replaceChildren();
+    if ($("chat-log")) clearChat();
     setHash("");
     if (was) $("room").value = was;
     else suggestRoom();
@@ -12213,11 +12402,24 @@
       grab = null;
       win2.classList.remove("dragging");
       keep(at());
+      if (!bar.matches(":hover")) focusable(false);
     };
     bar.addEventListener("pointerup", drop);
     bar.addEventListener("pointercancel", drop);
-    bar.tabIndex = 0;
-    bar.setAttribute("aria-label", "stanze window, move it with the arrow keys");
+    const focusable = (on) => {
+      if (on) {
+        bar.tabIndex = 0;
+        bar.setAttribute("aria-label", "stanze window, move it with the arrow keys");
+      } else {
+        bar.removeAttribute("tabindex");
+        bar.removeAttribute("aria-label");
+      }
+    };
+    focusable(false);
+    bar.addEventListener("pointerenter", () => focusable(true));
+    bar.addEventListener("pointerleave", () => {
+      if (!grab) focusable(false);
+    });
     bar.addEventListener("keydown", (event) => {
       const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
       if (!d) return;
@@ -12225,11 +12427,21 @@
       const here = at();
       keep(lobbyPlace(win2, here.x + d[0] * LOBBY_STEP, here.y + d[1] * LOBBY_STEP));
     });
-    window.addEventListener("resize", () => {
-      if (!win2.classList.contains("moved") || win2.hidden) return;
+    const small = typeof matchMedia === "function" ? matchMedia("(max-width: 700px)") : null;
+    const fit = () => {
+      if (win2.hidden || !win2.classList.contains("moved")) return;
+      if (small && small.matches) {
+        win2.classList.remove("moved");
+        win2.style.left = "";
+        win2.style.top = "";
+        keep(null);
+        return;
+      }
       const here = at();
       lobbyPlace(win2, here.x, here.y);
-    });
+    };
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
   }
 
   // src/lab.ts
@@ -12366,6 +12578,9 @@
 
   // src/boot.ts
   win().e2eApp = {
+    // The proximity lines in the room log are off for a person; the browser test
+    // turns them on here to read why a neighbour is heard or not.
+    presenceDebug: false,
     get state() {
       return state;
     },
@@ -12502,17 +12717,23 @@
       });
     }).catch(() => false);
   }
+  function showTouchHint() {
+    const hint = document.getElementById("touch-hint");
+    if (!hint || load("touchhint") === "1") return;
+    hint.hidden = false;
+    const done = () => {
+      hint.hidden = true;
+      store("touchhint", 1);
+      document.removeEventListener("pointerdown", done, true);
+    };
+    document.addEventListener("pointerdown", done, true);
+  }
   function restorePrefs() {
     purgeNamedVolume();
     const fromHash = roomFromHash();
     const last = load("room");
-    if (fromHash) {
-      $("room").value = fromHash;
-    } else if (last && ROOM_RE.test(last)) {
-      $("room").value = last;
-    } else {
-      suggestRoom();
-    }
+    if (fromHash) $("room").value = fromHash;
+    else if (last && ROOM_RE.test(last)) $("room").value = last;
     const lastName = load("name");
     if (lastName) $("name").value = lastName;
     state.mic = load("mic") !== "0";
@@ -12532,6 +12753,7 @@
     const storedPerf = parseInt(load("perf"), 10);
     state.perf = storedPerf >= 0 && storedPerf < PERF.length ? storedPerf : 0;
     paintPerf();
+    showTouchHint();
     state.noiseWanted = load("noise") !== "0";
     $("noise").checked = state.noiseWanted;
     $("noise-live").checked = state.noiseWanted;
@@ -12638,12 +12860,8 @@
     for (const id of ["perf", "perf-live"]) {
       const el2 = document.getElementById(id);
       if (!el2) continue;
-      el2.addEventListener("input", async () => {
-        const n = parseInt(el2.value, 10);
-        state.perf = n >= 0 && n < PERF.length ? PERF.length - 1 - n : 0;
-        store("perf", state.perf);
-        paintPerf();
-        await applyQuality();
+      el2.addEventListener("input", () => {
+        setPerf(parseInt(el2.value, 10));
       });
     }
     $("path").addEventListener("change", () => {
@@ -12768,18 +12986,21 @@
       });
     }
     const worldBtn = document.getElementById("world-btn");
+    const paintWorld = () => {
+      if (!worldBtn) return;
+      const on = isWorld();
+      worldBtn.setAttribute("aria-pressed", String(on));
+      worldBtn.querySelector("span").textContent = on ? "call grid" : "world";
+      worldBtn.setAttribute("aria-label", on ? "show the call grid" : "show the world");
+      worldBtn.title = on ? "show the call grid" : "show the world";
+    };
     if (worldBtn) {
-      const paint = () => {
-        const on = isWorld();
-        worldBtn.setAttribute("aria-pressed", String(on));
-        worldBtn.textContent = on ? "call grid" : "world";
-        worldBtn.title = on ? "show the call grid" : "show the world";
-      };
       worldBtn.addEventListener("click", () => {
         worldToggle();
-        paint();
+        paintWorld();
       });
-      paint();
+      paintWorld();
+      document.addEventListener("worldview", paintWorld);
     }
     const avatarPick = document.getElementById("avatar-pick");
     if (avatarPick) {
@@ -12805,7 +13026,14 @@
       }
     });
   }
+  function armLeave(btn, label) {
+    btn.classList.remove("armed");
+    if (label) label.textContent = "leave";
+    btn.removeAttribute("aria-label");
+  }
   function wireCallBar() {
+    const leaveBtn = $("leave-btn");
+    const leaveLabel = leaveBtn.querySelector("span");
     $("share-btn").addEventListener("click", () => {
       if (state.screen) stopShare();
       else startShare();
@@ -12820,16 +13048,32 @@
     });
     $("deaf-btn").addEventListener("click", () => setDeaf(!state.deaf));
     $("hand-btn").addEventListener("click", () => setHand(!state.hand));
-    $("leave-btn").addEventListener("click", () => leave(""));
+    $("leave-btn").addEventListener("click", (event) => {
+      if (!leaveBtn.classList.contains("armed")) {
+        leaveBtn.classList.add("armed");
+        leaveLabel.textContent = "leave?";
+        leaveBtn.setAttribute("aria-label", "click again to leave the call");
+        if (!event.isTrusted) leaveBtn.click();
+        return;
+      }
+      armLeave(leaveBtn, leaveLabel);
+      leave("");
+    });
     $("copy-btn").addEventListener("click", async () => {
       const link = `${location.origin}/#r=${encodeURIComponent(state.room)}`;
+      const status = document.getElementById("copy-status");
+      const tell = (text) => {
+        if (status) status.textContent = text;
+      };
       try {
         await navigator.clipboard.writeText(link);
         $("copy-btn").textContent = "copied";
+        tell("the link to this room is copied");
         setTimeout(() => {
           $("copy-btn").textContent = "copy link";
         }, 1500);
       } catch {
+        tell("the clipboard is not available; the link is in the dialog");
         window.prompt("copy this link", link);
       }
     });

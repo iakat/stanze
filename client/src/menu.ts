@@ -158,7 +158,13 @@ export function wireMenuBar() {
   document.addEventListener('click', (event) => {
     const target = event.target as Element;
     if (target.closest('#menubar')) return;
+    // A panel that held the focus hands it back to its own button, or the
+    // focus falls to the body and a keyboard guest loses its place.
+    const inside = document.activeElement && document.activeElement.closest('.menubar-menu');
     menuSet(false);
+    const owner = inside ? inside.closest('.menubar-slot') : null;
+    const btn = owner && (owner.querySelector('.menubar-item') as HTMLElement | null);
+    if (btn) btn.focus();
   });
 }
 
@@ -168,7 +174,10 @@ export function wireMenuBar() {
 export function suggestRoom() {
   const fp = state.idKey && state.idKey.fp ? state.idKey.fp : '';
   const room = newRoomID(fp);
-  $('room').value = room;
+  // The field keeps a snapshot of the value it held, so one click of the
+  // browser's own undo brings back exactly what was typed there.
+  const box = $('room');
+  box.setRangeText(room, 0, box.value.length, 'select');
   return room;
 }
 

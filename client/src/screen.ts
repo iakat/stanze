@@ -20,6 +20,17 @@ async function replaceScreenTrack(track) {
   }
 }
 
+// A share ends once: the track that stops fires `ended`, and the guest can
+// also press the stop switch. One handler runs one stopShare, and stopShare
+// takes it off before it stops the tracks, so the second path finds nothing.
+let shareEnded: (() => void) | null = null;
+
+function releaseShareEnded(video) {
+  if (!shareEnded || !video) return;
+  video.removeEventListener('ended', shareEnded);
+  shareEnded = null;
+}
+
 export async function startShare() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
     say('screen sharing is not supported by this browser');
@@ -41,7 +52,9 @@ export async function startShare() {
   const video = display.getVideoTracks()[0];
   if (video) {
     video.contentHint = 'detail';
-    video.addEventListener('ended', () => stopShare());
+    releaseShareEnded(video);
+    shareEnded = () => stopShare();
+    video.addEventListener('ended', shareEnded, { once: true });
     await replaceScreenTrack(video);
     // The screen gets its own tile, so the own camera keeps its picture, its
     // mirror and its badge.
@@ -72,6 +85,10 @@ export async function startShare() {
 
 export async function stopShare() {
   if (!state.screen) return;
+  // The listener goes before the tracks stop: an `ended` from them finds no
+  // handler and can not start a second stopShare on the share that is going.
+  const video = state.screen.getVideoTracks()[0];
+  releaseShareEnded(video);
   stopTracks(state.screen);
   if (state.screenSource) {
     disconnectQuietly(state.screenSource);

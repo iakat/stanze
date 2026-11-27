@@ -5,6 +5,7 @@
 
 import { PERF, QUALITY } from './config.js';
 import { state } from './state.js';
+import { store } from './prefs.js';
 import { say } from './util.js';
 import { lookResize, lookTrack } from './look.js';
 
@@ -66,20 +67,38 @@ function perfText() {
 }
 
 // paintPerf shows the step on both sliders, the one in the form and the one in
-// the toolbar, so the two can never disagree.
+// the toolbar, so the two can never disagree. The slider runs from the minimum
+// on the left to the full quality on the right in both places, so the two
+// positions and their words are set from the one stored step.
 export function paintPerf() {
+  // The step the page shows: a stored value this build does not know is the
+  // full quality step.
+  const step = state.perf >= 0 && state.perf < PERF.length ? state.perf : 0;
+  const index = PERF.length - 1 - step;
   for (const id of ['perf', 'perf-live']) {
     const el = document.getElementById(id) as HTMLInputElement | null;
-    // The slider runs from the minimum on the left to the full quality on the
-    // right, so the stored step is turned round for it.
-    if (el) el.value = String(PERF.length - 1 - state.perf);
+    if (!el) continue;
+    el.value = String(index);
+    el.setAttribute('aria-valuetext', PERF[index].name);
   }
-  for (const id of ['perf-text', 'perf-live-text']) {
+  for (const id of ['perf-text', 'perf-live-text', 'perf-out']) {
     const el = document.getElementById(id);
     if (!el) continue;
-    // The toolbar has room for the name only; the form carries the numbers.
-    el.textContent = id === 'perf-text' ? perfText() : perfNow().name;
+    // The form carries the numbers in its note; the toolbar and the output
+    // beside the slider carry the name only.
+    el.textContent = id === 'perf-text' ? perfText() : PERF[index].name;
   }
+}
+
+// setPerf takes the position of either slider and keeps the one step. Both
+// sliders and both words are repainted here, so a move on one slider is the
+// same state as the other one shows.
+export async function setPerf(index: number) {
+  const n = Math.min(Math.max(Math.round(index), 0), PERF.length - 1);
+  state.perf = PERF.length - 1 - n;
+  store('perf', state.perf);
+  paintPerf();
+  await applyQuality();
 }
 
 // ask opens one getUserMedia request and never throws, so the join can always

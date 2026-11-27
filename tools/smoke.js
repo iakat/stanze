@@ -188,6 +188,7 @@ function newRoomID() {
 
     // ---- leave
     await pageA.click('#leave-btn');
+    await pageA.click('#leave-btn');
     await until(pageA, () => !document.getElementById('lobby').hidden, null, 'the lobby after leave');
     pass('leave returns to the lobby', true);
 

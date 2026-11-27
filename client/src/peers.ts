@@ -256,13 +256,15 @@ function setPeerState(peer, text) {
 
 async function flushPending(peer) {
   const queued = peer.pending.splice(0);
-  for (const cand of queued) {
-    try {
-      await peer.pc.addIceCandidate(cand);
-    } catch (err) {
-      if (!peer.ignoreOffer) console.warn('candidate rejected', errName(err));
-    }
-  }
+  // The candidates are independent and the socket order holds them, so one
+  // wait covers the batch.
+  await Promise.allSettled(
+    queued.map((cand) =>
+      peer.pc.addIceCandidate(cand).catch((err) => {
+        if (!peer.ignoreOffer) console.warn('candidate rejected', errName(err));
+      }),
+    ),
+  );
 }
 
 // onDescription queues one description per peer: two offers, or an answer that
@@ -319,10 +321,26 @@ async function applyDescription(peer, type, sdp) {
   }
 }
 
+// PENDING_MAX is the candidate queue of one pair before its first description.
+// A real pair queues a handful; a flood is a peer that never sends one, and the
+// rest of its entries are dropped. The drops are counted on the peer so a page
+// can see that a link, not the network, is short; the console says so once.
+const PENDING_MAX = 100;
+
+let pendingWarned = false;
+
 export async function onCandidate(peer, candidate) {
   if (!candidate) return;
   if (!peer.pc || !peer.pc.remoteDescription) {
-    peer.pending.push(candidate);
+    if (peer.pending.length < PENDING_MAX) {
+      peer.pending.push(candidate);
+      return;
+    }
+    peer.pendingDropped = (peer.pendingDropped || 0) + 1;
+    if (!pendingWarned) {
+      pendingWarned = true;
+      console.warn('a candidate queue is full, further candidates are dropped and counted');
+    }
     return;
   }
   try {

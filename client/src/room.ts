@@ -34,6 +34,7 @@ import { canary } from './audit.js';
 import { roomW } from './gate.js';
 import { applyImmersive } from './phone.js';
 import { worldEnter, worldLeave } from './roomworld.js';
+import { clearChat } from './chat.js';
 
 // ---------------------------------------------------------------- room flow
 export async function enterRoom(room, pass) {
@@ -288,7 +289,7 @@ export function leave(message) {
   state.cam = false;
   setAdmins([]);
   state.peers.clear();
-  if ($('chat-log')) $('chat-log').replaceChildren();
+  if ($('chat-log')) clearChat();
   setHash('');
   // The room field keeps the last room, so another try needs no retyping.
   if (was) $('room').value = was;

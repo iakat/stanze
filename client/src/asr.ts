@@ -56,6 +56,7 @@ export const asr = {
   timer: 0,
   recs: new Map(), // peer id -> { rec, proc, src, sink }
   lib: null,
+  retired: [], // [{ model, timer }] no longer the model, worker freed after 2 s
 };
 
 const omni = {
@@ -510,6 +511,25 @@ function asrSync() {
   syncTaps(asr, asrTap, asrUntap);
 }
 
+// asrRetire takes the running model out of service at once. Its worker stays
+// two seconds for the recognizers that are still draining, and the entry holds
+// its own timer, so the next start frees neither this model nor its timer by
+// accident. A retired model is never handed to a new tap: asr.model is null.
+function asrRetire(model) {
+  const one = { model, timer: 0 };
+  one.timer = setTimeout(() => {
+    const i = asr.retired.indexOf(one);
+    if (i < 0) return; // asrStop took it first
+    asr.retired.splice(i, 1);
+    try {
+      model.terminate();
+    } catch {
+      /* already gone */
+    }
+  }, 2000);
+  asr.retired.push(one);
+}
+
 export function asrStop() {
   if (asr.abort) asr.abort.abort();
   asr.abort = null;
@@ -519,15 +539,9 @@ export function asrStop() {
   asr.timer = 0;
   for (const id of [...asr.recs.keys()]) asrUntap(id);
   if (asr.model) {
-    const model = asr.model;
-    // After the recognizers are gone, the worker and its memory go too.
-    setTimeout(() => {
-      try {
-        model.terminate();
-      } catch {
-        /* already gone */
-      }
-    }, 2000);
+    // The running worker frees on its timer like any retired one, so a restart
+    // inside those two seconds meets no dead worker.
+    asrRetire(asr.model);
     asr.model = null;
   }
   asr.busy = false;
@@ -559,17 +573,21 @@ async function asrStart() {
     asrNote('starting the transcription engine');
     const Vosk = await asrLoadLib();
     const url = URL.createObjectURL(blob);
+    let made = null;
     try {
-      asr.model = await Vosk.createModel(url);
+      // The model lands in a local first: a stop that runs while it is built
+      // must not read a half set asr.model.
+      made = await Vosk.createModel(url);
     } finally {
       // The worker has fetched the blob once the model is ready.
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
     if (signal.aborted) {
-      asr.model.terminate();
-      asr.model = null;
+      // Retired here too: the worker is alive, so it needs its own timer.
+      asrRetire(made);
       return;
     }
+    asr.model = made;
     asr.on = true;
     asr.busy = false;
     asr.abort = null;

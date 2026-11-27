@@ -79,6 +79,14 @@ function linkify(text) {
   return out;
 }
 
+// chatEmpty shows the "no messages" line of the log and hides it again as soon
+// as the log holds a line, so the empty state never sits under one.
+export function chatEmpty(log) {
+  const empty = document.getElementById('chat-empty');
+  if (!empty) return;
+  empty.hidden = log.children.length > 0;
+}
+
 export function addChatLine(name, text, ts) {
   const log = $('chat-log');
   if (!log) return;
@@ -96,4 +104,14 @@ export function addChatLine(name, text, ts) {
   log.appendChild(li);
   while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
+  chatEmpty(log);
+}
+
+// clearChat takes the log back to its empty state, which is a new call or a
+// call that ended.
+export function clearChat() {
+  const log = $('chat-log');
+  if (!log) return;
+  log.replaceChildren();
+  chatEmpty(log);
 }
