@@ -39,6 +39,16 @@ const BODY_BASE = 2;
 // The four facings, in the order a position frame carries them.
 export const DIR = ['down', 'left', 'right', 'up'];
 
+// The edge strip: a band of one avatar cell along the four edges of the window,
+// holding a marker per guest the camera does not hold. A guest is thus always
+// on screen and always named, however far the map carries them; the marker
+// says which edge, and an arrow under it says which way that guest lies.
+export const EDGE = CHAR_W;
+// EDGE_INSET is how far from the rim a marker sits, in screen pixels.
+const EDGE_INSET = 3;
+// EDGE_GAP is the room between two markers of one edge.
+const EDGE_GAP = 4;
+
 export type World = {
   room: string;
   widthPx: number;
