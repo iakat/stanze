@@ -129,9 +129,12 @@ func main() {
 	// running until the process exits. Closing the live sockets hands each
 	// page a close frame, so a tab notices the call is over instead of finding
 	// a dead socket later.
+	// The sweeper goes first: a sweep running beside closeAll iterates rooms
+	// whose peers are already leaving.
+	close(stopSweep)
+	hub.waitSweeper()
 	srv.closeAll()
 	httpSrv.Shutdown(shutdownCtx)
-	close(stopSweep)
 	if turnSrv != nil {
 		turnSrv.Close()
 	}

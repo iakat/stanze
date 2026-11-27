@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +65,10 @@ type server struct {
 	mint turnMinter
 
 	budgetMu sync.Mutex
-	budgets  map[*Peer]*relayBudget
+	// budgets is keyed by room id, not by peer: the bucket is the room's, so a
+	// guest with parts of two rooms cannot spend it twice. A peer that is not
+	// in a room yet spends the peer key.
+	budgets map[string]*relayBudget
 
 	// closeMu guards live, the sockets that are still open, so a shutdown can
 	// close every one of them.
@@ -101,7 +105,7 @@ func newServer(cfg *Config, hub *Hub, log *slog.Logger) *server {
 			}
 			return ice
 		},
-		budgets: make(map[*Peer]*relayBudget),
+		budgets: make(map[string]*relayBudget),
 		live:    make(map[*Peer]struct{}),
 	}
 	s.upgrader = websocket.Upgrader{
@@ -192,6 +196,12 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer p.close()
 	go p.writeLoop(conn, done)
+	// One panic in a per-peer goroutine used to take every room with it.
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("panic in the socket handler", "err", r, "stack", string(debug.Stack()))
+		}
+	}()
 
 	s.remember(p)
 	conn.SetReadDeadline(time.Now().Add(joinTimeout))
@@ -396,12 +406,13 @@ func (s *server) handleEnc(p *Peer, m clientMsg) bool {
 // refused too: by then it is the sender, not its receivers, that is the
 // problem.
 func (s *server) spend(p *Peer, size int) bool {
+	key := budgetKey(p)
 	s.budgetMu.Lock()
 	defer s.budgetMu.Unlock()
-	b := s.budgets[p]
+	b := s.budgets[key]
 	if b == nil {
 		b = &relayBudget{tokens: roomBudget.burst, bytes: roomBudget.bytes, last: time.Now()}
-		s.budgets[p] = b
+		s.budgets[key] = b
 	}
 	now := time.Now()
 	dt := now.Sub(b.last).Seconds()
@@ -426,7 +437,7 @@ func (s *server) spend(p *Peer, size int) bool {
 func (s *server) delivered(p *Peer) {
 	s.budgetMu.Lock()
 	defer s.budgetMu.Unlock()
-	if b := s.budgets[p]; b != nil {
+	if b := s.budgets[budgetKey(p)]; b != nil {
 		b.lostSince = time.Time{}
 	}
 }
@@ -437,15 +448,34 @@ func (s *server) delivered(p *Peer) {
 func (s *server) nothingReached(p *Peer) {
 	s.budgetMu.Lock()
 	defer s.budgetMu.Unlock()
-	if b := s.budgets[p]; b != nil && b.lostSince.IsZero() {
+	if b := s.budgets[budgetKey(p)]; b != nil && b.lostSince.IsZero() {
 		b.lostSince = time.Now()
 	}
 }
 
 // forget drops the per peer accounts of a connection that is gone.
+// budgetKey is the room the peer relayed in, or its own id while it has none.
+// leaveRoom is set as the peer leaves, so a closing peer that already dropped
+// its room still names the right bucket.
+func budgetKey(p *Peer) string {
+	if p.leaveRoom != "" {
+		return "room:" + p.leaveRoom
+	}
+	if p.room != nil {
+		return "room:" + p.room.id
+	}
+	return "peer:" + p.id
+}
+
+// forget hands the peer's bucket back only when it never joined a room: a
+// joined peer's bucket is the room's, and the room must not lose its tokens
+// because one guest left.
 func (s *server) forget(p *Peer) {
+	if p.leaveRoom != "" || p.room != nil {
+		return
+	}
 	s.budgetMu.Lock()
-	delete(s.budgets, p)
+	delete(s.budgets, "peer:"+p.id)
 	s.budgetMu.Unlock()
 }
 
