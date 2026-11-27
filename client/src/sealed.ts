@@ -112,6 +112,12 @@ export function shortPeer(id) {
   return String(id || '').slice(0, 6);
 }
 
+// peerName is the name of a guest for a tile, a row or a log line, with the
+// short id while the sealed name has not arrived yet.
+export function peerName(peer) {
+  return String((peer && peer.name) || '').trim() || shortPeer(peer && peer.id);
+}
+
 export function pairLabel(peerId) {
   return [state.self, peerId].sort().join('|');
 }

@@ -59,7 +59,6 @@ export interface Elements {
   mirror: HTMLInputElement;
   pip: HTMLInputElement;
   'voice-tiles': HTMLInputElement;
-  menubar: HTMLElement;
   'chrome-btn': HTMLButtonElement;
   'menu-settings-btn': HTMLButtonElement;
   'menu-settings': HTMLElement;

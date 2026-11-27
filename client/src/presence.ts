@@ -17,6 +17,7 @@ import { applyFlags, volGain } from './volume.js';
 import { paintPeerVideo } from './devices.js';
 import { addChatLine } from './chat.js';
 import { layoutStage } from './tiles.js';
+import { peerName, shortPeer } from './sealed.js';
 
 const routed = new Map<string, boolean>();
 // The pair this page is on, as the guest on the other side reported it. It names
@@ -33,9 +34,6 @@ let proxNoteAt = 0;
 function proxDebugOn(): boolean {
   const w = window as any;
   return !!(w && w.e2eApp && w.e2eApp.presenceDebug);
-}
-function short(id: string | undefined): string {
-  return String(id || '').slice(0, 6);
 }
 function where(peer: any): string {
   if (!peer) return ' (no peer)';
@@ -79,7 +77,7 @@ export function setRouted(peerId: string, on: boolean) {
   if (routed.get(peerId) === on) return;
   routed.set(peerId, on);
   const peer = state.peers.get(peerId);
-  presenceDebug('route ' + short(peerId) + ' ' + (on ? 'on' : 'off') + where(peer));
+  presenceDebug('route ' + shortPeer(peerId) + ' ' + (on ? 'on' : 'off') + where(peer));
   if (!peer) return;
   applyGain(peer);
   paintPeerVideo(peer);
@@ -98,7 +96,7 @@ export function setTalks(peerId: string, ids: unknown) {
   const before = talks.get(peerId) || [];
   if (before.length === list.length && before.every((one, i) => one === list[i])) return;
   talks.set(peerId, list);
-  presenceDebug('talks ' + short(peerId) + ' says ' + (list.length ? list.map(short).join(',') : 'nobody'));
+  presenceDebug('talks ' + shortPeer(peerId) + ' says ' + (list.length ? list.map(shortPeer).join(',') : 'nobody'));
   paintPresence();
 }
 
@@ -150,11 +148,6 @@ export function channelOf(peerId: string): string {
   return peer.micOn === false ? 'mic off' : 'voice';
 }
 
-function nameOf(peer: any): string {
-  const name = String((peer && peer.name) || '').trim();
-  return name || String(peer.id).slice(0, 6);
-}
-
 // paintPresence draws the one line.
 export function paintPresence() {
   const room = $('presence-room') as HTMLElement | null;
@@ -169,13 +162,13 @@ export function paintPresence() {
     if (!isRouted(id)) continue;
     const peer = state.peers.get(id);
     if (!peer) continue;
-    const name = nameOf(peer);
+    const name = peerName(peer);
     mine.push(name + ' [' + channelOf(id) + ']');
     const list: string[] = [];
     for (const other of talks.get(id) || []) {
       if (other === state.self) continue;
       const one = state.peers.get(other);
-      if (one) list.push(nameOf(one));
+      if (one) list.push(peerName(one));
     }
     if (list.length) theirs.push(name + ' with ' + list.join(', '));
   }

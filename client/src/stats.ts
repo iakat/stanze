@@ -2,17 +2,16 @@
  The stats panel: media metrics per guest and the wire and crypto counters.
 */
 
-import { feDrops } from './audio.js';
+import { feDrops, micLevelCells } from './audio.js';
 import { $ } from './dom.js';
 import { clamp } from './util.js';
 import { state } from './state.js';
-import { micLevelCells } from './audio.js';
 import {
   pairLabel,
+  peerName,
   sealedFailedPairs,
   sealedRoomCodes,
   sealingAvailable,
-  shortPeer,
   verifyText,
 } from './sealed.js';
 import { pinState } from './identity.js';
@@ -91,12 +90,11 @@ function counterDelta(last, report, field) {
   return prev ? value - prev.bytes : null;
 }
 
-// peerStats reads one report of one peer. Every access is guarded, so a peer that
-// closed between two ticks does not throw.
+// peerStats reads one report of one peer. A peer that closed between two ticks
+// yields null, so the card below says connecting and never throws.
 async function peerStats(peer) {
   const pc = peer.pc;
-  if (!pc || typeof pc.getStats !== 'function') return null;
-  if (pc.connectionState === 'closed' || pc.signalingState === 'closed') return null;
+  if (!pc || pc.connectionState === 'closed' || pc.signalingState === 'closed') return null;
   let report;
   try {
     report = await pc.getStats();
@@ -104,7 +102,6 @@ async function peerStats(peer) {
     return null;
   }
   if (!report || typeof report.forEach !== 'function') return null;
-  if (!(peer.statLast instanceof Map)) peer.statLast = new Map();
 
   const out = {
     up: { audio: 0, video: 0 },
@@ -162,23 +159,14 @@ async function peerStats(peer) {
     // A report can change under the loop; the next tick reads a fresh one.
   }
 
-  let pair = pairId ? pairs.get(pairId) : legacyPairId ? pairs.get(legacyPairId) : null;
-  if (!pair) {
-    for (const p of pairs.values()) {
-      if (p.selected || p.nominated) {
-        pair = p;
-        break;
-      }
-    }
-  }
-  if (!pair) {
-    for (const p of pairs.values()) {
-      if (p.state === 'succeeded') {
-        pair = p;
-        break;
-      }
-    }
-  }
+  // The chosen pair, then a nominated one, then any that succeeded: a report
+  // that names no pair still gives the route and the round trip.
+  const pick = (ok) => [...pairs.values()].find(ok);
+  const pair =
+    (pairId ? pairs.get(pairId) : null) ||
+    (legacyPairId ? pairs.get(legacyPairId) : null) ||
+    pick((p) => p.selected || p.nominated) ||
+    pick((p) => p.state === 'succeeded');
   if (pair) {
     if (typeof pair.currentRoundTripTime === 'number') {
       out.rtt = Math.round(pair.currentRoundTripTime * 1000);
@@ -249,31 +237,22 @@ function lossMark(pct) {
 
 // Panel drawings: each stands for a word and carries it in its title for a hover.
 const VIDEO_ICON = ['1F3A5', 'video'];
-
 const AUDIO_ICON = ['1F50A', 'audio'];
-
 const PICTURE_ICON = ['1F5BC', 'picture size'];
-
 const PING_ICON = ['1F3D3', 'round trip'];
-
 const JITTER_ICON = ['1F30A', 'jitter, how far apart the packets arrive'];
-
 const LOSS_ICON = ['1F4C9', 'packet loss'];
-
 const DIRECT_ICON = ['1F517', 'direct, the two browsers talk to each other'];
-
 const RELAY_ICON = ['1F4E1', 'relay, the media goes through the server'];
-
 const UP_ICON = ['2B06', 'out, what this browser sends'];
-
 const DOWN_ICON = ['2B07', 'in, what this browser receives'];
 
 // routeCell is the route row: a link when the browsers talk directly, a
 // satellite when the media passes the server.
 function routeCell(path) {
   if (!path) return ['', '', 'not known yet'];
-  const direct = path === 'direct' || path === 'p2p';
-  return [...(direct ? DIRECT_ICON : RELAY_ICON), path === 'p2p' ? 'direct' : path];
+  const word = pathText(path);
+  return [...(word === 'direct' ? DIRECT_ICON : RELAY_ICON), word];
 }
 
 // rateCell is one bitrate with its direction arrow; up and down share a row, so
@@ -321,10 +300,10 @@ function worstOf(live, key) {
 function callPairs(live, total) {
   const out = [];
   const path = callPath(live);
+  if (path) out.push(['route ', [routeCell(path)]]);
   const rtt = worstOf(live, 'rtt');
   const jitter = worstOf(live, 'jitter');
   const loss = worstOf(live, 'loss');
-  if (path) out.push(['route ', [routeCell(path)]]);
   if (rtt !== null || jitter !== null || loss !== null) {
     out.push(['link ', tripCells(rtt, jitter, loss), undefined, 'metrics']);
   }
@@ -878,16 +857,16 @@ export async function updateStats() {
     // The first round builds the card of a guest; every round after writes into it.
     const seen = new Set();
     for (const { peer, s } of guests) {
-      // The route can change mid call, so the tile mark follows the current report.
-      if (s && s.path && peer.tile)
-        peer.tile.dataset.relay = s.path.startsWith('relay') ? 'yes' : 'no';
+      // The route can change mid call, so the tile mark follows the current
+      // round: a warm mark here keeps a live tile right.
+      if (s && peer.tile) peer.tile.dataset.relay = s.path.startsWith('relay') ? 'yes' : 'no';
       const level = linkLevel(s);
       const pairs = peerPairs(peer, s);
       if (!pairs.length) continue;
       seen.add(peer.id);
       let row = keptRows.get(peer.id);
       if (!row) {
-        row = statsRow(peer.name || shortPeer(peer.id), pairs, undefined, level ? { level, text: level } : null);
+        row = statsRow(peerName(peer), pairs, undefined, level ? { level, text: level } : null);
         keptRows.set(peer.id, row);
       }
       writeGuestRow(row, pairs, level);
@@ -934,9 +913,7 @@ function sealedAlarms() {
   if (state.sealFault) out.push(statsRow('sealing fault', [['', state.sealFault, false]]));
   const failed = sealedFailedPairs();
   if (failed.length) {
-    const tags = failed.map(
-      (peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || 'no code'}`,
-    );
+    const tags = failed.map((peer) => `${peerName(peer)} ${verifyText(peer.sas) || 'no code'}`);
     out.push(
       statsRow('room code', [
         ['', 'KEY MISMATCH ' + tags.join(', '), false],

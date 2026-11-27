@@ -27,6 +27,7 @@ import { layoutStage } from './tiles.js';
 import { updateCount } from './host.js';
 import { isRouted, paintPresence, proxNote, setRouted, stageLayoutSoon } from './presence.js';
 import { sealedSend } from './gate.js';
+import { peerName } from './sealed.js';
 
 // The nodes of the world, built on demand and kept across a call: a view that
 // is torn down and rebuilt on every join would leave listeners behind.
@@ -355,7 +356,7 @@ function syncPeers() {
     if (!one) {
       one = {
         id,
-        name: peer.name || id.slice(0, 6),
+        name: peerName(peer),
         x: draw.x,
         y: draw.y,
         dir: remoteDir(id),
@@ -472,6 +473,9 @@ export function worldHook() {
       return { x: Math.round(walker.x), y: Math.round(walker.y) };
     },
     near: () => (view ? [...near] : []),
+    // reason names the way a pair was judged: meeting, near, bubble, silent,
+    // full or far. It is the proximity word and nothing more.
+    reason: (id: string) => (view ? prox.reason(id) : ''),
     // points is the exact place of every remote frame, which is what the pair
     // rule is judged on, and the zones of each place.
     points: () => {

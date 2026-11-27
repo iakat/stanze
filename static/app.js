@@ -484,135 +484,189 @@
     chatEmpty(log);
   }
 
-  // src/presence.ts
-  var routed = /* @__PURE__ */ new Map();
-  var talks = /* @__PURE__ */ new Map();
-  var proxNoteAt = 0;
-  function proxDebugOn() {
-    const w = window;
-    return !!(w && w.e2eApp && w.e2eApp.presenceDebug);
+  // src/audit.ts
+  function canary(value) {
+    const s = String(value || "");
+    if (s.length >= 4) state.canaries.add(s);
   }
-  function short(id) {
-    return String(id || "").slice(0, 6);
-  }
-  function where(peer) {
-    if (!peer) return " (no peer)";
-    const x = Number.isFinite(peer.x) ? Math.round(peer.x) : -1;
-    const y = Number.isFinite(peer.y) ? Math.round(peer.y) : -1;
-    return " at " + x + "," + y + (peer.waiting ? " waiting" : "");
-  }
-  function presenceDebug(text) {
-    if (!proxDebugOn()) return;
-    addChatLine("debug", text, Date.now());
-  }
-  function proxNote(text) {
-    if (!proxDebugOn()) return;
-    const now = Date.now();
-    if (now - proxNoteAt < 1500) return;
-    proxNoteAt = now;
-    addChatLine("debug", text, now);
-  }
-  var stageDirty = false;
-  function stageLayoutSoon() {
-    if (stageDirty) return;
-    stageDirty = true;
-    const run = () => {
-      stageDirty = false;
-      layoutStage();
-    };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-    else setTimeout(run, 0);
-  }
-  function setRouted(peerId, on) {
-    if (routed.get(peerId) === on) return;
-    routed.set(peerId, on);
-    const peer = state.peers.get(peerId);
-    presenceDebug("route " + short(peerId) + " " + (on ? "on" : "off") + where(peer));
-    if (!peer) return;
-    applyGain(peer);
-    paintPeerVideo(peer);
-    stageLayoutSoon();
-  }
-  function isRouted(peerId) {
-    return routed.get(peerId) === true;
-  }
-  function setTalks(peerId, ids) {
-    if (!state.peers.has(peerId)) return;
-    const list = Array.isArray(ids) ? ids.filter((one) => typeof one === "string" && state.peers.has(one)) : [];
-    const before = talks.get(peerId) || [];
-    if (before.length === list.length && before.every((one, i) => one === list[i])) return;
-    talks.set(peerId, list);
-    presenceDebug("talks " + short(peerId) + " says " + (list.length ? list.map(short).join(",") : "nobody"));
-    paintPresence();
-  }
-  function applyGain(peer) {
-    if (!peer) return;
-    const on = isRouted(peer.id);
-    const g = state.deaf || !on ? 0 : volGain(peer.vol);
-    if (peer.gain) peer.gain.gain.value = g;
-    if (peer.audioEl) peer.audioEl.volume = Math.min(g, 1);
-  }
-  function routeNow(peer) {
-    applyGain(peer);
-    if (!isRouted(peer.id)) paintPeerVideo(peer);
-  }
-  function forgetRoute(peerId) {
-    routed.delete(peerId);
-    talks.delete(peerId);
-  }
-  function setGuestFlags(peerId, flags) {
-    const peer = state.peers.get(peerId);
-    if (!peer) return;
-    const cam = flags.cam !== void 0 ? flags.cam !== false : peer.camOn !== false;
-    const mic = flags.mic !== void 0 ? flags.mic !== false : peer.micOn !== false;
-    const changed = cam !== peer.camOn || mic !== peer.micOn;
-    peer.camOn = cam;
-    peer.micOn = mic;
-    if (peer.tile) applyFlags(peer.tile, mic, cam, false);
-    if (changed) {
-      paintPeerVideo(peer);
-      paintPresence();
-    }
-  }
-  function channelOf(peerId) {
-    const peer = state.peers.get(peerId);
-    if (!peer) return "";
-    if (peer.waiting) return "not in this room";
-    if (peer.camOn !== false) return "camera on";
-    return peer.micOn === false ? "mic off" : "voice";
-  }
-  function nameOf(peer) {
-    const name = String(peer && peer.name || "").trim();
-    return name || String(peer.id).slice(0, 6);
-  }
-  function paintPresence() {
-    const room = $("presence-room");
-    const near2 = $("presence-near");
-    const via = $("presence-via");
-    if (!room || !near2) return;
-    const total = state.peers.size;
-    room.textContent = total ? "room: " + total + " other" + (total === 1 ? "" : "s") : "room: you alone";
-    const mine = [];
-    const theirs = [];
-    for (const id of [...routed.keys()].sort()) {
-      if (!isRouted(id)) continue;
-      const peer = state.peers.get(id);
-      if (!peer) continue;
-      const name = nameOf(peer);
-      mine.push(name + " [" + channelOf(id) + "]");
-      const list = [];
-      for (const other of talks.get(id) || []) {
-        if (other === state.self) continue;
-        const one = state.peers.get(other);
-        if (one) list.push(nameOf(one));
+  function auditWire(where2, raw) {
+    const text = typeof raw === "string" ? raw : String(raw);
+    state.wireFrames++;
+    for (const c of state.canaries) {
+      if (text.includes(c) && state.wireLeaks.length < 20) {
+        state.wireLeaks.push({ where: where2, canary: c });
       }
-      if (list.length) theirs.push(name + " with " + list.join(", "));
     }
-    near2.textContent = mine.length ? "hearing: " + mine.join(" \xB7 ") : "hearing: nobody, walk closer or into an area";
-    if (via) {
-      via.textContent = theirs.length ? "also: " + theirs.join("; ") : "";
-      via.hidden = !theirs.length;
+    if (/"sdp"|"candidate"|v=0|a=fingerprint/.test(text)) state.clearSignaling++;
+  }
+
+  // src/menu.ts
+  var MENUS = [
+    ["menu-settings-btn", "menu-settings"],
+    ["menu-effects-btn", "menu-effects"],
+    ["menu-asr-btn", "menu-asr"],
+    ["menu-devices-btn", "menu-devices"]
+  ];
+  function fitMenu(list) {
+    if (!(list instanceof HTMLElement)) return;
+    const room = document.documentElement.clientWidth;
+    list.style.left = "";
+    const box = list.getBoundingClientRect();
+    let shift = 0;
+    if (box.right > room - 2) shift = room - 2 - box.right;
+    if (box.left + shift < 2) shift = 2 - box.left;
+    if (shift) list.style.left = Math.round(shift) + "px";
+  }
+  function menuSet(open, which = null) {
+    for (const [btnId, listId] of MENUS) {
+      const btn = $(btnId);
+      const list = $(listId);
+      if (!btn || !list) continue;
+      const on = open && (!which || which === listId);
+      const was = !list.hidden;
+      list.hidden = !on;
+      if (!on) closeSubmenus(list);
+      btn.setAttribute("aria-expanded", String(on));
+      if (on && !was) {
+        fitMenu(list);
+        const first = list.querySelector(
+          'input[type="checkbox"], select, .menu-choice, .menu-sub'
+        );
+        if (first) first.focus();
+      }
     }
+  }
+  function menuClose() {
+    let any = false;
+    for (const [, listId] of MENUS) {
+      const list = $(listId);
+      if (list && !list.hidden) any = true;
+    }
+    if (any) menuSet(false);
+    return any;
+  }
+  function closeSubmenus(panel) {
+    if (!panel) return;
+    for (const sub of Array.from(panel.querySelectorAll(".menu-sub-list"))) {
+      if (sub instanceof HTMLElement) sub.hidden = true;
+    }
+    for (const btn of Array.from(panel.querySelectorAll(".menu-sub")))
+      btn.setAttribute("aria-expanded", "false");
+  }
+  function wireSubmenus() {
+    for (const wrap of Array.from(document.querySelectorAll(".menu-subwrap"))) {
+      const btn = wrap.querySelector(".menu-sub");
+      const list = wrap.querySelector(".menu-sub-list");
+      if (!btn || !list) continue;
+      const openSub = (on) => {
+        list.hidden = !on;
+        btn.setAttribute("aria-expanded", String(on));
+        if (!on) return;
+        for (const other of Array.from(document.querySelectorAll(".menu-subwrap"))) {
+          if (other === wrap) continue;
+          const otherList = other.querySelector(".menu-sub-list");
+          const otherBtn = other.querySelector(".menu-sub");
+          if (otherList) otherList.hidden = true;
+          if (otherBtn) otherBtn.setAttribute("aria-expanded", "false");
+        }
+      };
+      wrap.addEventListener("mouseenter", () => openSub(true));
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openSub(!list.hidden);
+      });
+      btn.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowRight" && event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openSub(true);
+        const first = list.querySelector(".menu-choice");
+        if (first) first.focus();
+      });
+      list.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        openSub(false);
+        btn.focus();
+      });
+    }
+  }
+  function wireMenuBar() {
+    for (const [btnId, listId] of MENUS) {
+      const btn = $(btnId);
+      const list = $(listId);
+      if (!btn || !list) continue;
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        menuSet(list.hidden, listId);
+      });
+      list.addEventListener("click", (event) => event.stopPropagation());
+      list.addEventListener("keydown", (event) => {
+        const rows = Array.from(
+          list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub')
+        ).filter((el2) => !el2.hidden);
+        const at = rows.indexOf(document.activeElement);
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          menuSet(false);
+          btn.focus();
+          return;
+        }
+        if (event.key === "Tab") {
+          menuSet(false);
+          return;
+        }
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        const step2 = event.key === "ArrowDown" ? 1 : -1;
+        const next = rows[(at + step2 + rows.length) % rows.length];
+        if (next) next.focus();
+      });
+    }
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target.closest("#menubar")) return;
+      const inside2 = document.activeElement && document.activeElement.closest(".menubar-menu");
+      menuSet(false);
+      const owner = inside2 ? inside2.closest(".menubar-slot") : null;
+      const btn = owner && owner.querySelector(".menubar-item");
+      if (btn) btn.focus();
+    });
+  }
+  function suggestRoom() {
+    const fp = state.idKey && state.idKey.fp ? state.idKey.fp : "";
+    const room = newRoomID(fp);
+    const box = $("room");
+    box.setRangeText(room, 0, box.value.length, "select");
+    return room;
+  }
+  function normalizeRoom(raw) {
+    let text = String(raw || "").trim();
+    const hash = text.match(/#r=([^&\s"'<>]+)/);
+    if (hash) text = hash[1];
+    try {
+      text = decodeURIComponent(text);
+    } catch {
+    }
+    return text.trim().toLowerCase();
+  }
+  function roomFromHash() {
+    const raw = location.hash.replace(/^#/, "");
+    const id = normalizeRoom(new URLSearchParams(raw).get("r") || "");
+    return ROOM_RE.test(id) ? id : "";
+  }
+  function setHash(room) {
+    history.replaceState(null, "", room ? `#r=${encodeURIComponent(room)}` : location.pathname);
+  }
+  function wsURL() {
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    return proto + location.host + "/ws";
+  }
+  function send(msg) {
+    const raw = JSON.stringify(msg);
+    auditWire("out", raw);
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(raw);
   }
 
   // src/trust.ts
@@ -883,18 +937,18 @@
       if (!(h[k] >= v)) h[k] = v;
     }
     for (let pass = 0; pass < 5; pass++) {
-      const src = Float32Array.from(h);
+      const src2 = Float32Array.from(h);
       let left = 0;
       for (let j = 0; j <= n; j++) {
         for (let i = 0; i <= n; i++) {
           const k = j * (n + 1) + i;
-          if (!Number.isNaN(src[k])) continue;
+          if (!Number.isNaN(src2[k])) continue;
           let sum2 = 0, cnt = 0;
           for (let dj = -1; dj <= 1; dj++) {
             for (let di = -1; di <= 1; di++) {
               const jj = j + dj, ii = i + di;
               if (jj < 0 || jj > n || ii < 0 || ii > n) continue;
-              const v = src[jj * (n + 1) + ii];
+              const v = src2[jj * (n + 1) + ii];
               if (Number.isNaN(v)) continue;
               sum2 += v;
               cnt++;
@@ -907,13 +961,11 @@
       if (!left) break;
     }
     for (let k = 0; k < h.length; k++) if (Number.isNaN(h[k])) h[k] = 0;
-    for (let pass = 0; pass < 1; pass++) {
-      const src = Float32Array.from(h);
-      for (let j = 1; j < n; j++) {
-        for (let i = 1; i < n; i++) {
-          const k = j * (n + 1) + i;
-          h[k] = (4 * src[k] + src[k - 1] + src[k + 1] + src[k - n - 1] + src[k + n + 1]) / 8;
-        }
+    const src = Float32Array.from(h);
+    for (let j = 1; j < n; j++) {
+      for (let i = 1; i < n; i++) {
+        const k = j * (n + 1) + i;
+        h[k] = (4 * src[k] + src[k - 1] + src[k + 1] + src[k - n - 1] + src[k + n + 1]) / 8;
       }
     }
     return { n, x0, y0, dx, dy, h };
@@ -1403,10 +1455,8 @@
     return { c, canvas: smoothCanvas, w, h };
   }
   function sheetOf(w, h) {
-    if (!sheetCanvas || !shellCanvas) {
-      sheetCanvas = sheetCanvas || document.createElement("canvas");
-      shellCanvas = shellCanvas || document.createElement("canvas");
-    }
+    sheetCanvas = sheetCanvas || document.createElement("canvas");
+    shellCanvas = shellCanvas || document.createElement("canvas");
     if (sheetCanvas.width < w || sheetCanvas.height < h) {
       sheetCanvas.width = Math.max(sheetCanvas.width, w);
       sheetCanvas.height = Math.max(sheetCanvas.height, h);
@@ -1888,7 +1938,7 @@
   }
   function depthOf(a, lm, W) {
     const lz = a.lz;
-    if (!lm || !lz || lz.length < 468) return null;
+    if (!lm) return null;
     const out = new Float32Array(lz.length);
     for (let i = 0; i < lz.length; i++) out[i] = lz[i] * W;
     return out;
@@ -2162,8 +2212,7 @@
   }
   var POTION_PINCH = 2.6;
   function lookPotion(p, a) {
-    const g = maskGeo(a, p.canvas.width, p.canvas.height);
-    pinchFace(p, g, POTION_PINCH);
+    pinchFace(p, maskGeo(a, p.canvas.width, p.canvas.height), POTION_PINCH);
   }
   function custom() {
     return state.cust;
@@ -3402,191 +3451,6 @@
     if (refused) say("the browser refused the new camera quality; the old one stays in effect");
   }
 
-  // src/audit.ts
-  function canary(value) {
-    const s = String(value || "");
-    if (s.length >= 4) state.canaries.add(s);
-  }
-  function auditWire(where2, raw) {
-    const text = typeof raw === "string" ? raw : String(raw);
-    state.wireFrames++;
-    for (const c of state.canaries) {
-      if (text.includes(c) && state.wireLeaks.length < 20) {
-        state.wireLeaks.push({ where: where2, canary: c });
-      }
-    }
-    if (/"sdp"|"candidate"|v=0|a=fingerprint/.test(text)) state.clearSignaling++;
-  }
-
-  // src/menu.ts
-  var MENUS = [
-    ["menu-settings-btn", "menu-settings"],
-    ["menu-effects-btn", "menu-effects"],
-    ["menu-asr-btn", "menu-asr"],
-    ["menu-devices-btn", "menu-devices"]
-  ];
-  function fitMenu(list) {
-    if (!(list instanceof HTMLElement)) return;
-    const room = document.documentElement.clientWidth;
-    list.style.left = "";
-    const box = list.getBoundingClientRect();
-    let shift = 0;
-    if (box.right > room - 2) shift = room - 2 - box.right;
-    if (box.left + shift < 2) shift = 2 - box.left;
-    if (shift) list.style.left = Math.round(shift) + "px";
-  }
-  function menuSet(open, which = null) {
-    for (const [btnId, listId] of MENUS) {
-      const btn = $(btnId);
-      const list = $(listId);
-      if (!btn || !list) continue;
-      const on = open && (!which || which === listId);
-      const was = !list.hidden;
-      list.hidden = !on;
-      if (!on) closeSubmenus(list);
-      btn.setAttribute("aria-expanded", String(on));
-      if (on && !was) {
-        fitMenu(list);
-        const first = list.querySelector(
-          'input[type="checkbox"], select, .menu-choice, .menu-sub'
-        );
-        if (first) first.focus();
-      }
-    }
-  }
-  function menuClose() {
-    let any = false;
-    for (const [, listId] of MENUS) {
-      const list = $(listId);
-      if (list && !list.hidden) any = true;
-    }
-    if (any) menuSet(false);
-    return any;
-  }
-  function closeSubmenus(panel) {
-    if (!panel) return;
-    for (const sub of Array.from(panel.querySelectorAll(".menu-sub-list"))) {
-      if (sub instanceof HTMLElement) sub.hidden = true;
-    }
-    for (const btn of Array.from(panel.querySelectorAll(".menu-sub")))
-      btn.setAttribute("aria-expanded", "false");
-  }
-  function wireSubmenus() {
-    for (const wrap of Array.from(document.querySelectorAll(".menu-subwrap"))) {
-      const btn = wrap.querySelector(".menu-sub");
-      const list = wrap.querySelector(".menu-sub-list");
-      if (!btn || !list) continue;
-      const openSub = (on) => {
-        list.hidden = !on;
-        btn.setAttribute("aria-expanded", String(on));
-        if (!on) return;
-        for (const other of Array.from(document.querySelectorAll(".menu-subwrap"))) {
-          if (other === wrap) continue;
-          const otherList = other.querySelector(".menu-sub-list");
-          const otherBtn = other.querySelector(".menu-sub");
-          if (otherList) otherList.hidden = true;
-          if (otherBtn) otherBtn.setAttribute("aria-expanded", "false");
-        }
-      };
-      wrap.addEventListener("mouseenter", () => openSub(true));
-      btn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        openSub(!list.hidden);
-      });
-      btn.addEventListener("keydown", (event) => {
-        if (event.key !== "ArrowRight" && event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        openSub(true);
-        const first = list.querySelector(".menu-choice");
-        if (first) first.focus();
-      });
-      list.addEventListener("keydown", (event) => {
-        if (event.key !== "ArrowLeft" && event.key !== "Escape") return;
-        event.preventDefault();
-        event.stopPropagation();
-        openSub(false);
-        btn.focus();
-      });
-    }
-  }
-  function wireMenuBar() {
-    for (const [btnId, listId] of MENUS) {
-      const btn = $(btnId);
-      const list = $(listId);
-      if (!btn || !list) continue;
-      btn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        menuSet(list.hidden, listId);
-      });
-      list.addEventListener("click", (event) => event.stopPropagation());
-      list.addEventListener("keydown", (event) => {
-        const rows = Array.from(
-          list.querySelectorAll('input[type="checkbox"], select, .menu-choice, .menu-sub')
-        ).filter((el2) => !el2.hidden);
-        const at = rows.indexOf(document.activeElement);
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          menuSet(false);
-          btn.focus();
-          return;
-        }
-        if (event.key === "Tab") {
-          menuSet(false);
-          return;
-        }
-        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-        event.preventDefault();
-        const step2 = event.key === "ArrowDown" ? 1 : -1;
-        const next = rows[(at + step2 + rows.length) % rows.length];
-        if (next) next.focus();
-      });
-    }
-    document.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target.closest("#menubar")) return;
-      const inside2 = document.activeElement && document.activeElement.closest(".menubar-menu");
-      menuSet(false);
-      const owner = inside2 ? inside2.closest(".menubar-slot") : null;
-      const btn = owner && owner.querySelector(".menubar-item");
-      if (btn) btn.focus();
-    });
-  }
-  function suggestRoom() {
-    const fp = state.idKey && state.idKey.fp ? state.idKey.fp : "";
-    const room = newRoomID(fp);
-    const box = $("room");
-    box.setRangeText(room, 0, box.value.length, "select");
-    return room;
-  }
-  function normalizeRoom(raw) {
-    let text = String(raw || "").trim();
-    const hash = text.match(/#r=([^&\s"'<>]+)/);
-    if (hash) text = hash[1];
-    try {
-      text = decodeURIComponent(text);
-    } catch {
-    }
-    return text.trim().toLowerCase();
-  }
-  function roomFromHash() {
-    const raw = location.hash.replace(/^#/, "");
-    const id = normalizeRoom(new URLSearchParams(raw).get("r") || "");
-    return ROOM_RE.test(id) ? id : "";
-  }
-  function setHash(room) {
-    history.replaceState(null, "", room ? `#r=${encodeURIComponent(room)}` : location.pathname);
-  }
-  function wsURL() {
-    const proto = location.protocol === "https:" ? "wss://" : "ws://";
-    return proto + location.host + "/ws";
-  }
-  function send(msg) {
-    const raw = JSON.stringify(msg);
-    auditWire("out", raw);
-    if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(raw);
-  }
-
   // src/positions.ts
   var POSITION_DELAY = 200;
   var WALK_SPEED = 200;
@@ -4660,7 +4524,7 @@
       }
       ctx.drawImage(sheet.image, col * sheet.cellW, row * sheet.cellH, sheet.cellW, sheet.cellH, dx, dy, sheet.cellW, sheet.cellH);
       ctx.filter = "none";
-      const label = one.name || one.id.slice(0, 6);
+      const label = peerName(one);
       ctx.font = "8px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "bottom";
@@ -5000,7 +4864,7 @@
       if (!one) {
         one = {
           id,
-          name: peer.name || id.slice(0, 6),
+          name: peerName(peer),
           x: draw.x,
           y: draw.y,
           dir: remoteDir(id),
@@ -5288,7 +5152,7 @@
     };
     state.filesIn.set(key, rec);
     canary(name);
-    rec.el = addFileRow(peer.name || shortPeer(peer.id), name, size);
+    rec.el = addFileRow(peerName(peer), name, size);
     if (rec.el) {
       rec.el.acts.append(
         fileButton("accept", (button) => fileAccept(rec, button)),
@@ -5394,7 +5258,7 @@
     fileSettle(out);
   }
   function fileCancelPeer(out, st, why) {
-    if (st.status === "done" || st.status === "refused" || st.status === "gone") return;
+    if (FILE_DONE.has(st.status)) return;
     st.status = "cancelled";
     fileStop(st);
     if (st.peer.keys) sealedSend(st.peer, { k: "file", a: "cancel", x: out.x, y: why || "" });
@@ -5430,7 +5294,7 @@
     const out = state.files.get(x);
     if (out) {
       const st = out.peers.get(peer.id);
-      if (st && st.status !== "done" && st.status !== "refused" && st.status !== "cancelled" && st.status !== "gone") {
+      if (st && !FILE_DONE.has(st.status)) {
         st.status = "cancelled";
         fileStop(st);
         state.fileCancelled++;
@@ -5440,8 +5304,7 @@
       return;
     }
     const rec = state.filesIn.get(peer.id + "|" + x);
-    if (!rec || rec.status === "done" || rec.status === "refused" || rec.status === "cancelled")
-      return;
+    if (!rec || FILE_DONE.has(rec.status)) return;
     rec.status = "cancelled";
     fileFinishIn(rec, "cancelled");
   }
@@ -5488,7 +5351,7 @@
     }
     const bytes = b64d(out.pt);
     if (rec.got + bytes.length > rec.size) {
-      if (peer.keys) sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
+      sealedSend(peer, { k: "file", a: "cancel", x: rec.x });
       fileFinishIn(rec, "cancelled");
       return;
     }
@@ -5673,7 +5536,6 @@
     const dc = peer.dc;
     peer.dc = null;
     if (dc) {
-      dc.onmessage = null;
       dc.onopen = null;
       dc.onclose = null;
       dc.onerror = null;
@@ -5922,7 +5784,7 @@
   }
   function asrPaintOthers() {
     if (asr.busy || asr.on || omni.busy || omni.on) return;
-    const names = [...state.peers.values()].filter((p) => p.asr).map((p) => p.name || shortPeer(p.id));
+    const names = [...state.peers.values()].filter((p) => p.asr).map(peerName);
     if (names.length) {
       asrNote(
         `${names.join(", ")} ${names.length > 1 ? "are" : "is"} transcribing this meeting. The text appears in the chat.`
@@ -6199,7 +6061,7 @@
     if (!asr.on || !asr.model || !ctx || !peer.audioSrc) return;
     if (!tapReady(asr.recs, peer, asrUntap)) return;
     const rec = new asr.model.KaldiRecognizer(ctx.sampleRate);
-    const speaker = () => peer.name || shortPeer(peer.id);
+    const speaker = () => peerName(peer);
     rec.on("result", (message) => {
       const text = String(message.result && message.result.text || "").trim();
       if (!text || !asr.on) return;
@@ -6355,7 +6217,7 @@
     }
   }
   function asrOnMessage(peer, obj) {
-    const name = peer.name || shortPeer(peer.id);
+    const name = peerName(peer);
     if (obj.s === "on" || obj.s === "off") {
       peer.asr = obj.s === "on";
       if (peer.asr) addChatLine("stanze", `${name} started transcribing this meeting`, Date.now());
@@ -6565,7 +6427,7 @@
   function omniLine(id, text) {
     if (!omni.on) return;
     const peer = state.peers.get(id);
-    sayLine(peer ? peer.name || shortPeer(id) : shortPeer(id), text);
+    sayLine(peerName(peer || { id }), text);
   }
   function omniWorkerSource(cfg) {
     return `(${omniWorker.toString()})(${JSON.stringify(cfg)});`;
@@ -6613,7 +6475,7 @@
     let rec = null;
     let decoding = false;
     let lastProgress = 0;
-    function short2(err) {
+    function short(err) {
       const text = String(err && err.message || err || "the engine stopped");
       return text.slice(0, 200);
     }
@@ -6854,7 +6716,7 @@
         text = String((rec.getResult(stream) || {}).text || "").trim();
         stream.free();
       } catch (err) {
-        post({ ev: "error", text: short2(err) });
+        post({ ev: "error", text: short(err) });
         return;
       } finally {
         decoding = false;
@@ -6871,7 +6733,7 @@
       };
     }
     listen();
-    start().catch((err) => post({ ev: "error", text: short2(err) }));
+    start().catch((err) => post({ ev: "error", text: short(err) }));
   }
 
   // src/handshake.ts
@@ -7397,17 +7259,14 @@
       else (peer.candEarly = peer.candEarly || []).push(obj.c);
       return;
     }
-    if (obj.k === "spake" || obj.k === "spakeok") {
-      sealedOnPassFrame(peer, obj);
-      return;
-    }
+    if (obj.k === "spake" || obj.k === "spakeok") sealedOnPassFrame(peer, obj);
     if (obj.k === "name") {
       sealedSetName(peer, obj.n);
     } else if ((obj.k === "chat" || obj.k === "file") && peer.waiting) {
       return;
     } else if (obj.k === "chat") {
       state.chatRecv++;
-      addChatLine(peer.name || shortPeer(peer.id), String(obj.x || ""), Date.now());
+      addChatLine(peerName(peer), String(obj.x || ""), Date.now());
     } else if (obj.k === "asr") {
       if (!peer.waiting) asrOnMessage(peer, obj);
     } else if (obj.k === "state") {
@@ -7459,7 +7318,7 @@
     state.gate = { v, n };
     const gen = ++state.wGen;
     state.w = "";
-    Promise.resolve(deriveRoomW(v, state.room)).then((w) => {
+    deriveRoomW(v, state.room).then((w) => {
       if (state.leaving || state.wGen !== gen) return;
       state.w = typeof w === "string" ? w : "";
     }).catch(() => {
@@ -7713,7 +7572,7 @@
   }
   function pinPeer(peer, label) {
     if (!peer || !peer.fp) return "new";
-    const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+    const name = String(label || pinLabelOf(peer) || peerName(peer)).slice(0, 32);
     const held = state.pins.get(name);
     if (held && held.fp !== peer.fp) {
       peer.pin = "changed";
@@ -7757,7 +7616,7 @@
     return "known";
   }
   function resetDevice(peer, label) {
-    const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+    const name = String(label || pinLabelOf(peer) || peerName(peer)).slice(0, 32);
     const held = state.pins.get(name);
     if (held && held.fp && held.fp !== peer.fp) {
       const gone = { fp: held.fp, label: name, at: Date.now() };
@@ -7809,7 +7668,6 @@
     chip.textContent = what === "known" ? pinLabelOf(peer) : what === "changed" ? "identity changed" : what === "rollback" ? "old key came back" : "unverified";
     chip.title = peer.fp ? "identity " + peer.fp : "";
     const named = what === "known";
-    chip.dataset.action = named ? "rename" : "";
     if (named) {
       chip.title = (chip.title ? chip.title + " | " : "") + "click to rename";
       chip.onclick = () => renamePin(peer, prompt("new name for this device", pinLabelOf(peer)) || "");
@@ -7841,28 +7699,26 @@
   }
 
   // src/badge.ts
-  function selectedPair(stats) {
-    let pair = null;
-    stats.forEach((r) => {
-      if (!pair && r.type === "transport" && r.selectedCandidatePairId) {
-        pair = stats.get(r.selectedCandidatePairId) || null;
-      }
-    });
-    if (pair) return pair;
-    stats.forEach((r) => {
-      if (!pair && r.type === "candidate-pair" && (r.selected || r.nominated && r.state === "succeeded"))
-        pair = r;
-    });
-    return pair;
-  }
-  async function paintRelay(peer) {
+  async function markRelay(peer) {
     try {
       const stats = await peer.pc.getStats();
-      const pair = selectedPair(stats);
-      const local = pair ? stats.get(pair.localCandidateId) : null;
-      const remote = pair ? stats.get(pair.remoteCandidateId) : null;
+      if (!peer.tile) return;
+      let pair = null;
+      stats.forEach((r) => {
+        if (!pair && r.type === "transport" && r.selectedCandidatePairId) {
+          pair = stats.get(r.selectedCandidatePairId) || null;
+        }
+      });
+      if (!pair)
+        stats.forEach((r) => {
+          if (!pair && r.type === "candidate-pair" && (r.selected || r.nominated && r.state === "succeeded"))
+            pair = r;
+        });
+      if (!pair) return;
+      const local = stats.get(pair.localCandidateId);
+      const remote = stats.get(pair.remoteCandidateId);
       const relayed = !!(local && local.candidateType === "relay" || remote && remote.candidateType === "relay");
-      if (peer.tile) peer.tile.dataset.relay = relayed ? "yes" : "no";
+      peer.tile.dataset.relay = relayed ? "yes" : "no";
     } catch {
     }
   }
@@ -7883,10 +7739,9 @@
   function ensurePeer(id) {
     let peer = state.peers.get(id);
     if (peer) return peer;
-    const initial = String(id).slice(0, 6);
     peer = {
       id,
-      name: initial,
+      name: shortPeer(id),
       mic: true,
       cam: true,
       deaf: false,
@@ -8046,7 +7901,7 @@
       setPeerState(peer, pc.connectionState);
       if (pc.connectionState === "connected") {
         capCameraSenders(pc);
-        paintRelay(peer);
+        markRelay(peer);
         if (!peer.askedKey) {
           peer.askedKey = true;
           sealedSendOpaque(peer.id, { k: "key" });
@@ -8113,8 +7968,9 @@
     } catch (err) {
       peer.settingAnswer = false;
       const kind = err && (err.name || err.constructor && err.constructor.name) || "error";
-      state.workerErrors.push("description failed for " + shortPeer(peer.id) + ": " + kind);
-      say("the " + type + " with " + shortPeer(peer.id) + " failed; the link has no media");
+      const short = shortPeer(peer.id);
+      state.workerErrors.push("description failed for " + short + ": " + kind);
+      say("the " + type + " with " + short + " failed; the link has no media");
     }
   }
   var PENDING_MAX = 100;
@@ -8229,6 +8085,9 @@
   function shortPeer(id) {
     return String(id || "").slice(0, 6);
   }
+  function peerName(peer) {
+    return String(peer && peer.name || "").trim() || shortPeer(peer && peer.id);
+  }
   function pairLabel(peerId) {
     return [state.self, peerId].sort().join("|");
   }
@@ -8297,6 +8156,130 @@
     for (const cand of target.candEarly || []) onCandidate(target, cand);
     target.candEarly = [];
     await onDescription(target, "offer", sdp);
+  }
+
+  // src/presence.ts
+  var routed = /* @__PURE__ */ new Map();
+  var talks = /* @__PURE__ */ new Map();
+  var proxNoteAt = 0;
+  function proxDebugOn() {
+    const w = window;
+    return !!(w && w.e2eApp && w.e2eApp.presenceDebug);
+  }
+  function where(peer) {
+    if (!peer) return " (no peer)";
+    const x = Number.isFinite(peer.x) ? Math.round(peer.x) : -1;
+    const y = Number.isFinite(peer.y) ? Math.round(peer.y) : -1;
+    return " at " + x + "," + y + (peer.waiting ? " waiting" : "");
+  }
+  function presenceDebug(text) {
+    if (!proxDebugOn()) return;
+    addChatLine("debug", text, Date.now());
+  }
+  function proxNote(text) {
+    if (!proxDebugOn()) return;
+    const now = Date.now();
+    if (now - proxNoteAt < 1500) return;
+    proxNoteAt = now;
+    addChatLine("debug", text, now);
+  }
+  var stageDirty = false;
+  function stageLayoutSoon() {
+    if (stageDirty) return;
+    stageDirty = true;
+    const run = () => {
+      stageDirty = false;
+      layoutStage();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  }
+  function setRouted(peerId, on) {
+    if (routed.get(peerId) === on) return;
+    routed.set(peerId, on);
+    const peer = state.peers.get(peerId);
+    presenceDebug("route " + shortPeer(peerId) + " " + (on ? "on" : "off") + where(peer));
+    if (!peer) return;
+    applyGain(peer);
+    paintPeerVideo(peer);
+    stageLayoutSoon();
+  }
+  function isRouted(peerId) {
+    return routed.get(peerId) === true;
+  }
+  function setTalks(peerId, ids) {
+    if (!state.peers.has(peerId)) return;
+    const list = Array.isArray(ids) ? ids.filter((one) => typeof one === "string" && state.peers.has(one)) : [];
+    const before = talks.get(peerId) || [];
+    if (before.length === list.length && before.every((one, i) => one === list[i])) return;
+    talks.set(peerId, list);
+    presenceDebug("talks " + shortPeer(peerId) + " says " + (list.length ? list.map(shortPeer).join(",") : "nobody"));
+    paintPresence();
+  }
+  function applyGain(peer) {
+    if (!peer) return;
+    const on = isRouted(peer.id);
+    const g = state.deaf || !on ? 0 : volGain(peer.vol);
+    if (peer.gain) peer.gain.gain.value = g;
+    if (peer.audioEl) peer.audioEl.volume = Math.min(g, 1);
+  }
+  function routeNow(peer) {
+    applyGain(peer);
+    if (!isRouted(peer.id)) paintPeerVideo(peer);
+  }
+  function forgetRoute(peerId) {
+    routed.delete(peerId);
+    talks.delete(peerId);
+  }
+  function setGuestFlags(peerId, flags) {
+    const peer = state.peers.get(peerId);
+    if (!peer) return;
+    const cam = flags.cam !== void 0 ? flags.cam !== false : peer.camOn !== false;
+    const mic = flags.mic !== void 0 ? flags.mic !== false : peer.micOn !== false;
+    const changed = cam !== peer.camOn || mic !== peer.micOn;
+    peer.camOn = cam;
+    peer.micOn = mic;
+    if (peer.tile) applyFlags(peer.tile, mic, cam, false);
+    if (changed) {
+      paintPeerVideo(peer);
+      paintPresence();
+    }
+  }
+  function channelOf(peerId) {
+    const peer = state.peers.get(peerId);
+    if (!peer) return "";
+    if (peer.waiting) return "not in this room";
+    if (peer.camOn !== false) return "camera on";
+    return peer.micOn === false ? "mic off" : "voice";
+  }
+  function paintPresence() {
+    const room = $("presence-room");
+    const near2 = $("presence-near");
+    const via = $("presence-via");
+    if (!room || !near2) return;
+    const total = state.peers.size;
+    room.textContent = total ? "room: " + total + " other" + (total === 1 ? "" : "s") : "room: you alone";
+    const mine = [];
+    const theirs = [];
+    for (const id of [...routed.keys()].sort()) {
+      if (!isRouted(id)) continue;
+      const peer = state.peers.get(id);
+      if (!peer) continue;
+      const name = peerName(peer);
+      mine.push(name + " [" + channelOf(id) + "]");
+      const list = [];
+      for (const other of talks.get(id) || []) {
+        if (other === state.self) continue;
+        const one = state.peers.get(other);
+        if (one) list.push(peerName(one));
+      }
+      if (list.length) theirs.push(name + " with " + list.join(", "));
+    }
+    near2.textContent = mine.length ? "hearing: " + mine.join(" \xB7 ") : "hearing: nobody, walk closer or into an area";
+    if (via) {
+      via.textContent = theirs.length ? "also: " + theirs.join("; ") : "";
+      via.hidden = !theirs.length;
+    }
   }
 
   // src/screen.ts
@@ -8498,7 +8481,6 @@
   }
   function setSounds(on) {
     state.sounds = on;
-    document.body.dataset.sounds = on ? "on" : "off";
     const box = $("sounds");
     if (box) box.checked = on;
     if (!on) {
@@ -10541,8 +10523,7 @@
   }
   async function peerStats(peer) {
     const pc = peer.pc;
-    if (!pc || typeof pc.getStats !== "function") return null;
-    if (pc.connectionState === "closed" || pc.signalingState === "closed") return null;
+    if (!pc || pc.connectionState === "closed" || pc.signalingState === "closed") return null;
     let report;
     try {
       report = await pc.getStats();
@@ -10550,7 +10531,6 @@
       return null;
     }
     if (!report || typeof report.forEach !== "function") return null;
-    if (!(peer.statLast instanceof Map)) peer.statLast = /* @__PURE__ */ new Map();
     const out = {
       up: { audio: 0, video: 0 },
       down: { audio: 0, video: 0 },
@@ -10597,23 +10577,8 @@
       });
     } catch {
     }
-    let pair = pairId ? pairs.get(pairId) : legacyPairId ? pairs.get(legacyPairId) : null;
-    if (!pair) {
-      for (const p of pairs.values()) {
-        if (p.selected || p.nominated) {
-          pair = p;
-          break;
-        }
-      }
-    }
-    if (!pair) {
-      for (const p of pairs.values()) {
-        if (p.state === "succeeded") {
-          pair = p;
-          break;
-        }
-      }
-    }
+    const pick = (ok) => [...pairs.values()].find(ok);
+    const pair = (pairId ? pairs.get(pairId) : null) || (legacyPairId ? pairs.get(legacyPairId) : null) || pick((p) => p.selected || p.nominated) || pick((p) => p.state === "succeeded");
     if (pair) {
       if (typeof pair.currentRoundTripTime === "number") {
         out.rtt = Math.round(pair.currentRoundTripTime * 1e3);
@@ -10676,8 +10641,8 @@
   var DOWN_ICON = ["2B07", "in, what this browser receives"];
   function routeCell(path) {
     if (!path) return ["", "", "not known yet"];
-    const direct = path === "direct" || path === "p2p";
-    return [...direct ? DIRECT_ICON : RELAY_ICON, path === "p2p" ? "direct" : path];
+    const word = pathText(path);
+    return [...word === "direct" ? DIRECT_ICON : RELAY_ICON, word];
   }
   function rateCell(dir, kbit) {
     return [...dir === "up" ? UP_ICON : DOWN_ICON, rateText(kbit) || "-"];
@@ -10706,10 +10671,10 @@
   function callPairs(live, total) {
     const out = [];
     const path = callPath(live);
+    if (path) out.push(["route ", [routeCell(path)]]);
     const rtt = worstOf(live, "rtt");
     const jitter = worstOf(live, "jitter");
     const loss = worstOf(live, "loss");
-    if (path) out.push(["route ", [routeCell(path)]]);
     if (rtt !== null || jitter !== null || loss !== null) {
       out.push(["link ", tripCells(rtt, jitter, loss), void 0, "metrics"]);
     }
@@ -11147,15 +11112,14 @@
       }
       const seen = /* @__PURE__ */ new Set();
       for (const { peer, s } of guests) {
-        if (s && s.path && peer.tile)
-          peer.tile.dataset.relay = s.path.startsWith("relay") ? "yes" : "no";
+        if (s && peer.tile) peer.tile.dataset.relay = s.path.startsWith("relay") ? "yes" : "no";
         const level = linkLevel(s);
         const pairs = peerPairs(peer, s);
         if (!pairs.length) continue;
         seen.add(peer.id);
         let row = keptRows.get(peer.id);
         if (!row) {
-          row = statsRow(peer.name || shortPeer(peer.id), pairs, void 0, level ? { level, text: level } : null);
+          row = statsRow(peerName(peer), pairs, void 0, level ? { level, text: level } : null);
           keptRows.set(peer.id, row);
         }
         writeGuestRow(row, pairs, level);
@@ -11193,9 +11157,7 @@
     if (state.sealFault) out.push(statsRow("sealing fault", [["", state.sealFault, false]]));
     const failed = sealedFailedPairs();
     if (failed.length) {
-      const tags = failed.map(
-        (peer) => `${peer.name || shortPeer(peer.id)} ${verifyText(peer.sas) || "no code"}`
-      );
+      const tags = failed.map((peer) => `${peerName(peer)} ${verifyText(peer.sas) || "no code"}`);
       out.push(
         statsRow("room code", [
           ["", "KEY MISMATCH " + tags.join(", "), false],
@@ -12440,6 +12402,7 @@
       const here = at();
       lobbyPlace(win2, here.x, here.y);
     };
+    if (small) small.addEventListener("change", fit);
     window.addEventListener("resize", fit);
     window.addEventListener("orientationchange", fit);
   }

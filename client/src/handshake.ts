@@ -24,6 +24,7 @@ import {
   sealedOnOffer,
   sealedSendOpaque,
   shortPeer,
+  peerName,
 } from './sealed.js';
 import { fingerprint, paintPin, pinState, updatePinCount } from './identity.js';
 import { scriptURL } from './trust.js';
@@ -803,10 +804,7 @@ function sealedDispatchApp(peer, obj) {
     else (peer.candEarly = peer.candEarly || []).push(obj.c);
     return;
   }
-  if (obj.k === 'spake' || obj.k === 'spakeok') {
-    sealedOnPassFrame(peer, obj);
-    return;
-  }
+  if (obj.k === 'spake' || obj.k === 'spakeok') sealedOnPassFrame(peer, obj);
   if (obj.k === 'name') {
     sealedSetName(peer, obj.n);
   } else if ((obj.k === 'chat' || obj.k === 'file') && peer.waiting) {
@@ -815,7 +813,7 @@ function sealedDispatchApp(peer, obj) {
     return;
   } else if (obj.k === 'chat') {
     state.chatRecv++;
-    addChatLine(peer.name || shortPeer(peer.id), String(obj.x || ''), Date.now());
+    addChatLine(peerName(peer), String(obj.x || ''), Date.now());
   } else if (obj.k === 'asr') {
     if (!peer.waiting) asrOnMessage(peer, obj);
   } else if (obj.k === 'state') {
@@ -896,7 +894,7 @@ export function adoptGate(v, n) {
   // scalar is whatever the derive answered, checked where it is used.
   const gen = ++state.wGen;
   state.w = '';
-  Promise.resolve(deriveRoomW(v, state.room))
+  deriveRoomW(v, state.room)
     .then((w) => {
       if (state.leaving || state.wGen !== gen) return;
       state.w = typeof w === 'string' ? w : '';

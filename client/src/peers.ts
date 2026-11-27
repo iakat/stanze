@@ -15,7 +15,7 @@ import { sealedSendOpaque, shortPeer } from './sealed.js';
 import { updatePinCount } from './identity.js';
 import { wipeKeys } from './handshake.js';
 import { sealedSendCand, sealedSendSdp } from './gate.js';
-import { paintRelay } from './badge.js';
+import { markRelay } from './badge.js';
 import { worldDrop } from './roomworld.js';
 import { forgetRoute, paintPresence, routeNow } from './presence.js';
 
@@ -42,10 +42,9 @@ export function ensurePeer(id) {
   let peer = state.peers.get(id);
   if (peer) return peer;
   // The name arrives sealed later, so the short id keeps the tile readable.
-  const initial = String(id).slice(0, 6);
   peer = {
     id,
-    name: initial,
+    name: shortPeer(id),
     mic: true,
     cam: true,
     deaf: false,
@@ -212,7 +211,7 @@ export function connectPeer(id, initiator) {
     if (pc.connectionState === 'connected') {
       // The encodings exist now, so a cap that was too early applies here.
       capCameraSenders(pc);
-      paintRelay(peer);
+      markRelay(peer);
       // One ask over the sealed channel, answered once with a key frame from
       // the sender. It is the only frame a fresh receiver can decode.
       if (!peer.askedKey) {
@@ -316,8 +315,9 @@ async function applyDescription(peer, type, sdp) {
     // in the clear under the seal. The error name is enough to tell one failure
     // from another.
     const kind = (err && (err.name || err.constructor && err.constructor.name)) || 'error';
-    state.workerErrors.push('description failed for ' + shortPeer(peer.id) + ': ' + kind);
-    say('the ' + type + ' with ' + shortPeer(peer.id) + ' failed; the link has no media');
+    const short = shortPeer(peer.id);
+    state.workerErrors.push('description failed for ' + short + ': ' + kind);
+    say('the ' + type + ' with ' + short + ' failed; the link has no media');
   }
 }
 

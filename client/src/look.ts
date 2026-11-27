@@ -35,7 +35,6 @@ export function lookTrack() {
 // not in front is handed no animation frames, and the peers would keep the last
 // picture for ever. One tick is one camera frame and one mesh detection.
 /** @type {Map<number, string>} */
-
 const drawClockURLs = new Map();
 
 function drawClockURL(fps) {
@@ -652,7 +651,7 @@ function roll(g) {
 // frame scales it.
 function depthOf(a, lm, W) {
   const lz = a.lz;
-  if (!lm || !lz || lz.length < 468) return null;
+  if (!lm) return null;
   const out = new Float32Array(lz.length);
   for (let i = 0; i < lz.length; i++) out[i] = lz[i] * W;
   return out;
@@ -1041,8 +1040,7 @@ const POTION_PINCH = 2.6;
 // lookPotion is the potion seller: eyes, nose and mouth pinched into a knot in
 // the middle of the face.
 function lookPotion(p, a) {
-  const g = maskGeo(a, p.canvas.width, p.canvas.height);
-  pinchFace(p, g, POTION_PINCH);
+  pinchFace(p, maskGeo(a, p.canvas.width, p.canvas.height), POTION_PINCH);
 }
 
 // custom reads the knobs of the custom effect from the state.

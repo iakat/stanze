@@ -9,6 +9,7 @@
 import { ROOM_RE } from './config.js';
 import { load, store } from './prefs.js';
 import { Zone, ZoneGrid, ZONE_CLASS, zoneList } from './zones.js';
+import { peerName } from './sealed.js';
 
 // The geometry of the shipped art, as frozen in docs/WORLD_CONTRACT.md §3: the
 // sheet on disk wins over any report written about it.
@@ -1160,7 +1161,7 @@ export class WorldView {
     ctx.filter = 'none';
     // The name is drawn in map pixels, so it scales with the avatar and never
     // blurs differently from it.
-    const label = one.name || one.id.slice(0, 6);
+    const label = peerName(one);
     ctx.font = '8px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';

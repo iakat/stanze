@@ -188,7 +188,7 @@ export const state = {
  *   'leave-btn': HTMLButtonElement, 'call-timer': HTMLElement,
  *   mirror: HTMLInputElement, pip: HTMLInputElement,
  *   'voice-tiles': HTMLInputElement,
- *   menubar: HTMLElement, 'chrome-btn': HTMLButtonElement,
+ *   'chrome-btn': HTMLButtonElement,
  *   'menu-settings-btn': HTMLButtonElement, 'menu-settings': HTMLElement,
  *   'menu-asr': HTMLElement,
  *   'menu-effects-btn': HTMLButtonElement, 'menu-effects': HTMLElement,

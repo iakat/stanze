@@ -6,7 +6,7 @@ import { $ } from './dom.js';
 import { state } from './state.js';
 import { clamp, say } from './util.js';
 import { CHAT_MAX, addChatLine, chatEmpty, chatTime } from './chat.js';
-import { b64d, b64e, fileAAD, pqCall, pqModule, shortPeer } from './sealed.js';
+import { b64d, b64e, fileAAD, peerName, pqCall, pqModule } from './sealed.js';
 import { canary } from './audit.js';
 import { sealedSend } from './gate.js';
 import { posOnMessage } from './positions.js';
@@ -237,7 +237,7 @@ function fileOnOffer(peer, msg) {
   };
   state.filesIn.set(key, rec);
   canary(name);
-  rec.el = addFileRow(peer.name || shortPeer(peer.id), name, size);
+  rec.el = addFileRow(peerName(peer), name, size);
   if (rec.el) {
     rec.el.acts.append(
       fileButton('accept', (button) => fileAccept(rec, button)),
@@ -354,6 +354,7 @@ function fileCancelOut(out, why = '') {
   out.cancelled = true;
   state.fileCancelled++;
   for (const st of out.peers.values()) {
+    // A cancelled pair keeps its word; only a live one is stopped here.
     if (st.status === 'done' || st.status === 'refused' || st.status === 'gone') continue;
     st.status = 'cancelled';
     fileStop(st);
@@ -366,7 +367,7 @@ function fileCancelOut(out, why = '') {
 }
 
 function fileCancelPeer(out, st, why) {
-  if (st.status === 'done' || st.status === 'refused' || st.status === 'gone') return;
+  if (FILE_DONE.has(st.status)) return;
   st.status = 'cancelled';
   fileStop(st);
   if (st.peer.keys) sealedSend(st.peer, { k: 'file', a: 'cancel', x: out.x, y: why || '' });
@@ -407,13 +408,7 @@ function fileOnCancel(peer, msg) {
   const out = state.files.get(x);
   if (out) {
     const st = out.peers.get(peer.id);
-    if (
-      st &&
-      st.status !== 'done' &&
-      st.status !== 'refused' &&
-      st.status !== 'cancelled' &&
-      st.status !== 'gone'
-    ) {
+    if (st && !FILE_DONE.has(st.status)) {
       st.status = 'cancelled';
       fileStop(st);
       state.fileCancelled++;
@@ -422,9 +417,10 @@ function fileOnCancel(peer, msg) {
     }
     return;
   }
+  // An incoming transfer that already ended keeps its status: the bytes are
+  // dropped and the row already says how.
   const rec = state.filesIn.get(peer.id + '|' + x);
-  if (!rec || rec.status === 'done' || rec.status === 'refused' || rec.status === 'cancelled')
-    return;
+  if (!rec || FILE_DONE.has(rec.status)) return;
   rec.status = 'cancelled';
   fileFinishIn(rec, 'cancelled');
 }
@@ -483,7 +479,7 @@ function fileOnChunk(peer, frame) {
   }
   const bytes = b64d(out.pt);
   if (rec.got + bytes.length > rec.size) {
-    if (peer.keys) sealedSend(peer, { k: 'file', a: 'cancel', x: rec.x });
+    sealedSend(peer, { k: 'file', a: 'cancel', x: rec.x });
     fileFinishIn(rec, 'cancelled');
     return;
   }
@@ -692,7 +688,6 @@ export function fileDropPeer(peer) {
   const dc = peer.dc;
   peer.dc = null;
   if (dc) {
-    dc.onmessage = null;
     dc.onopen = null;
     dc.onclose = null;
     dc.onerror = null;

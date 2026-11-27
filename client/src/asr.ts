@@ -6,7 +6,7 @@ import { $ } from './dom.js';
 import { state } from './state.js';
 import { load, store } from './prefs.js';
 import { addChatLine } from './chat.js';
-import { shortPeer } from './sealed.js';
+import { peerName } from './sealed.js';
 import { disconnectQuietly } from './util.js';
 import { sealedSend, toSealed } from './gate.js';
 import { scriptURL } from './trust.js';
@@ -102,7 +102,7 @@ function asrPaintOthers() {
   if (asr.busy || asr.on || omni.busy || omni.on) return;
   const names = [...state.peers.values()]
     .filter((p) => p.asr)
-    .map((p) => p.name || shortPeer(p.id));
+    .map(peerName);
   if (names.length) {
     asrNote(
       `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} transcribing this meeting. The text appears in the chat.`,
@@ -458,7 +458,7 @@ function asrTap(peer) {
   if (!asr.on || !asr.model || !ctx || !peer.audioSrc) return;
   if (!tapReady(asr.recs, peer, asrUntap)) return;
   const rec = new asr.model.KaldiRecognizer(ctx.sampleRate);
-  const speaker = () => peer.name || shortPeer(peer.id);
+  const speaker = () => peerName(peer);
   rec.on('result', (message) => {
     const text = String((message.result && message.result.text) || '').trim();
     if (!text || !asr.on) return;
@@ -650,7 +650,7 @@ export function initAsr() {
 
 // asrOnMessage handles a sealed transcription message from a guest.
 export function asrOnMessage(peer, obj) {
-  const name = peer.name || shortPeer(peer.id);
+  const name = peerName(peer);
   if (obj.s === 'on' || obj.s === 'off') {
     peer.asr = obj.s === 'on';
     if (peer.asr) addChatLine('stanze', `${name} started transcribing this meeting`, Date.now());
@@ -912,7 +912,7 @@ function omniDown(input, rate) {
 function omniLine(id, text) {
   if (!omni.on) return;
   const peer = state.peers.get(id);
-  sayLine(peer ? peer.name || shortPeer(id) : shortPeer(id), text);
+  sayLine(peerName(peer || { id }), text);
 }
 
 // omniWorkerSource turns the function below into the worker script, with no extra

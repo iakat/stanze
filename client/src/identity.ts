@@ -13,7 +13,7 @@ import {
   sealUtf8,
   sealedFailedPairs,
   sealedPairNames,
-  shortPeer,
+  peerName,
 } from './sealed.js';
 import { sealedRestart } from './handshake.js';
 import { paintState, refreshCodeCard } from './gate.js';
@@ -299,7 +299,7 @@ export function pinLabelOf(peer) {
 // in silence.
 export function pinPeer(peer, label) {
   if (!peer || !peer.fp) return 'new';
-  const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+  const name = String(label || pinLabelOf(peer) || peerName(peer)).slice(0, 32);
   const held = state.pins.get(name);
   if (held && held.fp !== peer.fp) {
     peer.pin = 'changed';
@@ -348,7 +348,7 @@ export function renamePin(peer, label) {
 // resetDevice is the calm path of a changed identity: the old fingerprint stays
 // revoked and the new one takes the label. A deliberate click, never automatic.
 export function resetDevice(peer, label) {
-  const name = String(label || pinLabelOf(peer) || peer.name || shortPeer(peer.id)).slice(0, 32);
+  const name = String(label || pinLabelOf(peer) || peerName(peer)).slice(0, 32);
   const held = state.pins.get(name);
   if (held && held.fp && held.fp !== peer.fp) {
     const gone = { fp: held.fp, label: name, at: Date.now() };
@@ -418,7 +418,6 @@ export function paintPin(peer) {
   // A named device can be renamed without asking for the fingerprint again;
   // the click is the whole interface.
   const named = what === 'known';
-  chip.dataset.action = named ? 'rename' : '';
   if (named) {
     chip.title = (chip.title ? chip.title + ' | ' : '') + 'click to rename';
     chip.onclick = () =>

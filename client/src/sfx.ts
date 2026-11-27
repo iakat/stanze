@@ -162,10 +162,9 @@ export function startLost() {
 }
 
 // setSounds is the switch for the cues and the lost connection chime. Off
-// cuts whatever plays now, and the body carries the state for the stylesheet.
+// cuts whatever plays now.
 export function setSounds(on) {
   state.sounds = on;
-  document.body.dataset.sounds = on ? 'on' : 'off';
   const box = $('sounds');
   if (box) box.checked = on;
   if (!on) {

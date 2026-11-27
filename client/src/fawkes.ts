@@ -171,8 +171,6 @@ function gauss(d: number) {
 // form is a shape and not a shading trick.
 function fawkesHeight(f: Fit, x: number, y: number, rho: number) {
   const face = f.face;
-  // The depth of the mesh is the surface; without a mesh the old dome stands,
-  // low and flat, so a colour test still gets a mask.
   // The shell is a dome of its own depth, so a turn shows its curve even
   // without a mesh, and the mesh only adds the face where it stands out.
   const dome = SHELL_DEPTH * Math.sqrt(Math.max(0, 1 - rho * rho));
@@ -193,8 +191,6 @@ function fawkesHeight(f: Fit, x: number, y: number, rho: number) {
   // The nose: a ridge that widens down to the tip, with a round tip. It runs
   // from the bridge to the tip the mesh found, so a short nose gets a short
   // ridge and a long one keeps its length.
-  // The ridge runs from the brow, between the eyes, down to the tip over the
-  // moustache, so it fills the bare stretch of the mask.
   const ny0 = (face.browL[1] + face.browR[1]) / 2 - 0.03;
   const ny1 = noseY - 0.015;
   if (y > ny1 && y < ny0) {
@@ -428,16 +424,13 @@ function formOf(f: Fit, g): Form | null {
     if (!left) break;
   }
   for (let k = 0; k < h.length; k++) if (Number.isNaN(h[k])) h[k] = 0;
-  // Two passes of a light blur take the noise of the landmarker off the depth,
+  // One pass of a light blur takes the noise of the landmarker off the depth,
   // so the shell is a surface and not a lumpy copy of the mesh.
-  for (let pass = 0; pass < 1; pass++) {
-    const src = Float32Array.from(h);
-    for (let j = 1; j < n; j++) {
-      for (let i = 1; i < n; i++) {
-        const k = j * (n + 1) + i;
-        h[k] =
-          (4 * src[k] + src[k - 1] + src[k + 1] + src[k - n - 1] + src[k + n + 1]) / 8;
-      }
+  const src = Float32Array.from(h);
+  for (let j = 1; j < n; j++) {
+    for (let i = 1; i < n; i++) {
+      const k = j * (n + 1) + i;
+      h[k] = (4 * src[k] + src[k - 1] + src[k + 1] + src[k - n - 1] + src[k + n + 1]) / 8;
     }
   }
   return { n, x0, y0, dx, dy, h };
@@ -1090,10 +1083,8 @@ function smoothOf(w: number, h: number) {
 }
 
 function sheetOf(w: number, h: number) {
-  if (!sheetCanvas || !shellCanvas) {
-    sheetCanvas = sheetCanvas || document.createElement('canvas');
-    shellCanvas = shellCanvas || document.createElement('canvas');
-  }
+  sheetCanvas = sheetCanvas || document.createElement('canvas');
+  shellCanvas = shellCanvas || document.createElement('canvas');
   if (sheetCanvas.width < w || sheetCanvas.height < h) {
     sheetCanvas.width = Math.max(sheetCanvas.width, w);
     sheetCanvas.height = Math.max(sheetCanvas.height, h);
@@ -1105,6 +1096,3 @@ function sheetOf(w: number, h: number) {
   if (!c || !sc) return null;
   return { canvas: sheetCanvas, c, sc };
 }
-
-// temporary lab handle
-export const __dbg = { fawkesFit, flatModel, fawkesRho, BROW, MUS, SMILE, NOSTRIL, CHINLINE, GOATEE, mouthSize, project, fawkesHeight };
