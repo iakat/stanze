@@ -3766,7 +3766,7 @@
   var CHAR_W = 32;
   var CHAR_H = 32;
   var CHAR_ORIGIN_Y = 32;
-  var SHEET_ROW = [2, 3, 1, 0];
+  var SHEET_ROW = [0, 1, 2, 3];
   var IDLE_FRAME = 3;
   var WALK_ORDER = [0, 1, 2, 1];
   var CHAR_FPS = 10;
@@ -3926,11 +3926,11 @@
     if (!raw || typeof raw !== "object" || !raw.image) return null;
     const frames = /* @__PURE__ */ new Map();
     const list = raw.frames && typeof raw.frames === "object" ? raw.frames : {};
-    const count = Math.max(1, Math.floor(Number(raw.tilecount)) || Object.keys(list).length);
-    let named = 0;
     for (const [key, value] of Object.entries(list)) {
       if (!value || typeof value !== "object") continue;
       const one = value;
+      const num = Number(key);
+      if (key.trim() === "" || !Number.isSafeInteger(num) || num < 1) continue;
       let x = Math.floor(Number(one.x));
       let y = Math.floor(Number(one.y));
       if ((!Number.isFinite(x) || !Number.isFinite(y)) && Number.isFinite(Number(one.col)) && Number.isFinite(Number(one.row))) {
@@ -3941,10 +3941,7 @@
       const w = Math.floor(Number(one.w)) || TILE;
       const h = Math.floor(Number(one.h)) || TILE;
       if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) continue;
-      const num = Number(key);
-      const id = Number.isSafeInteger(num) && key.trim() !== "" ? num : ++named > count ? 0 : named;
-      if (id < 1) continue;
-      frames.set(id, { x, y, w, h });
+      frames.set(num, { x, y, w, h });
     }
     return { image: String(raw.image), frames };
   }
@@ -3962,6 +3959,7 @@
     const tiles = [];
     const objects = [];
     walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
+    const roomBase = own.slice(0, own.lastIndexOf("/") + 1);
     const sidecar = await loadJSON(room === "" ? "" : base + "maps/" + room + ".zones.json", signal, true);
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
     const zones2 = zoneList(fromSidecar.length ? fromSidecar : zoneObjects(objects));
@@ -3993,7 +3991,7 @@
     for (const raw of Array.isArray(map.tilesets) ? map.tilesets : []) {
       if (raw && raw.source) {
         const src = String(raw.source);
-        const path = src.startsWith("/") ? src : base + src.replace(/^\.\//, "");
+        const path = src.startsWith("/") ? src : roomBase + src.replace(/^\.\//, "");
         const body = await loadJSON(path, signal, true);
         if (body && typeof body === "object") {
           const here = path.slice(0, path.lastIndexOf("/") + 1);

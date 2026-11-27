@@ -18,9 +18,9 @@ export const CHAR_W = 32;
 export const CHAR_H = 32;
 export const CHAR_ORIGIN_Y = 32;
 export const CHAR_LAYERS = 4;
-// The sheet is 4 rows top to bottom: N (back), E (side), S (front), W (side).
+// The sheet is 4 rows top to bottom: S (front), W (side), E (side), N (back).
 // A runtime direction is 0=down, 1=left, 2=right, 3=up.
-const SHEET_ROW = [2, 3, 1, 0];
+const SHEET_ROW = [0, 1, 2, 3];
 // Columns left to right are walk 0, walk 1, walk 2, idle. The walk ping-pongs,
 // because 0,1,2 is a hobble.
 const IDLE_FRAME = 3;
@@ -266,19 +266,25 @@ const DEFAULT_MAP = '/world/map.json';
 // atlasFrames reads the shipped atlas.json: a named rectangle per tile, which
 // is how a map whose gids are named cells is drawn. The file the assets ship
 // keys its frames by tile name, and a Tiled export keys them by gid; both are
-// read, a numeric key is its own gid and a name is the next gid in order, the
-// cells laid out exactly as the sheet packs them. It answers an empty map when
-// the file is not there, and the Tiled tileset path is used instead.
+// read. A numeric key is its own gid. A name gets no gid at all: a map of a
+// Tiled export carries numeric gids, and numbering a named atlas by position
+// drew the first cell of that atlas under every gid 1, 2, 3 of the map, so the
+// picture and the map disagreed and the floor came out as junk (the tiles that
+// looked broken). A name is only usable by a map that names its cells, which
+// is not the kind of map this tree ships, so the Tiled tileset path is the one
+// that draws the export. It answers an empty map when the file is not there.
 async function atlasFrames(signal?: AbortSignal): Promise<{ image: string; frames: Map<number, any> } | null> {
   const raw = await loadJSON('/world/atlas.json', signal, true);
   if (!raw || typeof raw !== 'object' || !raw.image) return null;
   const frames = new Map<number, any>();
   const list = raw.frames && typeof raw.frames === 'object' ? raw.frames : {};
-  const count = Math.max(1, Math.floor(Number(raw.tilecount)) || Object.keys(list).length);
-  let named = 0;
   for (const [key, value] of Object.entries(list)) {
     if (!value || typeof value !== 'object') continue;
     const one: any = value;
+    // Only a numeric key is a gid. A named cell has no gid this map could
+    // name, and a position in the sheet is not an identity.
+    const num = Number(key);
+    if (key.trim() === '' || !Number.isSafeInteger(num) || num < 1) continue;
     // A cell may be given as a grid position, the way the sheet is built, or
     // as the pixel rect a Tiled export writes; the rect wins when both.
     let x = Math.floor(Number(one.x));
@@ -291,10 +297,7 @@ async function atlasFrames(signal?: AbortSignal): Promise<{ image: string; frame
     const w = Math.floor(Number(one.w)) || TILE;
     const h = Math.floor(Number(one.h)) || TILE;
     if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) continue;
-    const num = Number(key);
-    const id = Number.isSafeInteger(num) && key.trim() !== '' ? num : ++named > count ? 0 : named;
-    if (id < 1) continue;
-    frames.set(id, { x, y, w, h });
+    frames.set(num, { x, y, w, h });
   }
   return { image: String(raw.image), frames };
 }
@@ -317,6 +320,14 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   const tiles: any[] = [];
   const objects: any[] = [];
   walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
+
+  // A Tiled map names its external tilesets relative to its own file, not to
+  // the world folder: a map at /world/maps/room.json says tilesets/x.tsj and
+  // means /world/maps/tilesets/x.tsj. Resolving against base 404s every
+  // tileset, the layers then have no image to draw and the room comes up as a
+  // black field the avatar walks on (the collision grid is built from layer
+  // names, so walls still stop it). roomBase is the folder of the map file.
+  const roomBase = own.slice(0, own.lastIndexOf('/') + 1);
 
   // The sidecar is the authored zone list; the object layer of the map is the
   // other legal source and comes second.
@@ -360,7 +371,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   for (const raw of Array.isArray(map.tilesets) ? map.tilesets : []) {
     if (raw && raw.source) {
       const src = String(raw.source);
-      const path = src.startsWith('/') ? src : base + src.replace(/^\.\//, '');
+      const path = src.startsWith('/') ? src : roomBase + src.replace(/^\.\//, '');
       const body = await loadJSON(path, signal, true);
       if (body && typeof body === 'object') {
         // The image of the file is a path beside it, never beside the map.
