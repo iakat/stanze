@@ -1,0 +1,34 @@
+{
+ "zones": [
+  {
+   "id": "meeting",
+   "name": "Meeting room",
+   "kind": "meeting",
+   "capacity": 8,
+   "proximity": 192,
+   "rects": [
+    {
+     "x": 736,
+     "y": 96,
+     "w": 224,
+     "h": 352
+    }
+   ]
+  },
+  {
+   "id": "chill",
+   "name": "Chill zone",
+   "kind": "meeting",
+   "capacity": 8,
+   "proximity": 192,
+   "rects": [
+    {
+     "x": 32,
+     "y": 96,
+     "w": 192,
+     "h": 128
+    }
+   ]
+  }
+ ]
+}

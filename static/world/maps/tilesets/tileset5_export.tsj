@@ -1,0 +1,13 @@
+{
+ "columns": 10,
+ "firstgid": 1,
+ "margin": 0,
+ "name": "tileset5_export",
+ "spacing": 0,
+ "tilecount": 100,
+ "tileheight": 32,
+ "tilewidth": 32,
+ "image": "../assets/tileset5_export.png",
+ "imagewidth": 320,
+ "imageheight": 320
+}

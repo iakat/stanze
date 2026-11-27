@@ -1,0 +1,13 @@
+{
+ "columns": 11,
+ "firstgid": 322,
+ "margin": 0,
+ "name": "tileset1-repositioning",
+ "spacing": 0,
+ "tilecount": 121,
+ "tileheight": 32,
+ "tilewidth": 32,
+ "image": "../assets/tileset1-repositioning.png",
+ "imagewidth": 352,
+ "imageheight": 352
+}

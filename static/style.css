@@ -819,8 +819,15 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
   .world-pad-down { grid-column: 2; grid-row: 2; }
   .world-pad-right { grid-column: 3; grid-row: 2; }
 }
+/* The grid is empty when the pictures are gone, and that rule hid the world
+   with it: the map lives inside #grid. The world rule comes after it and
+   repeats the whole condition, because :has() takes the specificity of its
+   argument of its own. A map in front keeps the column; the list beside it
+   still takes the width it freed. */
 .room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) #grid { display: none; }
 .room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) .side { flex: 1 1 auto; }
+.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]) #grid:has(#world-view:not([hidden])) { display: flex; }
+.room-row:has(#stage-main[hidden]):has(#self-pip[hidden]):has(#grid:has(#world-view:not([hidden]))) .side { flex: 0 0 290px; }
 /* The own picture as a small preview in the corner of the stage. The node is
    moved, never copied, so the preview keeps the own stream and its mirror. */
 .self-pip {

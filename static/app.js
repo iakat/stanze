@@ -395,6 +395,98 @@
     }
   }
 
+  // src/presence.ts
+  var routed = /* @__PURE__ */ new Map();
+  var talks = /* @__PURE__ */ new Map();
+  function setRouted(peerId, on) {
+    if (routed.get(peerId) === on) return;
+    routed.set(peerId, on);
+    const peer = state.peers.get(peerId);
+    if (!peer) return;
+    applyGain(peer);
+    paintPeerVideo(peer);
+  }
+  function isRouted(peerId) {
+    return routed.get(peerId) === true;
+  }
+  function setTalks(peerId, ids) {
+    if (!state.peers.has(peerId)) return;
+    const list = Array.isArray(ids) ? ids.filter((one) => typeof one === "string" && state.peers.has(one)) : [];
+    const before = talks.get(peerId) || [];
+    if (before.length === list.length && before.every((one, i) => one === list[i])) return;
+    talks.set(peerId, list);
+    paintPresence();
+  }
+  function applyGain(peer) {
+    if (!peer) return;
+    const on = isRouted(peer.id);
+    const g = state.deaf || !on ? 0 : volGain(peer.vol);
+    if (peer.gain) peer.gain.gain.value = g;
+    if (peer.audioEl) peer.audioEl.volume = Math.min(g, 1);
+  }
+  function routeNow(peer) {
+    applyGain(peer);
+    if (!isRouted(peer.id)) paintPeerVideo(peer);
+  }
+  function forgetRoute(peerId) {
+    routed.delete(peerId);
+    talks.delete(peerId);
+  }
+  function setGuestFlags(peerId, flags) {
+    const peer = state.peers.get(peerId);
+    if (!peer) return;
+    const cam = flags.cam !== void 0 ? flags.cam !== false : peer.camOn !== false;
+    const mic = flags.mic !== void 0 ? flags.mic !== false : peer.micOn !== false;
+    const changed = cam !== peer.camOn || mic !== peer.micOn;
+    peer.camOn = cam;
+    peer.micOn = mic;
+    if (peer.tile) applyFlags(peer.tile, mic, cam, false);
+    if (changed) {
+      paintPeerVideo(peer);
+      paintPresence();
+    }
+  }
+  function channelOf(peerId) {
+    const peer = state.peers.get(peerId);
+    if (!peer) return "";
+    if (peer.waiting) return "not in this room";
+    if (peer.camOn !== false) return "camera on";
+    return peer.micOn === false ? "mic off" : "voice";
+  }
+  function nameOf(peer) {
+    const name = String(peer && peer.name || "").trim();
+    return name || String(peer.id).slice(0, 6);
+  }
+  function paintPresence() {
+    const room = $("presence-room");
+    const near2 = $("presence-near");
+    const via = $("presence-via");
+    if (!room || !near2) return;
+    const total = state.peers.size;
+    room.textContent = total ? "room: " + total + " other" + (total === 1 ? "" : "s") : "room: you alone";
+    const mine = [];
+    const theirs = [];
+    for (const id of [...routed.keys()].sort()) {
+      if (!isRouted(id)) continue;
+      const peer = state.peers.get(id);
+      if (!peer) continue;
+      const name = nameOf(peer);
+      mine.push(name + " [" + channelOf(id) + "]");
+      const list = [];
+      for (const other of talks.get(id) || []) {
+        if (other === state.self) continue;
+        const one = state.peers.get(other);
+        if (one) list.push(nameOf(one));
+      }
+      if (list.length) theirs.push(name + " with " + list.join(", "));
+    }
+    near2.textContent = mine.length ? "hearing: " + mine.join(" \xB7 ") : "hearing: nobody, walk closer or into an area";
+    if (via) {
+      via.textContent = theirs.length ? "also: " + theirs.join("; ") : "";
+      via.hidden = !theirs.length;
+    }
+  }
+
   // src/trust.ts
   var factory = window.trustedTypes;
   var policy = factory ? factory.createPolicy("stanze", {
@@ -794,13 +886,13 @@
     const sw = Math.max(2, Math.min(1400, Math.round(bx2 - bx)));
     const sh = Math.max(2, Math.min(1400, Math.round(by2 - by)));
     const S = SHEET_SCALE;
-    const sheet2 = sheetOf(Math.ceil(sw * S), Math.ceil(sh * S));
-    if (!sheet2) return;
-    const c = sheet2.c;
+    const sheet = sheetOf(Math.ceil(sw * S), Math.ceil(sh * S));
+    if (!sheet) return;
+    const c = sheet.c;
     const sws = Math.ceil(sw * S), shs = Math.ceil(sh * S);
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, sws, shs);
-    const sc = sheet2.sc;
+    const sc = sheet.sc;
     sc.setTransform(1, 0, 0, 1, 0, 0);
     sc.clearRect(0, 0, sws, shs);
     sc.setTransform(S, 0, 0, S, -bx * S, -by * S);
@@ -915,7 +1007,7 @@
     ctx.fill();
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(sheet2.canvas, 0, 0, sws, shs, bx, by, sw, sh);
+    ctx.drawImage(sheet.canvas, 0, 0, sws, shs, bx, by, sw, sh);
     ctx.restore();
     if (typeof location !== "undefined" && /[?&]fawkesdebug/.test(location.search)) {
       const mesh = f.form ? "mesh" : "dome";
@@ -3429,12 +3521,12 @@
 
   // src/positions.ts
   var POSITION_DELAY = 200;
-  var MAX_EXTRAPOLATION = 100;
+  var WALK_SPEED = 200;
+  var STEP = WALK_SPEED * POSITION_DELAY / 1e3;
+  var STALE = POSITION_DELAY * 3;
   var POS_MAX_JSON = 200;
-  var POS_MAX_ZONES = 8;
   var POS_MAX_POINT = 65535;
   var POS_XFER = "pos";
-  var STEP = 32;
   var remotes = /* @__PURE__ */ new Map();
   var seqOut = /* @__PURE__ */ new Map();
   var seqIn = /* @__PURE__ */ new Map();
@@ -3448,21 +3540,19 @@
   function posForget(peerId) {
     remotes.delete(peerId);
   }
-  function posAt(id, now) {
+  function posAt(id, now, smooth) {
     const sample = remotes.get(id);
     if (!sample) return { x: 0, y: 0 };
     const age = now - sample.at;
-    const span = sample.n <= 0 ? 0 : POSITION_DELAY;
-    const t = Math.max(0, Math.min(age, POSITION_DELAY + MAX_EXTRAPOLATION)) / (span || 1);
-    const back = sample.mv && span ? STEP : 0;
-    const px = sample.x - DIR_X[sample.d] * back;
-    const py = sample.y - DIR_Y[sample.d] * back;
-    const f = Math.min(t, span ? (POSITION_DELAY + MAX_EXTRAPOLATION) / POSITION_DELAY : 1);
-    return { x: px + (sample.x - px) * f, y: py + (sample.y - py) * f };
+    if (!smooth || !sample.mv || age >= STALE) return { x: sample.x, y: sample.y };
+    const px = sample.x - DIR_X[sample.d] * STEP;
+    const py = sample.y - DIR_Y[sample.d] * STEP;
+    const t = Math.min(1, age / POSITION_DELAY);
+    return { x: px + (sample.x - px) * t, y: py + (sample.y - py) * t };
   }
-  function remotePoints(now) {
+  function remotePoints() {
     const out = /* @__PURE__ */ new Map();
-    for (const id of remotes.keys()) out.set(id, posAt(id, now));
+    for (const [id, sample] of remotes) out.set(id, { x: sample.x, y: sample.y });
     return out;
   }
   function remoteDir(id) {
@@ -3473,15 +3563,11 @@
     const sample = remotes.get(id);
     return !!(sample && sample.mv);
   }
-  function posFrame(x, y, d, mv, zones, flags = 0) {
+  function posFrame(x, y, d) {
     return {
       x: Math.round(Math.max(0, Math.min(POS_MAX_POINT, x))),
       y: Math.round(Math.max(0, Math.min(POS_MAX_POINT, y))),
       d: d === 1 || d === 2 || d === 3 ? d : 0,
-      mv: mv ? 1 : 0,
-      z: zones.slice(0, POS_MAX_ZONES).map((one) => String(one).slice(0, 32)),
-      f: Math.floor(flags) & 255,
-      ts: Date.now(),
       n: 0
     };
   }
@@ -3520,18 +3606,22 @@
     const seen = seqIn.get(peer.id);
     if (seen !== void 0 && n <= seen) return null;
     seqIn.set(peer.id, n);
-    const z = Array.isArray(body.z) ? body.z.filter((one) => typeof one === "string").slice(0, POS_MAX_ZONES).map((one) => one.slice(0, 32)) : [];
     const frame = {
       x: body.x,
       y: body.y,
       d: body.d === 1 || body.d === 2 || body.d === 3 ? body.d : 0,
-      mv: Number(body.mv) ? 1 : 0,
-      z,
-      f: (Number(body.f) || 0) & 255,
-      ts: Number(body.ts) || 0,
       n
     };
-    remotes.set(peer.id, { x: frame.x, y: frame.y, d: frame.d, mv: frame.mv, at: performance.now(), n });
+    const before = remotes.get(peer.id);
+    remotes.set(peer.id, {
+      x: frame.x,
+      y: frame.y,
+      d: frame.d,
+      // The moving flag does not travel: a frame that changed place is a step.
+      mv: before !== void 0 && (before.x !== frame.x || before.y !== frame.y),
+      at: performance.now(),
+      n
+    });
     return frame;
   }
   function openBody(peer, blob) {
@@ -3554,15 +3644,9 @@
   }
 
   // src/zones.ts
-  var ZONE_KINDS = [
-    "meeting",
-    "silent",
-    "lockable",
-    "podium",
-    "audience",
-    "exit",
-    "start"
-  ];
+  var ZONE_CLASS = "zone";
+  var ZONE_KINDS = ["meeting", "silent"];
+  var DEFAULT_PROXIMITY = 96;
   var ZONE_ID = /^[a-z0-9-]{1,32}$/;
   function zoneCleanId(raw) {
     return String(raw || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
@@ -3585,9 +3669,10 @@
     const fromName = zoneCleanId(raw.name);
     const id = zoneCleanId(raw.id) || fromName || "zone-" + index;
     if (!ZONE_ID.test(id)) return null;
-    const kind = ZONE_KINDS.includes(raw.kind) ? raw.kind : "meeting";
     const name = zoneCleanName(raw.name) || id;
     const capacity = Number(raw.capacity);
+    const proximity2 = Number(raw.proximity);
+    const kind = String(raw.kind || "");
     const list = Array.isArray(raw.rects) ? raw.rects : [raw];
     const rects = [];
     for (const one of list) {
@@ -3595,18 +3680,14 @@
       if (rect) rects.push(rect);
     }
     if (!rects.length) return null;
-    const zone = {
+    return {
       id,
-      kind,
       name,
+      kind: ZONE_KINDS.includes(kind) ? kind : "",
       capacity: Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : 0,
+      proximity: Number.isFinite(proximity2) && proximity2 > 0 ? Math.round(proximity2) : DEFAULT_PROXIMITY,
       rects
     };
-    if (raw.exit && typeof raw.exit === "object" && raw.exit.room) {
-      zone.exit = { room: String(raw.exit.room), start: String(raw.exit.start || "") };
-    }
-    if (raw.stage) zone.stage = String(raw.stage).slice(0, 32);
-    return zone;
   }
   function zoneList(raw) {
     const out = [];
@@ -3620,12 +3701,18 @@
     }
     return out;
   }
+  function inside(zone, x, y) {
+    for (const rect of zone.rects) {
+      if (x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h) return true;
+    }
+    return false;
+  }
   var ZoneGrid = class {
     zones;
     key = Number.NaN;
     here = [];
-    constructor(zones) {
-      this.zones = zones;
+    constructor(zones2) {
+      this.zones = zones2;
     }
     // at answers every zone holding the point. The cached answer is only reused
     // for the same map cell, so a zone edge inside one 32 px cell still updates
@@ -3635,14 +3722,7 @@
       if (key === this.key) return this.here;
       this.key = key;
       const found = [];
-      for (const zone of this.zones) {
-        for (const rect of zone.rects) {
-          if (x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h) {
-            found.push(zone);
-            break;
-          }
-        }
-      }
+      for (const zone of this.zones) if (inside(zone, x, y)) found.push(zone);
       this.here = found;
       return found;
     }
@@ -3691,7 +3771,7 @@
   var WALK_ORDER = [0, 1, 2, 1];
   var CHAR_FPS = 10;
   var CHAR_MOVE_MS = 1e3 / CHAR_FPS;
-  var WALK_SPEED = 160;
+  var WALK_SPEED2 = 200;
   var AVATAR_SORT_OFFSET = 0;
   var BODY_W = 20;
   var BODY_H = 16;
@@ -3732,9 +3812,37 @@
         walkLayers(layer.layers, tiles, objects);
         continue;
       }
-      if (layer.type === "tilelayer" && Array.isArray(layer.data)) tiles.push(layer);
+      if (layer.type === "tilelayer" && (Array.isArray(layer.data) || typeof layer.data === "string")) tiles.push(layer);
       if (layer.type === "objectgroup" && Array.isArray(layer.objects)) objects.push(layer);
     }
+  }
+  async function layerData(layer) {
+    if (Array.isArray(layer.data)) return layer.data;
+    const raw = typeof layer.data === "string" ? layer.data : "";
+    const enc = String(layer.encoding || "base64");
+    const comp = String(layer.compression || "");
+    if (!raw || enc !== "base64") return [];
+    let plain;
+    try {
+      const bin = atob(raw);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      plain = comp ? await inflate(bytes, comp) : bytes;
+    } catch {
+      return [];
+    }
+    const out = [];
+    for (let i = 0; i + 3 < plain.length; i += 4) {
+      out.push((plain[i] | plain[i + 1] << 8 | plain[i + 2] << 16 | plain[i + 3] << 24) >>> 0);
+    }
+    return out;
+  }
+  async function inflate(bytes, comp) {
+    if (comp !== "gzip" && comp !== "zlib") throw new Error("compression " + comp);
+    const DS = globalThis.DecompressionStream;
+    if (!DS) throw new Error("no decompressor");
+    const stream = new Blob([bytes]).stream().pipeThrough(new DS(comp === "gzip" ? "gzip" : "deflate"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
   }
   function polygonRects(obj, points) {
     const xs = points.map((p) => Number(p.x)).filter(Number.isFinite);
@@ -3774,42 +3882,34 @@
     const out = [];
     for (const layer of objects) {
       for (const obj of layer.objects) {
-        if (!obj || obj.class !== "zone" && obj.class !== "area") continue;
+        if (!obj || obj.class !== ZONE_CLASS && obj.class !== "area") continue;
         const props = {};
         for (const p of obj.properties || []) if (p && p.name) props[p.name] = p.value;
         let rects;
         const shape = obj.polygon || obj.polyline;
         if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
         else rects = [{ x: Math.round(obj.x), y: Math.round(obj.y), w: Math.round(obj.width), h: Math.round(obj.height) }];
-        const zone = {
+        out.push({
           id: obj.name,
-          kind: props.kind || props.type || "meeting",
           name: props.label || props.name || obj.name,
+          // The property bag of a Tiled zone is {kind, proximity, maxUsers}; the
+          // runtime form is {kind, proximity, capacity}, and without these lines
+          // a meeting room is a plain area that carries no talk.
+          kind: String(props.kind || ""),
+          proximity: props.proximity,
           capacity: props.maxUsers !== void 0 ? props.maxUsers : props.capacity,
           rects
-        };
-        if (props.proximity !== void 0) zone.radius = Number(props.proximity) || 0;
-        if (props.exitRoom) {
-          zone.exit = { room: String(props.exitRoom), start: String(props.exitStart || "") };
-        }
-        if (props.stage) zone.stage = props.stage;
-        out.push(zone);
+        });
       }
     }
     return out;
   }
-  function spawn(zones, want, blocked, w, h, tw, th) {
+  function spawn(start, blocked, w, h, tw, th) {
     const free = (x, y) => !bodyBlocked(blocked, w, h, tw, th, x, y);
-    let zone = null;
-    for (const one of zones) if (want && one.id === want && one.kind === "start") zone = one;
-    if (!zone) {
-      for (const one of zones) if (!zone && one.kind === "start") zone = one;
-    }
-    if (zone) {
-      const rect = zone.rects[0];
+    if (start && start.w > 0 && start.h > 0) {
       for (let draw = 0; draw < 10; draw++) {
-        const x = rect.x + 8 + Math.random() * Math.max(1, rect.w - 16);
-        const y = rect.y + 8 + Math.random() * Math.max(1, rect.h - 8);
+        const x = start.x + 8 + Math.random() * Math.max(1, start.w - 16);
+        const y = start.y + 8 + Math.random() * Math.max(1, start.h - 16);
         if (free(x, y)) return { x: Math.round(x), y: Math.round(y) };
       }
     }
@@ -3820,20 +3920,30 @@
   function mapPath(room) {
     return room === "" ? "/world/map.json" : "/world/maps/" + room + ".json";
   }
+  var DEFAULT_MAP = "/world/map.json";
   async function atlasFrames(signal) {
     const raw = await loadJSON("/world/atlas.json", signal, true);
     if (!raw || typeof raw !== "object" || !raw.image) return null;
     const frames = /* @__PURE__ */ new Map();
     const list = raw.frames && typeof raw.frames === "object" ? raw.frames : {};
-    for (const [key, rect] of Object.entries(list)) {
-      const id = Number(key);
-      if (!Number.isSafeInteger(id) || !rect) continue;
-      const one = rect;
-      const x = Math.floor(Number(one.x));
-      const y = Math.floor(Number(one.y));
-      const w = Math.floor(Number(one.w));
-      const h = Math.floor(Number(one.h));
+    const count = Math.max(1, Math.floor(Number(raw.tilecount)) || Object.keys(list).length);
+    let named = 0;
+    for (const [key, value] of Object.entries(list)) {
+      if (!value || typeof value !== "object") continue;
+      const one = value;
+      let x = Math.floor(Number(one.x));
+      let y = Math.floor(Number(one.y));
+      if ((!Number.isFinite(x) || !Number.isFinite(y)) && Number.isFinite(Number(one.col)) && Number.isFinite(Number(one.row))) {
+        const g = Math.max(0, Math.floor(Number(raw.gutter)) || 0);
+        x = g + Math.floor(Number(one.col)) * (TILE + g);
+        y = g + Math.floor(Number(one.row)) * (TILE + g);
+      }
+      const w = Math.floor(Number(one.w)) || TILE;
+      const h = Math.floor(Number(one.h)) || TILE;
       if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) continue;
+      const num = Number(key);
+      const id = Number.isSafeInteger(num) && key.trim() !== "" ? num : ++named > count ? 0 : named;
+      if (id < 1) continue;
       frames.set(id, { x, y, w, h });
     }
     return { image: String(raw.image), frames };
@@ -3841,7 +3951,9 @@
   async function loadWorld(room, signal) {
     if (!ROOM_RE.test(room)) throw new Error("bad room name");
     const base = "/world/";
-    const map = await loadJSON(mapPath(room), signal);
+    const own = mapPath(room);
+    let map = await loadJSON(own, signal, own !== DEFAULT_MAP);
+    if (!map && own !== DEFAULT_MAP) map = await loadJSON(DEFAULT_MAP, signal);
     if (!map || typeof map !== "object") throw new Error("no map for " + room);
     const width = Math.max(1, Math.floor(Number(map.width)) || 1);
     const height = Math.max(1, Math.floor(Number(map.height)) || 1);
@@ -3852,7 +3964,21 @@
     walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
     const sidecar = await loadJSON(room === "" ? "" : base + "maps/" + room + ".zones.json", signal, true);
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
-    const zones = zoneList(fromSidecar.length ? fromSidecar : zoneObjects(objects));
+    const zones2 = zoneList(fromSidecar.length ? fromSidecar : zoneObjects(objects));
+    let startRect = null;
+    for (const layer of objects) {
+      for (const obj of layer.objects || []) {
+        if (!obj || String(obj.name || "").toLowerCase() !== "spawn") continue;
+        startRect = {
+          x: Math.round(Number(obj.x) || 0),
+          y: Math.round(Number(obj.y) || 0),
+          w: Math.round(Number(obj.width) || 0),
+          h: Math.round(Number(obj.height) || 0)
+        };
+        break;
+      }
+      if (startRect) break;
+    }
     const images = /* @__PURE__ */ new Map();
     const image = async (path) => {
       const src = path.startsWith("/") ? path : base + path.replace(/^\.\//, "");
@@ -3863,8 +3989,24 @@
       }
       return found;
     };
-    const sets = [];
+    const tilesets = [];
     for (const raw of Array.isArray(map.tilesets) ? map.tilesets : []) {
+      if (raw && raw.source) {
+        const src = String(raw.source);
+        const path = src.startsWith("/") ? src : base + src.replace(/^\.\//, "");
+        const body = await loadJSON(path, signal, true);
+        if (body && typeof body === "object") {
+          const here = path.slice(0, path.lastIndexOf("/") + 1);
+          const pic = typeof body.image === "string" ? body.image : "";
+          const abs = !pic ? "" : pic.startsWith("/") ? pic : here + pic.replace(/^\.\//, "");
+          tilesets.push({ ...body, firstgid: raw.firstgid, image: abs });
+        }
+        continue;
+      }
+      tilesets.push(raw);
+    }
+    const sets = [];
+    for (const raw of tilesets) {
       if (!raw || !raw.image) continue;
       const firstgid = Math.floor(Number(raw.firstgid));
       if (!Number.isSafeInteger(firstgid) || firstgid < 1) continue;
@@ -3875,14 +4017,16 @@
         tileHeight: Math.max(1, Math.floor(Number(raw.tileheight)) || th),
         margin: Math.max(0, Math.floor(Number(raw.margin)) || 0),
         spacing: Math.max(0, Math.floor(Number(raw.spacing)) || 0),
-        image: await image(String(raw.image))
+        // A tileset image is a path beside its own file, so an external file
+        // keeps the folder it came from.
+        image: await image(raw.image ? String(raw.image) : "")
       });
     }
     const atlas = await atlasFrames(signal);
     let atlasImage = null;
     if (atlas && atlas.frames.size) atlasImage = await image(atlas.image);
     const flags = /* @__PURE__ */ new Set();
-    for (const set of Array.isArray(map.tilesets) ? map.tilesets : []) {
+    for (const set of tilesets) {
       const firstgid = Math.floor(Number(set && set.firstgid)) || 1;
       for (const tile of set && Array.isArray(set.tiles) && set.tiles || []) {
         if (!tile) continue;
@@ -3905,8 +4049,7 @@
     fctx.imageSmoothingEnabled = false;
     wctx.imageSmoothingEnabled = false;
     const blocked = new Uint8Array(width * height);
-    const paint = (target, layer) => {
-      const data = layer.data;
+    const paint = (target, layer, data) => {
       const opacity = layer.opacity === void 0 ? 1 : Number(layer.opacity);
       const alpha = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
       const cells = Math.min(data.length, width * height);
@@ -3932,7 +4075,7 @@
       target.globalAlpha = 1;
     };
     for (const layer of tiles) {
-      const data = layer.data;
+      const data = await layerData(layer);
       const wall = isWallLayer(layer);
       const cells = Math.min(data.length, width * height);
       for (let i = 0; i < cells; i++) {
@@ -3941,9 +4084,9 @@
         if (wall || flags.has(gid)) blocked[i] = 1;
       }
       if (layer.visible === false) continue;
-      paint(wall ? wctx : fctx, layer);
+      paint(wall ? wctx : fctx, layer, data);
     }
-    const grid = new ZoneGrid(zones);
+    const grid = new ZoneGrid(zones2);
     return {
       room,
       widthPx: px,
@@ -3953,12 +4096,12 @@
       collision(x, y) {
         return bodyBlocked(blocked, width, height, tw, th, x, y);
       },
-      zones,
+      zones: zones2,
       zoneAt(x, y) {
         return grid.at(x, y);
       },
-      startPoint(want) {
-        return spawn(zones, want, blocked, width, height, tw, th);
+      startPoint() {
+        return spawn(startRect, blocked, width, height, tw, th);
       },
       images
     };
@@ -3976,23 +4119,45 @@
     };
     return probe(left, top) || probe(right, top) || probe(left, bottom) || probe(right, bottom) || probe(x, bottom);
   }
-  function classicSheet(image) {
+  var AVATARS = [
+    { name: "pipoya 1", image: "/world/avatars/player-1.png" },
+    { name: "pipoya 2", image: "/world/avatars/player-2.png" },
+    { name: "pipoya 3", image: "/world/avatars/player-3.png" },
+    { name: "pipoya 4", image: "/world/avatars/player-4.png" }
+  ];
+  function avatarIndex() {
+    const raw = parseInt(load("avatar") || "0", 10);
+    return Number.isInteger(raw) && raw >= 0 && raw < AVATARS.length ? raw : 0;
+  }
+  function setAvatar(index) {
+    const n = Math.max(0, Math.min(AVATARS.length - 1, Math.floor(Number(index) || 0)));
+    store("avatar", String(n));
+  }
+  function sheetOf2(image) {
     const idle = {};
     const walk = {};
-    for (let d = 0; d < DIR.length; d++) {
-      idle[DIR[d]] = IDLE_FRAME;
-      walk[DIR[d]] = [...WALK_ORDER];
+    for (const dir of DIR) {
+      idle[dir] = 0;
+      walk[dir] = [0, 1, 2, 1];
     }
-    return { image, cellW: CHAR_W, cellH: CHAR_H, idle, walk };
+    return { image, cellW: CHAR_W, cellH: CHAR_H, idle, walk, columns: 3 };
   }
-  async function loadCharacter(signal) {
-    let image;
-    try {
-      image = await loadImage("/world/char_player.png", signal);
-    } catch {
-      return defaultSheet();
+  async function loadSheets(signal) {
+    const out = [];
+    for (const one of AVATARS) {
+      try {
+        out.push(sheetOf2(await loadImage(one.image, signal)));
+      } catch {
+      }
     }
-    return classicSheet(image);
+    if (!out.length) out.push(defaultSheet());
+    return out;
+  }
+  function sheetFor(id, sheets2, mine) {
+    if (mine) return sheets2[Math.min(avatarIndex(), sheets2.length - 1)];
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = h * 31 + id.charCodeAt(i) | 0;
+    return sheets2[Math.abs(h) % sheets2.length];
   }
   function defaultSheet() {
     const cols = 4;
@@ -4014,7 +4179,7 @@
       idle[dir] = IDLE_FRAME;
       walk[dir] = [...WALK_ORDER];
     }
-    return { image: canvas, cellW: CHAR_W, cellH: CHAR_H, idle, walk };
+    return { image: canvas, cellW: CHAR_W, cellH: CHAR_H, idle, walk, columns: cols };
   }
   var Walker = class {
     x;
@@ -4049,8 +4214,8 @@
       else if (dy !== 0 && dx === 0) this.dir = dy < 0 ? 3 : 0;
       const ms = Math.min(Math.max(dt, 0), 100);
       const len = Math.hypot(dx, dy) || 1;
-      const moveX = dx / len * WALK_SPEED * (ms / 1e3);
-      const moveY = dy / len * WALK_SPEED * (ms / 1e3);
+      const moveX = dx / len * WALK_SPEED2 * (ms / 1e3);
+      const moveY = dy / len * WALK_SPEED2 * (ms / 1e3);
       if (moveX && !this.world.collision(this.x + moveX, this.y)) this.x += moveX;
       if (moveY && !this.world.collision(this.x, this.y + moveY)) this.y += moveY;
       this.clock += ms;
@@ -4061,11 +4226,11 @@
     }
     // cell is the sheet cell of the current facing and step: the row of the
     // facing, the idle column when still, the walk cycle when moving.
-    cell(sheet2) {
+    cell(sheet) {
       const name = DIR[this.dir] || DIR[0];
       const row = SHEET_ROW[this.dir] ?? 0;
-      if (!this.moving) return { col: sheet2.idle[name] ?? IDLE_FRAME, row };
-      const walk = sheet2.walk[name] && sheet2.walk[name].length ? sheet2.walk[name] : WALK_ORDER;
+      if (!this.moving) return { col: sheet.idle[name] ?? IDLE_FRAME, row };
+      const walk = sheet.walk[name] && sheet.walk[name].length ? sheet.walk[name] : WALK_ORDER;
       return { col: walk[this.frame % walk.length], row };
     }
   };
@@ -4076,6 +4241,40 @@
     if (!target) return false;
     if (event.ctrlKey || event.metaKey || event.altKey) return true;
     return TYPING.has(target.tagName) || !!target.isContentEditable;
+  }
+  function makePad(host, hold) {
+    const box = document.createElement("div");
+    box.className = "world-pad";
+    box.setAttribute("aria-label", "walk");
+    const arrows = [
+      ["up", "ArrowUp", "\u2191"],
+      ["left", "ArrowLeft", "\u2190"],
+      ["right", "ArrowRight", "\u2192"],
+      ["down", "ArrowDown", "\u2193"]
+    ];
+    for (const [name, key, face] of arrows) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "world-pad-key world-pad-" + name;
+      b.textContent = face;
+      b.setAttribute("aria-label", "walk " + name);
+      const press = (event) => {
+        event.preventDefault();
+        b.setPointerCapture(event.pointerId);
+        hold(key, true);
+      };
+      const release = () => hold(key, false);
+      b.addEventListener("pointerdown", press);
+      b.addEventListener("pointerup", release);
+      b.addEventListener("pointercancel", release);
+      b.addEventListener("lostpointercapture", release);
+      box.appendChild(b);
+    }
+    const parent = host.parentElement;
+    if (!parent) return null;
+    parent.classList.add("has-pad");
+    parent.appendChild(box);
+    return box;
   }
   var WorldView = class {
     canvas;
@@ -4095,6 +4294,9 @@
     camX = 0;
     camY = 0;
     last = 0;
+    // pad is the four arrow buttons a touch screen walks with; a mouse never
+    // sees it.
+    pad = null;
     onKeyDown = (event) => this.key(event, true);
     onKeyUp = (event) => this.key(event, false);
     constructor(canvas, world) {
@@ -4108,6 +4310,7 @@
       canvas.setAttribute("aria-label", "the world of this room, walk with the arrow keys or w a s d");
       window.addEventListener("keydown", this.onKeyDown);
       window.addEventListener("keyup", this.onKeyUp);
+      this.pad = makePad(canvas, (key, down) => this.touch(key, down));
       if (typeof ResizeObserver === "function") {
         const observe = new ResizeObserver(() => {
           this.dirty = true;
@@ -4115,6 +4318,17 @@
         observe.observe(canvas);
       }
       this.raf = requestAnimationFrame((t) => this.tick(t));
+    }
+    // touch is one arrow button of the pad: it holds the same key a finger on a
+    // keyboard would, so the walker needs no second path.
+    touch(key, down) {
+      if (!KEYS.has(key)) return;
+      if (down) {
+        if (document.visibilityState === "visible") this.held.add(key);
+      } else {
+        this.held.delete(key);
+      }
+      this.dirty = true;
     }
     // keys is the set of keys held now, for the walker of this page.
     get keys() {
@@ -4125,6 +4339,8 @@
       this.raf = 0;
       window.removeEventListener("keydown", this.onKeyDown);
       window.removeEventListener("keyup", this.onKeyUp);
+      if (this.pad && this.pad.parentNode) this.pad.parentNode.removeChild(this.pad);
+      this.pad = null;
       this.avatars.clear();
       this.held.clear();
     }
@@ -4241,13 +4457,15 @@
     }
     drawAvatar(one) {
       const ctx = this.ctx;
-      const sheet2 = one.sheet;
+      const sheet = one.sheet;
       const name = DIR[one.dir] || DIR[0];
-      const walk = sheet2.walk[name] && sheet2.walk[name].length ? sheet2.walk[name] : WALK_ORDER;
-      const col = one.moving ? walk[Math.floor(performance.now() / CHAR_MOVE_MS) % walk.length] : sheet2.idle[name] ?? IDLE_FRAME;
+      const walk = sheet.walk[name] && sheet.walk[name].length ? sheet.walk[name] : WALK_ORDER;
+      const col = one.moving ? walk[Math.floor(performance.now() / CHAR_MOVE_MS) % walk.length] : sheet.idle[name] ?? IDLE_FRAME;
       const row = SHEET_ROW[one.dir] ?? 0;
       const dx = Math.round(one.x - CHAR_W / 2);
       const dy = Math.round(one.y - CHAR_ORIGIN_Y);
+      const heard = one.local || this.near.has(one.id);
+      if (!heard) ctx.filter = "grayscale(1) brightness(0.72)";
       if (one.local) {
         ctx.globalAlpha = 0.35;
         ctx.fillStyle = "#ffffff";
@@ -4256,7 +4474,8 @@
         ctx.fill();
         ctx.globalAlpha = 1;
       }
-      ctx.drawImage(sheet2.image, col * sheet2.cellW, row * sheet2.cellH, sheet2.cellW, sheet2.cellH, dx, dy, sheet2.cellW, sheet2.cellH);
+      ctx.drawImage(sheet.image, col * sheet.cellW, row * sheet.cellH, sheet.cellW, sheet.cellH, dx, dy, sheet.cellW, sheet.cellH);
+      ctx.filter = "none";
       const label = one.name || one.id.slice(0, 6);
       ctx.font = "8px sans-serif";
       ctx.textAlign = "center";
@@ -4275,8 +4494,28 @@
         ctx.arc(Math.round(one.x + wide / 2) + 1, top - 5, 2, 0, Math.PI * 2);
         ctx.fill();
       }
+      if (!one.local && one.camera) {
+        ctx.fillStyle = "#ffd23f";
+        ctx.fillRect(Math.round(one.x - wide / 2) - 6, top - 8, 4, 3);
+        ctx.fillRect(Math.round(one.x - wide / 2) - 1, top - 7, 1, 1);
+      }
     }
-    // paintNear takes the bubble set of this tick and repaints only on a change.
+    // marks takes the camera flag of every remote, so a name tag says when a
+    // guest holds a camera. It repaints only on a change.
+    marks(cams) {
+      let dirty = false;
+      for (const one of this.avatars.values()) {
+        if (one.local) continue;
+        const cam = !!cams.get(one.id);
+        if (!!one.camera !== cam) {
+          one.camera = cam;
+          dirty = true;
+        }
+      }
+      if (dirty) this.dirty = true;
+    }
+    // paintNear takes the conversation set of this tick and repaints only on a
+    // change.
     paintNear(ids) {
       const next = new Set(ids);
       if (next.size !== this.near.size || ids.some((id) => !this.near.has(id))) {
@@ -4287,26 +4526,51 @@
   };
 
   // src/proximity.ts
-  var BUBBLE_R = 96;
-  var BUBBLE_LEAVE = Math.round(BUBBLE_R * 1.3);
-  var BUBBLE_DWELL = 300;
-  var BUBBLE_CELL = BUBBLE_R;
+  var BUBBLE = 96;
   function dist2(a, b) {
     const dx = a.x - b.x;
     const dy = a.y - b.y;
     return dx * dx + dy * dy;
   }
+  function judge(mine, them) {
+    for (const a of mine.zones) {
+      if (a.kind === "silent") return { on: false, why: "silent" };
+      const b = them.zones.find((one) => one.id === a.id);
+      if (!b) continue;
+      if (mine.full === a.id || them.full === a.id) return { on: false, why: "full" };
+      if (a.kind === "meeting" || b.kind === "meeting") return { on: true, why: "meeting" };
+      const r = Math.max(a.proximity, b.proximity);
+      return dist2(mine.at, them.at) <= r * r ? { on: true, why: "near" } : { on: false, why: "far" };
+    }
+    for (const a of them.zones) {
+      if (a.kind === "silent") continue;
+      if (dist2(mine.at, them.at) <= a.proximity * a.proximity) return { on: true, why: "near" };
+    }
+    return dist2(mine.at, them.at) <= BUBBLE * BUBBLE ? { on: true, why: "bubble" } : { on: false, why: "far" };
+  }
   var Proximity = class {
-    // pair key "a|b" -> when the pair first came close, for the dwell
-    since = /* @__PURE__ */ new Map();
-    // pair key -> bubble is open now
-    open = /* @__PURE__ */ new Set();
     near = /* @__PURE__ */ new Set();
-    // reset forgets every pair, for a leave or a room change.
+    why = /* @__PURE__ */ new Map();
     reset() {
-      this.since.clear();
-      this.open.clear();
       this.near.clear();
+      this.why.clear();
+    }
+    build(selfId, guests) {
+      const mine = guests.get(selfId);
+      const next = /* @__PURE__ */ new Set();
+      this.why.clear();
+      if (!mine) {
+        this.near.clear();
+        return [];
+      }
+      for (const [id, them] of guests) {
+        if (id === selfId) continue;
+        const pair = judge(mine, them);
+        this.why.set(id, pair.why);
+        if (pair.on) next.add(id);
+      }
+      this.near = next;
+      return [...next];
     }
     isNear(id) {
       return this.near.has(id);
@@ -4314,111 +4578,36 @@
     nearIds() {
       return [...this.near];
     }
-    // build regroups every self id and its peers. `now` is the page clock of
-    // this tick, so the dwell is measured on one clock and not on a remote ts.
-    build(selfId, points, now) {
-      const buckets = /* @__PURE__ */ new Map();
-      const put = (id, p) => {
-        const key = Math.floor(p.x / BUBBLE_CELL) + "," + Math.floor(p.y / BUBBLE_CELL);
-        const list = buckets.get(key);
-        if (list) list.push(id);
-        else buckets.set(key, [id]);
-      };
-      const mine = points.get(selfId);
-      if (!mine) {
-        for (const id of this.near) this.since.delete(this.pair(selfId, id));
-        this.near.clear();
-        return [];
-      }
-      for (const [id, p] of points) put(id, p);
-      const near = /* @__PURE__ */ new Set();
-      for (const id of sweep(buckets, mine, selfId)) {
-        const p = points.get(id);
-        if (!p) continue;
-        const d2 = dist2(mine, p);
-        const key = this.pair(selfId, id);
-        if (d2 <= BUBBLE_R * BUBBLE_R) {
-          if (this.open.has(key)) {
-            near.add(id);
-            continue;
-          }
-          const at = this.since.get(key);
-          if (at === void 0) {
-            this.since.set(key, now);
-          } else if (now - at >= BUBBLE_DWELL) {
-            this.open.add(key);
-            this.since.delete(key);
-            near.add(id);
-          }
-          continue;
-        }
-        if (d2 > BUBBLE_LEAVE * BUBBLE_LEAVE) {
-          this.open.delete(key);
-          this.since.delete(key);
-          continue;
-        }
-        if (this.open.has(key)) near.add(id);
-      }
-      for (const key of [...this.open]) {
-        const other = key.startsWith(selfId + "|") ? key.slice(selfId.length + 1) : "";
-        if (!other || !points.has(other)) {
-          this.open.delete(key);
-          this.since.delete(key);
-        }
-      }
-      this.near = near;
-      return [...near];
-    }
-    pair(a, b) {
-      return a + "|" + b;
+    reason(id) {
+      return this.why.get(id) || "far";
     }
   };
-  function sweep(buckets, mine, selfId) {
-    const cx = Math.floor(mine.x / BUBBLE_CELL);
-    const cy = Math.floor(mine.y / BUBBLE_CELL);
-    const out = [];
-    for (let ix = cx - 1; ix <= cx + 1; ix++) {
-      for (let iy = cy - 1; iy <= cy + 1; iy++) {
-        const list = buckets.get(ix + "," + iy);
-        if (!list) continue;
-        for (const id of list) if (id !== selfId) out.push(id);
-      }
-    }
-    return out;
-  }
 
   // src/roomworld.ts
   var view = null;
   var walker = null;
   var proximity = null;
+  var zones = null;
   var watch = null;
-  var sheet = null;
+  var sheets = [];
   var raf = 0;
   var lastFrame = 0;
   var generation = 0;
+  var near = [];
   var worldStats = { loaded: 0, sent: 0, recv: 0, frames: 0, near: 0, zones: [] };
+  function worldAvatar() {
+    if (!view || !sheets.length) return;
+    const self2 = view.avatars.get("self");
+    if (self2) self2.sheet = sheetFor("self", sheets, true);
+    view.mark();
+  }
   function isWorld() {
-    return load("world") !== "0";
+    return load("world") === "1";
   }
   function worldNode() {
-    let box = document.getElementById("world-view");
-    if (!box) {
-      box = document.createElement("div");
-      box.id = "world-view";
-      box.className = "world-view";
-      box.hidden = true;
-      const canvas2 = document.createElement("canvas");
-      canvas2.id = "world-canvas";
-      canvas2.className = "world-canvas";
-      const note2 = document.createElement("p");
-      note2.id = "world-note";
-      note2.className = "world-note";
-      note2.hidden = true;
-      box.append(canvas2, note2);
-      $("grid").prepend(box);
-    }
-    const canvas = box.querySelector("canvas");
-    const note = box.querySelector(".world-note");
+    const box = document.getElementById("world-view");
+    const canvas = document.getElementById("world-canvas");
+    const note = document.getElementById("world-note");
     return { box, canvas, note };
   }
   async function worldEnter(room) {
@@ -4433,16 +4622,14 @@
     try {
       const world = await loadWorld(room);
       if (gen !== generation || state.leaving) return;
-      sheet = await loadCharacter();
+      sheets = await loadSheets();
       if (gen !== generation || state.leaving) return;
       if (view) view.destroy();
       view = new WorldView(canvas, world);
-      const want = startZoneFromHash();
-      const start = world.startPoint(want);
-      walker = new Walker(world, start);
+      walker = new Walker(world, world.startPoint());
       proximity = new Proximity();
-      const grid = new ZoneGrid(world.zones);
-      watch = new ZoneWatch(grid);
+      zones = new ZoneGrid(world.zones);
+      watch = new ZoneWatch(zones);
       view.avatars.set("self", {
         id: "self",
         name: state.name || "you",
@@ -4450,7 +4637,7 @@
         y: walker.y,
         dir: walker.dir,
         moving: false,
-        sheet,
+        sheet: sheetFor("self", sheets, true),
         local: true,
         walker
       });
@@ -4459,7 +4646,7 @@
       lastFrame = 0;
       worldSet(true);
       note.hidden = false;
-      note.textContent = "walk with the arrow keys or w a s d; the call grid is one click away";
+      note.textContent = "walk with the arrow keys or w a s d; the room is on the presence line";
       layoutStage();
       startLoop();
     } catch (err) {
@@ -4477,9 +4664,12 @@
     view = null;
     walker = null;
     proximity = null;
+    zones = null;
     watch = null;
+    near = [];
     posReset();
-    sheet = null;
+    sheets = [];
+    paintPresence();
     const box = document.getElementById("world-view");
     if (box) box.hidden = true;
   }
@@ -4506,11 +4696,6 @@
     if (view) view.mark();
     layoutStage();
   }
-  function startZoneFromHash() {
-    const hash = String(location.hash || "").replace(/^#/, "");
-    const found = /(?:^|&)start=([a-z0-9-]{1,32})(?:&|$)/.exec(hash);
-    return found ? found[1] : null;
-  }
   function startLoop() {
     stopLoop();
     const run = () => {
@@ -4518,7 +4703,7 @@
       const now = performance.now();
       if (now - lastFrame >= POSITION_DELAY) {
         lastFrame = now;
-        step(now);
+        step();
       }
       raf = requestAnimationFrame(run);
     };
@@ -4528,7 +4713,19 @@
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
   }
-  function step(now) {
+  function guestOf(x, y, load2) {
+    const list = [];
+    let full = "";
+    if (zones) {
+      for (const zone of zones.at(x, y)) {
+        list.push({ id: zone.id, kind: zone.kind, proximity: zone.proximity });
+        const n = load2.get(zone.id) || 0;
+        if (zone.capacity && n >= zone.capacity) full = zone.id;
+      }
+    }
+    return { at: { x, y }, zones: list, full };
+  }
+  function step() {
     if (!view || !walker || !proximity) return;
     const local = view.local;
     if (local && walker) {
@@ -4540,17 +4737,47 @@
     if (watch) watch.update(walker.x, walker.y);
     const zoneIds = watch ? watch.ids() : [];
     if (worldStats.zones.join(",") !== zoneIds.join(",")) worldStats.zones = zoneIds;
-    const frame = posFrame(walker.x, walker.y, walker.dir, walker.moving, zoneIds);
     const peers = [...state.peers.values()];
-    posSend(peers, frame);
+    posSend(peers, posFrame(walker.x, walker.y, walker.dir));
     worldStats.sent++;
-    const points = remotePoints(now);
-    if (state.self) points.set(state.self, { x: walker.x, y: walker.y });
-    const near = proximity.build(state.self || "self", points, now);
-    worldStats.near = near.length;
-    view.paintNear(near);
+    const points = remotePoints();
+    const load2 = /* @__PURE__ */ new Map();
+    if (zones) {
+      for (const zone of zones.at(walker.x, walker.y)) load2.set(zone.id, 1);
+      for (const at of points.values()) {
+        for (const zone of zones.at(at.x, at.y)) load2.set(zone.id, (load2.get(zone.id) || 0) + 1);
+      }
+    }
+    const guests = /* @__PURE__ */ new Map();
+    const selfId = state.self || "self";
+    guests.set(selfId, guestOf(walker.x, walker.y, load2));
+    for (const [id, at] of points) guests.set(id, guestOf(at.x, at.y, load2));
+    const next = proximity.build(selfId, guests);
+    const changed = next.length !== near.length || next.some((id, i) => id !== near[i]);
+    near = next;
+    worldStats.near = next.length;
+    route(peers, next);
+    const mine = next.slice(0, 16);
+    for (const peer of peers) {
+      if (!peer.talks || peer.talks.join(",") !== mine.join(",")) {
+        peer.talks = mine.slice();
+        sendTalks(peer, mine);
+      }
+    }
+    if (changed) view.paintNear(near);
     syncPeers();
+    const cams = /* @__PURE__ */ new Map();
+    for (const peer of peers) cams.set(peer.id, peer.camOn !== false);
+    view.marks(cams);
     view.mark();
+  }
+  function route(peers, nearIds) {
+    const on = new Set(nearIds);
+    for (const peer of peers) {
+      const wanted = on.has(peer.id);
+      if (isRouted(peer.id) !== wanted) setRouted(peer.id, wanted);
+    }
+    paintPresence();
   }
   function worldOnPos(peer) {
     if (!view || !peer) return;
@@ -4561,7 +4788,7 @@
     if (!view) return;
     const avatars = view.avatars;
     const now = performance.now();
-    const points = remotePoints(now);
+    const points = remotePoints();
     for (const [id, peer] of state.peers) {
       const at = points.get(id);
       let one = avatars.get(id);
@@ -4569,20 +4796,21 @@
         if (one) avatars.delete(id);
         continue;
       }
+      const draw = posAt(id, now, near.includes(id));
       if (!one) {
         one = {
           id,
           name: peer.name || id.slice(0, 6),
-          x: at.x,
-          y: at.y,
+          x: draw.x,
+          y: draw.y,
           dir: remoteDir(id),
           moving: remoteMoving(id),
-          sheet: sheet || avatars.get("self").sheet
+          sheet: sheetFor(id, sheets, false)
         };
         avatars.set(id, one);
       } else {
-        one.x = at.x;
-        one.y = at.y;
+        one.x = draw.x;
+        one.y = draw.y;
         one.dir = remoteDir(id);
         one.moving = remoteMoving(id);
         one.name = peer.name || one.name;
@@ -4608,7 +4836,13 @@
       map: () => {
         if (!view) return null;
         const world = view.world;
-        return { room: world.room, widthPx: world.widthPx, heightPx: world.heightPx, zones: world.zones.length, avatars: view.avatars.size };
+        return {
+          room: world.room,
+          widthPx: world.widthPx,
+          heightPx: world.heightPx,
+          zones: world.zones.length,
+          avatars: view.avatars.size
+        };
       },
       // walk holds one key for a number of milliseconds, the way a person holds
       // it, so the walker takes real steps through real collision.
@@ -4622,12 +4856,45 @@
         view?.mark();
         return view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y) } : null;
       },
-      near: () => view ? [...view.near] : [],
+      // goTo puts this page at a place the way a teleport would: it is for the
+      // browser test to stand two pages on a known spot, never a person's move.
+      goTo: (x, y) => {
+        if (!walker) return null;
+        walker.x = Math.max(0, Math.min(view ? view.world.widthPx : x, Number(x) || 0));
+        walker.y = Math.max(0, Math.min(view ? view.world.heightPx : y, Number(y) || 0));
+        view?.mark();
+        return { x: Math.round(walker.x), y: Math.round(walker.y) };
+      },
+      near: () => view ? [...near] : [],
+      // points is the exact place of every remote frame, which is what the pair
+      // rule is judged on, and the zones of each place.
+      points: () => {
+        const out = [];
+        for (const [id, at] of remotePoints()) {
+          out.push({ id, x: at.x, y: at.y, zones: zones ? zones.at(at.x, at.y).map((z) => z.id + ":" + z.kind) : [] });
+        }
+        return out;
+      },
+      // presence is the line as a person reads it, and the facts behind it: the
+      // pairs this page routes, and the pairs each of them says it talks to.
+      presence: () => ({
+        room: (document.getElementById("presence-room") || {}).textContent || "",
+        near: (document.getElementById("presence-near") || {}).textContent || "",
+        via: (document.getElementById("presence-via") || {}).textContent || "",
+        routed: (view ? [...near] : []).filter((id) => isRouted(id))
+      }),
       set: (on) => {
         store("world", on ? 1 : 0);
         worldSet(on);
       }
     };
+  }
+  function talksFrame(ids) {
+    return { k: "talks", ids };
+  }
+  function sendTalks(peer, ids) {
+    if (!peer || !peer.keys || peer.waiting) return;
+    sealedSend(peer, talksFrame(ids));
   }
 
   // src/files.ts
@@ -6455,6 +6722,8 @@
     peer.passEarly = [];
     if (peer.passTimer) clearTimeout(peer.passTimer);
     peer.passTimer = null;
+    for (const t of peer.passHold || []) clearTimeout(t);
+    peer.passHold = [];
     peer.ctlPending = [];
     fileDropPeer(peer);
     if (peer.pc) {
@@ -6464,6 +6733,18 @@
     if (peer.tile) peer.tile.dataset.sas = "";
     sealedSetE2E(peer, "new");
     if (resend) sealedSendPub(peer);
+    if (resend && peer.keys && String(state.self) < String(peer.id)) sealedHoldPass(peer);
+  }
+  var PASS_HOLDS_MAX = 6;
+  function sealedHoldPass(peer) {
+    if (peer.pass || peer.passSpent || (peer.passHold || []).length >= PASS_HOLDS_MAX) return;
+    const timer = setTimeout(() => {
+      peer.passHold = (peer.passHold || []).filter((t) => t !== timer);
+      if (!state.peers.has(peer.id) || state.leaving || peer.pass || !peer.keys) return;
+      if (startPassNow(peer)) sealedOfferPass(peer);
+      else sealedHoldPass(peer);
+    }, PASS_SPEND_MS + 100);
+    (peer.passHold = peer.passHold || []).push(timer);
   }
   function sealedOnPub(peer, msg) {
     if (peer.pub && peer.pub.sid && msg.sid && peer.pub.sid !== msg.sid) sealedRestart(peer, false);
@@ -6666,12 +6947,15 @@
       sealedRefuse(peer, "was removed from this room");
       return;
     }
-    peer.keyPromise = sealedInstallKeys(peer);
+    const keys = sealedInstallKeys(peer);
+    peer.keyPromise = keys;
     sealedSetE2E(peer, "ready");
-    Promise.resolve(peer.keyPromise).then((ok) => {
+    Promise.resolve(keys).then((ok) => {
+      if (peer.keyPromise === keys) peer.keyPromise = null;
       if (!ok || !state.peers.has(peer.id) || state.leaving) return;
       sealedFlushApp(peer);
       if (startPassNow(peer)) sealedOfferPass(peer);
+      else sealedHoldPass(peer);
     });
   }
   function sealedFlushApp(peer) {
@@ -6892,6 +7176,8 @@
       if (!peer.waiting) asrOnMessage(peer, obj);
     } else if (obj.k === "state") {
       sealedOnState(peer, obj);
+    } else if (obj.k === "talks") {
+      setTalks(peer.id, obj.ids);
     } else if (obj.k === "lower") {
       if (isAdmin(peer.id) && state.hand) setHand(false);
     } else if (obj.k === "gateq") {
@@ -7373,6 +7659,12 @@
       hand: false,
       // a raised hand
       handTs: 0,
+      camOn: true,
+      // the guest's own camera flag, sealed to this pair
+      micOn: true,
+      // the guest's own microphone flag, sealed to this pair
+      talks: [],
+      // the ids the guest says it is talking to, sealed to this pair
       screenShared: false,
       // a live share, until the sealed state says otherwise
       vol: 100,
@@ -7493,6 +7785,7 @@
       const track = event.track;
       if (track.kind === "audio") {
         routeAudio(peer, track);
+        routeNow(peer);
         track.addEventListener("ended", () => dropAudio(peer));
         return;
       }
@@ -7507,7 +7800,7 @@
         return;
       }
       peer.videoTrack = track;
-      paintPeerVideo(peer);
+      routeNow(peer);
       track.addEventListener("mute", () => paintPeerVideo(peer));
       track.addEventListener("unmute", () => paintPeerVideo(peer));
       track.addEventListener("ended", () => paintPeerVideo(peer));
@@ -7605,6 +7898,8 @@
     if (!peer) return;
     dropAudio(peer);
     worldDrop(id);
+    forgetRoute(id);
+    paintPresence();
     fileDropPeer(peer);
     if (peer.pc) peer.pc.close();
     const row = peer.tile ? rowOf.get(peer.tile) : null;
@@ -8434,7 +8729,7 @@
     const video = peer.tile && peer.tile.querySelector("video");
     if (!video) return;
     const track = peer.videoTrack;
-    const live = track && track.readyState === "live" && !track.muted && peer.cam !== false;
+    const live = track && track.readyState === "live" && !track.muted && peer.cam !== false && isRouted(peer.id);
     if (!state.deaf && live) {
       setVideoTrack(video, track);
       peer.tile.classList.add("playing");
@@ -8468,7 +8763,7 @@
   function paintPeerScreen(peer) {
     const track = peer.screenTrack;
     if (!track) return;
-    if (!state.deaf && peer.screenShared !== false && track.readyState === "live" && !track.muted) {
+    if (!state.deaf && isRouted(peer.id) && peer.screenShared !== false && track.readyState === "live" && !track.muted) {
       const tile = makeScreenTile(peer);
       const video = tile.querySelector("video");
       setVideoTrack(video, track);
@@ -8884,7 +9179,7 @@
       const el2 = peer.audioEl || new Audio();
       el2.autoplay = true;
       el2.srcObject = new MediaStream([track]);
-      el2.volume = state.deaf ? 0 : Math.min(volGain(peer.vol), 1);
+      el2.volume = state.deaf || !isRouted(peer.id) ? 0 : Math.min(volGain(peer.vol), 1);
       el2.play().catch(() => {
       });
       peer.audioEl = el2;
@@ -8900,7 +9195,7 @@
     });
     peer.pump = pump;
     peer.gain = ctx.createGain();
-    peer.gain.gain.value = state.deaf ? 0 : volGain(peer.vol);
+    peer.gain.gain.value = state.deaf || !isRouted(peer.id) ? 0 : volGain(peer.vol);
     peer.audioSrc = ctx.createMediaStreamSource(new MediaStream([track]));
     peer.audioSrc.connect(peer.gain);
     peer.gain.connect(ctx.destination);
@@ -9169,7 +9464,7 @@
       num.textContent = `${peer.vol}%`;
       range.value = String(peer.vol);
     }
-    const g = state.deaf ? 0 : volGain(peer.vol);
+    const g = state.deaf || !isRouted(peer.id) ? 0 : volGain(peer.vol);
     if (peer.gain) peer.gain.gain.value = g;
     if (peer.audioEl) peer.audioEl.volume = Math.min(g, 1);
   }
@@ -11425,6 +11720,7 @@
       if (peer.cam) paintPeerVideo(peer);
       else dropPeerCamera(peer);
     }
+    setGuestFlags(peer.id, { cam: obj.cam !== void 0 ? !!obj.cam : void 0, mic: obj.mic !== void 0 ? !!obj.mic : void 0 });
     if (obj.deaf !== void 0) peer.deaf = !!obj.deaf;
     if (obj.outFilter !== void 0) peer.outFilter = filterName(obj.outFilter);
     if (obj.inFilter !== void 0) peer.inFilter = filterName(obj.inFilter);
@@ -11937,6 +12233,14 @@
       videoT: p.video ? p.video.currentTime : 0,
       video: p.video
     })),
+    // peerGains is the output level of every pair this page plays, so a test can
+    // see that a guest out of the conversation is actually silent and not only
+    // absent from a line.
+    peerGains: () => [...state.peers.values()].map((p) => ({
+      id: p.id,
+      gain: p.gain ? Math.round(p.gain.gain.value * 1e3) / 1e3 : p.audioEl ? p.audioEl.volume : 0,
+      routed: isRouted(p.id)
+    })),
     identity: () => state.idKey ? {
       kind: state.idKey.kind,
       fp: state.idKey.fp,
@@ -12317,6 +12621,13 @@
         paint();
       });
       paint();
+    }
+    const avatarPick = document.getElementById("avatar-pick");
+    if (avatarPick) {
+      avatarPick.addEventListener("change", () => {
+        setAvatar(parseInt(avatarPick.value, 10) || 0);
+        worldAvatar();
+      });
     }
     document.addEventListener("click", closeMenus);
     document.addEventListener("keydown", (event) => {

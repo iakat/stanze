@@ -215,6 +215,11 @@ function zoneObjects(objects: any[]): any[] {
       out.push({
         id: obj.name,
         name: props.label || props.name || obj.name,
+        // The property bag of a Tiled zone is {kind, proximity, maxUsers}; the
+        // runtime form is {kind, proximity, capacity}, and without these lines
+        // a meeting room is a plain area that carries no talk.
+        kind: String(props.kind || ''),
+        proximity: props.proximity,
         capacity: props.maxUsers !== undefined ? props.maxUsers : props.capacity,
         rects,
       });
@@ -259,22 +264,36 @@ export function mapPath(room: string): string {
 const DEFAULT_MAP = '/world/map.json';
 
 // atlasFrames reads the shipped atlas.json: a named rectangle per tile, which
-// is how a map whose gids are named cells is drawn. It answers an empty map
-// when the file is not there, and the Tiled tileset path is used instead.
+// is how a map whose gids are named cells is drawn. The file the assets ship
+// keys its frames by tile name, and a Tiled export keys them by gid; both are
+// read, a numeric key is its own gid and a name is the next gid in order, the
+// cells laid out exactly as the sheet packs them. It answers an empty map when
+// the file is not there, and the Tiled tileset path is used instead.
 async function atlasFrames(signal?: AbortSignal): Promise<{ image: string; frames: Map<number, any> } | null> {
   const raw = await loadJSON('/world/atlas.json', signal, true);
   if (!raw || typeof raw !== 'object' || !raw.image) return null;
   const frames = new Map<number, any>();
   const list = raw.frames && typeof raw.frames === 'object' ? raw.frames : {};
-  for (const [key, rect] of Object.entries(list)) {
-    const id = Number(key);
-    if (!Number.isSafeInteger(id) || !rect) continue;
-    const one: any = rect;
-    const x = Math.floor(Number(one.x));
-    const y = Math.floor(Number(one.y));
-    const w = Math.floor(Number(one.w));
-    const h = Math.floor(Number(one.h));
+  const count = Math.max(1, Math.floor(Number(raw.tilecount)) || Object.keys(list).length);
+  let named = 0;
+  for (const [key, value] of Object.entries(list)) {
+    if (!value || typeof value !== 'object') continue;
+    const one: any = value;
+    // A cell may be given as a grid position, the way the sheet is built, or
+    // as the pixel rect a Tiled export writes; the rect wins when both.
+    let x = Math.floor(Number(one.x));
+    let y = Math.floor(Number(one.y));
+    if ((!Number.isFinite(x) || !Number.isFinite(y)) && Number.isFinite(Number(one.col)) && Number.isFinite(Number(one.row))) {
+      const g = Math.max(0, Math.floor(Number(raw.gutter)) || 0);
+      x = g + Math.floor(Number(one.col)) * (TILE + g);
+      y = g + Math.floor(Number(one.row)) * (TILE + g);
+    }
+    const w = Math.floor(Number(one.w)) || TILE;
+    const h = Math.floor(Number(one.h)) || TILE;
     if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) continue;
+    const num = Number(key);
+    const id = Number.isSafeInteger(num) && key.trim() !== '' ? num : ++named > count ? 0 : named;
+    if (id < 1) continue;
     frames.set(id, { x, y, w, h });
   }
   return { image: String(raw.image), frames };

@@ -46,10 +46,10 @@ export function worldAvatar() {
 }
 
 // isWorld answers whether the world view is the one in front of the visitor.
-// It is a stored choice that defaults to on, so a guest lands in the world and
-// the call grid is one menu click away.
+// The call grid is the default, so a guest lands in the grid and the world is
+// one menu click away.
 export function isWorld(): boolean {
-  return load('world') !== '0';
+  return load('world') === '1';
 }
 
 // worldNode is the one node that holds the canvas and its status line.
