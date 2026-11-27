@@ -262,6 +262,66 @@ function spawn(
   return { x: Math.round(tw * 1.5), y: Math.round(th * 1.5) };
 }
 
+// spawnObject is the point object this tree authors: an object of any layer
+// whose name is spawn. WorkAdventure has no such object; it is ours and it
+// stays first so the shipped map keeps spawning where it did.
+function spawnObject(objects: any[]): { x: number; y: number; w: number; h: number } | null {
+  for (const layer of objects) {
+    for (const obj of layer.objects || []) {
+      if (!obj || String(obj.name || '').toLowerCase() !== 'spawn') continue;
+      return {
+        x: Math.round(Number(obj.x) || 0),
+        y: Math.round(Number(obj.y) || 0),
+        w: Math.round(Number(obj.width) || 0),
+        h: Math.round(Number(obj.height) || 0),
+      };
+    }
+  }
+  return null;
+}
+
+// startLayerRect is WorkAdventure's documented start: a tile layer named
+// start, else a layer whose property bag says startLayer true (the older
+// spelling of the same thing). The rect is the bounding box of the non-empty
+// cells plus one tile of slack, so spawn()'s ten draws land on or beside a
+// start tile and a lone start tile still spawns on that tile's centre, as
+// WorkAdventure's own tile-centre rule does.
+async function startLayerRect(
+  tiles: any[],
+  width: number,
+  height: number,
+  tw: number,
+  th: number,
+): Promise<{ x: number; y: number; w: number; h: number } | null> {
+  const list = tiles.filter((layer) => layer && layer.type === 'tilelayer');
+  const named = list.find((layer) => String(layer.name || '').toLowerCase() === 'start');
+  const flagged = list.find((layer) => {
+    const props = Array.isArray(layer.properties) ? layer.properties : [];
+    return props.some(
+      (p) => p && (p.name === 'startLayer' || p.name === 'start') && (p.value === true || p.value === 'true'),
+    );
+  });
+  const pick = named || flagged || null;
+  if (!pick) return null;
+  const data = await layerData(pick);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const cells = Math.min(data.length, width * height);
+  for (let i = 0; i < cells; i++) {
+    if (!gidOf(Number(data[i]) || 0)) continue;
+    const x = (i % width) * tw;
+    const y = Math.floor(i / width) * th;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  if (!Number.isFinite(minX)) return null;
+  return { x: minX, y: minY, w: Math.max(tw, maxX - minX + tw), h: Math.max(th, maxY - minY + th) };
+}
+
 // mapPath is the one room to one map rule of §5: a room with a map of its own
 // gets it, and every other room walks the default office, the way a WorkAdventure
 // deployment serves its one world to every room. A map is geometry and zones;
@@ -344,21 +404,13 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   const sidecar = await loadJSON(room === '' ? '' : base + 'maps/' + room + '.zones.json', signal, true);
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
   const zones = zoneList(fromSidecar.length ? fromSidecar : zoneObjects(objects));
-  // The spawn is the point object named spawn, the way a Tiled map carries one.
-  let startRect: { x: number; y: number; w: number; h: number } | null = null;
-  for (const layer of objects) {
-    for (const obj of layer.objects || []) {
-      if (!obj || String(obj.name || '').toLowerCase() !== 'spawn') continue;
-      startRect = {
-        x: Math.round(Number(obj.x) || 0),
-        y: Math.round(Number(obj.y) || 0),
-        w: Math.round(Number(obj.width) || 0),
-        h: Math.round(Number(obj.height) || 0),
-      };
-      break;
-    }
-    if (startRect) break;
-  }
+  // The spawn, most specific first: the point object named spawn (this tree's
+  // own authoring), then the WorkAdventure start layer, then a layer flagged
+  // startLayer. A map with none of them falls through to spawn()'s centre,
+  // unchanged.
+  const startRect =
+    (await spawnObject(objects)) ||
+    (await startLayerRect(tiles, width, height, tw, th));
 
   // Every image is loaded once, keyed by its path, so two tilesets that share
   // one sheet cost one request.
