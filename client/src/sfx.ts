@@ -8,16 +8,14 @@ import { disconnectQuietly, stopQuietly } from './util.js';
 import { newAudioCtx } from './audio.js';
 
 // ---------------------------------------------------------------- sound effects
-// The one-shot cues from sfx/<name>.<ext>, decoded once into a cache, plus a
-// lost connection chime that loops. Ogg Opus first, WebM Opus next, an mp3
-// copy last for a browser that can not decode either.
+// The one-shot cues from sfx/<name>.<ext>, decoded once into a cache. Ogg Opus
+// first, WebM Opus next, an mp3 copy last for a browser that can not decode
+// either.
 //
-// Seven of them are the Jitsi Meet cues, so a room sounds like the one a guest
+// All seven are the Jitsi Meet cues, so a room sounds like the one a guest
 // knows: joining and leaving, a knock at the lobby, a hand going up, a chat
-// line, and a microphone that turns on or off. The Jitsi files carry no sound
-// for a connection that drops, so the pad and the two device cues below stay
-// this page's own.
-const SFX_NAMES = ['joined', 'left', 'knock', 'raisehand', 'msg', 'unmuted', 'muted', 'timp', 'hammer', 'lost'];
+// line, and a microphone that turns on or off.
+const SFX_NAMES = ['joined', 'left', 'knock', 'raisehand', 'msg', 'unmuted', 'muted'];
 
 const SFX_RATE = 0.35;
 
@@ -25,7 +23,8 @@ const SFX_RATE = 0.35;
 // quieter than a one shot cue.
 const LOST_RATE = 0.2;
 
-// The lost cue loops the middle 8.0 s of the file.
+// The lost cue loops a middle slice, so the codec padding at the file edges
+// stays outside the loop point.
 const LOST_LOOP_START = 0.16;
 
 const LOST_LOOP_END = 8.16;
@@ -71,8 +70,6 @@ export function preloadSfx() {
       .then((b) => ctx.decodeAudioData(b))
       .then((buffer) => {
         sfxCache.set(name, buffer);
-        // A lost connection may already have asked for the pad.
-        if (name === 'lost' && state.lostWanted) startLost();
       })
       .catch(() => {});
   }
