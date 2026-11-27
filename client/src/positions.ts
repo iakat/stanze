@@ -57,10 +57,6 @@ export function posForget(peerId: string) {
   remotes.delete(peerId);
 }
 
-export function posSeen(peerId: string): boolean {
-  return remotes.has(peerId);
-}
-
 // posAt is where a remote avatar stands now: the sample is drawn where the
 // sender put it, and while the pair is talking the step between two frames is
 // slid over a tick so a walk looks like a walk instead of five hops a second.
