@@ -14,7 +14,6 @@ import { Above, CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } 
 import { Guest, Proximity } from './proximity.js';
 import { Zone, ZoneGrid, ZoneWatch } from './zones.js';
 import { ROOM_RE } from './config.js';
-import { say } from './util.js';
 import {
   posAt,
   posFrame,
@@ -264,7 +263,7 @@ function guestOf(x: number, y: number, load: Map<string, number>): Guest {
 // map of the target room ('conference.tmj#from-office'), a link to the world, or
 // a full address; a link is the same host's page and so the same call, and a
 // remote host is not a door this page can walk through.
-export function roomOfExit(exit: string, here: string): string | null {
+export function roomOfExit(exit: string): string | null {
   const raw = String(exit || '').trim();
   if (!raw) return null;
   // WorkAdventure names a door three ways: a map beside this one
@@ -280,9 +279,12 @@ export function roomOfExit(exit: string, here: string): string | null {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(seg)) return '';
     return seg.replace(/\.(tmj|json|png)$/i, '').toLowerCase();
   };
-  let target = '';
-  if (/^(https?:)?\/\//i.test(raw)) {
-    let url: URL | null = null;
+  // A full address is the only form that has to name this host; the check is a
+  // plain prefix and a parse rather than a regex, because the regex was the one
+  // the linter could not prove linear.
+  let target: string;
+  if (raw.startsWith('//') || raw.toLowerCase().startsWith('http://') || raw.toLowerCase().startsWith('https://')) {
+    let url: URL;
     try {
       url = new URL(raw, location.href);
     } catch {
@@ -314,7 +316,7 @@ function door(enter: Zone[], leave: Zone[]) {
   if (!zone || !view || !state.room) return;
   doorOn = zone.id;
   if (now < doorCool) return;
-  const to = roomOfExit(zone.exit as string, state.room);
+  const to = roomOfExit(zone.exit as string);
   if (!to) {
     proxNote('door ' + zone.id + ' names a room this page cannot walk to: ' + zone.exit);
     return;
@@ -644,7 +646,7 @@ export function worldHook() {
       view
         ? view.world.zones
             .filter((one) => !!one.exit)
-            .map((one) => ({ id: one.id, room: roomOfExit(one.exit as string, view ? view.world.room : '') }))
+            .map((one) => ({ id: one.id, room: roomOfExit(one.exit as string) }))
         : [],
     // start is the zone this room lands a guest on, if the map names one.
     start: () => (view ? view.world.zones.filter((one) => one.start).map((one) => one.id) : []),

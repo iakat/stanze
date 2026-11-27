@@ -118,6 +118,10 @@ jobs:
           # esbuild strips types without checking them, so the type check runs
           # here: a type error that builds is still a broken client.
           npm --prefix client run check
+          # The lint set is the one the repo configures, and it was not run by
+          # any workflow: an unsafe regex and three dead identifiers sat in the
+          # tree while every job was green.
+          npm --prefix client run lint
           node client/build.mjs
           GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
           go run -trimpath -buildvcs=false ./cmd/pack
@@ -266,6 +270,18 @@ jobs:
           /tmp/stanze -listen 127.0.0.1:8095 -turn-port 0 & pid=$!
           for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
           node tools/quartet-e2e.js; code=$?; kill $pid || true; exit $code
+
+      # The same four guests with every link told to use the relay. This is the
+      # only suite that catches a page which never asked for the relay list, or
+      # one that asked before the pair existed: both leave four guests in a call
+      # where no candidate pair is ever relayed.
+      - name: relay quartet
+        env: {PW: /tmp/pw/node_modules/playwright-core, ROOMSBASE: "http://127.0.0.1:8095", OUTDIR: shots}
+        run: |
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 3478 -turn-public-ip 127.0.0.1 \
+            -turn-min-port 49200 -turn-max-port 49300 & pid=$!
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
+          node tools/relay-quartet-e2e.js; code=$?; kill $pid || true; exit $code
 
   image:
     name: image
