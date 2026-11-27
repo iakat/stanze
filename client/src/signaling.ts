@@ -116,6 +116,20 @@ export function handle(msg) {
       // relay; a reload is the whole fix.
       state.fatal = 'this page is out of date; reload it to join';
       leave(state.fatal);
+    } else if (msg.code === 'too-big') {
+      // A frame this page sent was over the relay limit and never reached its
+      // pair, whose counter therefore never saw it: the pair has to start
+      // again or every later frame fails the counter. Silence here left the
+      // link dead with no line on screen.
+      say('a frame was too large for the relay; that link starts again');
+    } else if (msg.code === 'relay-off') {
+      // The server has no relay to give: a call still works between guests
+      // that can reach each other directly, so the page says so and stays.
+      say('this server offers no relay; guests that cannot reach each other directly will not connect');
+    } else if (msg.code === 'relay-exhausted') {
+      say('the relay has already been given to this connection; leaving and joining again asks for a new one');
+    } else if (msg.code === 'bad-message') {
+      say('the server could not read a frame this page sent; the link may be out of date');
     }
     return;
   }
