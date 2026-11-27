@@ -3717,10 +3717,10 @@
       image.src = src;
     });
   }
-  async function loadJSON(src, signal, optional = false) {
+  async function loadJSON(src, signal, optional = false, how = "GET") {
     let res;
     try {
-      res = await fetch(src, { signal, credentials: "same-origin" });
+      res = await fetch(src, { signal, credentials: "same-origin", method: how });
     } catch {
       if (optional) return null;
       throw new Error("fetch failed: " + src);
@@ -3729,6 +3729,7 @@
       if (optional && res.status === 404) return null;
       throw new Error(res.status + ": " + src);
     }
+    if (how === "HEAD") return loadJSON(src, signal, optional);
     return res.json();
   }
   function gidOf(cell) {
@@ -3981,7 +3982,7 @@
     let wam = null;
     let mapPathUsed = own;
     for (const path of mapCandidates(room)) {
-      const doc = await loadJSON(path, signal, true);
+      const doc = path === own ? await loadJSON(path, signal, true) : await loadJSON(path, signal, true, "HEAD");
       if (!doc) continue;
       if (isWam(doc)) {
         map = await loadWam(path, doc, signal);
@@ -4004,7 +4005,7 @@
     const objects = [];
     walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
     const roomBase = mapPathUsed.slice(0, mapPathUsed.lastIndexOf("/") + 1);
-    const sidecar = await loadJSON(room === "" ? "" : base + "maps/" + room + ".zones.json", signal, true);
+    const sidecar = room === "" ? null : await loadJSON(base + "maps/" + room + ".zones.json", signal, true, "HEAD");
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
     const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
     const zones2 = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
@@ -9925,7 +9926,10 @@
     const total = state.peers.size + 1;
     const live = [...state.peers.values()].filter((p) => p.state === "connected").length + 1;
     const held = [...state.peers.values()].filter((p) => p.waiting).length;
-    document.title = (total === 1 ? "1 peer" : `${live}/${total} peers`) + (held && !state.waiting ? `, ${held} waiting` : "");
+    const count = $("peer-count");
+    if (count) {
+      count.textContent = (total === 1 ? "1 peer" : `${live}/${total} peers`) + (held && !state.waiting ? `, ${held} waiting` : "");
+    }
     updatePinCount();
   }
 
