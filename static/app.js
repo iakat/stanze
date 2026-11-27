@@ -4935,6 +4935,9 @@
         return { x: Math.round(walker.x), y: Math.round(walker.y) };
       },
       near: () => view ? [...near] : [],
+      // reason names the way a pair was judged: meeting, near, bubble, silent,
+      // full or far. It is the proximity word and nothing more.
+      reason: (id) => view && proximity ? proximity.reason(id) : "",
       // points is the exact place of every remote frame, which is what the pair
       // rule is judged on, and the zones of each place.
       points: () => {

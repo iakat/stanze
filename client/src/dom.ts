@@ -96,7 +96,7 @@ export interface Elements {
 }
 
 export function $<K extends keyof Elements>(id: K): Elements[K];
-export function $(id: string): any;
-export function $(id: string): any {
+export function $(id: string): HTMLElement;
+export function $(id: string): HTMLElement {
   return document.getElementById(id);
 }

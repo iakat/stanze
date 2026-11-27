@@ -10,7 +10,9 @@
 'use strict';
 
 const fs = require('fs');
-const { chromium, firefox } = require(process.env.PW);
+const pw = require(process.env.PW || 'playwright');
+const chromium = pw.chromium;
+const firefox = pw.firefox;
 const { expectedMiss } = require('./expected-404');
 
 const BASE = (process.env.ROOMSBASE || 'http://127.0.0.1:8095').replace(/\/+$/, '');
@@ -36,8 +38,10 @@ async function until(page, fn, arg, timeout, label) {
     }
     if (last) return last;
     await sleep(500);
+    if (process.env.TRACE) console.log('INFO  wait ' + label + ' ' + JSON.stringify(last));
   }
-  throw new Error('timed out: ' + (label || 'condition'));
+  console.log("INFO  timeout " + label + " last=" + JSON.stringify(last));
+  throw new Error("timed out: " + (label || "condition"));
 }
 
 function room() {
@@ -101,7 +105,10 @@ function watch(page, tag, errors) {
       ['B', ff, 'sasha'],
       ['C', cr, 'ovio'],
     ]) {
-      const ctx = await engine.newContext({ permissions: ['camera', 'microphone'] });
+      // Firefox has no camera or microphone permission to grant: it reads
+      // the prefs set at launch, and a permission name it does not know is an
+      // error. Chromium needs the grant.
+      const ctx = await engine.newContext(engine === cr ? { permissions: ['camera', 'microphone'] } : {});
       const page = await ctx.newPage();
       watch(page, tag, errors);
       const url = BASE + '/#r=' + id;
@@ -109,6 +116,8 @@ function watch(page, tag, errors) {
       guests.push({ tag, page, name, url });
     }
     for (const g of guests) {
+      const at = await g.page.evaluate(() => location.href);
+      console.log('INFO  ' + g.tag + ' at ' + at);
       await g.page.evaluate((n) => {
         const name = document.getElementById('name');
         if (name) {
@@ -121,8 +130,17 @@ function watch(page, tag, errors) {
         return hash;
       }, g.name);
       await g.page.waitForTimeout(300);
+      console.log('INFO  ' + g.tag + ' after enter lobby=' + (await g.page.evaluate(() => (document.getElementById('lobby') || {}).hidden)));
     }
     // Each guest has to see the two others connected.
+    await sleep(8000);
+    for (const g of guests) {
+      console.log('INFO  ' + g.tag + ' peek ' + JSON.stringify(await g.page.evaluate(() => {
+        const app = window.e2eApp;
+        return { app: !!app, peers: app && app.peers ? app.peers().map((p) => p.pc + '/' + p.ready + '/' + p.videoT) : null,
+          err: ((document.getElementById('stage-error') || {}).textContent || '').slice(0, 120) };
+      })));
+    }
     for (const g of guests) {
       const seen = await until(
         g.page,
@@ -131,11 +149,21 @@ function watch(page, tag, errors) {
           if (!app || !app.peers) return null;
           const list = app.peers();
           const ready = list.filter((p) => p.pc === 'connected');
-          return ready.length >= 2 ? list.length : null;
+          if (ready.length >= 2) return list.length;
+          return { list: list.map((p) => p.pc + '/' + p.ready) };
         },
         90000,
         g.tag + ' sees two guests',
       );
+      if (seen && seen.list) {
+        const dbg = await g.page.evaluate(() => ({
+          app: !!window.e2eApp,
+          list: window.e2eApp && window.e2eApp.peers ? window.e2eApp.peers().map((p) => p.pc + '/' + p.ready) : null,
+          err: (document.getElementById('stage-error') || {}).textContent || '',
+          note: (document.getElementById('lobby-error') || {}).textContent || '',
+        }));
+        console.log('INFO  ' + g.tag + ' dbg ' + JSON.stringify(dbg));
+      }
       check(g.tag + ' sees two connected guests', seen >= 2, 'peers=' + seen);
     }
     // The engines in play, read from the page itself.
