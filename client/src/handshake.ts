@@ -714,10 +714,8 @@ export function sealedHandleOpaque(from, b) {
       sealedOnProof(peer, msg).catch(() => sealedRefuse(peer, 'handshake failed'));
       break;
     case 'key':
-      // One request, one answer: ask our own worker for a key frame on the
-      // video sender of this pair. Only a pair that passed the room proof is
-      // answered: a key frame on a pair that proved nothing would let any
-      // proven stranger make this page encode for media nobody admitted.
+      // One request, one answer: ask this page's worker for a key frame on the
+      // video sender of the pair. Only a proven pair is answered.
       if (peer.pass && peer.pass.done && peer.keys && state.worker)
         state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id) });
       break;

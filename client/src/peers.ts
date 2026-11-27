@@ -212,9 +212,10 @@ export function connectPeer(id, initiator) {
       // The encodings exist now, so a cap that was too early applies here.
       capCameraSenders(pc);
       markRelay(peer);
-      // One ask over the sealed channel, answered once with a key frame from
-      // the sender. It is the only frame a fresh receiver can decode.
-      if (!peer.askedKey) {
+      // One ask over the sealed channel, answered with a key frame: the only
+      // frame a fresh receiver decodes. No live video throws in Gecko.
+      const sent = peer.tx?.video?.sender.track;
+      if (!peer.askedKey && sent?.readyState === 'live') {
         peer.askedKey = true;
         sealedSendOpaque(peer.id, { k: 'key' });
       }
