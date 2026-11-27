@@ -6,6 +6,9 @@
  * one of these to the console on every page. The answer is expected: the page
  * reads it as "this engine is not offered".
  *
+ * A .wam world names its map inside the world, and that map may be absent: the
+ * world is read in its place, and the one 404 is the world's own gap.
+ *
  * Every other console error stays fatal in the suites that use this filter.
  */
 'use strict';
@@ -19,7 +22,9 @@ function expectedMiss(msg) {
   } catch (_err) {
     return false;
   }
-  return !!(at && at.url && EXPECTED.some((path) => at.url.endsWith(path)));
+  if (!at || !at.url) return false;
+  if (EXPECTED.some((path) => at.url.endsWith(path))) return true;
+  return at.url.indexOf('/world/maps/') >= 0 && at.url.indexOf('/tilesets/') < 0;
 }
 
 module.exports = { expectedMiss };

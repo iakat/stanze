@@ -91,13 +91,12 @@ function loadImage(src: string, signal?: AbortSignal): Promise<HTMLImageElement>
   });
 }
 
-// loadJSON reads one JSON file. how is the method of the first request: a
-// candidate is asked for with HEAD, so a room with no map of its own costs a
-// header and not a 404 in the console, and the file is then read for real.
-async function loadJSON(src: string, signal?: AbortSignal, optional = false, how = 'GET'): Promise<any> {
+// loadJSON reads one JSON file. optional says a miss is an answer and not a
+// fault.
+async function loadJSON(src: string, signal?: AbortSignal, optional = false): Promise<any> {
   let res: Response;
   try {
-    res = await fetch(src, { signal, credentials: 'same-origin', method: how });
+    res = await fetch(src, { signal, credentials: 'same-origin' });
   } catch {
     if (optional) return null;
     throw new Error('fetch failed: ' + src);
@@ -106,7 +105,6 @@ async function loadJSON(src: string, signal?: AbortSignal, optional = false, how
     if (optional && res.status === 404) return null;
     throw new Error(res.status + ': ' + src);
   }
-  if (how === 'HEAD') return loadJSON(src, signal, optional);
   return res.json();
 }
 
@@ -331,17 +329,18 @@ export function mapPath(room: string): string {
   return room === '' ? '/world/map.json' : '/world/maps/' + room + '.json';
 }
 
-// mapCandidates is mapPath in the order it is tried. Tiled saves a JSON map as
-// .json or .tmj depending on the file the author typed, and WorkAdventure's own
-// maps are .tmj; both are the same document. The .json comes first so the
-// shipped tree costs no extra request, and the .tmj is one 404 for a room that
-// has none. A room exported from the WorkAdventure editor is a .wam world
-// instead, so it is the last candidate: one more 404 for every room that has
-// neither. A room with none of them is still no room.
+// mapCandidates is the one file of a room: the map it names, or the default
+// office for every other room. There is no probing: a miss would be a 404 in
+// the console of every join, which a person reads as a broken room.
+//
+// The maps this tree ships are WorkAdventure's own .tmj files, byte for byte,
+// so a room opens a WorkAdventure map today; a room with none is the default
+// office, unchanged.
+const OWN_MAPS = /^(office|conference)\.tmj$/;
+
 function mapCandidates(room: string): string[] {
   const own = mapPath(room);
-  const stem = own.replace(/\.json$/, '');
-  return own === DEFAULT_MAP ? [own] : [own, stem + '.tmj', stem + '.wam'];
+  return OWN_MAPS.test(own.slice(own.lastIndexOf('/') + 1)) ? [own] : [DEFAULT_MAP];
 }
 
 // isWam tells a WorkAdventure world from a Tiled map: a world names a mapUrl
@@ -467,7 +466,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   let wam: any = null;
   let mapPathUsed = own;
   for (const path of mapCandidates(room)) {
-    const doc = path === own ? await loadJSON(path, signal, true) : await loadJSON(path, signal, true, 'HEAD');
+    const doc = await loadJSON(path, signal, true);
     if (!doc) continue;
     // A world is followed to its map; a map is itself.
     if (isWam(doc)) {
@@ -503,7 +502,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // The sidecar is the authored zone list; the object layer of the map is the
   // other legal source and comes second, and the areas of a .wam come after it,
   // so a world keeps both its object zones and its areas.
-  const sidecar = room === '' ? null : await loadJSON(base + 'maps/' + room + '.zones.json', signal, true, 'HEAD');
+  const sidecar = own !== DEFAULT_MAP ? await loadJSON(own.replace(/\.\w+$/, '') + '.zones.json', signal, true) : null;
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
   const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
   const zones = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);

@@ -3717,10 +3717,10 @@
       image.src = src;
     });
   }
-  async function loadJSON(src, signal, optional = false, how = "GET") {
+  async function loadJSON(src, signal, optional = false) {
     let res;
     try {
-      res = await fetch(src, { signal, credentials: "same-origin", method: how });
+      res = await fetch(src, { signal, credentials: "same-origin" });
     } catch {
       if (optional) return null;
       throw new Error("fetch failed: " + src);
@@ -3729,7 +3729,6 @@
       if (optional && res.status === 404) return null;
       throw new Error(res.status + ": " + src);
     }
-    if (how === "HEAD") return loadJSON(src, signal, optional);
     return res.json();
   }
   function gidOf(cell) {
@@ -3896,10 +3895,10 @@
   function mapPath(room) {
     return room === "" ? "/world/map.json" : "/world/maps/" + room + ".json";
   }
+  var OWN_MAPS = /^(office|conference)\.tmj$/;
   function mapCandidates(room) {
     const own = mapPath(room);
-    const stem = own.replace(/\.json$/, "");
-    return own === DEFAULT_MAP ? [own] : [own, stem + ".tmj", stem + ".wam"];
+    return OWN_MAPS.test(own.slice(own.lastIndexOf("/") + 1)) ? [own] : [DEFAULT_MAP];
   }
   function isWam(doc) {
     return !!doc && typeof doc === "object" && typeof doc.mapUrl === "string" && !Array.isArray(doc.layers);
@@ -3982,7 +3981,7 @@
     let wam = null;
     let mapPathUsed = own;
     for (const path of mapCandidates(room)) {
-      const doc = path === own ? await loadJSON(path, signal, true) : await loadJSON(path, signal, true, "HEAD");
+      const doc = await loadJSON(path, signal, true);
       if (!doc) continue;
       if (isWam(doc)) {
         map = await loadWam(path, doc, signal);
@@ -4005,7 +4004,7 @@
     const objects = [];
     walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
     const roomBase = mapPathUsed.slice(0, mapPathUsed.lastIndexOf("/") + 1);
-    const sidecar = room === "" ? null : await loadJSON(base + "maps/" + room + ".zones.json", signal, true, "HEAD");
+    const sidecar = own !== DEFAULT_MAP ? await loadJSON(own.replace(/\.\w+$/, "") + ".zones.json", signal, true) : null;
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
     const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
     const zones2 = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
