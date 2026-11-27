@@ -31,6 +31,11 @@ export const CHAR_MOVE_MS = 1000 / CHAR_FPS;
 export const WALK_SPEED = 200;
 // An avatar's depth is its foot, and two avatars are told apart by it.
 export const AVATAR_SORT_OFFSET = 0;
+// The halo under a guest is an ellipse this wide and this tall, and its rim is
+// the lowest pixel the guest draws: the depth rule reads it so the halo can
+// never be painted over the row the guest stands in.
+export const HALO_RX = 10;
+export const HALO_RY = 4;
 // The hit box of an avatar: its lower half, so a head overlaps the wall behind
 // it and a wall stops a footstep at the foot, not at the scalp.
 const BODY_W = 20;
@@ -73,11 +78,12 @@ export type Above = {
   heightPx: number;
   // row is the index of the band that holds a foot line.
   row(x: number, y: number): number;
-  // cover is the index of the band the sprite ends in: the first band a guest
-  // standing at this foot line has to be drawn before. A sprite never reaches
-  // below the band its foot is in, so cover is never above row and never below
-  // the last band of the map.
-  cover(x: number, y: number, h: number): number;
+  // cover is the index of the band that holds the last pixel a guest draws,
+  // halo included: the guest goes down after every band up to and including it,
+  // so nothing of the guest is left painted over a leaf of the row it stands
+  // in. A guest never reaches below that band, so cover is never below the last
+  // band of the map.
+  cover(x: number, y: number, h: number, halo: number): number;
 };
 
 // OVERHEAD names a layer that is drawn over a guest: WorkAdventure's own
@@ -812,21 +818,18 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
           if (!Number.isFinite(y)) return 0;
           return Math.max(0, Math.min(height - 1, Math.floor(y / th)));
         },
-        cover(x: number, y: number, h: number) {
+        // The bottom of a guest is the lowest pixel it draws, which is the foot
+        // line plus the rim of the halo under it. A sprite reaches h pixels up
+        // from the foot and that only matters to the top of a taller sheet, so
+        // the band named here is the one that holds that lowest pixel: the guest
+        // is drawn after the bands above it, and a plant in this band covers the
+        // guest standing behind it. Reading the band of the foot line alone put
+        // the guest under the row it was standing in, which is the one pixel of
+        // the sprite and the halo that went over the thing that should cover it.
+        cover(x: number, y: number, h: number, halo: number) {
           if (!Number.isFinite(y)) return 0;
-          // The sprite ends at the foot line, so the band it ends in is the one
-          // that holds the last drawn pixel above it, not the band after it: a
-          // foot that lands exactly on a row boundary belongs to the row above,
-          // and a band of overhead paint never covers a pixel of a guest whose
-          // foot is on its floor. The rest of the height only has to keep a
-          // sprite from being drawn before a band it cannot reach, and one tile
-          // tall is what the character sheet is.
-          const rail = Math.max(1, Math.round(h / th));
-          const last = Math.max(0, Math.floor(y - 1));
-          // A sprite one tile tall is in this band; a taller one starts higher,
-          // and the last band of the map is as low as a guest can be drawn.
-          const bandAt = Math.floor(last / th) - (rail - 1);
-          return Math.max(0, Math.min(height - 1, bandAt));
+          const bottom = Math.floor(y + Math.max(0, Math.round(halo)));
+          return Math.max(0, Math.min(height - 1, Math.floor(bottom / th)));
         },
       };
     }
@@ -1323,7 +1326,7 @@ export class WorldView {
       // at different foot lines still have to be on the same side of the band
       // between them. Band by band, then by foot line, is what a guest sees.
       const where = new Map<Avatar, number>();
-      for (const one of list) where.set(one, above.cover(one.x, one.y, CHAR_H));
+      for (const one of list) where.set(one, above.cover(one.x, one.y, CHAR_H, HALO_RY));
       const ordered = [...list].sort(
         (a, b) => (where.get(a) as number) - (where.get(b) as number) || at(a) - at(b) || (a.id < b.id ? -1 : 1),
       );
@@ -1356,7 +1359,7 @@ export class WorldView {
       ctx.globalAlpha = 0.35;
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.ellipse(Math.round(one.x), Math.round(one.y), 10, 4, 0, 0, Math.PI * 2);
+      ctx.ellipse(Math.round(one.x), Math.round(one.y), HALO_RX, HALO_RY, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
     }
