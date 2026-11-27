@@ -16,8 +16,6 @@ export interface Elements {
   'sealed-note': HTMLElement;
   'lobby-error': HTMLElement;
   stage: HTMLElement;
-  'room-label': HTMLElement;
-  'peer-count': HTMLElement;
   'copy-btn': HTMLButtonElement;
   grid: HTMLElement;
   'stage-main': HTMLElement;

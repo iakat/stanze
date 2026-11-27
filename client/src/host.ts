@@ -228,7 +228,7 @@ export function updateCount() {
   const total = state.peers.size + 1;
   const live = [...state.peers.values()].filter((p) => p.state === 'connected').length + 1;
   const held = [...state.peers.values()].filter((p) => p.waiting).length;
-  $('peer-count').textContent =
+  document.title =
     (total === 1 ? '1 peer' : `${live}/${total} peers`) +
     (held && !state.waiting ? `, ${held} waiting` : '');
   updatePinCount();

@@ -9925,7 +9925,7 @@
     const total = state.peers.size + 1;
     const live = [...state.peers.values()].filter((p) => p.state === "connected").length + 1;
     const held = [...state.peers.values()].filter((p) => p.waiting).length;
-    $("peer-count").textContent = (total === 1 ? "1 peer" : `${live}/${total} peers`) + (held && !state.waiting ? `, ${held} waiting` : "");
+    document.title = (total === 1 ? "1 peer" : `${live}/${total} peers`) + (held && !state.waiting ? `, ${held} waiting` : "");
     updatePinCount();
   }
 
@@ -11567,8 +11567,7 @@
       $("stage").hidden = false;
       $("stage").classList.remove("chrome");
       applyImmersive();
-      $("room-label").textContent = room;
-      $("room-label").title = room;
+      document.title = "stanze - " + room;
       $("chat-note").hidden = false;
       updatePinCount();
       setHash(room);
@@ -11714,8 +11713,7 @@
     $("stage").hidden = true;
     $("lobby").hidden = false;
     applyImmersive();
-    $("room-label").textContent = "";
-    $("peer-count").textContent = "";
+    document.title = "stanze";
     state.room = "";
     state.self = null;
     state.ice = [];

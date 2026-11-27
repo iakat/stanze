@@ -123,8 +123,7 @@ export async function enterRoom(room, pass) {
     // A phone folds the call to the picture; a tap brings the frame back.
     $('stage').classList.remove('chrome');
     applyImmersive();
-    $('room-label').textContent = room;
-    $('room-label').title = room;
+    document.title = 'stanze - ' + room;
     $('chat-note').hidden = false;
     updatePinCount();
     setHash(room);
@@ -278,8 +277,7 @@ export function leave(message) {
   $('stage').hidden = true;
   $('lobby').hidden = false;
   applyImmersive();
-  $('room-label').textContent = '';
-  $('peer-count').textContent = '';
+  document.title = 'stanze';
   state.room = '';
   state.self = null;
   state.ice = [];
