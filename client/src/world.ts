@@ -54,7 +54,7 @@ export type World = {
   collision(x: number, y: number): boolean;
   zones: Zone[];
   zoneAt(x: number, y: number): Zone[];
-  startPoint(): { x: number; y: number };
+  startPoint(zoneId?: string | null): { x: number; y: number };
   images: Map<string, HTMLImageElement>;
   // above is the overhead paint of the map, cut into one band per map row: a
   // guest is drawn between the band of the row it stands in and the band
@@ -250,36 +250,63 @@ function zoneObjects(objects: any[]): any[] {
   for (const layer of objects) {
     for (const obj of layer.objects) {
       if (!obj) continue;
+      // The bag is read by its author words, never by a property: Tiled writes
+      // an area as a rectangle beside an L, so a word of this code is also a
+      // property name of a map.
       const props: Record<string, any> = {};
       for (const p of obj.properties || []) if (p && p.name) props[p.name] = p.value;
-      // A WorkAdventure area is an object with no class of its own: what it is
-      // lives in its properties (silent, jitsiRoom), and one whose properties
+      const bag = props;
+      // A WorkAdventure area is a plain object: what it is lives in its
+      // properties (silent, jitsiRoom, exitUrl, start), and one whose properties
       // say nothing about a zone is a decoration with a name and is left out.
+      // Tiled writes the class of an area as type and an older file writes
+      // class, so both spellings are read; "area" is a class the zone reader
+      // accepts, so it counts as no class here and the property bag is read.
+      const classOf = obj.class !== undefined ? obj.class : obj.type;
+      const classWord = String(classOf || '').toLowerCase();
       const wa =
-        obj.class === undefined &&
-        (typeof props.silent === 'boolean' ||
-          props.silent === 'true' ||
-          props.jitsiRoom !== undefined ||
-          props.jitsiRoomProperty !== undefined);
-      if (!wa && obj.class !== ZONE_CLASS && obj.class !== 'area') continue;
+        (!classWord || classWord === 'area') &&
+        (typeof bag["silent"] === 'boolean' ||
+          bag["silent"] === 'true' ||
+          bag["jitsiRoom"] !== undefined ||
+          bag["jitsiRoomProperty"] !== undefined ||
+          bag["exitUrl"] !== undefined ||
+          bag["start"] !== undefined);
+      if (!wa && classWord !== ZONE_CLASS && classWord !== 'area') continue;
       // The two WorkAdventure names that mean what this tree means, and nothing
-      // else: silent is a zone without a word, a jitsiRoom is a meeting room.
-      let kind = String(props.kind || '');
-      if (wa && !kind) kind = typeof props.silent === 'boolean' || props.silent === 'true' ? 'silent' : 'meeting';
+      // else: silent is a zone without a word, a jitsiRoom is a meeting room, and
+      // an area that says neither is a plain area, never a place where a silent
+      // tone mutes a guest by accident.
+      let kind = String(bag["kind"] || '');
+      if (wa && !kind && (typeof bag["silent"] === 'boolean' || bag["silent"] === 'true')) {
+        kind = 'silent';
+      }
+      if (wa && !kind && (bag["jitsiRoom"] !== undefined || bag["jitsiRoomProperty"] !== undefined)) {
+        kind = 'meeting';
+      }
       let rects: { x: number; y: number; w: number; h: number }[];
       const shape = obj.polygon || obj.polyline;
       if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
       else rects = [{ x: Math.round(obj.x), y: Math.round(obj.y), w: Math.round(obj.width), h: Math.round(obj.height) }];
+      // WorkAdventure's own door and landing: a zone with an exitUrl carries a
+      // guest to the room it names, and a zone marked start is where that room
+      // puts them down. Both travel through the runtime zone and never through
+      // a position frame.
+      const exitUrl = bag["exitUrl"] !== undefined ? bag["exitUrl"] : bag["exiturl"];
+      const exit = typeof exitUrl === 'string' ? exitUrl.trim() : '';
+      const start = bag["start"] === true || bag["start"] === 'true';
       out.push({
         id: obj.name,
-        name: props.label || props.name || obj.name,
+        name: bag["label"] || bag["name"] || obj.name,
         // The property bag of a Tiled zone is {kind, proximity, maxUsers}; the
         // runtime form is {kind, proximity, capacity}, and without these lines
         // a meeting room is a plain area that carries no talk.
         kind,
-        proximity: props.proximity,
-        capacity: props.maxUsers !== undefined ? props.maxUsers : props.capacity,
+        proximity: bag["proximity"],
+        capacity: bag["maxUsers"] !== undefined ? bag["maxUsers"] : bag["capacity"],
         rects,
+        exit,
+        start,
       });
     }
   }
@@ -432,17 +459,18 @@ function wamZones(doc: any): any[] {
     if (!area || typeof area !== 'object') continue;
     const props: Record<string, any> = {};
     for (const p of Array.isArray(area.properties) ? area.properties : []) if (p && p.name) props[p.name] = p.value;
-    let kind = String(props.kind || '');
-    if (!kind && (props.silent === true || props.silent === 'true')) kind = 'silent';
-    if (!kind && (props.jitsiRoom !== undefined || props.jitsiRoomProperty !== undefined)) kind = 'meeting';
-    const users = props.maxUsersInAreaPropertyData;
+    const bag = props;
+    let kind = String(bag["kind"] || '');
+    if (!kind && (bag["silent"] === true || bag["silent"] === 'true')) kind = 'silent';
+    if (!kind && (bag["jitsiRoom"] !== undefined || bag["jitsiRoomProperty"] !== undefined)) kind = 'meeting';
+    const users = bag["maxUsersInAreaPropertyData"];
     out.push({
       id: area.id || area.name,
-      name: props.label || props.name || area.name || area.id,
+      name: bag["label"] || bag["name"] || area.name || area.id,
       kind,
-      proximity: props.proximity,
+      proximity: bag["proximity"],
       capacity:
-        props.maxUsers !== undefined ? props.maxUsers : props.capacity !== undefined ? props.capacity : users && users.maxUsers,
+        bag["maxUsers"] !== undefined ? bag["maxUsers"] : bag["capacity"] !== undefined ? bag["capacity"] : users && users.maxUsers,
       rects: [areaRect(area)],
     });
   }
@@ -559,11 +587,15 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
   const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
   const zones = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
-  // The spawn, most specific first: the point object named spawn (this tree's
-  // own authoring), then the WorkAdventure start layer, then a layer flagged
-  // startLayer, then the start area of a .wam. A map with none of them falls
-  // through to spawn()'s centre, unchanged.
+  // The spawn, most specific first: a zone the map marks start (WorkAdventure's
+  // own landing area, the one a door of another map hands a guest to), then the
+  // point object named spawn (this tree's own authoring), then the
+  // WorkAdventure start layer, then a layer flagged startLayer, then the start
+  // area of a .wam. A map with none of them falls through to spawn()'s centre,
+  // unchanged.
+  const startZone = zones.find((zone) => zone.start);
   const startRect =
+    (startZone && startZone.rects.length ? startZone.rects[0] : null) ||
     (await spawnObject(objects)) ||
     (await startLayerRect(tiles, width, height, tw, th)) ||
     (wam ? wamStart(wam) : null);
@@ -813,8 +845,13 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     zoneAt(x: number, y: number) {
       return grid.at(x, y);
     },
-    startPoint() {
-      return spawn(startRect, blocked, width, height, tw, th);
+    // startPoint is where a guest lands. The zone a door named comes first,
+    // the way a WorkAdventure link carries a start area, then the map's own
+    // spawn ladder.
+    startPoint(zoneId?: string | null) {
+      const named = zoneId ? grid.byId(zoneId) : null;
+      const rect = named && named.rects.length ? named.rects[0] : null;
+      return spawn(rect || startRect, blocked, width, height, tw, th);
     },
     images,
     above,

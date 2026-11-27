@@ -3607,20 +3607,23 @@
     const capacity = Number(raw.capacity);
     const proximity2 = Number(raw.proximity);
     const kind = String(raw.kind || "");
-    const list = Array.isArray(raw.rects) ? raw.rects : [raw];
+    const call = Array.isArray(raw.rects) ? raw.rects : [raw];
     const rects = [];
-    for (const one of list) {
+    for (const one of call) {
       const rect = rectOf(one);
       if (rect) rects.push(rect);
     }
     if (!rects.length) return null;
+    const exit = typeof raw.exit === "string" ? raw.exit.trim().slice(0, 128) : "";
     return {
       id,
       name,
-      kind: ZONE_KINDS.includes(kind) ? kind : "",
+      kind: ZONE_KINDS.indexOf(kind) >= 0 ? kind : "",
       capacity: Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : 0,
       proximity: Number.isFinite(proximity2) && proximity2 > 0 ? Math.round(proximity2) : DEFAULT_PROXIMITY,
-      rects
+      rects,
+      ...exit ? { exit } : {},
+      ...raw.start === true ? { start: true } : {}
     };
   }
   function zoneList(raw) {
@@ -3825,24 +3828,37 @@
         if (!obj) continue;
         const props = {};
         for (const p of obj.properties || []) if (p && p.name) props[p.name] = p.value;
-        const wa = obj.class === void 0 && (typeof props.silent === "boolean" || props.silent === "true" || props.jitsiRoom !== void 0 || props.jitsiRoomProperty !== void 0);
-        if (!wa && obj.class !== ZONE_CLASS && obj.class !== "area") continue;
-        let kind = String(props.kind || "");
-        if (wa && !kind) kind = typeof props.silent === "boolean" || props.silent === "true" ? "silent" : "meeting";
+        const bag = props;
+        const classOf = obj.class !== void 0 ? obj.class : obj.type;
+        const classWord = String(classOf || "").toLowerCase();
+        const wa = (!classWord || classWord === "area") && (typeof bag["silent"] === "boolean" || bag["silent"] === "true" || bag["jitsiRoom"] !== void 0 || bag["jitsiRoomProperty"] !== void 0 || bag["exitUrl"] !== void 0 || bag["start"] !== void 0);
+        if (!wa && classWord !== ZONE_CLASS && classWord !== "area") continue;
+        let kind = String(bag["kind"] || "");
+        if (wa && !kind && (typeof bag["silent"] === "boolean" || bag["silent"] === "true")) {
+          kind = "silent";
+        }
+        if (wa && !kind && (bag["jitsiRoom"] !== void 0 || bag["jitsiRoomProperty"] !== void 0)) {
+          kind = "meeting";
+        }
         let rects;
         const shape = obj.polygon || obj.polyline;
         if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
         else rects = [{ x: Math.round(obj.x), y: Math.round(obj.y), w: Math.round(obj.width), h: Math.round(obj.height) }];
+        const exitUrl = bag["exitUrl"] !== void 0 ? bag["exitUrl"] : bag["exiturl"];
+        const exit = typeof exitUrl === "string" ? exitUrl.trim() : "";
+        const start = bag["start"] === true || bag["start"] === "true";
         out.push({
           id: obj.name,
-          name: props.label || props.name || obj.name,
+          name: bag["label"] || bag["name"] || obj.name,
           // The property bag of a Tiled zone is {kind, proximity, maxUsers}; the
           // runtime form is {kind, proximity, capacity}, and without these lines
           // a meeting room is a plain area that carries no talk.
           kind,
-          proximity: props.proximity,
-          capacity: props.maxUsers !== void 0 ? props.maxUsers : props.capacity,
-          rects
+          proximity: bag["proximity"],
+          capacity: bag["maxUsers"] !== void 0 ? bag["maxUsers"] : bag["capacity"],
+          rects,
+          exit,
+          start
         });
       }
     }
@@ -3937,16 +3953,17 @@
       if (!area || typeof area !== "object") continue;
       const props = {};
       for (const p of Array.isArray(area.properties) ? area.properties : []) if (p && p.name) props[p.name] = p.value;
-      let kind = String(props.kind || "");
-      if (!kind && (props.silent === true || props.silent === "true")) kind = "silent";
-      if (!kind && (props.jitsiRoom !== void 0 || props.jitsiRoomProperty !== void 0)) kind = "meeting";
-      const users = props.maxUsersInAreaPropertyData;
+      const bag = props;
+      let kind = String(bag["kind"] || "");
+      if (!kind && (bag["silent"] === true || bag["silent"] === "true")) kind = "silent";
+      if (!kind && (bag["jitsiRoom"] !== void 0 || bag["jitsiRoomProperty"] !== void 0)) kind = "meeting";
+      const users = bag["maxUsersInAreaPropertyData"];
       out.push({
         id: area.id || area.name,
-        name: props.label || props.name || area.name || area.id,
+        name: bag["label"] || bag["name"] || area.name || area.id,
         kind,
-        proximity: props.proximity,
-        capacity: props.maxUsers !== void 0 ? props.maxUsers : props.capacity !== void 0 ? props.capacity : users && users.maxUsers,
+        proximity: bag["proximity"],
+        capacity: bag["maxUsers"] !== void 0 ? bag["maxUsers"] : bag["capacity"] !== void 0 ? bag["capacity"] : users && users.maxUsers,
         rects: [areaRect(area)]
       });
     }
@@ -4021,7 +4038,8 @@
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
     const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
     const zones2 = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
-    const startRect = await spawnObject(objects) || await startLayerRect(tiles, width, height, tw, th) || (wam ? wamStart(wam) : null);
+    const startZone = zones2.find((zone) => zone.start);
+    const startRect = (startZone && startZone.rects.length ? startZone.rects[0] : null) || await spawnObject(objects) || await startLayerRect(tiles, width, height, tw, th) || (wam ? wamStart(wam) : null);
     const images = /* @__PURE__ */ new Map();
     const image = async (path) => {
       const src = path.startsWith("/") ? path : base + path.replace(/^\.\//, "");
@@ -4177,6 +4195,13 @@
           row(x, y) {
             if (!Number.isFinite(y)) return 0;
             return Math.max(0, Math.min(height - 1, Math.floor(y / th)));
+          },
+          cover(x, y, h) {
+            if (!Number.isFinite(y)) return 0;
+            const rail = Math.max(1, Math.round(h / th));
+            const last = Math.max(0, Math.floor(y - 1));
+            const bandAt = Math.floor(last / th) - (rail - 1);
+            return Math.max(0, Math.min(height - 1, bandAt));
           }
         };
       }
@@ -4194,8 +4219,13 @@
       zoneAt(x, y) {
         return grid.at(x, y);
       },
-      startPoint() {
-        return spawn(startRect, blocked, width, height, tw, th);
+      // startPoint is where a guest lands. The zone a door named comes first,
+      // the way a WorkAdventure link carries a start area, then the map's own
+      // spawn ladder.
+      startPoint(zoneId) {
+        const named = zoneId ? grid.byId(zoneId) : null;
+        const rect = named && named.rects.length ? named.rects[0] : null;
+        return spawn(rect || startRect, blocked, width, height, tw, th);
       },
       images,
       above
@@ -4381,6 +4411,8 @@
     // near is the bubble set of the proximity layer, drawn beside the name of a
     // guest that hears this page.
     near = /* @__PURE__ */ new Set();
+    // ctx, scale and the camera are read by the browser test, which judges a
+    // pixel of this canvas against the map under it; nothing else reads them.
     ctx;
     held = /* @__PURE__ */ new Set();
     dirty = true;
@@ -4560,11 +4592,17 @@
             band++;
           }
         };
-        for (const one of list) {
-          flush(above.row(one.x, one.y));
+        const where2 = /* @__PURE__ */ new Map();
+        for (const one of list) where2.set(one, above.cover(one.x, one.y, CHAR_H));
+        const ordered = [...list].sort(
+          (a, b) => where2.get(a) - where2.get(b) || at(a) - at(b) || (a.id < b.id ? -1 : 1)
+        );
+        for (const one of ordered) {
+          flush(where2.get(one));
           this.drawAvatar(one);
         }
-        flush(above.row(0, above.heightPx));
+        flush(above.row(0, above.heightPx) + 1);
+        flush(height);
       }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       this.frames++;
@@ -4613,6 +4651,12 @@
         ctx.fillRect(Math.round(one.x - wide / 2) - 6, top - 8, 4, 3);
         ctx.fillRect(Math.round(one.x - wide / 2) - 1, top - 7, 1, 1);
       }
+    }
+    // debug hands the map and the view to the browser test, so a pixel of the
+    // canvas can be judged against what the map holds there. It reads; it never
+    // changes a draw.
+    debug() {
+      return { map: this.world, view: this };
     }
     // marks takes the camera flag of every remote, so a name tag says when a
     // guest holds a camera. It repaints only on a change.
@@ -4705,6 +4749,10 @@
   var watch = null;
   var sheets = [];
   var raf = 0;
+  var leaveRoom = null;
+  var doorOn = "";
+  var doorCool = 0;
+  var DOOR_COOL_MS = 3e3;
   var lastPosAt = 0;
   var generation = 0;
   var near = [];
@@ -4714,7 +4762,9 @@
     recv: 0,
     frames: 0,
     near: 0,
-    zones: []
+    zones: [],
+    doors: 0,
+    lastDoor: ""
   };
   function worldAvatar() {
     if (!view || !sheets.length) return;
@@ -4734,7 +4784,7 @@
     const note = document.getElementById("world-note");
     return { box, canvas, note };
   }
-  async function worldEnter(room) {
+  async function worldEnter(room, start) {
     const gen = ++generation;
     if (!isWorld()) {
       worldSet(false);
@@ -4750,7 +4800,7 @@
       if (gen !== generation || state.leaving) return;
       if (view) view.destroy();
       view = new WorldView(canvas, world);
-      walker = new Walker(world, world.startPoint());
+      walker = new Walker(world, world.startPoint(start));
       proximity = new Proximity();
       zones = new ZoneGrid(world.zones);
       watch = new ZoneWatch(zones);
@@ -4787,6 +4837,9 @@
       } catch {
       }
     }
+  }
+  function setWorldLeave(fn) {
+    leaveRoom = fn;
   }
   function worldLeave() {
     generation++;
@@ -4850,6 +4903,61 @@
     }
     return { at: { x, y }, zones: list, full };
   }
+  function roomOfExit(exit, here) {
+    const raw = String(exit || "").trim();
+    if (!raw) return null;
+    const pick = (text) => {
+      const hash = text.match(/[#&]r=([^&\s]+)/);
+      if (hash) return decodeURIComponent(hash[1]).toLowerCase();
+      const clean = text.split("#")[0].split("?")[0];
+      const seg = clean.split("/").filter(Boolean).pop() || "";
+      if (!/^[A-Za-z0-9._-]{1,64}$/.test(seg)) return "";
+      return seg.replace(/\.(tmj|json|png)$/i, "").toLowerCase();
+    };
+    let target = "";
+    if (/^(https?:)?\/\//i.test(raw)) {
+      let url = null;
+      try {
+        url = new URL(raw, location.href);
+      } catch {
+        return null;
+      }
+      if (url.host !== location.host) return null;
+      target = pick(url.pathname + url.hash);
+    } else {
+      target = pick(raw);
+    }
+    return ROOM_RE.test(target) ? target : null;
+  }
+  function openDoor(zone) {
+    if (!zone || !zone.exit) return false;
+    door([zone], []);
+    return true;
+  }
+  function door(enter, leave2) {
+    const now = Date.now();
+    for (const zone2 of leave2) if (zone2.id === doorOn) doorOn = "";
+    const zone = enter.find((one) => one && one.exit && one.id !== doorOn) || null;
+    if (!zone || !view || !state.room) return;
+    doorOn = zone.id;
+    if (now < doorCool) return;
+    const to = roomOfExit(zone.exit, state.room);
+    if (!to) {
+      proxNote("door " + zone.id + " names a room this page cannot walk to: " + zone.exit);
+      return;
+    }
+    doorCool = now + DOOR_COOL_MS;
+    proxNote("door " + zone.id + " to " + to);
+    worldStats.doors++;
+    worldStats.lastDoor = to;
+    if (!leaveRoom) {
+      location.hash = "r=" + encodeURIComponent(to);
+      return;
+    }
+    const st = state;
+    const pass = st.pass;
+    leaveRoom(to, typeof pass === "string" ? pass : "");
+  }
   function step() {
     if (!view || !walker || !proximity) return;
     const local = view.local;
@@ -4859,7 +4967,8 @@
       local.dir = walker.dir;
       local.moving = walker.moving;
     }
-    if (watch) watch.update(walker.x, walker.y);
+    const walked = watch ? watch.update(walker.x, walker.y) : { enter: [], leave: [] };
+    door(walked.enter, walked.leave);
     const zoneIds = watch ? watch.ids() : [];
     if (worldStats.zones.join(",") !== zoneIds.join(",")) worldStats.zones = zoneIds;
     const peers = [...state.peers.values()];
@@ -4992,6 +5101,15 @@
           widthPx: world.widthPx,
           heightPx: world.heightPx,
           zones: world.zones.length,
+          // The zone list itself, so a browser test can judge a place against
+          // the rect a map draws.
+          list: world.zones.map((zone) => ({
+            id: zone.id,
+            kind: zone.kind,
+            rects: zone.rects.map((rect) => ({ ...rect })),
+            exit: zone.exit || "",
+            start: !!zone.start
+          })),
           avatars: view.avatars.size,
           // aboveRows counts the map rows the overhead paint fills, and
           // aboveBand is the height of one of them:
@@ -5028,6 +5146,20 @@
         view?.mark();
         return { x: Math.round(walker.x), y: Math.round(walker.y) };
       },
+      // debug hands the map and the view to a browser test that judges a pixel of
+      // the canvas against the map under it. It reads and never draws.
+      debug: () => view ? view.debug() : null,
+      // door fires the door of a zone by name, the way a step into it does, so a
+      // browser test can walk a guest to another room without a pixel hunt.
+      door: (id) => {
+        if (!view) return "no world";
+        const zone = view.world.zones.find((one) => one.id === id) || null;
+        return openDoor(zone) ? "fired" : "no door named " + id;
+      },
+      // doors is every door zone of this map with the room it names.
+      doors: () => view ? view.world.zones.filter((one) => !!one.exit).map((one) => ({ id: one.id, room: roomOfExit(one.exit, view ? view.world.room : "") })) : [],
+      // start is the zone this room lands a guest on, if the map names one.
+      start: () => view ? view.world.zones.filter((one) => one.start).map((one) => one.id) : [],
       near: () => view ? [...near] : [],
       // reason names the way a pair was judged: meeting, near, bubble, silent,
       // full or far. It is the proximity word and nothing more.
@@ -11593,7 +11725,9 @@
   }
 
   // src/room.ts
-  async function enterRoom(room, pass) {
+  var worldStart = "";
+  async function enterRoom(room, pass, start) {
+    worldStart = start || "";
     if (state.entering || state.ws) return;
     state.entering = true;
     try {
@@ -11679,7 +11813,7 @@
           say(state.sealFault + "; you joined without microphone and camera");
         }
         connectWS();
-        worldEnter(room).catch(() => {
+        worldEnter(room, worldStart).catch(() => {
         });
       } catch (err) {
         leave("");
@@ -11695,6 +11829,14 @@
       throw err;
     }
   }
+  function leaveFor(room, pass) {
+    if (state.leaving) return;
+    const was = state.name;
+    leave("");
+    if (was) $("name").value = was;
+    enterRoom(room, pass || "");
+  }
+  setWorldLeave(leaveFor);
   function leave(message) {
     const was = state.room;
     state.leaving = true;
@@ -11825,6 +11967,7 @@
     state.peers.clear();
     if ($("chat-log")) clearChat();
     setHash("");
+    worldStart = "";
     if (was) $("room").value = was;
     else suggestRoom();
     if (message) {

@@ -6,7 +6,7 @@ NODE ?= /data/workspace/node/bin
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build client wasm selftest run test typecheck lint deps format readme readme-check smoke sealed wam gate world check clean
+.PHONY: all build client wasm selftest run test typecheck lint deps format readme readme-check smoke sealed wam gate world door check clean
 
 all: build selftest
 
@@ -81,6 +81,11 @@ gate:
 world:
 	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
 	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) OUTDIR=$(OUTDIR) WORLD_ROOM=$(WORLD_ROOM) $(NODE)/node tools/world-e2e.js
+
+# A door carries a guest to another room and lands them on its start area.
+door:
+	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
+	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) OUTDIR=$(OUTDIR) $(NODE)/node tools/door-e2e.js
 
 # What a normal check runs: the types, the lint, the readme table, then the
 # browser.

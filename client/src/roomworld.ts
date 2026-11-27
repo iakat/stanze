@@ -2,8 +2,9 @@
  The world of a room: join it after the mesh is up, walk it, send positions on
  the files channel, and hand the conversation set to the presence layer.
 
- One map is one room. A map never switches rooms, so there is nothing here that
- could move a guest to another one.
+ One map is one room. A zone with an exitUrl is the one thing that moves a guest
+ to another room: it leaves this call and joins the room the map names, landing
+ on that room's start area.
 */
 
 import { $ } from './dom.js';
@@ -11,7 +12,9 @@ import { state } from './state.js';
 import { load, store } from './prefs.js';
 import { Above, CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } from './world.js';
 import { Guest, Proximity } from './proximity.js';
-import { ZoneGrid, ZoneWatch } from './zones.js';
+import { Zone, ZoneGrid, ZoneWatch } from './zones.js';
+import { ROOM_RE } from './config.js';
+import { say } from './util.js';
 import {
   posAt,
   posFrame,
@@ -38,6 +41,17 @@ let zones: ZoneGrid | null = null;
 let watch: ZoneWatch | null = null;
 let sheets: CharSheet[] = [];
 let raf = 0;
+// leaveRoom is what a door calls: room.ts hands it in, so this file moves a
+// guest between rooms without importing the room flow back into itself.
+let leaveRoom: ((room: string, pass: string) => void) | null = null;
+// doorOn is the door zone the guest stood in on the last tick, and doorCool is
+// the moment the next door may fire. A door fires on the step in, once, and a
+// guest that leaves it clears it: leaving is not instant, and a second tick on
+// the same threshold must not send two.
+let doorOn = '';
+let doorCool = 0;
+// DOOR_COOL_MS is how long a door stays shut after it fired.
+const DOOR_COOL_MS = 3000;
 // lastPosAt is the time of the last position tick. The tick length itself is
 // POSITION_DELAY, imported from the position frames.
 let lastPosAt = 0;
@@ -54,6 +68,8 @@ export const worldStats = {
   frames: 0,
   near: 0,
   zones: [] as string[],
+  doors: 0,
+  lastDoor: '',
 };
 
 // worldAvatar is the pick of the own avatar: the boot raises it when the menu
@@ -89,7 +105,7 @@ function worldNode(): { box: HTMLElement; canvas: HTMLCanvasElement; note: HTMLE
 // loadRoom loads the map of the room this page is in and starts the view. A
 // missing map is a word on the status line and the call grid, never a failed
 // join: a room of a call is still a room.
-export async function worldEnter(room: string) {
+export async function worldEnter(room: string, start?: string) {
   const gen = ++generation;
   if (!isWorld()) {
     worldSet(false);
@@ -107,7 +123,7 @@ export async function worldEnter(room: string) {
     if (gen !== generation || state.leaving) return;
     if (view) view.destroy();
     view = new WorldView(canvas, world);
-    walker = new Walker(world, world.startPoint());
+    walker = new Walker(world, world.startPoint(start));
     proximity = new Proximity();
     zones = new ZoneGrid(world.zones);
     watch = new ZoneWatch(zones);
@@ -151,6 +167,12 @@ export async function worldEnter(room: string) {
       /* the probe is a debug aid */
     }
   }
+}
+
+// setWorldLeave hands the world the room flow's leave: a door fires it with the
+// passphrase of the room being left, so the room it opens joins without a retype.
+export function setWorldLeave(fn: ((room: string, pass: string) => void) | null) {
+  leaveRoom = fn;
 }
 
 // worldLeave stops the loop and drops every remote of the old room. The map
@@ -236,6 +258,80 @@ function guestOf(x: number, y: number, load: Map<string, number>): Guest {
   return { at: { x, y }, zones: list, full };
 }
 
+// roomOfExit turns a WorkAdventure exitUrl into the room it names. WA writes the
+// map of the target room ('conference.tmj#from-office'), a link to the world, or
+// a full address; a link is the same host's page and so the same call, and a
+// remote host is not a door this page can walk through.
+export function roomOfExit(exit: string, here: string): string | null {
+  const raw = String(exit || '').trim();
+  if (!raw) return null;
+  // WorkAdventure names a door three ways: a map beside this one
+  // ('conference.tmj#from-office'), a page of this site ('/#r=conference'), and
+  // a full address. A fragment carrying r= wins; otherwise the last path
+  // segment is the room, with the map suffix taken off so a map file and the
+  // room it draws read as one name.
+  const pick = (text: string): string => {
+    const hash = text.match(/[#&]r=([^&\s]+)/);
+    if (hash) return decodeURIComponent(hash[1]).toLowerCase();
+    const clean = text.split('#')[0].split('?')[0];
+    const seg = clean.split('/').filter(Boolean).pop() || '';
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(seg)) return '';
+    return seg.replace(/\.(tmj|json|png)$/i, '').toLowerCase();
+  };
+  let target = '';
+  if (/^(https?:)?\/\//i.test(raw)) {
+    let url: URL | null = null;
+    try {
+      url = new URL(raw, location.href);
+    } catch {
+      return null;
+    }
+    if (url.host !== location.host) return null;
+    target = pick(url.pathname + url.hash);
+  } else {
+    target = pick(raw);
+  }
+  return ROOM_RE.test(target) ? target : null;
+}
+
+// openDoor is one door, by hand: the browser test stands a guest in a zone and
+// the same code a step runs fires. Nothing else in the page calls it.
+export function openDoor(zone: Zone | null): boolean {
+  if (!zone || !zone.exit) return false;
+  door([zone], []);
+  return true;
+}
+
+// door is what a zone with an exitUrl does when a guest steps into it: the page
+// leaves this call and joins the room the door names. The landing is the start
+// zone of that room, a link the room itself reads on the way in.
+function door(enter: Zone[], leave: Zone[]) {
+  const now = Date.now();
+  for (const zone of leave) if (zone.id === doorOn) doorOn = '';
+  const zone = enter.find((one) => one && one.exit && one.id !== doorOn) || null;
+  if (!zone || !view || !state.room) return;
+  doorOn = zone.id;
+  if (now < doorCool) return;
+  const to = roomOfExit(zone.exit as string, state.room);
+  if (!to) {
+    proxNote('door ' + zone.id + ' names a room this page cannot walk to: ' + zone.exit);
+    return;
+  }
+  doorCool = now + DOOR_COOL_MS;
+  proxNote('door ' + zone.id + ' to ' + to);
+  worldStats.doors++;
+  worldStats.lastDoor = to;
+  if (!leaveRoom) {
+    location.hash = 'r=' + encodeURIComponent(to);
+    return;
+  }
+  // The passphrase of the room being left opens the room being entered. It is
+  // read here and never carried by a map or a position frame.
+  const st = state as unknown as Record<string, unknown>;
+  const pass = st.pass;
+  leaveRoom(to, typeof pass === 'string' ? pass : '');
+}
+
 // step is one position tick: walk the zones, send the frame and the one word
 // about the conversation, judge the pairs, and route the media.
 function step() {
@@ -249,7 +345,8 @@ function step() {
   }
   // The zone test runs once per tick and only reports a change, so a guest
   // standing still costs nothing and a boundary says enter once.
-  if (watch) watch.update(walker.x, walker.y);
+  const walked = watch ? watch.update(walker.x, walker.y) : { enter: [], leave: [] };
+  door(walked.enter, walked.leave);
   const zoneIds = watch ? watch.ids() : [];
   if (worldStats.zones.join(',') !== zoneIds.join(',')) worldStats.zones = zoneIds;
   const peers = [...state.peers.values()];
@@ -466,6 +563,15 @@ export function worldHook() {
         widthPx: world.widthPx,
         heightPx: world.heightPx,
         zones: world.zones.length,
+        // The zone list itself, so a browser test can judge a place against
+        // the rect a map draws.
+        list: world.zones.map((zone) => ({
+          id: zone.id,
+          kind: zone.kind,
+          rects: zone.rects.map((rect) => ({ ...rect })),
+          exit: zone.exit || '',
+          start: !!zone.start,
+        })),
         avatars: view.avatars.size,
         // aboveRows counts the map rows the overhead paint fills, and
         // aboveBand is the height of one of them:
@@ -504,16 +610,25 @@ export function worldHook() {
       view?.mark();
       return { x: Math.round(walker.x), y: Math.round(walker.y) };
     },
-    // step is one position tick by hand: the place was set, this makes the
-    // pair rule and the frame that carries it run now instead of up to a fifth
-    // of a second later.
-    step: () => {
-      step();
-      return walker ? { x: Math.round(walker.x), y: Math.round(walker.y) } : null;
-    },
     // debug hands the map and the view to a browser test that judges a pixel of
     // the canvas against the map under it. It reads and never draws.
     debug: () => (view ? view.debug() : null),
+    // door fires the door of a zone by name, the way a step into it does, so a
+    // browser test can walk a guest to another room without a pixel hunt.
+    door: (id: string) => {
+      if (!view) return 'no world';
+      const zone = view.world.zones.find((one) => one.id === id) || null;
+      return openDoor(zone) ? 'fired' : 'no door named ' + id;
+    },
+    // doors is every door zone of this map with the room it names.
+    doors: () =>
+      view
+        ? view.world.zones
+            .filter((one) => !!one.exit)
+            .map((one) => ({ id: one.id, room: roomOfExit(one.exit as string, view ? view.world.room : '') }))
+        : [],
+    // start is the zone this room lands a guest on, if the map names one.
+    start: () => (view ? view.world.zones.filter((one) => one.start).map((one) => one.id) : []),
     near: () => (view ? [...near] : []),
     // reason names the way a pair was judged: meeting, near, bubble, silent,
     // full or far. It is the proximity word and nothing more.

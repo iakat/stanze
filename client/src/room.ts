@@ -33,11 +33,17 @@ import { asrStop, omniStop } from './asr.js';
 import { canary } from './audit.js';
 import { roomW } from './gate.js';
 import { applyImmersive } from './phone.js';
-import { worldEnter, worldLeave } from './roomworld.js';
+import { setWorldLeave, worldEnter, worldLeave } from './roomworld.js';
 import { clearChat } from './chat.js';
 
+// worldStart is the start area the next join of a room lands on. It comes from
+// the link of a door, never from a stored value, so it cannot outlive the step
+// that set it.
+let worldStart = '';
+
 // ---------------------------------------------------------------- room flow
-export async function enterRoom(room, pass) {
+export async function enterRoom(room, pass, start?: string) {
+  worldStart = start || '';
   // A second submit while the first join is still loading would start the room
   // twice and leave the first pass holding a worker nobody owns any more.
   if (state.entering || state.ws) return;
@@ -155,8 +161,9 @@ export async function enterRoom(room, pass) {
       }
       connectWS();
       // The world loads beside the mesh: it is a map over HTTP, and a room
-      // without one keeps the call grid.
-      worldEnter(room).catch(() => {});
+      // without one keeps the call grid. A door that named a start area lands
+      // the guest there instead of on the map's own spawn.
+      worldEnter(room, worldStart).catch(() => {});
     } catch (err) {
       leave('');
       state.leaving = false;
@@ -172,6 +179,22 @@ export async function enterRoom(room, pass) {
       throw err;
     }
   }
+
+// leaveFor is what a door calls. It leaves this room with no message and then
+// joins the room the door named, with the passphrase of the room it left. The
+// second join runs after leave finishes, so it never meets the guard that stops
+// a double submit.
+export function leaveFor(room: string, pass: string) {
+  if (state.leaving) return;
+  const was = state.name;
+  leave('');
+  if (was) $('name').value = was;
+  // The map of the room being entered says where it lands a guest; nothing
+  // about the room being left travels with the guest.
+  enterRoom(room, pass || '');
+}
+
+setWorldLeave(leaveFor);
 
 export function leave(message) {
   const was = state.room;
@@ -303,6 +326,7 @@ export function leave(message) {
   state.peers.clear();
   if ($('chat-log')) clearChat();
   setHash('');
+  worldStart = '';
   // The room field keeps the last room, so another try needs no retyping.
   if (was) $('room').value = was;
   else suggestRoom();

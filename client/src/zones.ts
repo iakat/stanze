@@ -3,19 +3,21 @@
  one of them is full.
 
  WorkAdventure has two area classes, "zone" and "area", and both are a rectangle
- with a name, an occupancy cap and a bubble radius. A zone here is that and
- nothing more: it is where guests talk. A map never switches rooms, so there is
- no exit; stanze has no megaphone, so there is no podium. An author property
- this file does not name is ignored, never guessed at.
+ with a name, an occupancy cap and a bubble radius. A zone here is that, and it
+ is where guests talk; a zone that names an exitUrl carries a guest to the room
+ the map names, and a zone marked start is where that room lands one. stanze has
+ no megaphone, so there is no podium. An author property this file does not name
+ is ignored, never guessed at.
 */
 
 // ZONE_CLASS is the one class a map object may carry to become a zone.
 export const ZONE_CLASS = 'zone';
 
 // The zone kinds WorkAdventure names, and which of them are a conversation
-// room rather than a way through. A meeting room is talk at any distance, a
-// silent zone is no talk at all, and a start or an exit is nothing this map
-// needs. A kind the table does not know is a plain area.
+// room rather than a way through. A meeting room is talk at any distance and a
+// silent zone is no talk at all. A start or an exit is not a kind: it is the
+// start and exit fields of a zone, so it works with any kind. A kind the table
+// does not know is a plain area.
 export const ZONE_KINDS = ['meeting', 'silent'] as const;
 
 // DEFAULT_PROXIMITY is the bubble of a zone that names none: WorkAdventure's
@@ -34,6 +36,11 @@ export type Zone = {
   capacity: number;
   proximity: number;
   rects: Rect[];
+  // exit names a room the zone carries a guest to, and start names the zone
+  // that room lands a guest on: WorkAdventure's exitUrl and start properties.
+  // Both are placed by the map loader and never by the wire.
+  exit?: string;
+  start?: boolean;
 };
 
 // ZONE_ID is the shape of a zone id: it names a hash fragment, so it is checked
@@ -81,20 +88,26 @@ export function zoneFromObject(raw: any, index: number): Zone | null {
   const capacity = Number(raw.capacity);
   const proximity = Number(raw.proximity);
   const kind = String(raw.kind || '');
-  const list = Array.isArray(raw.rects) ? raw.rects : [raw];
+  // A kind the runtime names survives; any other word is a plain area. The
+  // check reads the list directly, never through a lookup by a word, because
+  // a word of the code is also a property name an author may choose.
+  const call = Array.isArray(raw.rects) ? raw.rects : [raw];
   const rects: Rect[] = [];
-  for (const one of list) {
+  for (const one of call) {
     const rect = rectOf(one);
     if (rect) rects.push(rect);
   }
   if (!rects.length) return null;
+  const exit = typeof raw.exit === 'string' ? raw.exit.trim().slice(0, 128) : '';
   return {
     id,
     name,
-    kind: (ZONE_KINDS as readonly string[]).includes(kind) ? kind : '',
+    kind: ZONE_KINDS.indexOf(kind as (typeof ZONE_KINDS)[number]) >= 0 ? kind : '',
     capacity: Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : 0,
     proximity: Number.isFinite(proximity) && proximity > 0 ? Math.round(proximity) : DEFAULT_PROXIMITY,
     rects,
+    ...(exit ? { exit } : {}),
+    ...(raw.start === true ? { start: true } : {}),
   };
 }
 

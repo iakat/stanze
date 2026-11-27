@@ -41,7 +41,7 @@ Status words:
 | 13 | Layer `opacity`, `visible`, parallax | partial | `opacity` and `visible` read; `parallaxx/y` not |
 | 14 | Collision from the `collides` tile property | done | `world.ts` loader, class/property both spellings |
 | 15 | Hidden layers still collide | done | `world.ts` loader |
-| 16 | Spawn ladder: init, area, layer, tile, start, map start | partial | `world.ts` `startRect`/`spawn`; one rect, no ladder |
+| 16 | Spawn ladder: init, area, layer, tile, start, map start | done | `world.ts` `startRect`/`spawn`: a zone marked start, the spawn point object, the start layer, the .wam start area, then the centre |
 | 17 | One map per world, map served as bytes, never in a sealed frame | done | `world.ts` `mapPath`, HTTP GET |
 | 18 | WorkAdventure `.wam` world file names its map | done | `world.ts` `loadWam`, `tools/wam-e2e.js` |
 
@@ -50,7 +50,7 @@ Status words:
 | # | WA behaviour | status | where / why |
 |---|---|---|---|
 | 19 | Zone is a Tiled object `class: zone`/`area`, needs width and height | done | `zones.ts` `zoneFromObject` |
-| 20 | Rectangle, polygon and ellipse objects as one runtime shape | **missing** | `zones.ts` rects only; polygon and ellipse are skipped |
+| 20 | Rectangle, polygon and ellipse objects as one runtime shape | partial | `world.ts` `polygonRects` turns a polygon into rows of rects; an ellipse still reads as its bounding box |
 | 21 | `name`, `maxUsers`, `proximity` properties | done | `zones.ts` |
 | 22 | Meeting area: talk at any distance inside it | done | `proximity.ts` `judge` |
 | 23 | Silent area: no talk inside it | done | `proximity.ts` `judge` |
@@ -80,7 +80,7 @@ Status words:
 | 37 | Room passphrase, refused guest told why | done | `gate.ts`, sealed SPAKE2 |
 | 38 | Waiting room with a `let in` button | done | `host.ts`, `presence.ts` |
 | 39 | Member list with roles, mute, remove | done | `host.ts` |
-| 40 | Door / exit zones that carry a guest to another room | **missing** | - |
+| 40 | Door / exit zones that carry a guest to another room | done | `roomworld.ts` `door`, `roomOfExit`; `room.ts` `leaveFor`; office and conference carry each other's door |
 | 41 | Jitsi or a meeting link on an area | **missing** | stanze is the call; an area that names a call is not read |
 | 42 | Opening a web page in a side panel on an area | **missing** | - |
 
@@ -107,5 +107,6 @@ Status words:
 
 ## The count, as it stands
 
-`done` 11, `partial` 11, `missing` 20, `not ported` 1, n/a 1, out of 46 rows.
-The first gap taken is #20 (polygon and ellipse areas).
+`done` 13, `partial` 11, `missing` 18, `not ported` 1, n/a 1, out of 46 rows.
+Taken so far: #40 (doors, the office map already shipped one), #16 (the start
+area the ladder lacked), and half of #20 (polygon areas).
