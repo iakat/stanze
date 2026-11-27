@@ -1144,6 +1144,9 @@ export class WorldView {
   // pad is the four arrow buttons a touch screen walks with; a mouse never
   // sees it.
   private pad: HTMLElement | null = null;
+  // observer is the ResizeObserver of this canvas, kept so destroy can
+  // disconnect it: one is built per view, and a view is rebuilt on every join.
+  private observer: ResizeObserver | null = null;
   private onKeyDown = (event: KeyboardEvent) => this.key(event, true);
   private onKeyUp = (event: KeyboardEvent) => this.key(event, false);
 
@@ -1164,6 +1167,7 @@ export class WorldView {
         this.dirty = true;
       });
       observe.observe(canvas);
+      this.observer = observe;
     }
     this.raf = requestAnimationFrame((t) => this.tick(t));
   }
@@ -1190,6 +1194,13 @@ export class WorldView {
     this.raf = 0;
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    // The observer outlives the canvas it watches until it is disconnected: one
+    // is built per WorldView, so a leave and a join of a second room would keep
+    // the first canvas alive for the life of the tab.
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
     if (this.pad && this.pad.parentNode) this.pad.parentNode.removeChild(this.pad);
     this.pad = null;
     this.avatars.clear();
