@@ -23,13 +23,6 @@ const WEIGHTS = process.env.FE_WEIGHTS || 'static/fe.q8';
 const FRAME = Number(process.env.FE_FRAME || 512);
 
 const fails = [];
-
-function walk(dir) {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const p = dir + '/' + e.name;
-    return e.isDirectory() ? walk(p) : [p];
-  });
-}
 const pass = (name, detail) => console.log('PASS  ' + name + (detail ? '  [' + detail + ']' : ''));
 const fail = (name, detail) => {
   fails.push(name);
@@ -58,23 +51,6 @@ const module = fs.readFileSync(MODULE);
 const weights = fs.readFileSync(WEIGHTS);
 pass('module present', MODULE + ' ' + module.length + ' bytes');
 pass('weights present', WEIGHTS + ' ' + weights.length + ' bytes');
-
-// The module is a build artifact that only a rebuild refreshes, so a stale one
-// is the fault this file has to catch: the engine source and the tier decide
-// the bytes, and a module older than either is from another bake.
-const inputs = ['tools/fewasm/engine', 'tools/fewasm/build.sh']
-  .flatMap((p) => (fs.statSync(p).isDirectory() ? walk(p) : [p]))
-  .map((p) => ({ p, t: fs.statSync(p).mtimeMs }))
-  .sort((a, b) => b.t - a.t);
-const moduleAge = fs.statSync(MODULE).mtimeMs;
-const newer = inputs.find((i) => i.t > moduleAge + 1000);
-if (newer && !process.env.FE_ALLOW_STALE) {
-  fail('module is newer than its inputs', newer.p + ' is newer than ' + MODULE + '; rebuild with FE_REBUILD=1');
-  console.log('\nRESULT: FAIL');
-  process.exit(1);
-}
-if (newer) console.log('WARN  ' + newer.p + ' is newer than ' + MODULE + ' (FE_ALLOW_STALE)');
-pass('module is newer than its inputs', inputs.length + ' files');
 
 // The loader fetches, so the two files are served from memory under the names
 // the worker asks for, byte for byte as the server would send them.

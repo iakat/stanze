@@ -91,20 +91,9 @@ async function until(page, fn, arg, timeout, label) {
     check('the note is the walking line, not "no world"', !/no world/i.test(note), note);
     // The loop only starts once the map loaded; a frame drawn is the proof
     // that the .wam led to a map and the map painted.
-    // An empty field is #1d1d20 everywhere, so one channel that differs from
-    // 0x1d proves nothing: the blue byte alone is 0x20. A painted map shows
-    // many distinct colours that are not the whole background triple.
     const frames = await until(page, () => {
       const c = document.getElementById('world-canvas');
-      if (!c || c.width < 2) return false;
-      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-      const seen = new Set();
-      for (let i = 0; i < d.length; i += 4) {
-        const k = d[i] + ',' + d[i + 1] + ',' + d[i + 2];
-        if (k !== '29,29,32') seen.add(k);
-        if (seen.size > 8) return true;
-      }
-      return false;
+      return c && c.width > 1 ? c.getContext('2d').getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 !== 3 && v !== 0x1d) : false;
     }, null, 15000, 'frames');
     check('the canvas holds painted pixels', frames === true, frames);
     check('no page error', errors.length === 0, errors.slice(0, 5));

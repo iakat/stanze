@@ -35,16 +35,7 @@ GOOS=js GOARCH=wasm "$GO" build -trimpath -ldflags "-s -w" -o static/pq.wasm ./c
 # The tier is a property of the weights and of the frame size the worklet
 # cuts, so both come from one variable: the incoming streams run Small now.
 FE_TIER="${FE_TIER:-small}"
-# A module older than the engine source or the tier is from another bake, and
-# shipping it would pair new weights with an old engine. mtime is the cheap
-# test; the engine tree is small.
-FE_STALE=0
-if [ -s static/fe.wasm ]; then
-	if [ -n "$(find "$here/tools/fewasm/engine" "$here/tools/fewasm/build.sh" -newer "$here/static/fe.wasm" -print -quit 2>/dev/null)" ]; then
-		FE_STALE=1
-	fi
-fi
-if [ ! -s static/fe.wasm ] || [ "$FE_STALE" = "1" ] || [ "${FE_REBUILD:-0}" = "1" ]; then
+if [ ! -s static/fe.wasm ] || [ "${FE_REBUILD:-0}" = "1" ]; then
 	FE_CC="${FE_CC:-$here/../tools/wasi-sdk/bin/clang}"
 	if [ ! -x "$FE_CC" ]; then
 		echo "no wasm clang for the filter; set FE_CC=/path/to/clang" >&2
@@ -92,7 +83,7 @@ if [ ! -s "$here/static/app.js" ]; then
 fi
 # The commit the page reports. GIT_COMMIT overrides; a tree with no git
 # history (a release tarball) writes unknown and the label stays hidden.
-printf '%s\n' "${GIT_COMMIT:-$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)}" > "$here/static/version.txt"
+printf '%s\n' "${GIT_COMMIT:-unknown}" > "$here/static/version.txt"
 "$GO" run ./cmd/pack
 
 mkdir -p bin

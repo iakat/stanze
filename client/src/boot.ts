@@ -345,9 +345,8 @@ function wireJoinCard() {
     const box = $('room');
     // An empty field is a new room, so this page makes it. A name that was
     // already in the field is one it joined, and it stays unrooted here.
-    const named = normalizeRoom(box.value);
-    const opened = !named;
-    const room = named || suggestRoom() || newRoomID();
+    const opened = !normalizeRoom(box.value);
+    const room = normalizeRoom(box.value) || suggestRoom() || newRoomID();
     if (!ROOM_RE.test(room)) {
       say('room names use a-z 0-9 . _ - (1 to 64 characters)');
       return;

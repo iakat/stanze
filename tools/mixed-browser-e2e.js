@@ -62,11 +62,29 @@ function room() {
   return out;
 }
 
-function watch(page, tag, errors) {
+// missed is the URL of every answer of 4xx and 5xx the page asked for. A
+// failed resource is logged by Chromium as a console error without the URL, so
+// the line alone can not say whether it is one of the expected misses; the
+// answer it stands for can.
+function watch(page, tag, errors, missed) {
   page.on('pageerror', (e) => errors.push(tag + ' pageerror: ' + (e && e.message ? e.message : e)));
+  page.on('response', (res) => {
+    if (res.status() >= 400) missed.push(res.url());
+  });
   page.on('console', (m) => {
     if (m.type() !== 'error') return;
     if (expectedMiss(m)) return;
+    // Chromium's own wording for a failed load, with no address in it.
+    if (/^Failed to load resource/.test(m.text())) {
+      let url = '';
+      try {
+        url = (m.location() || {}).url || '';
+      } catch (_err) {
+        url = '';
+      }
+      missed.push({ url, text: m.text() });
+      return;
+    }
     errors.push(tag + ' console: ' + m.text());
   });
 }
@@ -74,6 +92,7 @@ function watch(page, tag, errors) {
 (async () => {
   const id = room();
   const errors = [];
+  const missed = [];
   let ff = null;
   let cr = null;
   try {
@@ -109,7 +128,7 @@ function watch(page, tag, errors) {
       // error. Chromium needs the grant.
       const ctx = await engine.newContext(engine === cr ? { permissions: ['camera', 'microphone'] } : {});
       const page = await ctx.newPage();
-      watch(page, tag, errors);
+      watch(page, tag, errors, missed);
       const url = BASE + '/#r=' + id;
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       guests.push({ tag, page, name, url });
@@ -195,7 +214,14 @@ function watch(page, tag, errors) {
       });
       check(g.tag + ' keeps its pairs after the mic opens', heard >= 2, 'peers=' + heard);
     }
+    // A failed load is reported apart from a broken page: the two are read
+    // differently, and one used to hide the other.
+    const odd = missed.filter((entry) => !expectedMiss({ location: () => ({ url: entry.url }) }));
     check('no page error and no console error', errors.length === 0, errors.slice(0, 4).join(' | '));
+    // The answer is what decides, not the line: the response URL is the
+    // address the line lacks.
+    const urls = odd.map((entry) => entry.url).filter(Boolean);
+    check('no resource missing but the expected ones', urls.length === 0, urls.slice(0, 4).join(' | '));
     if (OUT) {
       fs.mkdirSync(OUT, { recursive: true });
       for (const g of guests) await g.page.screenshot({ path: OUT + '/mix-' + g.tag + '.png' }).catch(() => {});

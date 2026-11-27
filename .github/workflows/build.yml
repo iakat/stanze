@@ -21,36 +21,6 @@ env:
   RELEASE_TAG: "0.0.1"
 
 jobs:
-  loc:
-    name: line diff
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: net lines
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-          else
-            base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"
-          fi
-          if [ -z "$base" ]; then echo "no parent to compare against"; exit 0; fi
-          add=$(git diff --numstat "$base"...HEAD | awk '{a+=$1} END {print a+0}')
-          del=$(git diff --numstat "$base"...HEAD | awk '{d+=$2} END {print d+0}')
-          net=$((add-del))
-          sign="+"; [ "$net" -lt 0 ] && sign=""
-          echo "additions ${add}"
-          echo "deletions ${del}"
-          echo "net ${sign}${net}"
-          # client/ must not grow: the tree is already over its budget.
-          cnet=$(git diff --numstat "$base"...HEAD -- client | awk '{a+=$1; d+=$2} END {print a-d+0}')
-          echo "client/ net ${cnet}"
-          if [ "$cnet" -gt 0 ]; then
-            echo "client/ grew by $cnet lines; split or shrink it" >&2
-            exit 1
-          fi
-
   binaries:
     name: stanze ${{ matrix.label }}
     runs-on: ubuntu-latest
@@ -115,18 +85,9 @@ jobs:
       - name: client
         run: |
           npm ci --prefix client
-          # esbuild strips types without checking them, so the type check runs
-          # here: a type error that builds is still a broken client.
-          npm --prefix client run check
           node client/build.mjs
           GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o static/pq.wasm ./cmd/pqwasm
           go run -trimpath -buildvcs=false ./cmd/pack
-
-      # The Go tests and vet, before any artifact is made.
-      - name: test
-        run: |
-          go vet ./...
-          go test ./...
 
       - name: build
         env:

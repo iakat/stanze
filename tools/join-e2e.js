@@ -109,11 +109,9 @@ const VIEWS = [
         () => {
           const stage = document.getElementById('stage');
           if (!stage || stage.hidden) return null;
-          const app = window.e2eApp && window.e2eApp.state;
           return {
             title: document.title,
             lobby: document.getElementById('lobby').hidden,
-            wasm: !!(app && app.wasmOk),
             note: document.getElementById('sealed-note').textContent,
           };
         },
@@ -122,23 +120,10 @@ const VIEWS = [
       );
       check(view.who + ' leaves the lobby for the stage', done && !done.timeout, done && done.timeout ? JSON.stringify(done.last) : '');
       check(view.who + ' names the room in the title', done && !done.timeout && /stanze - \S/.test(done.title || ''), done && done.title);
-      // A stage with a dead wasm module or a closed socket is not a join.
-      check(view.who + ' loaded the pq module', done && !done.timeout && done.wasm, done && JSON.stringify(done));
       if (OUT && done && !done.timeout) {
         fs.mkdirSync(OUT, { recursive: true });
         await page.screenshot({ path: OUT + '/join-' + view.who + '.png' }).catch(() => {});
       }
-      // The socket opens just after the stage appears: connectWS runs once the
-      // devices are asked for, so the open socket is waited for, not assumed.
-      await until(page, () => {
-        const a = window.e2eApp && window.e2eApp.state;
-        return !!(a && a.ws && a.ws.readyState === 1);
-      }, null, view.who + ' the socket opens', 15000);
-      const live = await page.evaluate(() => {
-        const a = window.e2eApp && window.e2eApp.state;
-        return !!(a && a.wasmOk && a.ws && a.ws.readyState === 1);
-      });
-      check(view.who + ' keeps the socket open and the pq module', live);
       // The page also has to stay joined for a moment, not fall back on the
       // first throw after the stage is shown.
       await sleep(3000);

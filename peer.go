@@ -13,11 +13,6 @@ type Peer struct {
 	id   string
 	room *Room
 
-	// leaveRoom is the id of the room this peer last relayed in. hub.leave
-	// clears room, and the relay budget is the room's, so the id has to
-	// outlive the pointer until the socket close finishes.
-	leaveRoom string
-
 	// iceMinted is set once this connection was handed a relay credential. One
 	// join offers one credential, so a page cannot farm the relay.
 	iceMinted bool

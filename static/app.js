@@ -203,8 +203,6 @@
     noiseEngine: "gtcrn",
     // the model that filter uses, the incoming side is not touched
     leaving: false,
-    entering: false,
-    // a join is loading; a second submit is refused
     reconnectTimer: null,
     reconnectDelay: 500,
     fatal: "",
@@ -5719,7 +5717,7 @@
   }
 
   // src/sfx.ts
-  var SFX_NAMES = ["joined", "left", "knock", "raisehand", "msg", "unmuted", "muted"];
+  var SFX_NAMES = ["joined", "left", "knock", "raisehand", "msg", "unmuted", "muted", "timp", "hammer", "lost"];
   var SFX_RATE = 0.35;
   var LOST_RATE = 0.2;
   var LOST_LOOP_START = 0.16;
@@ -5755,6 +5753,7 @@
       if (sfxCache.has(name)) continue;
       fetch(`sfx/${name}.${ext}`).then((r) => r.arrayBuffer()).then((b) => ctx.decodeAudioData(b)).then((buffer) => {
         sfxCache.set(name, buffer);
+        if (name === "lost" && state.lostWanted) startLost();
       }).catch(() => {
       });
     }
@@ -8871,7 +8870,6 @@
       const track = kind === "screen" ? state.screen && state.screen.getVideoTracks()[0] : state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
       if (!track) continue;
       if (peer.waiting) continue;
-      if (isAttached(peer, kind, track)) continue;
       tr.sender.replaceTrack(track).catch(() => {
       });
       if (kind === "video") capVideoSender(tr.sender);
@@ -8881,7 +8879,7 @@
     if (peer.sealed === false || peer.waiting) return;
     if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx[track.kind];
-    if (!tr || isAttached(peer, track.kind, track)) return;
+    if (!tr) return;
     tr.sender.replaceTrack(track).catch(() => {
     });
     if (track.kind === "video") capVideoSender(tr.sender);
@@ -8891,7 +8889,7 @@
     if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx.screen;
     const track = state.screen && state.screen.getVideoTracks()[0];
-    if (tr && track && !isAttached(peer, "screen", track)) tr.sender.replaceTrack(track).catch(() => {
+    if (tr && track) tr.sender.replaceTrack(track).catch(() => {
     });
   }
   function publishTrack(track) {
@@ -8899,13 +8897,6 @@
     for (const peer of state.peers.values()) {
       if (peer.pc) attachTrack(peer, track);
     }
-  }
-  function isAttached(peer, kind, track) {
-    const tr = peer.tx && peer.tx[kind];
-    if (!tr) return true;
-    const params = tr.sender.getParameters();
-    if (!params || !Array.isArray(params.encodings) || params.encodings.length === 0) return true;
-    return tr.sender.track === track;
   }
   async function adoptMic(track) {
     if (!track) return;
@@ -11502,105 +11493,95 @@
 
   // src/room.ts
   async function enterRoom(room, pass) {
-    if (state.entering || state.ws) return;
-    state.entering = true;
+    ensureSfx();
+    preloadSfx();
+    cancelReconnect();
+    state.fatal = "";
+    state.room = room;
+    state.name = cleanSealedName($("name").value) || "guest";
+    state.path = $("path").value;
+    state.noiseWanted = $("noise").checked;
+    state.mirror = true;
+    state.leaving = false;
+    state.mic = load("mic") !== "0";
+    state.cam = load("cam") !== "0";
+    store("name", state.name);
+    store("room", state.room);
+    store("path", state.path);
+    store("noise", state.noiseWanted ? 1 : 0);
+    ensurePlayback();
+    $("enter-btn").disabled = true;
+    $("sealed-note").hidden = false;
+    $("sealed-note").textContent = "loading the post-quantum module";
     try {
-      ensureSfx();
-      preloadSfx();
-      cancelReconnect();
-      stopLost();
-      state.fatal = "";
-      state.room = room;
-      state.name = cleanSealedName($("name").value) || "guest";
-      state.path = $("path").value;
-      state.noiseWanted = $("noise").checked;
-      state.mirror = true;
-      state.leaving = false;
-      state.mic = load("mic") !== "0";
-      state.cam = load("cam") !== "0";
-      store("name", state.name);
-      store("room", state.room);
-      store("path", state.path);
-      store("noise", state.noiseWanted ? 1 : 0);
-      ensurePlayback();
-      $("enter-btn").disabled = true;
-      $("sealed-note").hidden = false;
-      $("sealed-note").textContent = "loading the post-quantum module";
       try {
-        try {
-          await ensureReady();
-          $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
-        } catch (err) {
-          const why = err && err.message ? err.message : String(err);
-          $("sealed-note").textContent = "the sealed client did not start: " + why;
-          state.room = "";
-          say("cannot open a sealed room: " + why);
-          return;
-        }
-        canary(pass);
-        state.w = "";
-        try {
-          const derived = await deriveRoomW(pass, room);
-          state.w = typeof derived === "string" ? derived : "";
-        } catch {
-          state.w = roomW(pass, room);
-        }
-        state.gate = { v: pass, n: 0 };
-        paintGate();
-        state.warmed = true;
-        if (!rootFingerprint(room)) {
-          try {
-            const fp = await roomRoot(room);
-            if (fp) setRoot(fp);
-          } catch {
-          }
-        }
-        startSealedWorker();
-        const made = JSON.parse(pqModule().gen());
-        state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
-        state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
-        canary(state.name);
-        if (!sealingAvailable()) {
-          state.sealFault = "this browser cannot seal media frames, so no media is sent";
-          state.mic = false;
-          state.cam = false;
-        }
-        $("lobby").hidden = true;
-        $("stage").hidden = false;
-        $("stage").classList.remove("chrome");
-        applyImmersive();
-        document.title = "stanze - " + room;
-        $("chat-note").hidden = false;
-        updatePinCount();
-        setHash(room);
-        startCallClock();
-        startSpeaking();
-        prepareLocal();
-        prefetchNoise();
-        if (sealingAvailable()) {
-          try {
-            await requestLocal();
-          } catch {
-          }
-        } else {
-          updateButtons();
-          say(state.sealFault + "; you joined without microphone and camera");
-        }
-        connectWS();
-        worldEnter(room).catch(() => {
-        });
+        await ensureReady();
+        $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
       } catch (err) {
-        leave("");
-        state.leaving = false;
-        say("cannot open a sealed room: " + (err && err.message ? err.message : String(err)));
-      } finally {
-        state.entering = false;
-        const button = $("enter-btn");
-        if (button) button.disabled = false;
+        const why = err && err.message ? err.message : String(err);
+        $("sealed-note").textContent = "the sealed client did not start: " + why;
+        state.room = "";
+        say("cannot open a sealed room: " + why);
+        return;
       }
+      canary(pass);
+      state.w = "";
+      try {
+        const derived = await deriveRoomW(pass, room);
+        state.w = typeof derived === "string" ? derived : "";
+      } catch {
+        state.w = roomW(pass, room);
+      }
+      state.gate = { v: pass, n: 0 };
+      paintGate();
+      state.warmed = true;
+      if (!rootFingerprint(room)) {
+        try {
+          const fp = await roomRoot(room);
+          if (fp) setRoot(fp);
+        } catch {
+        }
+      }
+      startSealedWorker();
+      const made = JSON.parse(pqModule().gen());
+      state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
+      state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
+      canary(state.name);
+      if (!sealingAvailable()) {
+        state.sealFault = "this browser cannot seal media frames, so no media is sent";
+        state.mic = false;
+        state.cam = false;
+      }
+      $("lobby").hidden = true;
+      $("stage").hidden = false;
+      $("stage").classList.remove("chrome");
+      applyImmersive();
+      document.title = "stanze - " + room;
+      $("chat-note").hidden = false;
+      updatePinCount();
+      setHash(room);
+      startCallClock();
+      startSpeaking();
+      prepareLocal();
+      prefetchNoise();
+      if (sealingAvailable()) {
+        try {
+          await requestLocal();
+        } catch {
+        }
+      } else {
+        updateButtons();
+        say(state.sealFault + "; you joined without microphone and camera");
+      }
+      connectWS();
+      worldEnter(room).catch(() => {
+      });
     } catch (err) {
-      state.entering = false;
-      throw err;
+      leave("");
+      state.leaving = false;
+      say("cannot open a sealed room: " + (err && err.message ? err.message : String(err)));
+    } finally {
+      $("enter-btn").disabled = false;
     }
   }
   function leave(message) {
@@ -12747,9 +12728,8 @@
       event.preventDefault();
       ensurePlayback();
       const box = $("room");
-      const named = normalizeRoom(box.value);
-      const opened = !named;
-      const room = named || suggestRoom() || newRoomID();
+      const opened = !normalizeRoom(box.value);
+      const room = normalizeRoom(box.value) || suggestRoom() || newRoomID();
       if (!ROOM_RE.test(room)) {
         say("room names use a-z 0-9 . _ - (1 to 64 characters)");
         return;

@@ -96,9 +96,6 @@ export interface Elements {
 
 export function $<K extends keyof Elements>(id: K): Elements[K];
 export function $(id: string): HTMLElement;
-export function $(id: string): HTMLElement | null {
-  // The markup can drop an id the code still asks for, and a throw here used to
-  // take the whole join down mid way. A missing node is null, and the callers
-  // that need one say so.
+export function $(id: string): HTMLElement {
   return document.getElementById(id);
 }
