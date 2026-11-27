@@ -791,6 +791,83 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 .world-view[hidden] { display: none; }
 .world-canvas { flex: 1 1 auto; min-width: 0; min-height: 0; display: block; width: 100%; height: 100%; image-rendering: pixelated; }
 .world-note { position: absolute; left: 8px; right: 8px; bottom: 8px; margin: 0; color: var(--ink); background: var(--panel); border: 1px solid var(--edge); padding: 3px 6px; font-size: var(--fs-smaller); }
+/* The note stays on the map and off the strip: on a wide box the strip holds
+   the right edge, so the note ends before it; on a narrow box the strip holds
+   the bottom edge, so the note floats above it. It never covers a picture and a
+   picture never covers it. */
+.world-view:has(.world-rail:not([hidden])) .world-note { right: calc(clamp(132px, 24%, 188px) + 14px); }
+@media (max-width: 760px), (max-aspect-ratio: 5/4) {
+  .world-view:has(.world-rail:not([hidden])) .world-note { right: 8px; bottom: auto; top: 8px; }
+}
+/* The strip of pictures beside the map: a column on the right edge of the map
+   box on a wide screen, a row along the bottom on a narrow one. The map keeps
+   the rest, so it only loses the width (or the height) the strip needs, and a
+   tile joined or dropped never resizes the map itself. The strip scrolls, so a
+   fifth guest costs a scroll and not a smaller picture of everybody. */
+.world-rail {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 3px;
+  overflow: auto;
+  background: var(--panel);
+  border: 2px solid;
+  border-color: var(--panel-hi) var(--edge) var(--edge) var(--panel-hi);
+  padding: 3px;
+  min-width: 0;
+  min-height: 0;
+  z-index: 2;
+}
+.world-rail[hidden] { display: none; }
+.world-rail {
+  flex-direction: column;
+  width: clamp(132px, 24%, 188px);
+  max-height: 100%;
+  align-items: stretch;
+}
+/* A tile in the strip is one small picture with its name bar: the strip sets
+   the height, the tile keeps the 16:9 of a camera and the screen shape of a
+   share instead of the stage's whole frame. */
+.world-rail .tile {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: none;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+.world-rail .tile.screenshare { aspect-ratio: 4 / 3; }
+/* One guest in the strip takes the room a single small picture needs, so the
+   map keeps nearly all of its box. */
+.world-rail[data-count="1"] { width: clamp(132px, 24%, 188px); }
+.world-rail[data-count="1"] .tile { align-self: flex-start; }
+/* The picture of the strip is cropped, like a thumbnail: the name bar and the
+   talking light carry the identity, the face is what the map can not show. */
+.world-rail .tile video { object-fit: cover; }
+.world-rail .tile.screenshare video { object-fit: contain; }
+/* The controls of a full tile would cover a thumbnail: only the name bar and
+   the rings stay, and a click still enlarges the guest. */
+.world-rail .tile .vol,
+.world-rail .tile .admit,
+.world-rail .tile .dots,
+.world-rail .tile .route,
+.world-rail .tile .pin { display: none; }
+.world-rail .tile .tag { height: 19px; font-size: var(--fs-tiny); }
+.world-rail .tile .avatar { inset: 0 0 19px 0; padding: 4px 6px; font-size: var(--fs-smaller); }
+/* A narrow box puts the strip along the bottom edge as a row: a column of
+   thumbnails would leave the map a sliver. A horizontal scroll keeps every
+   picture one size, so a fifth guest costs a scroll and never a smaller face. */
+@media (max-width: 760px), (max-aspect-ratio: 5/4) {
+  .world-view { flex-direction: column; }
+  .world-rail {
+    flex-direction: row;
+    width: auto;
+    height: auto;
+    max-height: 34%;
+    align-items: center;
+  }
+  .world-rail .tile { width: auto; height: 100%; aspect-ratio: 16 / 9; }
+  .world-rail[data-count="1"] { width: auto; }
+  .world-rail[data-count="1"] .tile { align-self: center; width: auto; height: 100%; }
+}
 @media (hover: none) and (pointer: coarse) {
   .world-view.has-pad .world-pad {
     display: grid;
@@ -858,6 +935,25 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 .self-pip[data-corner="tr"] { right: 8px; top: 8px; left: auto; bottom: auto; }
 .self-pip[data-corner="bl"] { left: 8px; bottom: 8px; right: auto; top: auto; }
 .self-pip[data-corner="br"] { right: 8px; bottom: 8px; left: auto; top: auto; }
+/* Over the map the own preview is even smaller, and its right corners keep
+ * clear of the strip of guests: a preview over a face is a face lost. It is
+ * still draggable, so a guest who works in a corner puts it elsewhere. */
+.world-view:not([hidden]) ~ .self-pip {
+  width: 128px;
+  height: 96px;
+}
+.room-row:has(.world-view:not([hidden])) .self-pip[data-corner="tr"],
+.room-row:has(.world-view:not([hidden])) .self-pip[data-corner="br"] {
+  right: calc(clamp(132px, 24%, 188px) + 14px);
+}
+@media (max-width: 760px), (max-aspect-ratio: 5/4) {
+  /* The strip holds the bottom edge there, so the preview sits on top. */
+  .room-row:has(.world-view:not([hidden])) .self-pip[data-corner="tr"],
+  .room-row:has(.world-view:not([hidden])) .self-pip[data-corner="br"] { right: 8px; }
+  .room-row:has(.world-view:not([hidden])) .self-pip[data-corner="bl"],
+  .room-row:has(.world-view:not([hidden])) .self-pip[data-corner="br"] { bottom: auto; top: 8px; }
+  .world-view:not([hidden]) ~ .self-pip { width: 104px; height: 78px; }
+}
 /* One guest alone in the large area fills it, and the picture covers the
    whole frame instead of keeping a fixed ratio with black bars. */
 .stage-main[data-alone="yes"] {
@@ -1548,6 +1644,11 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
     min-height: 64px;
   }
   .stats { max-height: 70vh; }
+  /* The line of presence keeps both halves readable in a narrow column: the
+     room count takes a line of its own when it and the near list do not fit,
+     instead of squeezing the near list to nothing. */
+  .presence-row { flex-direction: column; }
+  .presence-room { white-space: normal; }
   /* The strip of a tile keeps its words: the name gives way first, because the
      list of names under the pictures carries it a second time, and the chips
      of the state were all cut to "mu..." when every one of them shrank. On the

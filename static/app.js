@@ -3941,8 +3941,104 @@
     if (free(centre.x, centre.y)) return centre;
     return { x: Math.round(tw * 1.5), y: Math.round(th * 1.5) };
   }
+  function spawnObject(objects) {
+    for (const layer of objects) {
+      for (const obj of layer.objects || []) {
+        if (!obj || String(obj.name || "").toLowerCase() !== "spawn") continue;
+        return {
+          x: Math.round(Number(obj.x) || 0),
+          y: Math.round(Number(obj.y) || 0),
+          w: Math.round(Number(obj.width) || 0),
+          h: Math.round(Number(obj.height) || 0)
+        };
+      }
+    }
+    return null;
+  }
+  async function startLayerRect(tiles, width, height, tw, th) {
+    const list = tiles.filter((layer) => layer && layer.type === "tilelayer");
+    const named = list.find((layer) => String(layer.name || "").toLowerCase() === "start");
+    const flagged = list.find((layer) => {
+      const props = Array.isArray(layer.properties) ? layer.properties : [];
+      return props.some(
+        (p) => p && (p.name === "startLayer" || p.name === "start") && (p.value === true || p.value === "true")
+      );
+    });
+    const pick = named || flagged || null;
+    if (!pick) return null;
+    const data = await layerData(pick);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const cells = Math.min(data.length, width * height);
+    for (let i = 0; i < cells; i++) {
+      if (!gidOf(Number(data[i]) || 0)) continue;
+      const x = i % width * tw;
+      const y = Math.floor(i / width) * th;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    if (!Number.isFinite(minX)) return null;
+    return { x: minX, y: minY, w: Math.max(tw, maxX - minX + tw), h: Math.max(th, maxY - minY + th) };
+  }
   function mapPath(room) {
     return room === "" ? "/world/map.json" : "/world/maps/" + room + ".json";
+  }
+  function mapCandidates(room) {
+    const own = mapPath(room);
+    const stem = own.replace(/\.json$/, "");
+    return own === DEFAULT_MAP ? [own] : [own, stem + ".tmj", stem + ".wam"];
+  }
+  function isWam(doc) {
+    return !!doc && typeof doc === "object" && typeof doc.mapUrl === "string" && !Array.isArray(doc.layers);
+  }
+  async function loadWam(path, doc, signal) {
+    const url = String(doc.mapUrl || "").trim();
+    if (!url) return null;
+    const rel = url.replace(/^\.\//, "");
+    const here = path.slice(0, path.lastIndexOf("/") + 1);
+    const map = await loadJSON(rel.startsWith("/") ? rel : here + rel, signal, true);
+    return map && typeof map === "object" && Array.isArray(map.layers) ? map : null;
+  }
+  function areaRect(area) {
+    return {
+      x: Math.round(Number(area.x) || 0),
+      y: Math.round(Number(area.y) || 0),
+      w: Math.round(Number(area.width) || 0),
+      h: Math.round(Number(area.height) || 0)
+    };
+  }
+  function wamZones(doc) {
+    const out = [];
+    for (const area of Array.isArray(doc.areas) ? doc.areas : []) {
+      if (!area || typeof area !== "object") continue;
+      const props = {};
+      for (const p of Array.isArray(area.properties) ? area.properties : []) if (p && p.name) props[p.name] = p.value;
+      let kind = String(props.kind || "");
+      if (!kind && (props.silent === true || props.silent === "true")) kind = "silent";
+      if (!kind && (props.jitsiRoom !== void 0 || props.jitsiRoomProperty !== void 0)) kind = "meeting";
+      const users = props.maxUsersInAreaPropertyData;
+      out.push({
+        id: area.id || area.name,
+        name: props.label || props.name || area.name || area.id,
+        kind,
+        proximity: props.proximity,
+        capacity: props.maxUsers !== void 0 ? props.maxUsers : props.capacity !== void 0 ? props.capacity : users && users.maxUsers,
+        rects: [areaRect(area)]
+      });
+    }
+    return out;
+  }
+  function wamStart(doc) {
+    for (const area of Array.isArray(doc.areas) ? doc.areas : []) {
+      const props = area && Array.isArray(area.properties) ? area.properties : [];
+      if (!props.some((p) => p && p.name === "start")) continue;
+      return areaRect(area);
+    }
+    return null;
   }
   var DEFAULT_MAP = "/world/map.json";
   async function atlasFrames(signal) {
@@ -3973,8 +4069,24 @@
     if (!ROOM_RE.test(room)) throw new Error("bad room name");
     const base = "/world/";
     const own = mapPath(room);
-    let map = await loadJSON(own, signal, own !== DEFAULT_MAP);
-    if (!map && own !== DEFAULT_MAP) map = await loadJSON(DEFAULT_MAP, signal);
+    let map = null;
+    let wam = null;
+    let mapPathUsed = own;
+    for (const path of mapCandidates(room)) {
+      const doc = await loadJSON(path, signal, true);
+      if (!doc) continue;
+      if (isWam(doc)) {
+        map = await loadWam(path, doc, signal);
+        if (!map) continue;
+        wam = doc;
+      } else map = doc;
+      mapPathUsed = path;
+      break;
+    }
+    if (!map && own !== DEFAULT_MAP) {
+      mapPathUsed = DEFAULT_MAP;
+      map = await loadJSON(DEFAULT_MAP, signal);
+    }
     if (!map || typeof map !== "object") throw new Error("no map for " + room);
     const width = Math.max(1, Math.floor(Number(map.width)) || 1);
     const height = Math.max(1, Math.floor(Number(map.height)) || 1);
@@ -3983,24 +4095,12 @@
     const tiles = [];
     const objects = [];
     walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
-    const roomBase = own.slice(0, own.lastIndexOf("/") + 1);
+    const roomBase = mapPathUsed.slice(0, mapPathUsed.lastIndexOf("/") + 1);
     const sidecar = await loadJSON(room === "" ? "" : base + "maps/" + room + ".zones.json", signal, true);
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
-    const zones2 = zoneList(fromSidecar.length ? fromSidecar : zoneObjects(objects));
-    let startRect = null;
-    for (const layer of objects) {
-      for (const obj of layer.objects || []) {
-        if (!obj || String(obj.name || "").toLowerCase() !== "spawn") continue;
-        startRect = {
-          x: Math.round(Number(obj.x) || 0),
-          y: Math.round(Number(obj.y) || 0),
-          w: Math.round(Number(obj.width) || 0),
-          h: Math.round(Number(obj.height) || 0)
-        };
-        break;
-      }
-      if (startRect) break;
-    }
+    const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
+    const zones2 = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
+    const startRect = await spawnObject(objects) || await startLayerRect(tiles, width, height, tw, th) || (wam ? wamStart(wam) : null);
     const images = /* @__PURE__ */ new Map();
     const image = async (path) => {
       const src = path.startsWith("/") ? path : base + path.replace(/^\.\//, "");
@@ -4059,7 +4159,7 @@
       for (const tile of set && Array.isArray(set.tiles) && set.tiles || []) {
         if (!tile) continue;
         const props = Array.isArray(tile.properties) ? tile.properties : [];
-        const hit = tile.class === "collides" || props.some((p) => p && p.name === "collides" && (p.value === true || p.value === "true"));
+        const hit = tile.class === "collides" || tile.tileclass === "collides" || props.some((p) => p && p.name === "collides" && (p.value === true || p.value === "true"));
         if (hit) flags.add(firstgid + Math.floor(Number(tile.id) || 0));
       }
     }
@@ -9986,6 +10086,26 @@
     const world = document.getElementById("world-view");
     const worldOn = !!world && !world.hidden;
     main.hidden = bigs.length === 0 || worldOn;
+    layoutWorldRail(worldOn, bigs);
+  }
+  function layoutWorldRail(worldOn, bigs) {
+    const rail = document.getElementById("world-rail");
+    const main = $("stage-main");
+    if (!rail || !main) return;
+    const want = [];
+    if (worldOn) {
+      for (const tile of bigs) {
+        if (tile.dataset.screen || tileHasPicture(tile)) want.push(tile);
+      }
+    }
+    const keep = new Set(want);
+    for (const tile of [...rail.children]) {
+      if (!keep.has(tile)) main.appendChild(tile);
+    }
+    for (const tile of want) if (tile.parentElement !== rail) rail.appendChild(tile);
+    rail.hidden = want.length === 0;
+    const count = String(want.length);
+    if (rail.dataset.count !== count) rail.dataset.count = count;
   }
   function wirePipDrag() {
     const box = $("self-pip");
@@ -10320,6 +10440,7 @@
     let pairId = null;
     const pairs = /* @__PURE__ */ new Map();
     const cands = /* @__PURE__ */ new Map();
+    let legacyPairId = null;
     try {
       report.forEach((r) => {
         if (r.type === "outbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
@@ -10340,6 +10461,8 @@
           }
         } else if (r.type === "transport" && r.selectedCandidatePairId) {
           pairId = r.selectedCandidatePairId;
+        } else if (r.type === "connection" && (r.selectedCandidatePairId || r.nominatedCandidatePairId)) {
+          legacyPairId = r.selectedCandidatePairId || r.nominatedCandidatePairId;
         } else if (r.type === "candidate-pair") {
           pairs.set(r.id, r);
         } else if (r.type === "local-candidate" || r.type === "remote-candidate") {
@@ -10348,7 +10471,7 @@
       });
     } catch {
     }
-    let pair = pairId ? pairs.get(pairId) : null;
+    let pair = pairId ? pairs.get(pairId) : legacyPairId ? pairs.get(legacyPairId) : null;
     if (!pair) {
       for (const p of pairs.values()) {
         if (p.selected || p.nominated) {

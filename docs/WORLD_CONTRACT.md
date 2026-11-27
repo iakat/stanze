@@ -278,6 +278,16 @@ so `map.json` is the default office and any other room needs
 fallback to the default: two rooms silently sharing one map is a privacy leak of
 position, not a convenience.
 
+The loader also reads a map saved as `.tmj`, and a room exported from the
+WorkAdventure editor as a `.wam` world. A `.wam` carries no tiles: it names a
+`mapUrl`, resolved beside the `.wam` file, and the `.tmj` it names is loaded
+exactly like any other map. Its `areas[]` become zones **in addition to** the
+object layers, and an area carrying a `start` property is the spawn for a map
+that has none. A `.wam` that leads to no map is skipped like a missing file.
+The next candidate after `<room>.json` is the `.tmj` an author saved, then a
+`.wam`, then the default office. The fixture `maps/wamtest.wam` +
+`maps/wamtest.tmj` proves the last one (`make wam`, room `wamtest`).
+
 **Served under `/world/`** via the existing `folderNames()` mechanism
 (`main.go:486`) plus one recursive loader, because `cmd/pack` walks all of
 `static/` and the browser only sees names `folderNames()` lists. `/world/` is

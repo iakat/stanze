@@ -6,7 +6,7 @@ NODE ?= /data/workspace/node/bin
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build client wasm selftest run test typecheck lint deps format readme readme-check smoke sealed check clean
+.PHONY: all build client wasm selftest run test typecheck lint deps format readme readme-check smoke sealed wam gate check clean
 
 all: build selftest
 
@@ -66,6 +66,11 @@ smoke:
 sealed:
 	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
 	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) OUTDIR=$(OUTDIR) $(NODE)/node tools/pq-browser-e2e.js
+
+# One browser, a room saved as a .wam world: the tmj it names is drawn.
+wam:
+	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
+	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) OUTDIR=$(OUTDIR) $(NODE)/node tools/wam-e2e.js
 
 # Two browsers, one room, the passphrase changed mid call.
 gate:

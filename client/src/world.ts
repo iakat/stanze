@@ -334,11 +334,81 @@ export function mapPath(room: string): string {
 // .json or .tmj depending on the file the author typed, and WorkAdventure's own
 // maps are .tmj; both are the same document. The .json comes first so the
 // shipped tree costs no extra request, and the .tmj is one 404 for a room that
-// has none. A room with neither is still no room.
+// has none. A room exported from the WorkAdventure editor is a .wam world
+// instead, so it is the last candidate: one more 404 for every room that has
+// neither. A room with none of them is still no room.
 function mapCandidates(room: string): string[] {
   const own = mapPath(room);
   const stem = own.replace(/\.json$/, '');
-  return own === DEFAULT_MAP ? [own] : [own, stem + '.tmj'];
+  return own === DEFAULT_MAP ? [own] : [own, stem + '.tmj', stem + '.wam'];
+}
+
+// isWam tells a WorkAdventure world from a Tiled map: a world names a mapUrl
+// and carries its areas, a map carries its layers and no mapUrl.
+function isWam(doc: any): boolean {
+  return !!doc && typeof doc === 'object' && typeof doc.mapUrl === 'string' && !Array.isArray(doc.layers);
+}
+
+// loadWam follows a .wam world to the map it names: the mapUrl is resolved
+// beside the .wam file, as WorkAdventure does, not beside /world/, and the .tmj
+// is then loaded like any other map. It answers null when the world leads to no
+// map, so a broken world is never a broken join: the caller tries its next
+// candidate and then the default office, as it does for a missing file.
+async function loadWam(path: string, doc: any, signal?: AbortSignal): Promise<any> {
+  const url = String(doc.mapUrl || '').trim();
+  if (!url) return null;
+  const rel = url.replace(/^\.\//, '');
+  const here = path.slice(0, path.lastIndexOf('/') + 1);
+  const map = await loadJSON(rel.startsWith('/') ? rel : here + rel, signal, true);
+  return map && typeof map === 'object' && Array.isArray(map.layers) ? map : null;
+}
+
+// areaRect is the rectangle of one .wam area, the way the editor saves it.
+function areaRect(area: any): { x: number; y: number; w: number; h: number } {
+  return {
+    x: Math.round(Number(area.x) || 0),
+    y: Math.round(Number(area.y) || 0),
+    w: Math.round(Number(area.width) || 0),
+    h: Math.round(Number(area.height) || 0),
+  };
+}
+
+// wamZones turns the areas of a .wam into the zone shape zones.ts reads: the
+// property names zoneObjects already takes, plus the two canonical WorkAdventure
+// ones whose meaning is not in doubt, silent true and a jitsiRoom. A property
+// with no equivalent here is ignored, as everywhere else.
+function wamZones(doc: any): any[] {
+  const out: any[] = [];
+  for (const area of Array.isArray(doc.areas) ? doc.areas : []) {
+    if (!area || typeof area !== 'object') continue;
+    const props: Record<string, any> = {};
+    for (const p of Array.isArray(area.properties) ? area.properties : []) if (p && p.name) props[p.name] = p.value;
+    let kind = String(props.kind || '');
+    if (!kind && (props.silent === true || props.silent === 'true')) kind = 'silent';
+    if (!kind && (props.jitsiRoom !== undefined || props.jitsiRoomProperty !== undefined)) kind = 'meeting';
+    const users = props.maxUsersInAreaPropertyData;
+    out.push({
+      id: area.id || area.name,
+      name: props.label || props.name || area.name || area.id,
+      kind,
+      proximity: props.proximity,
+      capacity:
+        props.maxUsers !== undefined ? props.maxUsers : props.capacity !== undefined ? props.capacity : users && users.maxUsers,
+      rects: [areaRect(area)],
+    });
+  }
+  return out;
+}
+
+// wamStart is the start area of a .wam, the rect spawn() draws in for a world
+// whose map has no spawn of its own.
+function wamStart(doc: any): { x: number; y: number; w: number; h: number } | null {
+  for (const area of Array.isArray(doc.areas) ? doc.areas : []) {
+    const props = area && Array.isArray(area.properties) ? area.properties : [];
+    if (!props.some((p) => p && p.name === 'start')) continue;
+    return areaRect(area);
+  }
+  return null;
 }
 
 // DEFAULT_MAP is the map of a room that ships none.
@@ -391,11 +461,26 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   const base = '/world/';
   const own = mapPath(room);
   let map: any = null;
+  // The .wam a room answered, when it answered one: its areas become zones and
+  // its start area may be the spawn.
+  let wam: any = null;
+  let mapPathUsed = own;
   for (const path of mapCandidates(room)) {
-    map = await loadJSON(path, signal, true);
-    if (map) break;
+    const doc = await loadJSON(path, signal, true);
+    if (!doc) continue;
+    // A world is followed to its map; a map is itself.
+    if (isWam(doc)) {
+      map = await loadWam(path, doc, signal);
+      if (!map) continue;
+      wam = doc;
+    } else map = doc;
+    mapPathUsed = path;
+    break;
   }
-  if (!map && own !== DEFAULT_MAP) map = await loadJSON(DEFAULT_MAP, signal);
+  if (!map && own !== DEFAULT_MAP) {
+    mapPathUsed = DEFAULT_MAP;
+    map = await loadJSON(DEFAULT_MAP, signal);
+  }
   if (!map || typeof map !== 'object') throw new Error('no map for ' + room);
   const width = Math.max(1, Math.floor(Number(map.width)) || 1);
   const height = Math.max(1, Math.floor(Number(map.height)) || 1);
@@ -412,20 +497,23 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // tileset, the layers then have no image to draw and the room comes up as a
   // black field the avatar walks on (the collision grid is built from layer
   // names, so walls still stop it). roomBase is the folder of the map file.
-  const roomBase = own.slice(0, own.lastIndexOf('/') + 1);
+  const roomBase = mapPathUsed.slice(0, mapPathUsed.lastIndexOf('/') + 1);
 
   // The sidecar is the authored zone list; the object layer of the map is the
-  // other legal source and comes second.
+  // other legal source and comes second, and the areas of a .wam come after it,
+  // so a world keeps both its object zones and its areas.
   const sidecar = await loadJSON(room === '' ? '' : base + 'maps/' + room + '.zones.json', signal, true);
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
-  const zones = zoneList(fromSidecar.length ? fromSidecar : zoneObjects(objects));
+  const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
+  const zones = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
   // The spawn, most specific first: the point object named spawn (this tree's
   // own authoring), then the WorkAdventure start layer, then a layer flagged
-  // startLayer. A map with none of them falls through to spawn()'s centre,
-  // unchanged.
+  // startLayer, then the start area of a .wam. A map with none of them falls
+  // through to spawn()'s centre, unchanged.
   const startRect =
     (await spawnObject(objects)) ||
-    (await startLayerRect(tiles, width, height, tw, th));
+    (await startLayerRect(tiles, width, height, tw, th)) ||
+    (wam ? wamStart(wam) : null);
 
   // Every image is loaded once, keyed by its path, so two tilesets that share
   // one sheet cost one request.

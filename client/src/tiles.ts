@@ -364,6 +364,38 @@ export function layoutStage() {
   const world = document.getElementById('world-view');
   const worldOn = !!world && !world.hidden;
   main.hidden = bigs.length === 0 || worldOn;
+  // The map is in front: the pictures that would take the large area go to the
+  // strip beside it instead of vanishing. The node is moved, not copied, so a
+  // guest keeps its stream and its controls across the switch.
+  layoutWorldRail(worldOn, bigs);
+}
+
+// layoutWorldRail keeps the small strip of pictures at one edge of the map. A
+// tile stays a tile: it is only moved, and the rail takes the tiles that hold a
+// picture in the stage. A voice tile without a picture, or a waiting guest, has
+// nothing to draw over the map, so it stays out. The strip is collapsed and
+// empty when the world is off, and the stage gets its tiles back untouched.
+function layoutWorldRail(worldOn: boolean, bigs: HTMLElement[]) {
+  const rail = document.getElementById('world-rail');
+  const main = $('stage-main');
+  if (!rail || !main) return;
+  const want: HTMLElement[] = [];
+  if (worldOn) {
+    for (const tile of bigs) {
+      // A screen tile and a camera tile both belong in the strip; a voice tile
+      // that only happens to be in the stage does not.
+      if (tile.dataset.screen || tileHasPicture(tile)) want.push(tile);
+    }
+  }
+  const keep = new Set(want);
+  // A tile that leaves the strip goes back to the stage, never to nowhere.
+  for (const tile of [...rail.children] as HTMLElement[]) {
+    if (!keep.has(tile)) main.appendChild(tile);
+  }
+  for (const tile of want) if (tile.parentElement !== rail) rail.appendChild(tile);
+  rail.hidden = want.length === 0;
+  const count = String(want.length);
+  if (rail.dataset.count !== count) rail.dataset.count = count;
 }
 
 // wirePipDrag lets the small preview follow the pointer and snap to the

@@ -120,6 +120,11 @@ async function peerStats(peer) {
   let pairId = null;
   const pairs = new Map();
   const cands = new Map();
+  // The earlier shape of the report: a connection entry carries the pair it
+  // chose, under its own name, and a browser that still writes it has no
+  // transport entry to read. Both names are read so the route row is never
+  // blank on a working call.
+  let legacyPairId = null;
   try {
     report.forEach((r) => {
       if (r.type === 'outbound-rtp' && (r.kind === 'audio' || r.kind === 'video')) {
@@ -144,6 +149,8 @@ async function peerStats(peer) {
         }
       } else if (r.type === 'transport' && r.selectedCandidatePairId) {
         pairId = r.selectedCandidatePairId;
+      } else if (r.type === 'connection' && (r.selectedCandidatePairId || r.nominatedCandidatePairId)) {
+        legacyPairId = r.selectedCandidatePairId || r.nominatedCandidatePairId;
       } else if (r.type === 'candidate-pair') {
         pairs.set(r.id, r);
       } else if (r.type === 'local-candidate' || r.type === 'remote-candidate') {
@@ -154,7 +161,7 @@ async function peerStats(peer) {
     // A report can change under the loop; the next tick reads a fresh one.
   }
 
-  let pair = pairId ? pairs.get(pairId) : null;
+  let pair = pairId ? pairs.get(pairId) : legacyPairId ? pairs.get(legacyPairId) : null;
   if (!pair) {
     for (const p of pairs.values()) {
       if (p.selected || p.nominated) {

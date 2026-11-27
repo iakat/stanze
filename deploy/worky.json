@@ -1,0 +1,115 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "worky",
+    "namespace": "ocbot2",
+    "labels": {
+      "app": "worky"
+    }
+  },
+  "spec": {
+    "replicas": 1,
+    "selector": {
+      "matchLabels": {
+        "app": "worky"
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    },
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "worky"
+        }
+      },
+      "spec": {
+        "hostNetwork": true,
+        "dnsPolicy": "ClusterFirstWithHostNet",
+        "enableServiceLinks": false,
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "name": "worky",
+            "image": "alpine:3.20",
+            "imagePullPolicy": "IfNotPresent",
+            "command": [
+              "/bin/sh",
+              "-c"
+            ],
+            "args": [
+              "install -m 0755 /files/stanze-server /tmp/stanze && exec /tmp/stanze -listen 0.0.0.0:8090 -behind-proxy -allowed-origin https://worky.ch-test.katia.sh -turn-public-ip 152.53.49.131 -turn-port 3479 -turn-min-port 49310 -turn-max-port 49410"
+            ],
+            "env": [
+              {
+                "name": "TURN_SECRET",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "name": "worky-env",
+                    "key": "TURN_SECRET"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "name": "http",
+                "containerPort": 8090,
+                "protocol": "TCP"
+              }
+            ],
+            "resources": {
+              "requests": {
+                "cpu": "50m",
+                "memory": "64Mi"
+              },
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              }
+            },
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 65534,
+              "runAsGroup": 65534,
+              "allowPrivilegeEscalation": false,
+              "readOnlyRootFilesystem": true,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "files",
+                "mountPath": "/files",
+                "readOnly": true
+              },
+              {
+                "name": "tmp",
+                "mountPath": "/tmp"
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "files",
+            "hostPath": {
+              "path": "/srv/ocbot-files/workyworky",
+              "type": "Directory"
+            }
+          },
+          {
+            "name": "tmp",
+            "emptyDir": {
+              "sizeLimit": "32Mi"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
