@@ -152,6 +152,45 @@ func TestRoomBudgetClosesTheFlooder(t *testing.T) {
 	}
 }
 
+// The relay budget belongs to the room, not to each peer: a caller with eight
+// sockets does not get eight times the room's allowance.
+func TestBudgetIsTheRoomsNotThePeers(t *testing.T) {
+	cfg := &Config{MaxPeers: 8, MaxRooms: 8}
+	srv := newServer(cfg, newHub(cfg), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	hub := srv.hub
+	peers := make([]*Peer, 0, 8)
+	for i := 0; i < 8; i++ {
+		p := newPeer()
+		p.id = "p" + string(rune('a'+i))
+		if _, err := hub.join("budget-room", p); err != nil {
+			t.Fatalf("join %d: %v", i, err)
+		}
+		peers = append(peers, p)
+	}
+	// Drain the whole room allowance through the first socket.
+	size := 64
+	spent := 0
+	for srv.spend(peers[0], size) {
+		spent++
+		if spent > 10000 {
+			t.Fatal("the room bucket never emptied")
+		}
+	}
+	// A second guest of the same room shares that bucket, so it is empty too.
+	if srv.spend(peers[1], size) {
+		t.Fatal("a second peer of the same room had its own bucket")
+	}
+	// A peer of another room is unaffected.
+	other := newPeer()
+	other.id = "other"
+	if _, err := hub.join("another-room", other); err != nil {
+		t.Fatal(err)
+	}
+	if !srv.spend(other, size) {
+		t.Fatal("one room's flood took another room's allowance")
+	}
+}
+
 // A slow receiver is not closed by its sender's burst: the frame is dropped
 // for it, so the guest that cannot keep up stays in the call.
 func TestFullQueueDropsForTheReceiver(t *testing.T) {
