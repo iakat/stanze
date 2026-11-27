@@ -8,8 +8,8 @@
 
 import { ROOM_RE } from './config.js';
 import { load, store } from './prefs.js';
-import { Zone, ZoneGrid, ZONE_CLASS, zoneList } from './zones.js';
-import { peerName } from './sealed.js';
+import * as zonesMod from './zones.js';
+import { Zone, ZONE_CLASS, zoneList } from './zones.js';
 
 // The geometry of the shipped art, as frozen in docs/WORLD_CONTRACT.md §3: the
 // sheet on disk wins over any report written about it.
@@ -494,8 +494,15 @@ function wamStart(doc: any): { x: number; y: number; w: number; h: number } | nu
   return null;
 }
 
-// DEFAULT_MAP is the map of a room that ships none.
-const DEFAULT_MAP = '/world/map.json';
+// DEFAULT_MAP is the map of a room that ships none. It is the WorkAdventure
+// office, the same file the room of that name opens: one world for every room
+// that authored nothing, which is what a WorkAdventure deployment serves. The
+// hand made 24x16 starter map that used to be the default is gone from the
+// route: its art read as cut off plants and stray diagonal tiles at this zoom,
+// and two rooms on one map leak nothing (a map is geometry, no guest, no
+// position), so sharing the office costs nothing and looks like the room the
+// map was drawn for.
+const DEFAULT_MAP = '/world/maps/office.tmj';
 
 // atlasFrames reads the shipped atlas.json: a named rectangle per tile, which
 // is how a map whose gids are named cells is drawn. The file the assets ship
@@ -587,9 +594,11 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // so a world keeps both its object zones and its areas. A map of this tree's
   // own kind, a .wam, or the default office all carry theirs in the map, and a
   // request for a sidecar that cannot exist logs a 404 on every join; only a
-  // room map asked for as <room>.json may have one beside it.
+  // room map asked for as <room>.json may have one beside it. The test is the
+  // map that was actually used, not the name the room asked for: a room on the
+  // default office has no sidecar of its own either.
   const sidecarPath = own.replace(/\.\w+$/, '') + '.zones.json';
-  const sidecar = own !== DEFAULT_MAP && !OWN_MAPS.test(room) ? await loadJSON(sidecarPath, signal, true) : null;
+  const sidecar = mapPathUsed !== DEFAULT_MAP && !OWN_MAPS.test(room) ? await loadJSON(sidecarPath, signal, true) : null;
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
   const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
   const zones = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
@@ -835,7 +844,7 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     }
   }
 
-  const grid = new ZoneGrid(zones);
+  const grid = zoneGrid(zones);
   return {
     room,
     widthPx: px,
@@ -859,6 +868,14 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     images,
     above,
   };
+}
+
+// zoneGrid is the point lookup of the zones. It is reached through the
+// namespace and not as a named import, so a browser test can import loadWorld
+// and the view alone: esbuild then drops zones.ts, which reads localStorage at
+// load time. The annotation is the import type, so no value name is in scope.
+function zoneGrid(zones: Zone[]): import('./zones.js').ZoneGrid {
+  return new zonesMod.ZoneGrid(zones);
 }
 
 // bodyBlocked tests the corners of an avatar's footer against the grid, so a
@@ -1367,7 +1384,7 @@ export class WorldView {
     ctx.filter = 'none';
     // The name is drawn in map pixels, so it scales with the avatar and never
     // blurs differently from it.
-    const label = peerName(one);
+    const label = String(one.name || '').trim() || String(one.id || '').slice(0, 6);
     ctx.font = '8px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';

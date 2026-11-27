@@ -3979,7 +3979,7 @@
     }
     return null;
   }
-  var DEFAULT_MAP = "/world/map.json";
+  var DEFAULT_MAP = "/world/maps/office.tmj";
   async function atlasFrames(signal) {
     const raw = await loadJSON("/world/atlas.json", signal, true);
     if (!raw || typeof raw !== "object" || !raw.image) return null;
@@ -4036,7 +4036,7 @@
     walkLayers(Array.isArray(map.layers) ? map.layers : [], tiles, objects);
     const roomBase = mapPathUsed.slice(0, mapPathUsed.lastIndexOf("/") + 1);
     const sidecarPath = own.replace(/\.\w+$/, "") + ".zones.json";
-    const sidecar = own !== DEFAULT_MAP && !OWN_MAPS.test(room) ? await loadJSON(sidecarPath, signal, true) : null;
+    const sidecar = mapPathUsed !== DEFAULT_MAP && !OWN_MAPS.test(room) ? await loadJSON(sidecarPath, signal, true) : null;
     const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
     const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
     const zones2 = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
@@ -4214,7 +4214,7 @@
         };
       }
     }
-    const grid = new ZoneGrid(zones2);
+    const grid = zoneGrid(zones2);
     return {
       room,
       widthPx: px,
@@ -4238,6 +4238,9 @@
       images,
       above
     };
+  }
+  function zoneGrid(zones2) {
+    return new ZoneGrid(zones2);
   }
   function bodyBlocked(blocked, width, height, tileW, tileH, x, y) {
     const left = x - BODY_W / 2;
@@ -4636,7 +4639,7 @@
       }
       ctx.drawImage(sheet.image, col * sheet.cellW, row * sheet.cellH, sheet.cellW, sheet.cellH, dx, dy, sheet.cellW, sheet.cellH);
       ctx.filter = "none";
-      const label = peerName(one);
+      const label = String(one.name || "").trim() || String(one.id || "").slice(0, 6);
       ctx.font = "8px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "bottom";
