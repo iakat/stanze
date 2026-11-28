@@ -84,7 +84,7 @@ all live behind it).
 | Megaphone: one guest speaks to the whole room | **missing** | a deliberate decision so far (`zones.ts` header says so). The pricing page sells it as a capability, and a speaker zone is how WA runs talks |
 | Podium + audience: speaker seen and heard, audience listen-only | **missing** | row 33. Follows from megaphone |
 | Raise hand, ordered queue, host gives the floor | partial | a hand bit exists; no queue order, no floor grant (`host.ts` `hand-e2e.js`) |
-| Whisper / private side conversation | **missing** | not a WA feature either; noted so it is not mistaken for a gap |
+| Whisper / private side conversation | shipped, not a WA gap | WA has no whisper, so no ported map can break on it: this row is **out of scope for parity** and is not counted as a missing feature. stanze ships one anyway, as a side conversation over the sealed pair channel (`chat.ts` `sideOpen`, `tools/whisper-e2e.js`); it is text only and never routes audio, because `judge` in `proximity.ts` stays the only decider of who is heard |
 | Multi-party video beyond a small room | not ported | WA's own mesh is similar; both lean on a group size. `maxPeers` 8 |
 | Live streaming (RTMP out) | **missing** | Business tier only in WA |
 

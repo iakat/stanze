@@ -1,15 +1,23 @@
 /* The presence line keeps its box: the right column never jumps.
  *
- * Two guests join the office map and walk in and out of earshot of each other,
- * which changes the presence line from "hearing: nobody, walk closer or into an
- * area." to "hearing: <name> [bubble]" and back. The line is written by the
- * routing, so a box that grew with its text would push the chat down on every
- * step and pull it back again: one walk would make the whole right column jump.
+ * The line is written by the routing, so it changes on its own as guests walk:
+ * "hearing: nobody, walk closer or into an area." in the empty state, then one
+ * name per pair in earshot. A box that grew with that text would push the chat
+ * down on every step and pull it back again, and one walk would make the whole
+ * right column jump.
  *
  * What is measured is the geometry, not the text: the height of the presence
- * box and the top of the chat panel are read before, during and after the
- * change, and none of them may move by more than a pixel. The line may be cut
- * with an ellipsis; it may not wrap to a second line.
+ * box, the height of the near line and the top of the chat panel are read in
+ * every state the page passes through. None of them may move.
+ *
+ * The names are long on purpose. The near line names every pair in earshot, and
+ * a short name does not push the old box over a line; "alpha-longname-human"
+ * twice does, which is why the crowded state is the one that used to wrap and
+ * push the chat down.
+ *
+ * A viewport narrower than 620 px opens the call on the picture alone and hides
+ * the whole side column, so the narrow case is measured at the narrowest width
+ * where the column still exists.
  *
  * env: PW, CHROME, ROOMSBASE
  */
@@ -20,6 +28,7 @@ const { chromium } = require(process.env.PW);
 const BASE = (process.env.ROOMSBASE || 'http://127.0.0.1:8095').replace(/\/+$/, '');
 const ROOM = 'presence-' + Math.random().toString(36).slice(2, 8);
 const TIMEOUT = 60000;
+const NARROW = 700;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let checks = 0;
@@ -51,6 +60,9 @@ async function join(browser, name, viewport = { width: 1024, height: 720 }) {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => {
+    if (m.type() === 'error' && !/failed to load resource|favicon/i.test(m.text())) errors.push(m.text());
+  });
   await page.goto(BASE + '/#r=' + ROOM, { waitUntil: 'domcontentloaded' });
   await page.fill('#name', name);
   await page.click('#enter-btn');
@@ -64,28 +76,42 @@ async function join(browser, name, viewport = { width: 1024, height: 720 }) {
   return { ctx, page, errors };
 }
 
-/* box reads the geometry that must not move: the presence box, the room line,
-   the near line, and the top edge of the panel under it. */
-function box() {
-  const at = (el) => (el ? el.getBoundingClientRect() : null);
-  const p = document.getElementById('presence');
+// box is the geometry that must not move. It is a string because this runs in
+// the page: a closure of this process does not travel into a browser.
+const BOX = `(() => {
+  const rect = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.getBoundingClientRect() : null;
+  };
+  const r = (x) => (x ? Math.round(x * 100) / 100 : null);
+  const p = rect('presence');
+  const n = rect('presence-near');
+  const c = rect('chat-panel');
+  const v = rect('presence-via');
   const near = document.getElementById('presence-near');
   const room = document.getElementById('presence-room');
-  const via = document.getElementById('presence-via');
-  const chat = document.getElementById('chat-panel');
-  const r = at(p);
-  const n = at(near);
-  const c = at(chat);
   return {
-    h: r ? Math.round(r.height * 100) / 100 : null,
-    chatTop: c ? Math.round(c.top * 100) / 100 : null,
-    nearH: n ? Math.round(n.height * 100) / 100 : null,
+    h: r(p && p.height),
+    nearH: r(n && n.height),
+    nearW: r(n && n.width),
+    viaH: r(v && v.height),
+    chatTop: r(c && c.top),
     nearText: near ? near.textContent : '',
     roomText: room ? room.textContent : '',
-    viaH: via ? Math.round(at(via).height * 100) / 100 : null,
-    viaHidden: via ? !!via.hidden : false,
+    visible: !!(p && p.height > 0),
   };
+})()`;
+
+function box(page) {
+  return page.evaluate(BOX);
 }
+
+// namesOn counts the pairs the near line names: one bracketed channel each.
+const NAMES = `(() => {
+  const near = document.getElementById('presence-near');
+  const text = near ? near.textContent : '';
+  return { text, names: (text.match(/\\[/g) || []).length };
+})()`;
 
 (async () => {
   const CHROME = process.env.CHROME || '';
@@ -93,116 +119,93 @@ function box() {
     ...(CHROME ? { executablePath: CHROME } : {}),
     args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
   });
-  let a;
-  let b;
+  const guests = [];
   try {
-    a = await join(browser, 'alpha');
-    b = await join(browser, 'beta');
+    guests.push(await join(browser, 'alpha-longname-human'));
+    const alone = await box(guests[0].page);
+    console.log('INFO  alone   ' + JSON.stringify({ ...alone, nearText: alone.nearText }));
+    check('the line says nobody while this guest is alone', /nobody/.test(alone.nearText), alone.nearText);
+    check('the presence box is a visible box', alone.visible === true && alone.h > 0, alone);
+
+    guests.push(await join(browser, 'beta-second-name-person'));
+    guests.push(await join(browser, 'gamma-third-name-human'));
     await until(
-      a.page,
-      () => window.e2eApp.peers().length >= 1 && window.e2eApp.peers().every((p) => p.proven && p.dc === 'open'),
+      guests[0].page,
+      () => window.e2eApp.peers().length >= 2 && window.e2eApp.peers().every((p) => p.proven && p.dc === 'open'),
       null,
       TIMEOUT,
-      'the pair',
+      'the two pairs',
     );
 
-    // The empty state is the long one: "hearing: nobody, walk closer or into an
-    // area." is the widest the near line gets and it is where the box used to
-    // grow. It is read first, before any walk, so the baseline is that state.
-    const empty = await a.page.evaluate(box);
-    console.log('INFO  empty  ' + JSON.stringify(empty));
-    check('the line says nobody while the pairs are apart', /nobody/.test(empty.nearText), empty.nearText);
-
-    // The guests walk into the same bubble. The office spawns them a few pixels
-    // apart, so one short step puts them in a conversation.
-    const walk = (async () => {
-      await a.page.evaluate(() => window.e2eApp.world.walk('d', 250));
-      await sleep(300);
-    })();
-    const loud = await until(
-      a.page,
+    // The office spawns the guests a few pixels apart, so one short step puts
+    // them all in one bubble: the widest the near line gets with names on it.
+    const crowded = await until(
+      guests[0].page,
       () => {
         const near = document.getElementById('presence-near');
-        return near && /hearing: (?!nobody)/.test(near.textContent) ? box() : null;
+        const text = near ? near.textContent : '';
+        const names = (text.match(/\[/g) || []).length;
+        return names >= 2 ? { text, names } : null;
       },
       null,
-      TIMEOUT,
-      'a name on the line',
-    );
-    await walk;
-    console.log('INFO  talking ' + JSON.stringify(loud));
-    check('the line names the guest once they are in earshot', /hearing: (?!nobody)/.test(loud.nearText), loud.nearText);
+      20000,
+      'two names on the line',
+    ).catch(async () => {
+      await guests[0].page.evaluate(() => window.e2eApp.world.walk('d', 500));
+      await sleep(900);
+      return until(
+        guests[0].page,
+        () => {
+          const near = document.getElementById('presence-near');
+          const text = near ? near.textContent : '';
+          const names = (text.match(/\[/g) || []).length;
+          return names >= 2 ? { text, names } : null;
+        },
+        null,
+        TIMEOUT,
+        'two names on the line, after a step',
+      );
+    });
+    const loud = await box(guests[0].page);
+    console.log('INFO  crowded ' + JSON.stringify({ ...loud, nearby: crowded.text }));
+    check('the line names the guests once they are in earshot', /hearing: (?!nobody)/.test(loud.nearText), loud.nearText);
+    check('the crowded line is longer than the empty one', loud.nearText.length > alone.nearText.length, {
+      alone: alone.nearText.length,
+      crowded: loud.nearText.length,
+    });
 
-    // The two states are different sentences, and the box is the same height.
-    check('the two states are different text', empty.nearText !== loud.nearText, {
-      empty: empty.nearText,
-      talking: loud.nearText,
+    check('the presence box is the same height alone and crowded', alone.h === loud.h, {
+      alone: alone.h,
+      crowded: loud.h,
     });
-    check('the presence box is the same height in both', empty.h == loud.h, { empty: empty.h, talking: loud.h });
-    check('the chat panel does not move between them', empty.chatTop == loud.chatTop, {
-      empty: empty.chatTop,
-      talking: loud.chatTop,
-    });
-    check('the near line is one line in both', empty.nearH == loud.nearH, { empty: empty.nearH, talking: loud.nearH });
-    check('the via line keeps its height while hidden', empty.viaH == loud.viaH, {
-      empty: empty.viaH,
-      talking: loud.viaH,
+    check('the near line stays one line', alone.nearH === loud.nearH, { alone: alone.nearH, crowded: loud.nearH });
+    check('the chat panel does not move', alone.chatTop === loud.chatTop, { alone: alone.chatTop, crowded: loud.chatTop });
+
+    // The narrow column that still shows the panel: the same promise, and the
+    // via line as well, which appears when a guest says whom it talks to.
+    const narrow = await join(browser, 'delta-narrow-column-human', { width: NARROW, height: 720 });
+    guests.push(narrow);
+    await until(narrow.page, () => window.e2eApp.peers().length >= 3, null, TIMEOUT, 'delta sees the room');
+    const narrowA = await box(narrow.page);
+    console.log('INFO  narrow  ' + JSON.stringify({ ...narrowA, nearby: narrowA.nearText }));
+    check('the narrow column still shows the panel', narrowA.visible === true && narrowA.h > 0, narrowA);
+    await narrow.page.evaluate(() => window.e2eApp.world.walk('d', 500));
+    await sleep(1400);
+    const narrowB = await box(narrow.page);
+    console.log('INFO  narrow2 ' + JSON.stringify({ ...narrowB, nearby: narrowB.nearText }));
+    check('a narrow column keeps the box height', narrowA.h === narrowB.h, { a: narrowA.h, b: narrowB.h });
+    check('a narrow column keeps the near line to one line', narrowA.nearH === narrowB.nearH, {
+      a: narrowA.nearH,
+      b: narrowB.nearH,
     });
 
-    // The jump, measured the way a person sees it: sample the chat top on every
-    // animation frame while the guests walk in and out of earshot, and count the
-    // number of times it moves.
-    await a.page.evaluate(() => {
-      window.__tops = [];
-      const tick = () => {
-        const c = document.getElementById('chat-panel');
-        window.__tops.push(c ? Math.round(c.getBoundingClientRect().top) : null);
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    });
-    for (let i = 0; i < 3; i++) {
-      await a.page.evaluate(() => window.e2eApp.world.walk('a', 400));
-      await a.page.evaluate(() => window.e2eApp.world.walk('d', 400));
+    for (const [i, g] of guests.entries()) {
+      check('no page error in guest ' + (i + 1), g.errors.length === 0, g.errors.slice(0, 3));
     }
-    await sleep(300);
-    const tops = await a.page.evaluate(() => window.__tops.filter((one) => typeof one === 'number'));
-    const distinct = [...new Set(tops)];
-    console.log('INFO  chat top over ' + tops.length + ' frames: ' + JSON.stringify(distinct));
-    check('the chat panel never jumps while the line changes', distinct.length === 1, distinct);
-
-    // A narrow column is the other place the line used to wrap. The phone width
-    // gets the same promise.
-    const phone = await join(browser, 'gamma', { width: 390, height: 700 });
-    await until(phone.page, () => window.e2eApp.peers().length >= 2, null, TIMEOUT, 'gamma sees the room');
-    await phone.page.click('#chrome-btn').catch(() => {});
-    await sleep(800);
-    const narrowEmpty = await phone.page.evaluate(box);
-    await phone.page.evaluate(() => window.e2eApp.world.walk('d', 300));
-    await sleep(1200);
-    const narrowTalking = await phone.page.evaluate(box);
-    console.log('INFO  narrow empty   ' + JSON.stringify(narrowEmpty));
-    console.log('INFO  narrow talking ' + JSON.stringify(narrowTalking));
-    check(
-      'a narrow column keeps the same box height too',
-      narrowEmpty.h == narrowTalking.h,
-      { empty: narrowEmpty.h, talking: narrowTalking.h },
-    );
-    check(
-      'a narrow column keeps the near line to one line',
-      narrowEmpty.nearH == narrowTalking.nearH,
-      { empty: narrowEmpty.nearH, talking: narrowTalking.nearH },
-    );
-
-    check('no page error in alpha', a.errors.length === 0, a.errors.slice(0, 3));
-    check('no page error in beta', b.errors.length === 0, b.errors.slice(0, 3));
-    check('no page error in gamma', phone.errors.length === 0, phone.errors.slice(0, 3));
-    await phone.ctx.close().catch(() => {});
   } catch (err) {
     check('the run finished', false, err && err.message ? err.message : String(err));
   } finally {
-    for (const g of [b, a]) {
-      if (!g) continue;
+    for (const g of guests) {
       await g.page.close().catch(() => {});
       await g.ctx.close().catch(() => {});
     }

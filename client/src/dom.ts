@@ -37,6 +37,14 @@ export interface Elements {
   'chat-form': HTMLFormElement;
   'chat-text': HTMLInputElement;
   'chat-note': HTMLElement;
+  'side-open': HTMLButtonElement;
+  'side-panel': HTMLElement;
+  'side-log': HTMLElement;
+  'side-text': HTMLInputElement;
+  'side-form': HTMLFormElement;
+  'side-who': HTMLElement;
+  'side-empty': HTMLElement;
+  'side-close': HTMLButtonElement;
   'mic-btn': HTMLButtonElement;
   'chat-panel': HTMLElement;
   'file-btn': HTMLButtonElement;

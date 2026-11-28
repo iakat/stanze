@@ -104,6 +104,54 @@ row order is a *separate* mapping, through `SHEET_ROW` in section 3.
 0x40 locked-bubble  0x80 blocked(local, never sent)
 ```
 
+### The `side` frame (whisper: a private side conversation)
+
+A whisper is **not** a map feature and has **no map or zone field**. Nothing in
+this contract, in `map.json` or in a `.wam` can turn one on, so a map that never
+uses it behaves exactly as before and there is no authoring shape to get wrong.
+The gap row it came from (`WA_GAP.md` §2.3) is a non-gap: WorkAdventure has no
+whisper, so no ported map can break on it.
+
+It is a second use of the **pair channel that already exists**, not a second
+transport:
+
+```
+{ k: 'side', o: 'open'|'say'|'leave', w: '<owner peer id>', m?: string[], x?: string, ts?: number }
+```
+
+- Sealed with the pair's chat key and `chatAAD`, inside the same `app` envelope
+  and the same strict counter as every other sealed frame. The relay sees one
+  more opaque blob per member per line and learns nothing: not the text, not the
+  membership, not that a whisper is open at all.
+- `w` names the owner of the conversation. Every frame carries it, and a
+  receiver acts only on the conversation it is in, so a member that was removed
+  cannot keep talking into a panel that no longer exists.
+- `m` is the membership, sent by the owner in one `open` frame per member. Both
+  ends apply the same bounds (`proximity.ts` `sideClean`, `sideSet`): legal
+  12-hex peer id, no self, no repeat, at most **`SIDE_MAX` = 4**, sorted so two
+  pages told in a different order hold the same list.
+- `x` is text, capped at 500 characters on both ends, and goes **only to the
+  members** — `toSealed` is never called for a side frame.
+
+**What a whisper may not do.** It never routes audio or video, never changes a
+guest's conversation set and never touches `judge`. `judge` (`proximity.ts:41`)
+is decided by place alone so a page that lies in a frame cannot make itself
+heard; a whisper is decided by consent, which is a different question asked of a
+different set of people. A whisper is therefore text only, and it cannot reach a
+guest the map does not already put you beside — the pair it would need does not
+exist.
+
+**Lifecycle.** One whisper per page at a time (the panel is one box). The owner
+leaving or closing ends it for everybody; any other member leaving is the list
+minus that name, and it is over when one member is left. A call ending clears it
+with the room log (`chat.ts` `chatOnClear`).
+
+**Degrading cleanly.** The panel (`#side-panel`) is `hidden` and the CSS gives it
+no height until a conversation is on, so a room that never opens one is laid out
+and painted exactly as before. A page from an older build receives `k: 'side'`
+and drops it at the `default` arm of `sealedDispatchApp`, which is already the
+behaviour for any kind it does not know.
+
 ---
 
 ## 2. Zone object schema (Tiled object layer -> runtime)

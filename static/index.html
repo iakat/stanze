@@ -323,7 +323,9 @@
       </section>
 
       <aside class="chat" id="chat-panel">
-        <div class="chat-head">chat <span id="chat-note" class="muted" hidden>(sealed, no server history)</span></div>
+        <div class="chat-head">chat <span id="chat-note" class="muted" hidden>(sealed, no server history)</span>
+          <button id="side-open" type="button" class="side-open" title="a private side conversation with a guest" aria-pressed="false">whisper</button>
+        </div>
         <ol id="chat-log" class="chat-log"></ol>
         <p id="chat-empty" class="chat-empty">no messages</p>
         <form id="chat-form" class="chat-form" autocomplete="off">
@@ -332,6 +334,21 @@
           <button type="submit">send</button>
         </form>
         <input id="file-input" type="file" multiple hidden>
+      </aside>
+
+      <!-- A whisper is a side conversation over the sealed pair channel: a few
+           guests, text only, and nothing the room log holds. The box is hidden
+           until one is open, so a room that never uses it looks unchanged. -->
+      <aside class="chat side-chat" id="side-panel" aria-label="whisper, a private side conversation" hidden>
+        <div class="chat-head">whisper <span id="side-who" class="muted"></span>
+          <button id="side-close" type="button" class="side-close" title="leave this whisper" aria-label="leave this whisper">×</button>
+        </div>
+        <ol id="side-log" class="chat-log"></ol>
+        <p id="side-empty" class="chat-empty"></p>
+        <form id="side-form" class="chat-form" autocomplete="off">
+          <input id="side-text" maxlength="500" placeholder="only they hear this" spellcheck="false" autocomplete="off">
+          <button type="submit">send</button>
+        </form>
       </aside>
       </div>
     </div>

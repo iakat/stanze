@@ -19,25 +19,25 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 798 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
-| [src/state.ts](src/state.ts) | 215 | The client state, one object per page. |
+| [src/boot.ts](src/boot.ts) | 833 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/state.ts](src/state.ts) | 217 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 77 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
 | [src/trust.ts](src/trust.ts) | 37 | Script addresses under Trusted Types: the worker and worklet URLs. |
 | [src/util.ts](src/util.ts) | 107 | Small helpers that touch nothing but their arguments and storage. |
 | [src/buildtag.ts](src/buildtag.ts) | 18 | The build label in the corner, read from `/version.txt`. |
-| [src/dom.ts](src/dom.ts) | 104 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
+| [src/dom.ts](src/dom.ts) | 112 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
 | [src/globals.d.ts](src/globals.d.ts) | 20 | Optional globals the loader sets at run time: the wasm glue, the transcriber, the test hook. |
 
 ## Room, signalling and panels
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/room.ts](src/room.ts) | 351 | Create, join, wait, leave, and the lobby that drives them. |
+| [src/room.ts](src/room.ts) | 353 | Create, join, wait, leave, and the lobby that drives them. |
 | [src/signaling.ts](src/signaling.ts) | 212 | The websocket frames, both directions. |
 | [src/peers.ts](src/peers.ts) | 375 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
 | [src/gate.ts](src/gate.ts) | 832 | The room gate: the passphrase, the member list and the sealed claims. |
-| [src/host.ts](src/host.ts) | 255 | The host controls in the call panel: waiting room, let in, member menus. |
+| [src/host.ts](src/host.ts) | 260 | The host controls in the call panel: waiting room, let in, member menus. |
 | [src/lobby.ts](src/lobby.ts) | 122 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
 | [src/menu.ts](src/menu.ts) | 222 | The drop-down menu bar. |
 | [src/phone.ts](src/phone.ts) | 37 | The phone frame: the stylesheet folds the app frame away and a tap brings it back. |
@@ -58,7 +58,7 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/handshake.ts](src/handshake.ts) | 982 | The post-quantum handshake of a pair. |
+| [src/handshake.ts](src/handshake.ts) | 987 | The post-quantum handshake of a pair. |
 | [src/sealed.ts](src/sealed.ts) | 257 | Opaque payloads, the base64 and AAD helpers, and the sealed channel of a pair. |
 | [src/frame.ts](src/frame.ts) | 51 | The frame transform worker and its key install. |
 | [src/identity.ts](src/identity.ts) | 534 | The pinned identity of a peer and its fingerprint rows. |
@@ -75,11 +75,11 @@ module in `src` has no row yet.
 | [src/tiles.ts](src/tiles.ts) | 508 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
 | [src/world.ts](src/world.ts) | 1539 | The world: the Tiled map with its tilesets and avatars, the collision grid, the spawn, the walking avatar, the camera and the touch pad. |
 | [src/zones.ts](src/zones.ts) | 205 | The named rectangles of a map (meeting or silent), the cell cached hit test and the enter and leave of a walk. |
-| [src/proximity.ts](src/proximity.ts) | 100 | The talk rule of a pair: a meeting area, a shared area inside its bubble, a silent area, or the conversation bubble. |
-| [src/positions.ts](src/positions.ts) | 274 | Position frames that follow the walker (30 Hz moving, 1 Hz still) over the sealed files channel, and the lerp that draws them. |
-| [src/roomworld.ts](src/roomworld.ts) | 709 | Joining the world of a room, the position tick, the near pairs, the talks frame and the switch between the map and the call grid. |
-| [src/presence.ts](src/presence.ts) | 191 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
-| [src/chat.ts](src/chat.ts) | 117 | The room log and its links. |
+| [src/proximity.ts](src/proximity.ts) | 163 | The talk rule of a pair: a meeting area, a shared area inside its bubble, a silent area, or the conversation bubble. |
+| [src/positions.ts](src/positions.ts) | 324 | Position frames that follow the walker (30 Hz moving, 1 Hz still) over the sealed files channel, and the 1 euro filter that draws them. |
+| [src/roomworld.ts](src/roomworld.ts) | 719 | Joining the world of a room, the position tick, the near pairs, the talks frame and the switch between the map and the call grid. |
+| [src/presence.ts](src/presence.ts) | 196 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
+| [src/chat.ts](src/chat.ts) | 455 | The room log, its links, and the whisper: a private side conversation over the sealed pair channel. |
 | [src/board.ts](src/board.ts) | 82 | The cue board: eight one shot notification cues, a volume and a stop. |
 | [src/stats.ts](src/stats.ts) | 1043 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1289 | Local transcription, one language and many. |

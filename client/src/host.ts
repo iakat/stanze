@@ -12,6 +12,7 @@ import { paintHandQueue, sendState, setPeerNoise } from './audio.js';
 import { playSfx } from './sfx.js';
 import { updatePinCount } from './identity.js';
 import { banOf, banPeer, unbanPeer } from './bans.js';
+import { sideOn, sideOpen } from './chat.js';
 import { asrAnnounce } from './asr.js';
 import {
   admitAllHeld,
@@ -98,6 +99,10 @@ export function wireDots(host) {
     const noiseOn = !!(peer && peer.inNoise);
     const noiseEngine = peer ? peer.inEngine : '';
     const here = (name) => (noiseOn && noiseEngine === name ? ' (on)' : '');
+    // A whisper is opened on one guest from that guest's own menu, because a
+    // side conversation needs a name and the menu is where a person names one.
+    // The panel keeps the way out.
+    if (peer && !sideOn()) add('whisper to this guest', () => sideOpen([peer.id]));
     add('noise cancel: FastEnhancer' + here('fastenhancer'), () => {
       void setPeerNoise(peer, true, 'fastenhancer');
     });

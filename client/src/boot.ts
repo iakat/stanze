@@ -79,7 +79,17 @@ import { paintGate, setGate } from './handshake.js';
 import { pqSelfTest, preloadSealed } from './wasm.js';
 import { asrStats, initAsr } from './asr.js';
 import { initLobbyWindow } from './lobby.js';
-import { renameSelf, sendSealedChat, setWaitingRoom } from './gate.js';
+import { renameSelf, sealedSend, sendSealedChat, setWaitingRoom } from './gate.js';
+import {
+  sideLeave,
+  sideMembers,
+  sideOn,
+  sideOpen,
+  sideOwner,
+  sideSend,
+  sideSetSealer,
+  sideWire,
+} from './chat.js';
 import { runLab } from './lab.js';
 import { applyImmersive, phoneQuery, setChrome } from './phone.js';
 import { isWorld, worldAvatar, worldHook, worldToggle } from './roomworld.js';
@@ -164,6 +174,8 @@ win().e2eApp = {
     decryptFrames: state.decryptFrames,
     chatSent: state.chatSent,
     chatRecv: state.chatRecv,
+    sideSent: state.sideSent,
+    sideRecv: state.sideRecv,
     fileOffers: state.fileOffers,
     fileRecv: state.fileRecv,
     fileChunksSent: state.fileChunksSent,
@@ -181,6 +193,23 @@ win().e2eApp = {
   }),
   selfTest: pqSelfTest,
   lab: runLab,
+  // The whisper: what this page is in, what its panel holds, and the two
+  // actions a browser test drives. A person uses the menu and the panel.
+  side: () => ({
+    on: sideOn(),
+    owner: sideOwner(),
+    members: sideMembers(),
+    note: (document.getElementById('side-empty') || {}).textContent || '',
+    lines: [...document.querySelectorAll('#side-log li')].map((li) => li.textContent),
+    shown: !!(document.getElementById('side-panel') || {}).hidden === false,
+  }),
+  sideOpen: (ids: string[]) => sideOpen(ids),
+  sideSay: (text: string) => {
+    const box = document.getElementById('side-text') as HTMLInputElement | null;
+    if (box) box.value = text;
+    sideSend();
+  },
+  sideLeave,
   // The world of the room: the drawn map, the avatars, and a walk with the
   // same rule a key press follows.
   world: worldHook(),
@@ -363,6 +392,12 @@ function wireJoinCard() {
     event.preventDefault();
     sendSealedChat();
   });
+
+  // The whisper panel and the sealed send it writes through. The panel is wired
+  // once for the page; it shows itself only while a conversation is on, so a
+  // room that never opens one looks exactly as it did.
+  sideSetSealer((peer, obj) => sealedSend(peer, obj));
+  sideWire();
 
   // A file goes into the chat either way: the button opens the picker and a
   // drop on the chat panel does the same without the picker.

@@ -6,6 +6,14 @@
  company in it, and a silent area is no talk at all. Without a shared area it is
  the conversation bubble around the guest. Nothing else connects anybody:
  there is no room wide stream and no hidden subscription.
+
+ A side conversation (a whisper) is not part of this rule and must not be bent
+ into it. `judge` is decided by place alone, so a page that lies in a frame can
+ not make itself heard; a whisper is decided by consent, so it is a second and
+ narrower thing: text only, on the sealed pair channel that already exists, to
+ the guests that joined it. It never routes a frame of audio or video, so the
+ answer below stays the only decider of who hears whom. `SIDE_MAX` and
+ `sideSet` are the whole of what a whisper borrows from this file.
 */
 
 export type Point = { x: number; y: number };
@@ -97,4 +105,59 @@ export class Proximity {
   reason(id: string): string {
     return this.why.get(id) || 'far';
   }
+}
+
+// ------------------------------------------------------------ side conversation
+// A whisper is a guest plus the guests it invited, and nothing else. The bound
+// is small on purpose: a side conversation is a few people saying a sentence
+// each, not a second room, and every line costs one sealed frame per member on
+// the same pair channel the room already pays for.
+export const SIDE_MAX = 4;
+
+// sideClean keeps a list of peer ids to the ones a page may hold: legal ids, no
+// repeat, never more than SIDE_MAX, and never the given guest itself. It is what
+// an invite list is cleaned with, on the sending side: a guest cannot invite
+// itself, because it is already in the conversation by definition.
+export function sideClean(selfId: string, ids: unknown): string[] {
+  return sideIds(ids).filter((id) => id !== String(selfId || ''));
+}
+
+// sideIds is the same bounds without the self test. The membership a member
+// holds must contain itself, so the list the owner sends is read with this one:
+// the owner names every member, its own id included.
+export function sideIds(ids: unknown): string[] {
+  const out: string[] = [];
+  if (!Array.isArray(ids)) return out;
+  for (const one of ids) {
+    const id = String(one || '');
+    if (!/^[0-9a-f]{12}$/.test(id)) continue;
+    if (out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= SIDE_MAX) break;
+  }
+  return out;
+}
+
+// sideSet is the membership of one whisper as every member holds it: the guest
+// that opened it first, then the others, so two pages that were told the same
+// thing in a different order still agree on the whole list. The guest reading
+// this is one of the members and stays in the list: it is the list the owner
+// sent, bounded and put in one order, not the owner's view of everybody else.
+export function sideSet(selfId: string, ownerId: string, ids: unknown): string[] {
+  const owner = String(ownerId || '');
+  const rest = sideIds(ids).filter((id) => id !== owner);
+  return [owner, ...rest].slice(0, SIDE_MAX).sort();
+}
+
+// sideAlive answers whether a whisper still has a conversation in it: the guest
+// that owns it counts only while somebody else is still in it, because a
+// whisper of one is the guest talking to itself.
+export function sideAlive(selfId: string, members: string[], present: Set<string>): boolean {
+  const self = String(selfId || '');
+  let others = 0;
+  for (const id of members) {
+    if (id === self) continue;
+    if (present.has(id)) others++;
+  }
+  return others > 0;
 }

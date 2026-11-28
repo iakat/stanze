@@ -256,16 +256,19 @@ export function worldToggle() {
 const JUDGE_DELAY = 200;
 
 // ---------------------------------------------------------------- the loop
-// startLoop runs two clocks: the world tick at JUDGE_DELAY, which judges the
-// conversation and moves the remotes, and the position send, which runs on the
-// animation frame and whose length follows the walker. The view's own frame
-// loop draws on top of both.
+// startLoop runs three clocks on one animation frame. The position send goes out
+// at the walker's own cadence. The remotes are moved on every frame, because a
+// slide is measured in animation frames and a 5 Hz move would hold a 30 Hz send
+// down to five drawn steps a second: that is the hop the send was raised to
+// remove. The world tick at JUDGE_DELAY is the slow one and stays slow: it judges
+// the pairs, tests the zones and repaints the presence line.
 function startLoop() {
   stopLoop();
   const run = () => {
     if (!view || !walker || state.leaving) return;
     const now = performance.now();
     sendPos(now);
+    syncPeers();
     if (now - lastJudgeAt >= JUDGE_DELAY) {
       lastJudgeAt = now;
       step();
@@ -460,9 +463,9 @@ function step() {
     }
   }
   if (changed) view.paintNear(near);
-  // The remotes take the place they are drawn at this tick, so the picture and
-  // the rule never disagree.
-  syncPeers();
+  // The remotes are already where this tick judged them: syncPeers runs on the
+  // animation frame, so the picture and the rule never disagree for longer than
+  // one frame.
   const cams = new Map<string, boolean>();
   for (const peer of peers) cams.set(peer.id, peer.camOn !== false);
   view.marks(cams);
@@ -587,6 +590,13 @@ export function worldHook() {
     sheetOf: (id: string) =>
       view?.avatars.get(id) ? sheets.indexOf(view.avatars.get(id)!.sheet) : -1,
     mySheet: () => avatarIndex(),
+    // drawn is the place a remote avatar is painted at this frame, which is the
+    // slide and not the last frame received. The position rate is the rate this
+    // number changes at, so a browser test has to read it and not the samples.
+    drawn: (id: string) => {
+      const one = view?.avatars.get(id);
+      return one ? { x: Math.round(one.x * 100) / 100, y: Math.round(one.y * 100) / 100 } : null;
+    },
     map: () => {
       if (!view) return null;
       const world = view.world;

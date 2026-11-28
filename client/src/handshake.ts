@@ -9,7 +9,7 @@ import { paintVolume, storedVolume } from './volume.js';
 import { disableMic, preparePeer } from './devices.js';
 import { sealedSendState, setHand } from './audio.js';
 import { connectPeer, ensurePeer, onCandidate, onDescription } from './peers.js';
-import { addChatLine } from './chat.js';
+import { addChatLine, sideOnFrame } from './chat.js';
 import { leave } from './room.js';
 import { playSfx } from './sfx.js';
 import { fileDropPeer, fileOnMessage } from './files.js';
@@ -879,6 +879,11 @@ function sealedDispatchApp(peer, obj) {
     }
   } else if (obj.k === 'file') {
     fileOnMessage(peer, obj);
+  } else if (obj.k === 'side') {
+    // A whisper line is one sealed frame on this pair and nothing more: it is
+    // never rebroadcast, so a member of a side conversation is the only page
+    // that reads it. The bounds and the membership are checked in chat.ts.
+    sideOnFrame(peer, obj);
   }
 }
 

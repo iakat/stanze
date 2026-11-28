@@ -287,6 +287,10 @@
     decryptFrames: 0,
     chatSent: 0,
     chatRecv: 0,
+    sideSent: 0,
+    // whisper lines this guest sent
+    sideRecv: 0,
+    // whisper lines this guest received
     replayDrops: 0,
     // a sealed app or file frame out of order or replayed
     fileOffers: 0,
@@ -398,94 +402,6 @@
     } catch {
       return "";
     }
-  }
-
-  // src/chat.ts
-  var CHAT_MAX = 200;
-  function chatTime(ts = null) {
-    const d = ts ? new Date(ts) : /* @__PURE__ */ new Date();
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  }
-  var LINK_RE = /https?:\/\/[^\s<>"']+/gi;
-  function splitLink(raw) {
-    let url = raw;
-    let tail = "";
-    for (; ; ) {
-      const last = url[url.length - 1];
-      if (!last) break;
-      let cut = `.,;:!?'"`.includes(last);
-      if (!cut && (last === ")" || last === "]" || last === "}")) {
-        const open = { ")": "(", "]": "[", "}": "{" }[last];
-        cut = url.split(last).length > url.split(open).length;
-      }
-      if (!cut) break;
-      tail = last + tail;
-      url = url.slice(0, -1);
-    }
-    return { url, tail };
-  }
-  function safeLink(text) {
-    let u;
-    try {
-      u = new URL(text);
-    } catch {
-      return null;
-    }
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    if (!u.hostname || u.username || u.password) return null;
-    return u;
-  }
-  function linkify(text) {
-    const out = document.createDocumentFragment();
-    let at = 0;
-    for (const m of text.matchAll(LINK_RE)) {
-      const { url } = splitLink(m[0]);
-      const u = safeLink(url);
-      if (!u) continue;
-      if (m.index > at) out.appendChild(document.createTextNode(text.slice(at, m.index)));
-      const a = document.createElement("a");
-      a.textContent = url;
-      a.href = u.href;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer nofollow";
-      a.referrerPolicy = "no-referrer";
-      a.title = `opens ${u.href}`;
-      a.className = "chat-link";
-      out.appendChild(a);
-      at = m.index + url.length;
-    }
-    if (at < text.length) out.appendChild(document.createTextNode(text.slice(at)));
-    return out;
-  }
-  function chatEmpty(log) {
-    const empty = document.getElementById("chat-empty");
-    if (!empty) return;
-    empty.hidden = log.children.length > 0;
-  }
-  function addChatLine(name, text, ts) {
-    const log = $("chat-log");
-    if (!log) return;
-    const li = document.createElement("li");
-    const when = document.createElement("span");
-    when.className = "when";
-    when.textContent = chatTime(ts);
-    li.appendChild(when);
-    const who = document.createElement("span");
-    who.className = "who";
-    who.textContent = `${name || "guest"}:`;
-    li.appendChild(who);
-    li.appendChild(document.createTextNode(" "));
-    li.appendChild(linkify(String(text)));
-    log.appendChild(li);
-    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
-    log.scrollTop = log.scrollHeight;
-    chatEmpty(log);
-  }
-  function clearChat() {
-    const log = $("chat-log");
-    if (!log) return;
-    log.replaceChildren();
-    chatEmpty(log);
   }
 
   // src/audit.ts
@@ -2340,13 +2256,13 @@
           [fL, fL.x < cxe ? -1 : 1],
           [fR, fR.x > cxe ? 1 : -1]
         ];
-        eyes.forEach(([f, side], i) => {
+        eyes.forEach(([f, side2], i) => {
           const to = g.spot([cxe + (f.x - cxe) * sp, cye + (f.y - cye) * sp], 0, lift);
           moves.push({
             slot: "E" + i,
             src: box(f.x, f.y, ew, eh),
             dst: box(to[0], to[1], ew * es, eh * es),
-            skin: [side * 0.06, 0.62]
+            skin: [side2 * 0.06, 0.62]
           });
         });
       }
@@ -2558,10 +2474,10 @@
   function drawCat(ctx, g) {
     ctx.strokeStyle = "#20242c";
     ctx.lineWidth = Math.max(1.5, g.fw * 0.012);
-    for (const side of [-1, 1]) {
-      const a = g.spot(g.top, side * 0.42, -0.04);
-      const b = g.spot(g.top, side * 0.18, 0.02);
-      const t = g.spot(g.top, side * 0.38, 0.17);
+    for (const side2 of [-1, 1]) {
+      const a = g.spot(g.top, side2 * 0.42, -0.04);
+      const b = g.spot(g.top, side2 * 0.18, 0.02);
+      const t = g.spot(g.top, side2 * 0.38, 0.17);
       ctx.fillStyle = "#3a3f4b";
       ctx.beginPath();
       ctx.moveTo(a[0], a[1]);
@@ -2585,15 +2501,15 @@
   function drawDog(ctx, g) {
     ctx.strokeStyle = "#241a15";
     ctx.lineWidth = Math.max(1.5, g.fw * 0.012);
-    for (const side of [-1, 1]) {
-      const base = side < 0 ? g.templeL : g.templeR;
-      const a = g.spot(base, side * 0.04, 0.02);
-      const b = g.spot(base, -side * 0.04, -0.02);
-      const tip = g.spot(base, side * 0.16, -0.5);
-      const c1 = g.spot(base, side * 0.22, -0.1);
-      const c2 = g.spot(base, side * 0.24, -0.36);
-      const d2 = g.spot(base, side * 0.02, -0.38);
-      const d1 = g.spot(base, -side * 0.04, -0.12);
+    for (const side2 of [-1, 1]) {
+      const base = side2 < 0 ? g.templeL : g.templeR;
+      const a = g.spot(base, side2 * 0.04, 0.02);
+      const b = g.spot(base, -side2 * 0.04, -0.02);
+      const tip = g.spot(base, side2 * 0.16, -0.5);
+      const c1 = g.spot(base, side2 * 0.22, -0.1);
+      const c2 = g.spot(base, side2 * 0.24, -0.36);
+      const d2 = g.spot(base, side2 * 0.02, -0.38);
+      const d1 = g.spot(base, -side2 * 0.04, -0.12);
       ctx.fillStyle = "#4a352a";
       ctx.beginPath();
       ctx.moveTo(a[0], a[1]);
@@ -2602,9 +2518,9 @@
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      const i1 = g.spot(base, side * 0.1, -0.12);
-      const i2 = g.spot(base, side * 0.12, -0.34);
-      const i3 = g.spot(base, side * 0.2, -0.24);
+      const i1 = g.spot(base, side2 * 0.1, -0.12);
+      const i2 = g.spot(base, side2 * 0.12, -0.34);
+      const i3 = g.spot(base, side2 * 0.2, -0.24);
       ctx.strokeStyle = "rgba(255, 214, 194, 0.22)";
       ctx.beginPath();
       ctx.moveTo(i1[0], i1[1]);
@@ -2771,8 +2687,8 @@
     ctx.beginPath();
     ctx.ellipse(cx, cy + g.fh * 0.03, rx, ry, 0, 0, Math.PI * 2);
     ctx.fill();
-    for (const side of [-1, 1]) {
-      const bx = cx + side * g.fw * 0.26;
+    for (const side2 of [-1, 1]) {
+      const bx = cx + side2 * g.fw * 0.26;
       const by = cy + g.fh * 0.17;
       const bg = ctx.createRadialGradient(bx, by, 0, bx, by, g.fw * 0.1);
       bg.addColorStop(0, MIKU.blush);
@@ -3458,8 +3374,40 @@
   // src/positions.ts
   var MOVING_DELAY = 30;
   var IDLE_DELAY = 1e3;
-  var MIN_GAP = 16;
-  var MAX_GAP = 150;
+  var MIN_CUTOFF = 1.2;
+  var BETA = 0.02;
+  var D_CUTOFF = 1;
+  var OneEuro = class {
+    hat;
+    dhat;
+    at;
+    constructor(v, now) {
+      this.hat = v;
+      this.dhat = 0;
+      this.at = now;
+    }
+    // snap puts the filter on a place with no history. It is what a stop, a guest
+    // out of the conversation and a first frame all need: the picture goes where
+    // the sender says and the next walk starts from there, not from a stale
+    // history that would drag it back.
+    snap(v, now) {
+      this.hat = v;
+      this.dhat = 0;
+      this.at = now;
+    }
+    step(target, now) {
+      const dt = Math.max(1e-3, Math.min(0.25, (now - this.at) / 1e3));
+      this.at = now;
+      const rate2 = 1 / dt;
+      const dx = (target - this.hat) * rate2;
+      const aD = 1 / (1 + rate2 / (2 * Math.PI * D_CUTOFF));
+      this.dhat = aD * dx + (1 - aD) * this.dhat;
+      const cutoff = MIN_CUTOFF + BETA * Math.abs(this.dhat);
+      const a = 1 / (1 + rate2 / (2 * Math.PI * cutoff));
+      this.hat = a * target + (1 - a) * this.hat;
+      return this.hat;
+    }
+  };
   var POS_MAX_JSON = 200;
   var POS_MAX_POINT = 65535;
   var POS_MAX_SHEET = 63;
@@ -3478,10 +3426,14 @@
   function posAt(id, now, smooth) {
     const sample = remotes.get(id);
     if (!sample) return { x: 0, y: 0 };
-    const age = now - sample.at;
-    if (!smooth || !sample.mv || age >= sample.gap) return { x: sample.x, y: sample.y };
-    const t = Math.max(0, Math.min(1, age / sample.gap));
-    return { x: sample.px + (sample.x - sample.px) * t, y: sample.py + (sample.y - sample.py) * t };
+    if (!smooth || !sample.mv) {
+      if (sample.fx) sample.fx.snap(sample.x, now);
+      if (sample.fy) sample.fy.snap(sample.y, now);
+      return { x: sample.x, y: sample.y };
+    }
+    if (!sample.fx) sample.fx = new OneEuro(sample.x, now);
+    if (!sample.fy) sample.fy = new OneEuro(sample.y, now);
+    return { x: sample.fx.step(sample.x, now), y: sample.fy.step(sample.y, now) };
   }
   function remotePoints() {
     const out = /* @__PURE__ */ new Map();
@@ -3567,19 +3519,17 @@
     };
     const before = remotes.get(peer.id);
     const now = performance.now();
-    const gap2 = before ? Math.max(MIN_GAP, Math.min(MAX_GAP, now - before.at)) : MAX_GAP;
+    const moved = before !== void 0 && (before.x !== frame.x || before.y !== frame.y);
     remotes.set(peer.id, {
       x: frame.x,
       y: frame.y,
-      px: before ? before.x : frame.x,
-      py: before ? before.y : frame.y,
       d: frame.d,
       a: frame.a,
-      // The moving flag does not travel: a frame that changed place is a step.
-      mv: before !== void 0 && (before.x !== frame.x || before.y !== frame.y),
+      mv: moved,
       at: now,
-      gap: gap2,
-      n
+      n,
+      fx: before && moved ? before.fx : null,
+      fy: before && moved ? before.fy : null
     });
     return frame;
   }
@@ -3753,7 +3703,8 @@
   function isOverhead(layer) {
     if (!layer || layer.type !== "tilelayer" && layer.type !== "group") return false;
     const props = Array.isArray(layer.properties) ? layer.properties : [];
-    if (props.some((p) => p && p.name === "above" && (p.value === true || p.value === "true"))) return true;
+    if (props.some((p) => p && p.name === "above" && (p.value === true || p.value === "true")))
+      return true;
     return /above|overhead/i.test(String(layer.name || ""));
   }
   function loadImage(src, signal) {
@@ -3791,7 +3742,8 @@
         walkLayers(layer.layers, tiles, objects);
         continue;
       }
-      if (layer.type === "tilelayer" && (Array.isArray(layer.data) || typeof layer.data === "string")) tiles.push(layer);
+      if (layer.type === "tilelayer" && (Array.isArray(layer.data) || typeof layer.data === "string"))
+        tiles.push(layer);
       if (layer.type === "objectgroup" && Array.isArray(layer.objects)) objects.push(layer);
     }
   }
@@ -3879,7 +3831,15 @@
         let rects;
         const shape = obj.polygon || obj.polyline;
         if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
-        else rects = [{ x: Math.round(obj.x), y: Math.round(obj.y), w: Math.round(obj.width), h: Math.round(obj.height) }];
+        else
+          rects = [
+            {
+              x: Math.round(obj.x),
+              y: Math.round(obj.y),
+              w: Math.round(obj.width),
+              h: Math.round(obj.height)
+            }
+          ];
         const exitUrl = bag["exitUrl"] !== void 0 ? bag["exitUrl"] : bag["exiturl"];
         const exit = typeof exitUrl === "string" ? exitUrl.trim() : "";
         const start = bag["start"] === true || bag["start"] === "true";
@@ -3988,11 +3948,13 @@
     for (const area of Array.isArray(doc.areas) ? doc.areas : []) {
       if (!area || typeof area !== "object") continue;
       const props = {};
-      for (const p of Array.isArray(area.properties) ? area.properties : []) if (p && p.name) props[p.name] = p.value;
+      for (const p of Array.isArray(area.properties) ? area.properties : [])
+        if (p && p.name) props[p.name] = p.value;
       const bag = props;
       let kind = String(bag["kind"] || "");
       if (!kind && (bag["silent"] === true || bag["silent"] === "true")) kind = "silent";
-      if (!kind && (bag["jitsiRoom"] !== void 0 || bag["jitsiRoomProperty"] !== void 0)) kind = "meeting";
+      if (!kind && (bag["jitsiRoom"] !== void 0 || bag["jitsiRoomProperty"] !== void 0))
+        kind = "meeting";
       const users = bag["maxUsersInAreaPropertyData"];
       out.push({
         id: area.id || area.name,
@@ -4172,7 +4134,8 @@
       const frame = atlasImage && atlas ? atlas.frames.get(gid) || null : null;
       let set = null;
       if (!frame) {
-        for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
+        for (const one of sets)
+          if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
       }
       const hit = frame || set ? { frame, set } : null;
       draw[gid] = hit;
@@ -4192,7 +4155,17 @@
         if (!hit) continue;
         const { frame, set } = hit;
         if (frame) {
-          target.drawImage(atlasImage, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
+          target.drawImage(
+            atlasImage,
+            frame.x,
+            frame.y,
+            frame.w,
+            frame.h,
+            dx,
+            dy,
+            tw,
+            th
+          );
           continue;
         }
         if (!set) continue;
@@ -4334,7 +4307,10 @@
       for (let i = 0; i < id.length; i++) h = h * 31 + id.charCodeAt(i) | 0;
       index = Math.abs(h);
     }
-    const n = Math.max(0, Math.min(sheets2.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0)));
+    const n = Math.max(
+      0,
+      Math.min(sheets2.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0))
+    );
     return sheets2[n];
   }
   function defaultSheet() {
@@ -4357,7 +4333,14 @@
       idle[dir] = IDLE_FRAME;
       walk[dir] = [...WALK_ORDER];
     }
-    return { image: canvas, cellW: CHAR_W, cellH: CHAR_H, idle, walk, columns: cols };
+    return {
+      image: canvas,
+      cellW: CHAR_W,
+      cellH: CHAR_H,
+      idle,
+      walk,
+      columns: cols
+    };
   }
   var Walker = class {
     x;
@@ -4488,7 +4471,10 @@
       this.world = world;
       canvas.tabIndex = 0;
       canvas.setAttribute("role", "img");
-      canvas.setAttribute("aria-label", "the world of this room, walk with the arrow keys or w a s d");
+      canvas.setAttribute(
+        "aria-label",
+        "the world of this room, walk with the arrow keys or w a s d"
+      );
       window.addEventListener("keydown", this.onKeyDown);
       window.addEventListener("keyup", this.onKeyUp);
       this.pad = makePad(canvas, (key, down) => this.touch(key, down));
@@ -4597,7 +4583,9 @@
         const wantX = local.x * this.scale - width / 2;
         const wantY = local.y * this.scale - height / 2;
         this.camX = Math.round(Math.max(0, Math.min(this.world.widthPx * this.scale - width, wantX)));
-        this.camY = Math.round(Math.max(0, Math.min(this.world.heightPx * this.scale - height, wantY)));
+        this.camY = Math.round(
+          Math.max(0, Math.min(this.world.heightPx * this.scale - height, wantY))
+        );
       }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.imageSmoothingEnabled = this.scale % 1 !== 0;
@@ -4609,11 +4597,23 @@
       const y1 = Math.min(this.world.heightPx, Math.ceil((this.camY + height) / this.scale) + 1);
       const view2 = { x0, y0, x1, y1 };
       if (x1 > x0 && y1 > y0) {
-        ctx.drawImage(this.world.tiles, x0, y0, x1 - x0, y1 - y0, x0 * this.scale - this.camX, y0 * this.scale - this.camY, (x1 - x0) * this.scale, (y1 - y0) * this.scale);
+        ctx.drawImage(
+          this.world.tiles,
+          x0,
+          y0,
+          x1 - x0,
+          y1 - y0,
+          x0 * this.scale - this.camX,
+          y0 * this.scale - this.camY,
+          (x1 - x0) * this.scale,
+          (y1 - y0) * this.scale
+        );
       }
       ctx.setTransform(this.scale, 0, 0, this.scale, -this.camX, -this.camY);
       const at = (one) => one.y + AVATAR_SORT_OFFSET;
-      const list = [...this.avatars.values()].filter((one) => one.x + CHAR_W >= view2.x0 && one.x - CHAR_W <= view2.x1 && one.y >= view2.y0 && one.y - CHAR_H <= view2.y1).sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1));
+      const list = [...this.avatars.values()].filter(
+        (one) => one.x + CHAR_W >= view2.x0 && one.x - CHAR_W <= view2.x1 && one.y >= view2.y0 && one.y - CHAR_H <= view2.y1
+      ).sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1));
       const above = this.world.above;
       if (!above) {
         for (const one of list) this.drawAvatar(one);
@@ -4661,7 +4661,17 @@
         ctx.fill();
         ctx.globalAlpha = 1;
       }
-      ctx.drawImage(sheet.image, col * sheet.cellW, row * sheet.cellH, sheet.cellW, sheet.cellH, dx, dy, sheet.cellW, sheet.cellH);
+      ctx.drawImage(
+        sheet.image,
+        col * sheet.cellW,
+        row * sheet.cellH,
+        sheet.cellW,
+        sheet.cellH,
+        dx,
+        dy,
+        sheet.cellW,
+        sheet.cellH
+      );
       ctx.filter = "none";
       const label = String(one.name || "").trim() || String(one.id || "").slice(0, 6);
       ctx.font = "8px sans-serif";
@@ -4775,6 +4785,36 @@
       return this.why.get(id) || "far";
     }
   };
+  var SIDE_MAX = 4;
+  function sideClean(selfId, ids) {
+    return sideIds(ids).filter((id) => id !== String(selfId || ""));
+  }
+  function sideIds(ids) {
+    const out = [];
+    if (!Array.isArray(ids)) return out;
+    for (const one of ids) {
+      const id = String(one || "");
+      if (!/^[0-9a-f]{12}$/.test(id)) continue;
+      if (out.includes(id)) continue;
+      out.push(id);
+      if (out.length >= SIDE_MAX) break;
+    }
+    return out;
+  }
+  function sideSet(selfId, ownerId, ids) {
+    const owner = String(ownerId || "");
+    const rest = sideIds(ids).filter((id) => id !== owner);
+    return [owner, ...rest].slice(0, SIDE_MAX).sort();
+  }
+  function sideAlive(selfId, members, present) {
+    const self2 = String(selfId || "");
+    let others = 0;
+    for (const id of members) {
+      if (id === self2) continue;
+      if (present.has(id)) others++;
+    }
+    return others > 0;
+  }
 
   // src/roomworld.ts
   var view = null;
@@ -4932,6 +4972,7 @@
       if (!view || !walker || state.leaving) return;
       const now = performance.now();
       sendPos(now);
+      syncPeers();
       if (now - lastJudgeAt >= JUDGE_DELAY) {
         lastJudgeAt = now;
         step();
@@ -5070,7 +5111,6 @@
       }
     }
     if (changed) view.paintNear(near);
-    syncPeers();
     const cams = /* @__PURE__ */ new Map();
     for (const peer of peers) cams.set(peer.id, peer.camOn !== false);
     view.marks(cams);
@@ -5166,6 +5206,13 @@
       // is the character every window draws.
       sheetOf: (id) => view?.avatars.get(id) ? sheets.indexOf(view.avatars.get(id).sheet) : -1,
       mySheet: () => avatarIndex(),
+      // drawn is the place a remote avatar is painted at this frame, which is the
+      // slide and not the last frame received. The position rate is the rate this
+      // number changes at, so a browser test has to read it and not the samples.
+      drawn: (id) => {
+        const one = view?.avatars.get(id);
+        return one ? { x: Math.round(one.x * 100) / 100, y: Math.round(one.y * 100) / 100 } : null;
+      },
       map: () => {
         if (!view) return null;
         const world = view.world;
@@ -8782,6 +8829,8 @@
     state.decryptFrames = 0;
     state.chatSent = 0;
     state.chatRecv = 0;
+    state.sideSent = 0;
+    state.sideRecv = 0;
     state.replayDrops = 0;
     fileClearAll();
     state.confirmFailures = 0;
@@ -8927,7 +8976,8 @@
     sealedSetE2E(peer, "failed");
     say(shortPeer(peer.id) + " does not know the room passphrase; the link stays closed");
     if (state.waiting) {
-      if ([...state.peers.values()].every((one) => one.passFailed)) setTimeout(() => leave("the room refused the passphrase"), 0);
+      if ([...state.peers.values()].every((one) => one.passFailed))
+        setTimeout(() => leave("the room refused the passphrase"), 0);
       return;
     }
     if (!isAdmin(state.self) || isAdmin(peer.id)) return;
@@ -9452,6 +9502,8 @@
       }
     } else if (obj.k === "file") {
       fileOnMessage(peer, obj);
+    } else if (obj.k === "side") {
+      sideOnFrame(peer, obj);
     }
   }
   function sealedOnGate(peer, obj) {
@@ -10353,6 +10405,306 @@
     await onDescription(target, "offer", sdp);
   }
 
+  // src/chat.ts
+  var CHAT_MAX = 200;
+  function chatTime(ts = null) {
+    const d = ts ? new Date(ts) : /* @__PURE__ */ new Date();
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  var LINK_RE = /https?:\/\/[^\s<>"']+/gi;
+  function splitLink(raw) {
+    let url = raw;
+    let tail = "";
+    for (; ; ) {
+      const last = url[url.length - 1];
+      if (!last) break;
+      let cut = `.,;:!?'"`.includes(last);
+      if (!cut && (last === ")" || last === "]" || last === "}")) {
+        const open = { ")": "(", "]": "[", "}": "{" }[last];
+        cut = url.split(last).length > url.split(open).length;
+      }
+      if (!cut) break;
+      tail = last + tail;
+      url = url.slice(0, -1);
+    }
+    return { url, tail };
+  }
+  function safeLink(text) {
+    let u;
+    try {
+      u = new URL(text);
+    } catch {
+      return null;
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (!u.hostname || u.username || u.password) return null;
+    return u;
+  }
+  function linkify(text) {
+    const out = document.createDocumentFragment();
+    let at = 0;
+    for (const m of text.matchAll(LINK_RE)) {
+      const { url } = splitLink(m[0]);
+      const u = safeLink(url);
+      if (!u) continue;
+      if (m.index > at) out.appendChild(document.createTextNode(text.slice(at, m.index)));
+      const a = document.createElement("a");
+      a.textContent = url;
+      a.href = u.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer nofollow";
+      a.referrerPolicy = "no-referrer";
+      a.title = `opens ${u.href}`;
+      a.className = "chat-link";
+      out.appendChild(a);
+      at = m.index + url.length;
+    }
+    if (at < text.length) out.appendChild(document.createTextNode(text.slice(at)));
+    return out;
+  }
+  function blankLine(log, empty) {
+    if (!log || !empty) return;
+    empty.hidden = log.children.length > 0;
+  }
+  function chatEmpty(log) {
+    blankLine(log, document.getElementById("chat-empty"));
+  }
+  function chatRow(name, text, ts) {
+    const li = document.createElement("li");
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = chatTime(ts);
+    li.appendChild(when);
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = `${name || "guest"}:`;
+    li.appendChild(who);
+    li.appendChild(document.createTextNode(" "));
+    li.appendChild(linkify(String(text)));
+    return li;
+  }
+  function addLine(log, name, text, ts) {
+    if (!log) return null;
+    const li = chatRow(name, text, ts);
+    log.appendChild(li);
+    while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+    return li;
+  }
+  function addChatLine(name, text, ts) {
+    const log = $("chat-log");
+    if (!log) return;
+    addLine(log, name, text, ts);
+    chatEmpty(log);
+  }
+  var clearHooks = [];
+  function chatOnClear(fn) {
+    clearHooks.push(fn);
+  }
+  function clearChat() {
+    const log = $("chat-log");
+    if (!log) return;
+    log.replaceChildren();
+    chatEmpty(log);
+    for (const fn of clearHooks) {
+      try {
+        fn();
+      } catch {
+      }
+    }
+  }
+  var side = null;
+  var sideNote = "";
+  function sidePeer(id) {
+    const peer = state.peers.get(id);
+    return peer && !peer.waiting ? peer : null;
+  }
+  function sideName(id) {
+    if (id === state.self) return "you";
+    const peer = sidePeer(id);
+    return peer ? peerName(peer) : shortPeer(id);
+  }
+  function sideMembers() {
+    if (!side) return [];
+    return side.members.filter((id) => id === state.self || !!sidePeer(id));
+  }
+  function sideOn() {
+    if (!side) return false;
+    const members = sideMembers();
+    return sideAlive(state.self, members, new Set(members));
+  }
+  function sideOwner() {
+    return side ? side.owner : "";
+  }
+  function sidePanel() {
+    const box = document.getElementById("side-panel");
+    if (!box) return;
+    const log = document.getElementById("side-log");
+    const head = document.getElementById("side-who");
+    const empty = document.getElementById("side-empty");
+    const members = sideMembers();
+    const on = members.length > 1;
+    box.hidden = !on;
+    if (head) head.textContent = on ? members.map(sideName).join(", ") : "";
+    if (empty) {
+      empty.textContent = sideNote;
+      blankLine(log, empty);
+    }
+    const open = document.getElementById("side-open");
+    if (open) {
+      open.textContent = on ? "leave" : "whisper";
+      open.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+    if (on) {
+      document.dispatchEvent(new CustomEvent("sidepanel"));
+    }
+  }
+  function sideSay(name, text, ts) {
+    const log = document.getElementById("side-log");
+    if (!log) return;
+    addLine(log, name, text, ts);
+    const empty = document.getElementById("side-empty");
+    if (empty) empty.hidden = true;
+    const box = document.getElementById("side-panel");
+    if (box) box.hidden = false;
+  }
+  function sideNoteTo(text) {
+    sideNote = String(text || "");
+    const empty = document.getElementById("side-empty");
+    const log = document.getElementById("side-log");
+    if (!empty) return;
+    empty.textContent = sideNote;
+    blankLine(log, empty);
+  }
+  function sideClose(reason) {
+    if (!side) return;
+    side = null;
+    sideNoteTo(reason);
+    sidePanel();
+  }
+  function sideApply(owner, ids) {
+    const members = sideSet(state.self, owner, ids);
+    if (!members.includes(state.self)) {
+      sideClose("closed by " + sideName(owner));
+      return;
+    }
+    const before = side ? side.members.join(",") : "";
+    side = { owner, members };
+    if (before !== members.join(",")) sideNoteTo("");
+    sidePanel();
+  }
+  function sideOpen(ids) {
+    if (!state.self || state.leaving || state.waiting) return false;
+    const others = sideClean(state.self, ids);
+    if (!others.length) {
+      say("a whisper needs a name: open one from the menu of a guest beside you");
+      return false;
+    }
+    const members = sideSet(state.self, state.self, others);
+    side = { owner: state.self, members };
+    sideNoteTo("");
+    sidePanel();
+    for (const id of others) {
+      const peer = sidePeer(id);
+      if (peer) sealedSide(peer, { k: "side", o: "open", w: state.self, m: members });
+    }
+    playSfx("knock");
+    return true;
+  }
+  function sideLeave() {
+    if (!side) return;
+    const members = sideMembers();
+    const owner = side.owner;
+    sideClose("you left the whisper");
+    for (const id of members) {
+      if (id === state.self) continue;
+      const peer = sidePeer(id);
+      if (peer) sealedSide(peer, { k: "side", o: "leave", f: state.self, w: owner });
+    }
+  }
+  function sideSend() {
+    const input = document.getElementById("side-text");
+    const text = String(input && input.value || "").trim();
+    if (!text || !sideOn()) return;
+    if (input) input.value = "";
+    canary(text);
+    sideSay(state.name || "you", text, Date.now());
+    state.sideSent++;
+    const owner = side ? side.owner : "";
+    for (const id of sideMembers()) {
+      if (id === state.self) continue;
+      const peer = sidePeer(id);
+      if (peer) sealedSide(peer, { k: "side", o: "say", w: owner, x: text, ts: Date.now() });
+    }
+  }
+  function sideOnFrame(peer, obj) {
+    const owner = String(obj.w || "");
+    if (!owner) return;
+    if (obj.k !== "side") return;
+    if (peer.waiting) return;
+    if (state.leaving) return;
+    if (obj.o === "open") {
+      sideApply(owner, obj.m);
+      if (sideOn()) playSfx("msg");
+      return;
+    }
+    if (!side || side.owner !== owner) return;
+    if (!side.members.includes(peer.id)) return;
+    if (obj.o === "leave") {
+      if (peer.id === owner || side.members.length <= 2) {
+        sideClose(sideName(peer.id) + " closed the whisper");
+        return;
+      }
+      side = { owner: side.owner, members: side.members.filter((id) => id !== peer.id) };
+      sideNoteTo("");
+      sidePanel();
+      return;
+    }
+    if (obj.o === "say") {
+      const text = String(obj.x || "").slice(0, 500);
+      if (!text) return;
+      state.sideRecv++;
+      sideSay(sideName(peer.id), text, Number(obj.ts) || Date.now());
+    }
+  }
+  function sideWire() {
+    const form = document.getElementById("side-form");
+    if (form) {
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        sideSend();
+      });
+    }
+    const open = document.getElementById("side-open");
+    if (open) {
+      open.addEventListener("click", () => {
+        if (sideOn()) {
+          sideLeave();
+          return;
+        }
+        sideNoteTo("open a whisper from the menu of a guest beside you");
+        sidePanel();
+      });
+    }
+    const close = document.getElementById("side-close");
+    if (close) close.addEventListener("click", () => sideLeave());
+    chatOnClear(() => {
+      side = null;
+      sideNote = "";
+      const log = document.getElementById("side-log");
+      if (log) log.replaceChildren();
+      sidePanel();
+    });
+    sidePanel();
+  }
+  var sideSealer = null;
+  function sideSetSealer(fn) {
+    sideSealer = fn;
+  }
+  function sealedSide(peer, obj) {
+    if (sideSealer) sideSealer(peer, obj);
+  }
+
   // src/presence.ts
   var routed = /* @__PURE__ */ new Map();
   var talks = /* @__PURE__ */ new Map();
@@ -10408,7 +10760,9 @@
     const before = talks.get(peerId) || [];
     if (before.length === list.length && before.every((one, i) => one === list[i])) return;
     talks.set(peerId, list);
-    presenceDebug("talks " + shortPeer(peerId) + " says " + (list.length ? list.map(shortPeer).join(",") : "nobody"));
+    presenceDebug(
+      "talks " + shortPeer(peerId) + " says " + (list.length ? list.map(shortPeer).join(",") : "nobody")
+    );
     paintPresence();
   }
   function applyGain(peer) {
@@ -10471,8 +10825,11 @@
       if (list.length) theirs.push(name + " with " + list.join(", "));
     }
     near2.textContent = mine.length ? "hearing: " + mine.join(" \xB7 ") : "hearing: nobody, walk closer or into an area";
+    near2.title = near2.textContent;
+    room.title = room.textContent;
     if (via) {
       via.textContent = theirs.length ? "also: " + theirs.join("; ") : "";
+      via.title = via.textContent;
       via.hidden = !theirs.length;
     }
   }
@@ -10886,9 +11243,9 @@
     refreshSelf();
     sendState();
   }
-  function sealOne(peer, side, dir, kind) {
+  function sealOne(peer, side2, dir, kind) {
     try {
-      side.transform = new RTCRtpScriptTransform(state.worker, {
+      side2.transform = new RTCRtpScriptTransform(state.worker, {
         // `from` names who sends these frames: the page on send, the peer on receive;
         // the AAD binds it, so a moved or reflected frame can not match.
         pair: pairLabel(peer.id),
@@ -10950,8 +11307,9 @@
     if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx.screen;
     const track = state.screen && state.screen.getVideoTracks()[0];
-    if (tr && track && !isAttached(peer, "screen", track)) tr.sender.replaceTrack(track).catch(() => {
-    });
+    if (tr && track && !isAttached(peer, "screen", track))
+      tr.sender.replaceTrack(track).catch(() => {
+      });
   }
   function publishTrack(track) {
     if (!track) return;
@@ -11877,6 +12235,7 @@
       const noiseOn = !!(peer && peer.inNoise);
       const noiseEngine = peer ? peer.inEngine : "";
       const here = (name) => noiseOn && noiseEngine === name ? " (on)" : "";
+      if (peer && !sideOn()) add("whisper to this guest", () => sideOpen([peer.id]));
       add("noise cancel: FastEnhancer" + here("fastenhancer"), () => {
         void setPeerNoise(peer, true, "fastenhancer");
       });
@@ -12381,10 +12740,10 @@
   }
 
   // src/gate.ts
-  var ROOTED = /^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-([a-z0-9._-]{1,40})$/;
+  var ROOTED = /^([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z0-9._-]{1,40})$/;
   function rootFingerprint(room) {
     const m = ROOTED.exec(String(room || ""));
-    if (m) return m[0].slice(0, 23);
+    if (m) return m.slice(1, 6).join("-");
     return state.root || "";
   }
   function setRoot(fp) {
@@ -12674,7 +13033,10 @@
       if (peer.cam) paintPeerVideo(peer);
       else dropPeerCamera(peer);
     }
-    setGuestFlags(peer.id, { cam: obj.cam !== void 0 ? !!obj.cam : void 0, mic: obj.mic !== void 0 ? !!obj.mic : void 0 });
+    setGuestFlags(peer.id, {
+      cam: obj.cam !== void 0 ? !!obj.cam : void 0,
+      mic: obj.mic !== void 0 ? !!obj.mic : void 0
+    });
     if (obj.deaf !== void 0) peer.deaf = !!obj.deaf;
     if (obj.outFilter !== void 0) peer.outFilter = filterName(obj.outFilter);
     if (obj.inFilter !== void 0) peer.inFilter = filterName(obj.inFilter);
@@ -12720,7 +13082,8 @@
   var PAD_BUCKETS = [512, 2048, 8192];
   var PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
   function padPayload(obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY)) throw new Error("the padding key is reserved");
+    if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY))
+      throw new Error("the padding key is reserved");
     const withPad = Object.assign({}, obj, { [PAD_KEY]: "" });
     const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
     let target = PAD_BUCKETS.find((n) => n >= bytes);
@@ -12751,7 +13114,8 @@
   function roomW(pass, room) {
     const secret = pass === "" ? "\0open room" : pass;
     const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
-    if (!out || typeof out.w !== "string" || !out.w) throw new Error("the room key could not be derived");
+    if (!out || typeof out.w !== "string" || !out.w)
+      throw new Error("the room key could not be derived");
     return out.w;
   }
   function sealedSendSdp(peer, kind, sdp) {
@@ -13254,6 +13618,8 @@
       decryptFrames: state.decryptFrames,
       chatSent: state.chatSent,
       chatRecv: state.chatRecv,
+      sideSent: state.sideSent,
+      sideRecv: state.sideRecv,
       fileOffers: state.fileOffers,
       fileRecv: state.fileRecv,
       fileChunksSent: state.fileChunksSent,
@@ -13271,6 +13637,23 @@
     }),
     selfTest: pqSelfTest,
     lab: runLab,
+    // The whisper: what this page is in, what its panel holds, and the two
+    // actions a browser test drives. A person uses the menu and the panel.
+    side: () => ({
+      on: sideOn(),
+      owner: sideOwner(),
+      members: sideMembers(),
+      note: (document.getElementById("side-empty") || {}).textContent || "",
+      lines: [...document.querySelectorAll("#side-log li")].map((li) => li.textContent),
+      shown: !!(document.getElementById("side-panel") || {}).hidden === false
+    }),
+    sideOpen: (ids) => sideOpen(ids),
+    sideSay: (text) => {
+      const box = document.getElementById("side-text");
+      if (box) box.value = text;
+      sideSend();
+    },
+    sideLeave,
     // The world of the room: the drawn map, the avatars, and a walk with the
     // same rule a key press follows.
     world: worldHook(),
@@ -13397,6 +13780,8 @@
       event.preventDefault();
       sendSealedChat();
     });
+    sideSetSealer((peer, obj) => sealedSend(peer, obj));
+    sideWire();
     const input = $("file-input");
     $("file-btn").addEventListener("click", () => input.click());
     input.addEventListener("change", () => {

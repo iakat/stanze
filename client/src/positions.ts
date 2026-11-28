@@ -1,7 +1,7 @@
 /*
  Position frames over the sealed files channel, and the drawing that turns them
- back into somebody walking: thirty a second while the guest walks, one a
- second while it stands still, and one at once when it stops or turns.
+ back into somebody walking: thirty a second while the guest walks, one a second
+ while it stands still, and one at once when it stops or turns.
 
  One pair, one direction: every guest holds a pair to every other guest and
  sends its place over that pair, at the cadence WorkAdventure sends at, so the
@@ -26,11 +26,65 @@ import type { Point } from './proximity.js';
 export const MOVING_DELAY = 30;
 export const IDLE_DELAY = 1000;
 
-// A measured gap is clamped to this window: below it a burst is not a reason to
-// snap, above it a stall is not a reason to slide for a second. A first frame
-// takes the ceiling, so it is drawn where it says it is.
-const MIN_GAP = 16;
-const MAX_GAP = 150;
+// ------------------------------------------------------------ the 1 euro filter
+// A remote avatar is drawn from a filter, not from a slide between two frames.
+// The 1 euro filter (Casiez, Roussel, Vogel: "1e Filter", CHI 2012) is one
+// exponential low pass per axis whose cutoff rises with the speed of the
+// motion: slow motion is smoothed hard, so a standing guest does not jitter,
+// and fast motion is followed closely, so a walking guest does not lag its own
+// position. It takes a timestamp for every step, so an irregular arrival rate
+// (30 Hz walking, 1 Hz standing, a burst after a stall) needs no guess about
+// the gap and no second mechanism to hide one.
+//
+// The three constants are the paper's, tuned for a map in pixels at the tree's
+// WALK_SPEED of 160 px/s: a still guest sits at MIN_CUTOFF, and a walk puts the
+// cutoff near 4 Hz, which is about 40 ms of lag and no visible ripple.
+export const MIN_CUTOFF = 1.2;
+export const BETA = 0.02;
+export const D_CUTOFF = 1.0;
+
+// OneEuro is the filter of one axis: the filtered place and the filtered speed,
+// stepped forward in time by the drawing frame. It is never stepped backwards,
+// so a clock that jumps back (a tab restored from bfcache) is clamped and not
+// folded into the estimate.
+class OneEuro {
+  hat: number;
+  dhat: number;
+  at: number;
+
+  constructor(v: number, now: number) {
+    this.hat = v;
+    this.dhat = 0;
+    this.at = now;
+  }
+
+  // snap puts the filter on a place with no history. It is what a stop, a guest
+  // out of the conversation and a first frame all need: the picture goes where
+  // the sender says and the next walk starts from there, not from a stale
+  // history that would drag it back.
+  snap(v: number, now: number) {
+    this.hat = v;
+    this.dhat = 0;
+    this.at = now;
+  }
+
+  step(target: number, now: number): number {
+    // The step is clamped both ways: two draws in one millisecond are not a
+    // divide by zero, and a tab hidden for a second is not a crawl the cutoff
+    // should follow.
+    const dt = Math.max(0.001, Math.min(0.25, (now - this.at) / 1000));
+    this.at = now;
+    const rate = 1 / dt;
+    const dx = (target - this.hat) * rate;
+    const aD = 1 / (1 + rate / (2 * Math.PI * D_CUTOFF));
+    this.dhat = aD * dx + (1 - aD) * this.dhat;
+    const cutoff = MIN_CUTOFF + BETA * Math.abs(this.dhat);
+    const a = 1 / (1 + rate / (2 * Math.PI * cutoff));
+    this.hat = a * target + (1 - a) * this.hat;
+    return this.hat;
+  }
+}
+
 // POS_MAX_JSON bounds the plaintext of one frame, so a broken page cannot grow
 // the channel.
 const POS_MAX_JSON = 200;
@@ -49,20 +103,19 @@ export type PosFrame = {
   n: number;
 };
 
-// Sample is what a receiver keeps: the frame, the place before it, the clock it
-// arrived on, how long it took to arrive, and whether it moved since the one
-// before. The receiver's clock, never the sender's: two tabs are two machines.
+// Sample is what a receiver keeps: the place the sender reported, the clock it
+// arrived on, whether it moved since the frame before, and the filter that draws
+// it. The receiver's clock, never the sender's: two tabs are two machines.
 type Sample = {
   x: number;
   y: number;
-  px: number;
-  py: number;
   d: number;
   a: number;
   mv: boolean;
   at: number;
-  gap: number;
   n: number;
+  fx: OneEuro | null;
+  fy: OneEuro | null;
 };
 
 const remotes = new Map<string, Sample>();
@@ -79,26 +132,26 @@ export function posForget(peerId: string) {
   remotes.delete(peerId);
 }
 
-// posAt is where a remote avatar stands now. The sender's cadence is not fixed
-// (twenty a second walking, one a second standing), so the slide runs over the
-// gap actually measured between the last two frames instead of assuming a tick,
-// and it starts from where the avatar was drawn, not from a guess about the
-// walk speed. That keeps a walk smooth at any rate and never overshoots: an
-// avatar is drawn between two places its sender really reported.
+// posAt is where a remote avatar is drawn now: the filtered place, stepped to
+// this frame. A guest that is not moving, a pair that is not talking and a page
+// with no filter yet are drawn exactly where the sender put them, so a standing
+// guest never creeps and a grey avatar never drifts.
 export function posAt(id: string, now: number, smooth: boolean): Point {
   const sample = remotes.get(id);
   if (!sample) return { x: 0, y: 0 };
-  const age = now - sample.at;
-  // A still guest, a pair that is not talking, or a frame from a peer that has
-  // gone quiet: the sample is drawn where the sender put it.
-  if (!smooth || !sample.mv || age >= sample.gap) return { x: sample.x, y: sample.y };
-  const t = Math.max(0, Math.min(1, age / sample.gap));
-  return { x: sample.px + (sample.x - sample.px) * t, y: sample.py + (sample.y - sample.py) * t };
+  if (!smooth || !sample.mv) {
+    if (sample.fx) sample.fx.snap(sample.x, now);
+    if (sample.fy) sample.fy.snap(sample.y, now);
+    return { x: sample.x, y: sample.y };
+  }
+  if (!sample.fx) sample.fx = new OneEuro(sample.x, now);
+  if (!sample.fy) sample.fy = new OneEuro(sample.y, now);
+  return { x: sample.fx.step(sample.x, now), y: sample.fy.step(sample.y, now) };
 }
 
-// remotePoints is the exact place of every remote frame, without the slide: it
-// is what the pair rule is judged on, so two pages can never disagree because
-// one of them drew a step late.
+// remotePoints is the exact place of every remote frame, unfiltered: it is what
+// the pair rule is judged on, so two pages can never disagree because one of
+// them drew a step late.
 export function remotePoints(): Map<string, Point> {
   const out = new Map<string, Point>();
   for (const [id, sample] of remotes) out.set(id, { x: sample.x, y: sample.y });
@@ -215,23 +268,20 @@ export function posOnMessage(peer: any, raw: any): PosFrame | null {
   };
   const before = remotes.get(peer.id);
   const now = performance.now();
-  // The gap between this frame and the one before it is what the slide runs
-  // over. It is clamped: a husk of a tab that reported nothing for a second is
-  // not a reason to slide a walk over a second, and a burst after a stall must
-  // not make the next step instant.
-  const gap = before ? Math.max(MIN_GAP, Math.min(MAX_GAP, now - before.at)) : MAX_GAP;
+  // A frame that changed place is a step, and the filter that draws it is kept:
+  // it is stepped to this frame by the draw, not by the arrival, so a burst of
+  // two frames costs no smoothing and a stall costs no crawl.
+  const moved = before !== undefined && (before.x !== frame.x || before.y !== frame.y);
   remotes.set(peer.id, {
     x: frame.x,
     y: frame.y,
-    px: before ? before.x : frame.x,
-    py: before ? before.y : frame.y,
     d: frame.d,
     a: frame.a,
-    // The moving flag does not travel: a frame that changed place is a step.
-    mv: before !== undefined && (before.x !== frame.x || before.y !== frame.y),
+    mv: moved,
     at: now,
-    gap,
     n,
+    fx: before && moved ? before.fx : null,
+    fy: before && moved ? before.fy : null,
   });
   return frame;
 }
