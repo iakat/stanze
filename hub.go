@@ -17,10 +17,13 @@ var errRoomUnavailable = errors.New("room unavailable")
 // last twenty percent stays a working margin for calls that are already up.
 var roomHeadroom = struct{ num, den int }{8, 10}
 
-// roomIdleTimeout is how long a room may stay open with no frame from any of
-// its peers before it is dropped and its guests are disconnected. The peers
-// ping every 25 s and a joining socket has 90 s, so a live room is never idle
-// for this long; a socket that went silent without a close frame is. It is a
+// roomIdleTimeout is how long a room may stay open with no sign of life from
+// its guests before it is dropped and its peers are disconnected. Every frame a
+// guest sends counts, and so does every keepalive the socket answers: the
+// server pings every 25 s and the browser's pong touches the room, so a call
+// that is up but carries no application frame—which is every call once the
+// sealed channels are open—still proves itself well inside this window. What
+// this catches is a room whose sockets are gone without a close frame. It is a
 // variable so a test can shorten it.
 var roomIdleTimeout = 5 * time.Minute
 
@@ -214,23 +217,29 @@ func (h *Hub) touch(room *Room) {
 // the number of rooms dropped. A room that leaves one bad connection behind
 // cannot hold a slot for good this way.
 func (h *Hub) sweepIdle(now time.Time) int {
-	var stale []*Room
+	// stale is a snapshot of the peers of every dropped room, taken under the
+	// lock. The live map cannot be walked after the unlock: a leave on another
+	// goroutine deletes from it, and reading it there is a race the race
+	// detector reports as a map read during a write.
+	var stale [][]*Peer
 	h.mu.Lock()
 	for id, room := range h.rooms {
 		if now.Sub(room.lastSeen) < roomIdleTimeout {
 			continue
 		}
 		delete(h.rooms, id)
+		gone := make([]*Peer, 0, len(room.peers))
 		for _, p := range room.peers {
 			p.room = nil
+			gone = append(gone, p)
 		}
-		stale = append(stale, room)
+		stale = append(stale, gone)
 	}
 	h.mu.Unlock()
 	// Close outside the lock: a close runs the onClose hook, which leaves the
 	// hub again.
-	for _, room := range stale {
-		for _, p := range room.peers {
+	for _, gone := range stale {
+		for _, p := range gone {
 			p.close()
 		}
 	}

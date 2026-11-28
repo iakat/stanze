@@ -209,14 +209,27 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// is alive: the deadline is pushed forward each time. A ping is answered
 	// here rather than by the default handler, because the default one does
 	// not touch the deadline and a quiet tab would otherwise be cut.
+	//
+	// A control frame also says the guest is still in the room, so it touches
+	// the room exactly as a message does. A call carries no application frame
+	// once it is up: positions, chat and the media signalling all ride the
+	// sealed channels of each pair, and the only WebSocket traffic left is the
+	// keepalive the server sends and the browser answers. Without this touch a
+	// room where everybody is talking and nobody types is swept as idle.
+	// A peer that holds no room yet, or no longer holds one, touches nothing.
 	conn.SetPingHandler(func(appData string) error {
 		if err := conn.SetReadDeadline(time.Now().Add(wsReadTimeout)); err != nil {
 			return err
 		}
+		s.hub.touch(s.hub.roomOf(p))
 		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(wsWriteTimeout))
 	})
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		if err := conn.SetReadDeadline(time.Now().Add(wsReadTimeout)); err != nil {
+			return err
+		}
+		s.hub.touch(s.hub.roomOf(p))
+		return nil
 	})
 
 	for {
