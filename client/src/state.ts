@@ -132,6 +132,7 @@ export const state = {
   seqGaps: 0, // sealed frames that arrived with a gap in their counter
   wait: { on: false, n: 0 }, // the sealed waiting-room switch, with a counter
   kickedFps: new Set(), // identities this page removed for good in this call
+  banned: new Map(), // "room length:room fp" -> {fp, room, at, until, by, label}, bans kept across calls
   pins: new Map(), // local label -> {label, fp, first, last}
   revoked: new Map(), // fingerprint -> {fp, label, at}, a pin that was replaced
   identityFailures: 0, // a peer that sent no identity or could not prove one

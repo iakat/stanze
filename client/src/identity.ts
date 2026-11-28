@@ -81,8 +81,8 @@ function dropDb(db) {
   if (idDb && db && idDb === db) idDb = null;
 }
 
-// idStore opens the one local database: the identity, the pins this guest made
-// and the fingerprints a pin replaced. No session material is written.
+// idStore opens the one local database: the identity, the pins this guest made,
+// the fingerprints a pin replaced and the bans this browser holds.
 function idStore() {
   if (idDb) return idDb;
   idDb = new Promise((resolve, reject) => {
@@ -90,9 +90,11 @@ function idStore() {
       reject(new Error('no indexeddb'));
       return;
     }
-    const req = indexedDB.open(ID_DB, 2);
+    const req = indexedDB.open(ID_DB, 3);
     req.onupgradeneeded = () => {
-      for (const name of ['id', 'pins', 'revoked', 'roots']) {
+      // Version 3 adds 'bans'. The loop keeps a browser that skipped a version
+      // from opening a handle without the stores this build reads.
+      for (const name of ['id', 'pins', 'revoked', 'roots', 'bans']) {
         if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
       }
     };
@@ -171,6 +173,23 @@ function idbPut(store, key, value) {
 
 function idbDelete(store, key) {
   return idbRequest(store, 'readwrite', (s) => s.delete(key));
+}
+
+// The ban rows are read and written here because the database handle, the retry
+// on a replaced handle and the upgrade of the version all live in this file. The
+// rules of a ban are in banlist.ts and the page's copy of the list is in bans.ts;
+// these three are only the door to the 'bans' store, so a page that can not keep
+// an identity keeps no bans either.
+export function banStoreAll() {
+  return idbAll('bans');
+}
+
+export function banStorePut(key, rec) {
+  return idbPut('bans', key, rec);
+}
+
+export function banStoreDelete(key) {
+  return idbDelete('bans', key);
 }
 
 export function fingerprint(pub) {
