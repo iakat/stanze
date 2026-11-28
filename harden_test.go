@@ -325,6 +325,25 @@ func TestPeerSeatedAgainSpendsTheNewRoomsTokens(t *testing.T) {
 	}
 }
 
+// The last peer out takes the room's account with it, the same way the hub
+// takes the room: a stream of short calls cannot leave an account behind for
+// every room that ever relayed one frame.
+func TestLastPeerOutDropsTheRoomsAccount(t *testing.T) {
+	srv := newRoomServer()
+	only := joinRoom(t, srv, "one-room", "only")
+	if !srv.spend(only, 64) {
+		t.Fatal("the first frame was refused")
+	}
+	srv.nothingReached(only)
+	if room := srv.hub.leave(only); room != nil {
+		t.Fatal("the last peer out kept the room alive")
+	}
+	srv.forget(only, srv.hub.leave(only) == nil)
+	if len(srv.budgets) != 0 {
+		t.Fatalf("budgets = %v, want none after the last peer out", srv.budgets)
+	}
+}
+
 // A room the sweep took away takes its account with it: the last peer out
 // settles it, so a burst of short lived rooms cannot leave one behind. The
 // peers of that room are closed without ever having left, so the sweep names
