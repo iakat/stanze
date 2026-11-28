@@ -184,8 +184,13 @@ export function paintPresence() {
   near.textContent = mine.length
     ? 'hearing: ' + mine.join(' · ')
     : 'hearing: nobody, walk closer or into an area';
+  // The line is cut with an ellipsis rather than wrapped, so the box never grows
+  // and the column below it never moves. The whole sentence stays on the title.
+  near.title = near.textContent;
+  room.title = room.textContent;
   if (via) {
     via.textContent = theirs.length ? 'also: ' + theirs.join('; ') : '';
+    via.title = via.textContent;
     via.hidden = !theirs.length;
   }
 }
