@@ -10,7 +10,8 @@
     "format:check": "prettier --check \"src/**/*.ts\" build.mjs eslint.config.mjs",
     "readme": "node tools/overview.mjs --write",
     "readme:check": "node tools/overview.mjs --check",
-    "outdated": "npm outdated || true"
+    "outdated": "npm outdated || true",
+    "test": "node tools/rootfp-test.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
