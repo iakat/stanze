@@ -128,8 +128,9 @@ function idStore() {
 // of what was asked.
 function isStale(err) {
   const name = err && err.name;
-  return name === 'InvalidStateError' || name === 'TransactionInactiveError' ||
-    name === 'NotFoundError';
+  return (
+    name === 'InvalidStateError' || name === 'TransactionInactiveError' || name === 'NotFoundError'
+  );
 }
 
 function idbOnce(store, mode, fn) {
@@ -252,7 +253,6 @@ function seedIdentity(seed, pub, kind) {
     },
   };
 }
-
 
 function createIdentity() {
   return Promise.resolve()

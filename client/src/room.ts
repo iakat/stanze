@@ -180,11 +180,11 @@ export async function enterRoom(room, pass, start?: string) {
       if (button) button.disabled = false;
     }
   } catch (err) {
-      // The guard clears on every way out of the outer try.
-      state.entering = false;
-      throw err;
-    }
+    // The guard clears on every way out of the outer try.
+    state.entering = false;
+    throw err;
   }
+}
 
 // leaveFor is what a door calls. It leaves this room with no message and then
 // joins the room the door named, with the passphrase of the room it left. The

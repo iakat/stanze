@@ -147,7 +147,10 @@ async function peerStats(peer) {
         }
       } else if (r.type === 'transport' && r.selectedCandidatePairId) {
         pairId = r.selectedCandidatePairId;
-      } else if (r.type === 'connection' && (r.selectedCandidatePairId || r.nominatedCandidatePairId)) {
+      } else if (
+        r.type === 'connection' &&
+        (r.selectedCandidatePairId || r.nominatedCandidatePairId)
+      ) {
         legacyPairId = r.selectedCandidatePairId || r.nominatedCandidatePairId;
       } else if (r.type === 'candidate-pair') {
         pairs.set(r.id, r);

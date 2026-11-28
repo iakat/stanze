@@ -134,7 +134,8 @@ export function sealedRefusePass(peer) {
   // Every pair refused the same proof, so this page holds the wrong
   // passphrase: it goes back to the lobby. One refusal is a guest's problem.
   if (state.waiting) {
-    if ([...state.peers.values()].every((one) => one.passFailed)) setTimeout(() => leave('the room refused the passphrase'), 0);
+    if ([...state.peers.values()].every((one) => one.passFailed))
+      setTimeout(() => leave('the room refused the passphrase'), 0);
     return;
   }
   // The admin removes the identity, not the socket, so the same guest can not

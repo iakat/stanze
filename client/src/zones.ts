@@ -104,7 +104,8 @@ export function zoneFromObject(raw: any, index: number): Zone | null {
     name,
     kind: ZONE_KINDS.indexOf(kind as (typeof ZONE_KINDS)[number]) >= 0 ? kind : '',
     capacity: Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : 0,
-    proximity: Number.isFinite(proximity) && proximity > 0 ? Math.round(proximity) : DEFAULT_PROXIMITY,
+    proximity:
+      Number.isFinite(proximity) && proximity > 0 ? Math.round(proximity) : DEFAULT_PROXIMITY,
     rects,
     ...(exit ? { exit } : {}),
     ...(raw.start === true ? { start: true } : {}),

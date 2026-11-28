@@ -530,7 +530,8 @@ export function attachScreen(peer) {
   if (!peer.pass || !peer.pass.done) return;
   const tr = peer.tx && peer.tx.screen;
   const track = state.screen && state.screen.getVideoTracks()[0];
-  if (tr && track && !isAttached(peer, 'screen', track)) tr.sender.replaceTrack(track).catch(() => {});
+  if (tr && track && !isAttached(peer, 'screen', track))
+    tr.sender.replaceTrack(track).catch(() => {});
 }
 
 // publishTrack hands one new track to every connection that has transceivers; a
@@ -634,7 +635,8 @@ export function paintPeerVideo(peer) {
   const track = peer.videoTrack;
   // The picture is drawn for a guest in the conversation and for nobody else:
   // the presence line names every guest this page draws.
-  const live = track && track.readyState === 'live' && !track.muted && peer.cam !== false && isRouted(peer.id);
+  const live =
+    track && track.readyState === 'live' && !track.muted && peer.cam !== false && isRouted(peer.id);
   if (!state.deaf && live) {
     setVideoTrack(video, track);
     peer.tile.classList.add('playing');
@@ -680,7 +682,13 @@ function makeScreenTile(peer) {
 export function paintPeerScreen(peer) {
   const track = peer.screenTrack;
   if (!track) return;
-  if (!state.deaf && isRouted(peer.id) && peer.screenShared !== false && track.readyState === 'live' && !track.muted) {
+  if (
+    !state.deaf &&
+    isRouted(peer.id) &&
+    peer.screenShared !== false &&
+    track.readyState === 'live' &&
+    !track.muted
+  ) {
     const tile = makeScreenTile(peer);
     const video = tile.querySelector('video');
     setVideoTrack(video, track);

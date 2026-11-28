@@ -19,8 +19,10 @@ import { isWorld, route } from './roomworld.js';
 // Every failure the server can name has a line, so no code is silence.
 const ERROR_LINES: Record<string, string> = {
   'too-big': 'a frame was too large for the relay; that link starts again',
-  'relay-off': 'this server offers no relay; guests that cannot reach each other directly will not connect',
-  'relay-exhausted': 'the relay was already given to this connection; leave and join again for a new one',
+  'relay-off':
+    'this server offers no relay; guests that cannot reach each other directly will not connect',
+  'relay-exhausted':
+    'the relay was already given to this connection; leave and join again for a new one',
   'bad-message': 'the server could not read a frame this page sent; the link may be out of date',
 };
 
@@ -132,7 +134,12 @@ export function handle(msg) {
       // The relay list rides its own frame: a failed pair gathers again with it.
       state.ice = msg.ice || [];
       for (const one of state.peers.values()) {
-        try { one.pc?.setConfiguration(rtcConfig()); one.pc?.restartIce(); } catch { /* closed pair */ }
+        try {
+          one.pc?.setConfiguration(rtcConfig());
+          one.pc?.restartIce();
+        } catch {
+          /* closed pair */
+        }
       }
       break;
     case 'joined': {

@@ -10,7 +10,17 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { load, store } from './prefs.js';
-import { Above, avatarIndex, CharSheet, loadSheets, loadWorld, rollAvatar, sheetFor, Walker, WorldView } from './world.js';
+import {
+  Above,
+  avatarIndex,
+  CharSheet,
+  loadSheets,
+  loadWorld,
+  rollAvatar,
+  sheetFor,
+  Walker,
+  WorldView,
+} from './world.js';
 import { Guest, Proximity } from './proximity.js';
 import { Zone, ZoneGrid, ZoneWatch } from './zones.js';
 import { ROOM_RE } from './config.js';

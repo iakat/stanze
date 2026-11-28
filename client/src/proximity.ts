@@ -52,7 +52,9 @@ export function judge(mine: Guest, them: Guest): Pair {
     if (a.kind === 'silent') continue;
     if (dist2(mine.at, them.at) <= a.proximity * a.proximity) return { on: true, why: 'near' };
   }
-  return dist2(mine.at, them.at) <= BUBBLE * BUBBLE ? { on: true, why: 'bubble' } : { on: false, why: 'far' };
+  return dist2(mine.at, them.at) <= BUBBLE * BUBBLE
+    ? { on: true, why: 'bubble' }
+    : { on: false, why: 'far' };
 }
 
 // Proximity holds one page's conversation set, and the one word the presence
