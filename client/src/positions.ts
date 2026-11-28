@@ -1,6 +1,7 @@
 /*
- Position frames: 5 Hz over the sealed files channel, and the drawing that turns
- them back into somebody walking.
+ Position frames over the sealed files channel, and the drawing that turns them
+ back into somebody walking: about fifteen a second while the guest walks, one a
+ second while it stands still, and one at once when it stops or turns.
 
  One pair, one direction: every guest holds a pair to every other guest and
  sends its place over that pair, at the cadence WorkAdventure sends at, so the
@@ -12,15 +13,18 @@ import { state } from './state.js';
 import { b64d, b64e, fileAAD, pqCall, pqModule } from './sealed.js';
 import type { Point } from './proximity.js';
 
-// POSITION_DELAY is one tick: five frames a second.
-export const POSITION_DELAY = 200;
+// The cadence follows the walker instead of a fixed clock. A guest on the move
+// sends MOVING_DELAY about fifteen times a second, so a walk reads as a walk;
+// a guest standing still sends IDLE_DELAY once a second, which is all a late
+// joiner needs to learn where everybody is. A stop and a turn go out at once.
+export const MOVING_DELAY = 66;
+export const IDLE_DELAY = 1000;
 
-// The walk speed, and the far a lerp travels between two frames.
-const WALK_SPEED = 200;
-const STEP = (WALK_SPEED * POSITION_DELAY) / 1000;
-// A frame older than three ticks is a stale sample and is not slid in slowly:
-// the guest is drawn where it says it is.
-const STALE = POSITION_DELAY * 3;
+// A measured gap is clamped to this window: below it a burst is not a reason to
+// snap, above it a stall is not a reason to slide for a second. A first frame
+// takes the ceiling, so it is drawn where it says it is.
+const MIN_GAP = 16;
+const MAX_GAP = 150;
 // POS_MAX_JSON bounds the plaintext of one frame, so a broken page cannot grow
 // the channel.
 const POS_MAX_JSON = 200;
@@ -36,16 +40,24 @@ export type PosFrame = {
   n: number;
 };
 
-// Sample is what a receiver keeps: the frame, the clock it arrived on and
-// whether it moved since the one before. The receiver's clock, never the
-// sender's: two tabs are two machines.
-type Sample = { x: number; y: number; d: number; mv: boolean; at: number; n: number };
+// Sample is what a receiver keeps: the frame, the place before it, the clock it
+// arrived on, how long it took to arrive, and whether it moved since the one
+// before. The receiver's clock, never the sender's: two tabs are two machines.
+type Sample = {
+  x: number;
+  y: number;
+  px: number;
+  py: number;
+  d: number;
+  mv: boolean;
+  at: number;
+  gap: number;
+  n: number;
+};
 
 const remotes = new Map<string, Sample>();
 const seqOut = new Map<string, number>();
 const seqIn = new Map<string, number>();
-const DIR_X = [0, -1, 1, 0];
-const DIR_Y = [1, 0, 0, -1];
 
 export function posReset() {
   remotes.clear();
@@ -57,18 +69,21 @@ export function posForget(peerId: string) {
   remotes.delete(peerId);
 }
 
-// posAt is where a remote avatar stands now: the sample is drawn where the
-// sender put it, and while the pair is talking the step between two frames is
-// slid over a tick so a walk looks like a walk instead of five hops a second.
+// posAt is where a remote avatar stands now. The sender's cadence is not fixed
+// (twenty a second walking, one a second standing), so the slide runs over the
+// gap actually measured between the last two frames instead of assuming a tick,
+// and it starts from where the avatar was drawn, not from a guess about the
+// walk speed. That keeps a walk smooth at any rate and never overshoots: an
+// avatar is drawn between two places its sender really reported.
 export function posAt(id: string, now: number, smooth: boolean): Point {
   const sample = remotes.get(id);
   if (!sample) return { x: 0, y: 0 };
   const age = now - sample.at;
-  if (!smooth || !sample.mv || age >= STALE) return { x: sample.x, y: sample.y };
-  const px = sample.x - DIR_X[sample.d] * STEP;
-  const py = sample.y - DIR_Y[sample.d] * STEP;
-  const t = Math.min(1, age / POSITION_DELAY);
-  return { x: px + (sample.x - px) * t, y: py + (sample.y - py) * t };
+  // A still guest, a pair that is not talking, or a frame from a peer that has
+  // gone quiet: the sample is drawn where the sender put it.
+  if (!smooth || !sample.mv || age >= sample.gap) return { x: sample.x, y: sample.y };
+  const t = Math.max(0, Math.min(1, age / sample.gap));
+  return { x: sample.px + (sample.x - sample.px) * t, y: sample.py + (sample.y - sample.py) * t };
 }
 
 // remotePoints is the exact place of every remote frame, without the slide: it
@@ -100,6 +115,22 @@ export function posFrame(x: number, y: number, d: number): PosFrame {
   };
 }
 
+// posDelay is how long to wait before the next frame. A walking guest sends at
+// about fifteen a second, which is enough for a walk to read as a walk without
+// flooding the mesh: one frame per pair, so the cost grows with the room. A
+// guest standing still sends once a second, which is all a late joiner needs to
+// learn where everybody is.
+export function posDelay(moving: boolean): number {
+  return moving ? MOVING_DELAY : IDLE_DELAY;
+}
+
+// shouldSend answers whether this animation frame is a frame of the cadence. A
+// stop or a turn goes out at once, so the last step of a walk and the new
+// facing are never held back by a slow clock.
+export function shouldSend(now: number, lastAt: number, moving: boolean, edge: boolean): boolean {
+  return edge || now - lastAt >= posDelay(moving);
+}
+
 // posSend seals one frame for every proven pair and puts it on the files
 // channel of that pair. A pair whose channel is closed this tick is skipped:
 // the next tick in 200 ms is the retry, and a queue of stale positions is worse
@@ -120,7 +151,16 @@ export function posSend(peerList: Iterable<any>, frame: PosFrame) {
     if (plain.length > POS_MAX_JSON) continue;
     const sealed = pqCall((json) => pqModule().seal(json), {
       key: b64e(peer.keys.sendChat),
-      aad: b64e(fileAAD(peer.id, state.self, POS_XFER, n, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+      aad: b64e(
+        fileAAD(
+          peer.id,
+          state.self,
+          POS_XFER,
+          n,
+          state.idKey && state.idKey.pub,
+          peer.pub && peer.pub.id,
+        ),
+      ),
       pt: b64e(new TextEncoder().encode(plain)),
     });
     if (!sealed || !sealed.b) continue;
@@ -158,13 +198,22 @@ export function posOnMessage(peer: any, raw: any): PosFrame | null {
     n,
   };
   const before = remotes.get(peer.id);
+  const now = performance.now();
+  // The gap between this frame and the one before it is what the slide runs
+  // over. It is clamped: a husk of a tab that reported nothing for a second is
+  // not a reason to slide a walk over a second, and a burst after a stall must
+  // not make the next step instant.
+  const gap = before ? Math.max(MIN_GAP, Math.min(MAX_GAP, now - before.at)) : MAX_GAP;
   remotes.set(peer.id, {
     x: frame.x,
     y: frame.y,
+    px: before ? before.x : frame.x,
+    py: before ? before.y : frame.y,
     d: frame.d,
     // The moving flag does not travel: a frame that changed place is a step.
     mv: before !== undefined && (before.x !== frame.x || before.y !== frame.y),
-    at: performance.now(),
+    at: now,
+    gap,
     n,
   });
   return frame;
@@ -177,13 +226,26 @@ export function posOnMessage(peer: any, raw: any): PosFrame | null {
 function openBody(peer: any, blob: string): any {
   const last = seqIn.get(peer.id);
   const next = last === undefined ? 0 : last + 1;
-  return openWith(peer, blob, next) || openWith(peer, blob, last === undefined ? -1 : last) || openWith(peer, blob, 0);
+  return (
+    openWith(peer, blob, next) ||
+    openWith(peer, blob, last === undefined ? -1 : last) ||
+    openWith(peer, blob, 0)
+  );
 }
 
 function openWith(peer: any, blob: string, seq: number): any {
   const out = pqCall((json) => pqModule().open(json), {
     key: b64e(peer.keys.recvChat),
-    aad: b64e(fileAAD(peer.id, peer.id, POS_XFER, seq, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+    aad: b64e(
+      fileAAD(
+        peer.id,
+        peer.id,
+        POS_XFER,
+        seq,
+        state.idKey && state.idKey.pub,
+        peer.pub && peer.pub.id,
+      ),
+    ),
     b: blob,
   });
   if (!out || out.error || typeof out.pt !== 'string') return null;

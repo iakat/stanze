@@ -20,7 +20,7 @@ import {
   posForget,
   posReset,
   posSend,
-  POSITION_DELAY,
+  shouldSend,
   remoteDir,
   remoteMoving,
   remotePoints,
@@ -51,9 +51,16 @@ let doorOn = '';
 let doorCool = 0;
 // DOOR_COOL_MS is how long a door stays shut after it fired.
 const DOOR_COOL_MS = 3000;
-// lastPosAt is the time of the last position tick. The tick length itself is
-// POSITION_DELAY, imported from the position frames.
+// lastPosAt is the time of the last position frame, and lastPosX/Y/Dir/Moving
+// are the walker as that frame saw it, so a stop or a turn is an edge the clock
+// cannot swallow. The tick length itself comes from the position frames.
 let lastPosAt = 0;
+// lastJudgeAt is the world tick, which never slows down: only the send does.
+let lastJudgeAt = 0;
+let lastPosX = 0;
+let lastPosY = 0;
+let lastPosDir = 0;
+let lastPosMoving = false;
 let generation = 0;
 // The conversation set as the last tick judged it, for the test hook and for
 // the change detection that keeps a still room from repainting.
@@ -140,6 +147,11 @@ export async function worldEnter(room: string, start?: string) {
     worldStats.loaded++;
     worldStats.frames = 0;
     lastPosAt = 0;
+    lastJudgeAt = 0;
+    lastPosX = walker.x;
+    lastPosY = walker.y;
+    lastPosDir = walker.dir;
+    lastPosMoving = false;
     // A map that arrived after the visitor asked for the grid again never
     // takes the frame back: the stored choice is read once more.
     const on = isWorld();
@@ -221,20 +233,49 @@ export function worldToggle() {
 }
 
 // ---------------------------------------------------------------- the loop
-// startLoop runs two clocks: the position tick at 5 Hz, which is also the only
-// place a conversation is judged, and the view's own frame loop, which draws.
+// JUDGE_DELAY is the world tick: five a second, the rate the zone test, the
+// conversation judgement and the drawing of remotes run at. The position send
+// is gated separately, at the walker's own cadence, so a still room still
+// routes the media the moment somebody walks into earshot.
+const JUDGE_DELAY = 200;
+
+// ---------------------------------------------------------------- the loop
+// startLoop runs two clocks: the world tick at JUDGE_DELAY, which judges the
+// conversation and moves the remotes, and the position send, which runs on the
+// animation frame and whose length follows the walker. The view's own frame
+// loop draws on top of both.
 function startLoop() {
   stopLoop();
   const run = () => {
     if (!view || !walker || state.leaving) return;
     const now = performance.now();
-    if (now - lastPosAt >= POSITION_DELAY) {
-      lastPosAt = now;
+    sendPos(now);
+    if (now - lastJudgeAt >= JUDGE_DELAY) {
+      lastJudgeAt = now;
       step();
     }
     raf = requestAnimationFrame(run);
   };
   raf = requestAnimationFrame(run);
+}
+
+// sendPos is the position cadence on its own: the frame goes out at the walker's
+// rate, not the world's, so a walking guest is not held to five a second. A
+// stop or a turn is an edge and goes at once, so the last step of a walk and a
+// new facing are never swallowed by the clock.
+function sendPos(now: number) {
+  if (!walker) return;
+  const moved = walker.x !== lastPosX || walker.y !== lastPosY;
+  const turned = walker.dir !== lastPosDir;
+  const edge = (moved && !walker.moving) || turned || walker.moving !== lastPosMoving;
+  if (!shouldSend(now, lastPosAt, walker.moving, edge)) return;
+  lastPosAt = now;
+  lastPosX = walker.x;
+  lastPosY = walker.y;
+  lastPosDir = walker.dir;
+  lastPosMoving = walker.moving;
+  posSend(state.peers.values(), posFrame(walker.x, walker.y, walker.dir));
+  worldStats.sent++;
 }
 
 function stopLoop() {
@@ -333,8 +374,8 @@ function door(enter: Zone[], leave: Zone[]) {
   leaveRoom(to, typeof pass === 'string' ? pass : '');
 }
 
-// step is one position tick: walk the zones, send the frame and the one word
-// about the conversation, judge the pairs, and route the media.
+// step is one world tick: walk the zones, send the position frame when its own
+// clock says so, judge the pairs, and route the media.
 function step() {
   if (!view || !walker || !proximity) return;
   const local = view.local as any;
@@ -351,8 +392,6 @@ function step() {
   const zoneIds = watch ? watch.ids() : [];
   if (worldStats.zones.join(',') !== zoneIds.join(',')) worldStats.zones = zoneIds;
   const peers = [...state.peers.values()];
-  posSend(peers, posFrame(walker.x, walker.y, walker.dir));
-  worldStats.sent++;
   // The judgement, on the exact places: this page and every remote at the
   // place its last frame named, with every area counted once.
   const points = remotePoints();
@@ -565,7 +604,9 @@ export function worldHook() {
     // of a second later.
     step: () => {
       step();
-      return view && view.local ? { x: Math.round(view.local.x), y: Math.round(view.local.y) } : null;
+      return view && view.local
+        ? { x: Math.round(view.local.x), y: Math.round(view.local.y) }
+        : null;
     },
     // walk holds one key for a number of milliseconds, the way a person holds
     // it, so the walker takes real steps through real collision.

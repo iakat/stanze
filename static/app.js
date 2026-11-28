@@ -3454,18 +3454,16 @@
   }
 
   // src/positions.ts
-  var POSITION_DELAY = 200;
-  var WALK_SPEED = 200;
-  var STEP = WALK_SPEED * POSITION_DELAY / 1e3;
-  var STALE = POSITION_DELAY * 3;
+  var MOVING_DELAY = 66;
+  var IDLE_DELAY = 1e3;
+  var MIN_GAP = 16;
+  var MAX_GAP = 150;
   var POS_MAX_JSON = 200;
   var POS_MAX_POINT = 65535;
   var POS_XFER = "pos";
   var remotes = /* @__PURE__ */ new Map();
   var seqOut = /* @__PURE__ */ new Map();
   var seqIn = /* @__PURE__ */ new Map();
-  var DIR_X = [0, -1, 1, 0];
-  var DIR_Y = [1, 0, 0, -1];
   function posReset() {
     remotes.clear();
     seqOut.clear();
@@ -3478,11 +3476,9 @@
     const sample = remotes.get(id);
     if (!sample) return { x: 0, y: 0 };
     const age = now - sample.at;
-    if (!smooth || !sample.mv || age >= STALE) return { x: sample.x, y: sample.y };
-    const px = sample.x - DIR_X[sample.d] * STEP;
-    const py = sample.y - DIR_Y[sample.d] * STEP;
-    const t = Math.min(1, age / POSITION_DELAY);
-    return { x: px + (sample.x - px) * t, y: py + (sample.y - py) * t };
+    if (!smooth || !sample.mv || age >= sample.gap) return { x: sample.x, y: sample.y };
+    const t = Math.max(0, Math.min(1, age / sample.gap));
+    return { x: sample.px + (sample.x - sample.px) * t, y: sample.py + (sample.y - sample.py) * t };
   }
   function remotePoints() {
     const out = /* @__PURE__ */ new Map();
@@ -3505,6 +3501,12 @@
       n: 0
     };
   }
+  function posDelay(moving) {
+    return moving ? MOVING_DELAY : IDLE_DELAY;
+  }
+  function shouldSend(now, lastAt, moving, edge) {
+    return edge || now - lastAt >= posDelay(moving);
+  }
   function posSend(peerList, frame) {
     if (!state.self || state.leaving) return;
     for (const peer of peerList) {
@@ -3517,7 +3519,16 @@
       if (plain.length > POS_MAX_JSON) continue;
       const sealed = pqCall((json) => pqModule().seal(json), {
         key: b64e(peer.keys.sendChat),
-        aad: b64e(fileAAD(peer.id, state.self, POS_XFER, n, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+        aad: b64e(
+          fileAAD(
+            peer.id,
+            state.self,
+            POS_XFER,
+            n,
+            state.idKey && state.idKey.pub,
+            peer.pub && peer.pub.id
+          )
+        ),
         pt: b64e(new TextEncoder().encode(plain))
       });
       if (!sealed || !sealed.b) continue;
@@ -3547,13 +3558,18 @@
       n
     };
     const before = remotes.get(peer.id);
+    const now = performance.now();
+    const gap2 = before ? Math.max(MIN_GAP, Math.min(MAX_GAP, now - before.at)) : MAX_GAP;
     remotes.set(peer.id, {
       x: frame.x,
       y: frame.y,
+      px: before ? before.x : frame.x,
+      py: before ? before.y : frame.y,
       d: frame.d,
       // The moving flag does not travel: a frame that changed place is a step.
       mv: before !== void 0 && (before.x !== frame.x || before.y !== frame.y),
-      at: performance.now(),
+      at: now,
+      gap: gap2,
       n
     });
     return frame;
@@ -3566,7 +3582,16 @@
   function openWith(peer, blob, seq) {
     const out = pqCall((json) => pqModule().open(json), {
       key: b64e(peer.keys.recvChat),
-      aad: b64e(fileAAD(peer.id, peer.id, POS_XFER, seq, state.idKey && state.idKey.pub, peer.pub && peer.pub.id)),
+      aad: b64e(
+        fileAAD(
+          peer.id,
+          peer.id,
+          POS_XFER,
+          seq,
+          state.idKey && state.idKey.pub,
+          peer.pub && peer.pub.id
+        )
+      ),
       b: blob
     });
     if (!out || out.error || typeof out.pt !== "string") return null;
@@ -3708,7 +3733,7 @@
   var WALK_ORDER = [0, 1, 2, 1];
   var CHAR_FPS = 10;
   var CHAR_MOVE_MS = 1e3 / CHAR_FPS;
-  var WALK_SPEED2 = 200;
+  var WALK_SPEED = 200;
   var AVATAR_SORT_OFFSET = 0;
   var HALO_RX = 10;
   var HALO_RY = 4;
@@ -4350,8 +4375,8 @@
       else if (dy !== 0 && dx === 0) this.dir = dy < 0 ? 3 : 0;
       const ms = Math.min(Math.max(dt, 0), 100);
       const len = Math.hypot(dx, dy) || 1;
-      const moveX = dx / len * WALK_SPEED2 * (ms / 1e3);
-      const moveY = dy / len * WALK_SPEED2 * (ms / 1e3);
+      const moveX = dx / len * WALK_SPEED * (ms / 1e3);
+      const moveY = dy / len * WALK_SPEED * (ms / 1e3);
       if (moveX && !this.world.collision(this.x + moveX, this.y)) this.x += moveX;
       if (moveY && !this.world.collision(this.x, this.y + moveY)) this.y += moveY;
       this.clock += ms;
@@ -4435,6 +4460,7 @@
     // pad is the four arrow buttons a touch screen walks with; a mouse never
     // sees it.
     pad = null;
+    observer = null;
     onKeyDown = (event) => this.key(event, true);
     onKeyUp = (event) => this.key(event, false);
     constructor(canvas, world) {
@@ -4454,6 +4480,7 @@
           this.dirty = true;
         });
         observe.observe(canvas);
+        this.observer = observe;
       }
       this.raf = requestAnimationFrame((t) => this.tick(t));
     }
@@ -4477,6 +4504,8 @@
       this.raf = 0;
       window.removeEventListener("keydown", this.onKeyDown);
       window.removeEventListener("keyup", this.onKeyUp);
+      if (this.observer) this.observer.disconnect();
+      this.observer = null;
       if (this.pad && this.pad.parentNode) this.pad.parentNode.removeChild(this.pad);
       this.pad = null;
       this.avatars.clear();
@@ -4765,6 +4794,11 @@
   var doorCool = 0;
   var DOOR_COOL_MS = 3e3;
   var lastPosAt = 0;
+  var lastJudgeAt = 0;
+  var lastPosX = 0;
+  var lastPosY = 0;
+  var lastPosDir = 0;
+  var lastPosMoving = false;
   var generation = 0;
   var near = [];
   var worldStats = {
@@ -4829,6 +4863,11 @@
       worldStats.loaded++;
       worldStats.frames = 0;
       lastPosAt = 0;
+      lastJudgeAt = 0;
+      lastPosX = walker.x;
+      lastPosY = walker.y;
+      lastPosDir = walker.dir;
+      lastPosMoving = false;
       const on = isWorld();
       if (on) {
         worldSet(true);
@@ -4840,6 +4879,7 @@
     } catch (err) {
       if (gen !== generation) return;
       worldSet(false);
+      route([...state.peers.values()]);
       const why = err && err.message ? err.message : String(err);
       note.hidden = false;
       note.textContent = "no world for this room (" + why + "), the call grid is shown instead";
@@ -4885,18 +4925,34 @@
     if (on && !view) worldEnter(state.room).catch(() => {
     });
   }
+  var JUDGE_DELAY = 200;
   function startLoop() {
     stopLoop();
     const run = () => {
       if (!view || !walker || state.leaving) return;
       const now = performance.now();
-      if (now - lastPosAt >= POSITION_DELAY) {
-        lastPosAt = now;
+      sendPos(now);
+      if (now - lastJudgeAt >= JUDGE_DELAY) {
+        lastJudgeAt = now;
         step();
       }
       raf = requestAnimationFrame(run);
     };
     raf = requestAnimationFrame(run);
+  }
+  function sendPos(now) {
+    if (!walker) return;
+    const moved = walker.x !== lastPosX || walker.y !== lastPosY;
+    const turned = walker.dir !== lastPosDir;
+    const edge = moved && !walker.moving || turned || walker.moving !== lastPosMoving;
+    if (!shouldSend(now, lastPosAt, walker.moving, edge)) return;
+    lastPosAt = now;
+    lastPosX = walker.x;
+    lastPosY = walker.y;
+    lastPosDir = walker.dir;
+    lastPosMoving = walker.moving;
+    posSend(state.peers.values(), posFrame(walker.x, walker.y, walker.dir));
+    worldStats.sent++;
   }
   function stopLoop() {
     if (raf) cancelAnimationFrame(raf);
@@ -4914,7 +4970,7 @@
     }
     return { at: { x, y }, zones: list, full };
   }
-  function roomOfExit(exit, here) {
+  function roomOfExit(exit) {
     const raw = String(exit || "").trim();
     if (!raw) return null;
     const pick = (text) => {
@@ -4925,9 +4981,10 @@
       if (!/^[A-Za-z0-9._-]{1,64}$/.test(seg)) return "";
       return seg.replace(/\.(tmj|json|png)$/i, "").toLowerCase();
     };
-    let target = "";
-    if (/^(https?:)?\/\//i.test(raw)) {
-      let url = null;
+    let target;
+    const lower = raw.toLowerCase();
+    if (raw.startsWith("//") || lower.startsWith("http://") || lower.startsWith("https://")) {
+      let url;
       try {
         url = new URL(raw, location.href);
       } catch {
@@ -4952,7 +5009,7 @@
     if (!zone || !view || !state.room) return;
     doorOn = zone.id;
     if (now < doorCool) return;
-    const to = roomOfExit(zone.exit, state.room);
+    const to = roomOfExit(zone.exit);
     if (!to) {
       proxNote("door " + zone.id + " names a room this page cannot walk to: " + zone.exit);
       return;
@@ -4983,8 +5040,6 @@
     const zoneIds = watch ? watch.ids() : [];
     if (worldStats.zones.join(",") !== zoneIds.join(",")) worldStats.zones = zoneIds;
     const peers = [...state.peers.values()];
-    posSend(peers, posFrame(walker.x, walker.y, walker.dir));
-    worldStats.sent++;
     const points = remotePoints();
     const load2 = /* @__PURE__ */ new Map();
     if (zones) {
@@ -5020,7 +5075,7 @@
     view.marks(cams);
     view.mark();
   }
-  function route(peers, nearIds) {
+  function route(peers, nearIds = peers.map((one) => one.id)) {
     const on = new Set(nearIds);
     for (const peer of peers) {
       const wanted = on.has(peer.id);
@@ -5168,7 +5223,7 @@
         return openDoor(zone) ? "fired" : "no door named " + id;
       },
       // doors is every door zone of this map with the room it names.
-      doors: () => view ? view.world.zones.filter((one) => !!one.exit).map((one) => ({ id: one.id, room: roomOfExit(one.exit, view ? view.world.room : "") })) : [],
+      doors: () => view ? view.world.zones.filter((one) => !!one.exit).map((one) => ({ id: one.id, room: roomOfExit(one.exit) })) : [],
       // start is the zone this room lands a guest on, if the map names one.
       start: () => view ? view.world.zones.filter((one) => one.start).map((one) => one.id) : [],
       near: () => view ? [...near] : [],
@@ -5951,6 +6006,31 @@
     state.fileChunksRecv = 0;
     state.fileRefused = 0;
     state.fileCancelled = 0;
+  }
+
+  // src/clock.ts
+  function clockText(ms) {
+    const total = Math.max(0, Math.floor(ms / 1e3));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor(total % 3600 / 60);
+    const s = total % 60;
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  function startCallClock() {
+    stopCallClock();
+    state.callStart = Date.now();
+    $("call-timer").textContent = clockText(0);
+    state.callTimer = setInterval(() => {
+      if (!state.callStart) return;
+      $("call-timer").textContent = clockText(Date.now() - state.callStart);
+    }, 1e3);
+  }
+  function stopCallClock() {
+    if (state.callTimer) clearInterval(state.callTimer);
+    state.callTimer = null;
+    state.callStart = 0;
+    const el2 = $("call-timer");
+    if (el2) el2.textContent = "";
   }
 
   // src/sfx.ts
@@ -7106,6 +7186,1443 @@
     start().catch((err) => post({ ev: "error", text: short(err) }));
   }
 
+  // src/signaling.ts
+  var ERROR_LINES = {
+    "too-big": "a frame was too large for the relay; that link starts again",
+    "relay-off": "this server offers no relay; guests that cannot reach each other directly will not connect",
+    "relay-exhausted": "the relay was already given to this connection; leave and join again for a new one",
+    "bad-message": "the server could not read a frame this page sent; the link may be out of date"
+  };
+  function dropPeers() {
+    for (const id of [...state.peers.keys()]) dropPeer(id);
+  }
+  function scheduleReconnect() {
+    if (state.leaving || state.fatal || state.reconnectTimer) return;
+    const delay = state.reconnectDelay;
+    state.reconnectDelay = Math.min(state.reconnectDelay * 2, 1e4);
+    state.reconnectTimer = setTimeout(() => {
+      state.reconnectTimer = null;
+      if (!state.leaving && !state.fatal) connectWS();
+    }, delay);
+  }
+  function cancelReconnect() {
+    if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = null;
+    state.reconnectDelay = 500;
+  }
+  function connectWS() {
+    cancelReconnect();
+    if (state.ws) {
+      const old = state.ws;
+      state.ws = null;
+      old.onclose = null;
+      try {
+        old.close();
+      } catch {
+      }
+    }
+    let ws;
+    try {
+      ws = new WebSocket(wsURL());
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+    state.ws = ws;
+    ws.onopen = () => {
+      state.reconnectDelay = 500;
+      stopLost();
+      send({ t: "join", room: state.room });
+    };
+    ws.onmessage = (event) => {
+      auditWire("in", event.data);
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      handle(msg);
+    };
+    ws.onclose = () => {
+      if (state.ws === ws) state.ws = null;
+      if (state.leaving) return;
+      dropPeers();
+      if (state.fatal) {
+        leave(state.fatal);
+        return;
+      }
+      say("connection lost, reconnecting");
+      startLost();
+      scheduleReconnect();
+    };
+    ws.onerror = () => {
+    };
+  }
+  function handle(msg) {
+    if (msg.t === "error") {
+      if (msg.code === "unavailable") {
+        state.fatal = "room unavailable or full";
+        leave(state.fatal);
+      } else if (msg.code === "sealed-only") {
+        state.fatal = "this page is out of date; reload it to join";
+        leave(state.fatal);
+      } else if (ERROR_LINES[msg.code]) say(ERROR_LINES[msg.code]);
+      return;
+    }
+    switch (msg.t) {
+      case "ice":
+        state.ice = msg.ice || [];
+        for (const one of state.peers.values()) {
+          try {
+            one.pc?.setConfiguration(rtcConfig());
+            one.pc?.restartIce();
+          } catch {
+          }
+        }
+        break;
+      case "joined": {
+        state.self = msg.self;
+        state.ice = msg.ice || [];
+        send({ t: "ice" });
+        if (state.notice === "connection lost, reconnecting") say("");
+        state.auth = { n: -1, admins: [], by: "", sig: "" };
+        setAdmins([]);
+        state.waiting = true;
+        asrProbe();
+        omniProbe();
+        let listed = 0;
+        for (const info of msg.peers || []) {
+          if (!info || !info.id) continue;
+          const peer = ensurePeer(info.id);
+          peer.waiting = false;
+          sealedSendPub(peer);
+          listed++;
+        }
+        if (!listed) sealedSendPub(null);
+        startAuthSeed();
+        markAdmins();
+        paintWaiting();
+        sendState();
+        updateCount();
+        break;
+      }
+      case "peer-joined": {
+        if (!msg.peer || !msg.peer.id) break;
+        const peer = ensurePeer(msg.peer.id);
+        markAdmins();
+        paintWaiting();
+        paintHandQueue();
+        sealedSendPub(peer);
+        if (!isWorld()) route([...state.peers.values()]);
+        playSfx("joined");
+        break;
+      }
+      case "peer-left": {
+        dropPeer(msg.from);
+        state.admins.delete(msg.from);
+        resealOnLeave(msg.from);
+        markAdmins();
+        paintWaiting();
+        playSfx("left");
+        break;
+      }
+      case "enc": {
+        if (msg.from && typeof msg.b === "string") sealedHandleOpaque(msg.from, msg.b);
+        break;
+      }
+    }
+  }
+
+  // src/stats.ts
+  var STATS_MS = 1e3;
+  var STATS_HISTORY = 60;
+  function statsOpen() {
+    const panel = $("stats-panel");
+    return !!panel && !panel.hidden;
+  }
+  function startStats() {
+    if (state.statsTimer || !statsOpen()) return;
+    for (const peer of state.peers.values()) {
+      peer.statLast.clear();
+      peer.statLoss = void 0;
+    }
+    state.statHist.length = 0;
+    clearStatsPanel();
+    updateStats();
+    state.statsTimer = setInterval(() => updateStats(), STATS_MS);
+  }
+  function stopStats() {
+    if (state.statsTimer) clearInterval(state.statsTimer);
+    state.statsTimer = null;
+  }
+  function setStatsOpen(open) {
+    $("stats-panel").hidden = !open;
+    $("stats-btn").setAttribute("aria-pressed", String(open));
+    if (open && !document.hidden) startStats();
+    else stopStats();
+  }
+  function clearStatsPanel() {
+    keptRows.clear();
+    const body = $("stats-body");
+    if (body) body.replaceChildren();
+    const sum = $("stats-sum");
+    if (sum) sum.replaceChildren();
+  }
+  function bitrate(last, report, field) {
+    const bytes = report[field] || 0;
+    const ts = report.timestamp || 0;
+    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
+    const prev = last.get(key);
+    last.set(key, { bytes, ts });
+    if (!prev || !(ts > prev.ts)) return 0;
+    const kbit = (bytes - prev.bytes) * 8 / (ts - prev.ts);
+    return kbit > 0 ? Math.round(kbit) : 0;
+  }
+  function isDirectType(type) {
+    return type === "host" || type === "srflx" || type === "prflx";
+  }
+  function counterDelta(last, report, field) {
+    const value = report[field];
+    if (typeof value !== "number") return null;
+    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
+    const prev = last.get(key);
+    last.set(key, { bytes: value, ts: report.timestamp || 0 });
+    return prev ? value - prev.bytes : null;
+  }
+  async function peerStats(peer) {
+    const pc = peer.pc;
+    if (!pc || pc.connectionState === "closed" || pc.signalingState === "closed") return null;
+    let report;
+    try {
+      report = await pc.getStats();
+    } catch {
+      return null;
+    }
+    if (!report || typeof report.forEach !== "function") return null;
+    const out = {
+      up: { audio: 0, video: 0 },
+      down: { audio: 0, video: 0 },
+      rtt: null,
+      path: "",
+      jitter: null,
+      loss: null,
+      shot: ""
+    };
+    let jitterMax = null;
+    let lost = 0;
+    let got = 0;
+    let pairId = null;
+    const pairs = /* @__PURE__ */ new Map();
+    const cands = /* @__PURE__ */ new Map();
+    let legacyPairId = null;
+    try {
+      report.forEach((r) => {
+        if (r.type === "outbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
+          out.up[r.kind] += bitrate(peer.statLast, r, "bytesSent");
+        } else if (r.type === "inbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
+          out.down[r.kind] += bitrate(peer.statLast, r, "bytesReceived");
+          if (r.kind === "video" && r.frameWidth && r.frameHeight) {
+            out.shot = `${r.frameWidth}x${r.frameHeight}`;
+          }
+          if (typeof r.jitter === "number") {
+            jitterMax = jitterMax === null ? r.jitter : Math.max(jitterMax, r.jitter);
+          }
+          const dLost = counterDelta(peer.statLast, r, "packetsLost");
+          const dGot = counterDelta(peer.statLast, r, "packetsReceived");
+          if (dLost !== null && dGot !== null && dGot >= 0) {
+            lost += Math.max(0, dLost);
+            got += dGot;
+          }
+        } else if (r.type === "transport" && r.selectedCandidatePairId) {
+          pairId = r.selectedCandidatePairId;
+        } else if (r.type === "connection" && (r.selectedCandidatePairId || r.nominatedCandidatePairId)) {
+          legacyPairId = r.selectedCandidatePairId || r.nominatedCandidatePairId;
+        } else if (r.type === "candidate-pair") {
+          pairs.set(r.id, r);
+        } else if (r.type === "local-candidate" || r.type === "remote-candidate") {
+          cands.set(r.id, r);
+        }
+      });
+    } catch {
+    }
+    const pick = (ok) => [...pairs.values()].find(ok);
+    const pair = (pairId ? pairs.get(pairId) : null) || (legacyPairId ? pairs.get(legacyPairId) : null) || pick((p) => p.selected || p.nominated) || pick((p) => p.state === "succeeded");
+    if (pair) {
+      if (typeof pair.currentRoundTripTime === "number") {
+        out.rtt = Math.round(pair.currentRoundTripTime * 1e3);
+      }
+      const local = cands.get(pair.localCandidateId);
+      const remote = cands.get(pair.remoteCandidateId);
+      const lt = local ? local.candidateType || local.type || "" : "";
+      const rt = remote ? remote.candidateType || remote.type || "" : "";
+      const relays = [];
+      if (lt === "relay") relays.push("you");
+      if (rt === "relay") relays.push("them");
+      if (relays.length) out.path = `relay (${relays.join(" + ")})`;
+      else if (isDirectType(lt) && isDirectType(rt)) out.path = "p2p";
+    }
+    if (jitterMax !== null) out.jitter = jitterMax * 1e3;
+    if (got > 0) {
+      const now = lost / (lost + got) * 100;
+      out.loss = typeof peer.statLoss === "number" ? peer.statLoss * 0.7 + now * 0.3 : now;
+      peer.statLoss = out.loss;
+    }
+    return out;
+  }
+  function rateScale(kbit) {
+    const bytes = state.statsBytes;
+    const n = Math.max(0, kbit) * (bytes ? 125 : 1);
+    const big = n >= (bytes ? 1048576 : 1e3);
+    const v = n / (big ? bytes ? 1048576 : 1e3 : bytes ? 1024 : 1);
+    const num = big ? v.toFixed(v >= 10 ? 0 : 1) : Math.round(v).toString();
+    return { num, unit: big ? "m" : "k" };
+  }
+  function rateText(kbit) {
+    if (!(kbit > 0)) return "";
+    const r = rateScale(kbit);
+    return r.num + r.unit;
+  }
+  function msText(ms) {
+    return Math.round(ms) + " ms";
+  }
+  function jitterText(ms) {
+    if (typeof ms !== "number") return "";
+    return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + " ms";
+  }
+  function lossText(pct) {
+    if (typeof pct !== "number") return "";
+    if (pct < 0.05) return "none";
+    return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + " %";
+  }
+  function lossMark(pct) {
+    return pct >= 2 ? false : void 0;
+  }
+  var VIDEO_ICON = ["1F3A5", "video"];
+  var AUDIO_ICON = ["1F50A", "audio"];
+  var PICTURE_ICON = ["1F5BC", "picture size"];
+  var PING_ICON = ["1F3D3", "round trip"];
+  var JITTER_ICON = ["1F30A", "jitter, how far apart the packets arrive"];
+  var LOSS_ICON = ["1F4C9", "packet loss"];
+  var DIRECT_ICON = ["1F517", "direct, the two browsers talk to each other"];
+  var RELAY_ICON = ["1F4E1", "relay, the media goes through the server"];
+  var UP_ICON = ["2B06", "out, what this browser sends"];
+  var DOWN_ICON = ["2B07", "in, what this browser receives"];
+  function routeCell(path) {
+    if (!path) return ["", "", "not known yet"];
+    const word = pathText(path);
+    return [...word === "direct" ? DIRECT_ICON : RELAY_ICON, word];
+  }
+  function rateCell(dir, kbit) {
+    return [...dir === "up" ? UP_ICON : DOWN_ICON, rateText(kbit) || "-"];
+  }
+  function tripCells(rtt, jitter, loss) {
+    return [
+      [...PING_ICON, typeof rtt === "number" ? msText(rtt) : ""],
+      [...JITTER_ICON, typeof jitter === "number" ? jitterText(jitter) : ""],
+      [...LOSS_ICON, typeof loss === "number" ? lossText(loss) : "", lossMark(loss)]
+    ];
+  }
+  function pathText(path) {
+    return path === "p2p" ? "direct" : path;
+  }
+  function callPath(live) {
+    const words = /* @__PURE__ */ new Set();
+    for (const s of live) if (s.path) words.add(pathText(s.path));
+    if (words.size === 0) return "";
+    if (words.size === 1) return [...words][0];
+    return "mixed: " + [...words].join(", ");
+  }
+  function worstOf(live, key) {
+    const nums = live.map((s) => s[key]).filter((n) => typeof n === "number");
+    return nums.length ? Math.max(...nums) : null;
+  }
+  function callPairs(live, total) {
+    const out = [];
+    const path = callPath(live);
+    if (path) out.push(["route ", [routeCell(path)]]);
+    const rtt = worstOf(live, "rtt");
+    const jitter = worstOf(live, "jitter");
+    const loss = worstOf(live, "loss");
+    if (rtt !== null || jitter !== null || loss !== null) {
+      out.push(["link ", tripCells(rtt, jitter, loss), void 0, "metrics"]);
+    }
+    out.push([
+      VIDEO_ICON,
+      [["", "", ""], rateCell("up", total.up.video), rateCell("down", total.down.video)]
+    ]);
+    out.push([
+      AUDIO_ICON,
+      [["", "", ""], rateCell("up", total.up.audio), rateCell("down", total.down.audio)]
+    ]);
+    return out;
+  }
+  function levelDb(peak) {
+    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+    return db > -60 ? `${Math.round(db)} dB` : "silent";
+  }
+  function levelFraction(peak) {
+    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
+    return clamp((db + 60) / 60, 0, 1);
+  }
+  function peerLevel(peer) {
+    if (!peer.audioSrc || !peer.meter) return "";
+    return levelDb(peer.meterPeak || 0);
+  }
+  function noiseText(out, down) {
+    if (!out && !down) return "";
+    return `out ${out || "?"}, in ${down || "?"}`;
+  }
+  function ownPairs(total) {
+    const out = [];
+    if (state.idKey) out.push(["key ", state.idKey.fp, void 0, "mono"]);
+    const live = !!(state.mic && state.micTrack && state.micTrack.readyState === "live");
+    const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
+    const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
+    const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : "off";
+    out.push([
+      VIDEO_ICON,
+      [
+        [...PICTURE_ICON, shot],
+        rateCell("up", total ? total.up.video : 0),
+        rateCell("down", total ? total.down.video : 0)
+      ]
+    ]);
+    const sample = mic && mic.sampleRate ? `${Math.round(mic.sampleRate / 1e3)} kHz ${mic.channelCount || 1}ch` : "";
+    out.push([
+      AUDIO_ICON,
+      [
+        ["", "", live ? sample || "on" : "off"],
+        rateCell("up", total ? total.up.audio : 0),
+        rateCell("down", total ? total.down.audio : 0)
+      ]
+    ]);
+    const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
+    out.push([
+      "mic ",
+      [["", "", level ? level.state === "silent" ? "silent" : level.db : "off"]],
+      void 0,
+      false,
+      level ? levelFraction(state.meterPeak) : 0
+    ]);
+    const fe = feDrops();
+    const seen = fe.frames + fe.dropped;
+    const drops = seen > 0 ? `, ${(100 * fe.dropped / seen).toFixed(1)}% drop` : "";
+    out.push(["filter ", `out ${state.denoiseOn ? state.denoiseEngine : "off"}${drops}`]);
+    const ctx = state.playCtx;
+    const play2 = ctx ? ctx.state : "none";
+    if (play2 !== "running") out.push(["sound ", `${play2}, tap the page once`, false]);
+    return out;
+  }
+  function peerPairs(peer, s) {
+    const out = [];
+    const pin = pinState(peer);
+    if (peer.fp && pin !== "new") {
+      const bad = pin === "changed" || pin === "rollback";
+      const cells = [pin === "known" ? ["2714", "verified", peer.fp] : ["", "", peer.fp]];
+      if (pin !== "known") cells.push(["", "", pin]);
+      out.push(["key ", cells, bad ? false : void 0, "mono"]);
+    }
+    if (!s) {
+      out.push(["", "connecting", void 0, true]);
+    } else {
+      out.push(["route ", [routeCell(s.path)]]);
+      out.push(["link ", tripCells(s.rtt, s.jitter, s.loss), void 0, "metrics"]);
+      out.push([
+        VIDEO_ICON,
+        [[...PICTURE_ICON, s.shot || ""], rateCell("up", s.up.video), rateCell("down", s.down.video)]
+      ]);
+      out.push([
+        AUDIO_ICON,
+        [["", "", peerLevel(peer)], rateCell("up", s.up.audio), rateCell("down", s.down.audio)]
+      ]);
+      const noise = noiseText(peer.outFilter, peer.inFilter);
+      if (noise) out.push(["filter ", noise]);
+    }
+    if (peer.sas && sealedRoomCodes().size > 1)
+      out.push(["code ", verifyText(peer.sas), void 0, true]);
+    if (!peer.keys) out.push(["keys ", "none", false, true]);
+    else if (peer.ready === "ready" && !peer.confirmed)
+      out.push(["keys ", "not confirmed", false, true]);
+    const c = sealedPairCount(peer.id);
+    if (c.refused) out.push(["frames ", `${c.refused} refused`, false, true]);
+    return out;
+  }
+  function statIcon(hex, title) {
+    const img = document.createElement("img");
+    img.className = "sico";
+    img.src = `/openmoji/${hex}.svg`;
+    img.alt = title;
+    img.title = title;
+    return img;
+  }
+  function statCells(value, metrics) {
+    const span = document.createElement("span");
+    span.className = "sv";
+    const parts = Array.isArray(value) ? value : [value];
+    for (const raw of parts) {
+      const p = Array.isArray(raw) ? raw : [raw];
+      const cell = document.createElement("span");
+      cell.className = "cell" + (p[3] === true ? " good" : p[3] === false ? " bad" : "");
+      const word = p.length > 1 ? p[2] : p[0];
+      const text = document.createElement("span");
+      text.textContent = word === null || word === void 0 ? "" : String(word);
+      if (metrics && p.length > 1 && p[1]) {
+        const label = document.createElement("span");
+        label.className = "cl";
+        label.title = String(p[1]);
+        label.textContent = String(p[1]).split(",")[0];
+        text.className = "cv";
+        cell.append(label, text);
+      } else {
+        if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
+        cell.appendChild(text);
+      }
+      span.appendChild(cell);
+    }
+    return span;
+  }
+  function statLine(key, value, mark, sub, meter) {
+    const line = document.createElement("div");
+    const parts = Array.isArray(value) ? value : [value];
+    line.className = "sline" + (sub === "mono" ? " mono" : sub === "metrics" ? " metrics" : sub ? " sub" : "") + (typeof meter === "number" ? " meterline" : "") + (mark === true ? " good" : mark === false ? " bad" : "");
+    line.dataset.n = String(parts.length);
+    const k = document.createElement("span");
+    k.className = "sk";
+    if (Array.isArray(key) && key[0]) {
+      k.appendChild(statIcon(key[0], key[1]));
+      k.appendChild(document.createTextNode(String(key[1]).split(",")[0]));
+    } else k.textContent = Array.isArray(key) ? key[1] || "" : key;
+    line.appendChild(k);
+    if (typeof meter === "number") {
+      const bar = document.createElement("span");
+      bar.className = "meter";
+      bar.setAttribute("role", "img");
+      bar.setAttribute("aria-label", `level ${Math.round(meter * 100)} percent`);
+      const fill = document.createElement("i");
+      fill.style.width = `${Math.round(meter * 100)}%`;
+      bar.appendChild(fill);
+      line.appendChild(bar);
+    }
+    line.appendChild(statCells(value, sub === "metrics"));
+    return line;
+  }
+  function statsRow(title, pairs, mark = null, badge = null) {
+    const row = document.createElement("div");
+    row.className = "srow";
+    const head = document.createElement("div");
+    head.className = "sname";
+    const name = document.createElement("span");
+    name.className = "stitle";
+    name.textContent = title;
+    head.appendChild(name);
+    if (badge && badge.level) {
+      const chip = document.createElement("span");
+      chip.className = "sbadge";
+      chip.dataset.level = badge.level;
+      chip.textContent = badge.text || badge.level;
+      head.appendChild(chip);
+    }
+    row.appendChild(head);
+    for (const p of pairs) {
+      row.appendChild(
+        statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false, p[4])
+      );
+    }
+    return row;
+  }
+  function linkLevel(s) {
+    if (!s) return "";
+    const { rtt, loss, jitter } = s;
+    if (rtt === null && loss === null) return "";
+    if (loss !== null && loss >= 5 || rtt !== null && rtt >= 400) return "poor";
+    if (loss !== null && loss >= 2 || rtt !== null && rtt >= 200 || jitter !== null && jitter >= 40)
+      return "fair";
+    return "good";
+  }
+  function worstLevel(levels) {
+    for (const word of ["poor", "fair", "good"]) if (levels.includes(word)) return word;
+    return "";
+  }
+  function statsSummary(live, guestCount) {
+    const level = worstLevel(live.map(linkLevel));
+    const box = document.createElement("div");
+    box.className = "ssum";
+    box.dataset.level = level;
+    const lamp = document.createElement("span");
+    lamp.className = "slamp";
+    const text = document.createElement("div");
+    const head = document.createElement("div");
+    head.className = "ssum-head";
+    const sub = document.createElement("div");
+    sub.className = "ssum-sub";
+    if (guestCount === 0) {
+      head.textContent = "waiting for guests";
+      sub.textContent = "the numbers start when someone joins";
+    } else if (!level) {
+      head.textContent = "measuring";
+      sub.textContent = "the first numbers arrive in a second";
+    } else {
+      head.textContent = `connection ${level}`;
+      const nums = live.map((s) => s.rtt).filter((n) => typeof n === "number");
+      const loss = live.map((s) => s.loss).filter((n) => typeof n === "number");
+      const bits = [callPath(live)];
+      if (nums.length) bits.push(msText(Math.max(...nums)));
+      if (loss.length) bits.push(`loss ${lossText(Math.max(...loss))}`);
+      sub.textContent = bits.filter(Boolean).join(" | ");
+      if (level === "poor") sub.textContent += ". Try a lower quality in the toolbar.";
+    }
+    text.append(head, sub);
+    box.append(lamp, text);
+    return box;
+  }
+  function recordStatsHistory(total, live) {
+    state.statHist.push({
+      down: total.down.video + total.down.audio,
+      rtt: worstOf(live, "rtt"),
+      loss: worstOf(live, "loss")
+    });
+    if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
+  }
+  function statsPlot(canvas, values, peak, fill, color) {
+    if (!canvas) return;
+    const cssW = canvas.clientWidth || 288;
+    const cssH = canvas.clientHeight || 34;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(cssW * dpr);
+    const h = Math.round(cssH * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, cssW, cssH);
+    const n = values.length;
+    const stepX = (cssW - 2) / (STATS_HISTORY - 1);
+    const px = (i) => cssW - 1 - (n - 1 - i) * stepX;
+    const py = (v) => cssH - 1 - Math.min(v, peak) / peak * (cssH - 2);
+    ctx.strokeStyle = "#0c3c0c";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let g = 1; g < 3; g++) {
+      const y = Math.round(cssH * g / 3) + 0.5;
+      ctx.moveTo(0, y);
+      ctx.lineTo(cssW, y);
+    }
+    for (let g = 1; g < 6; g++) {
+      const x = Math.round(cssW * g / 6) + 0.5;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, cssH);
+    }
+    ctx.stroke();
+    if (n < 1) return;
+    if (fill) {
+      ctx.beginPath();
+      ctx.moveTo(px(0), cssH - 1);
+      for (let i = 0; i < n; i++) ctx.lineTo(px(i), py(values[i] === null ? 0 : values[i]));
+      ctx.lineTo(px(n - 1), cssH - 1);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.35;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    let drawing = false;
+    for (let i = 0; i < n; i++) {
+      const v = values[i];
+      if (v === null) {
+        drawing = false;
+        continue;
+      }
+      if (drawing) ctx.lineTo(px(i), py(v));
+      else {
+        ctx.moveTo(px(i), py(v));
+        drawing = true;
+      }
+    }
+    ctx.stroke();
+  }
+  function statsNote(id, text) {
+    const note = $(id);
+    if (note) note.textContent = text;
+  }
+  function rateWords(kbit) {
+    const r = rateScale(kbit);
+    const words = state.statsBytes ? ["KiB/s", "MiB/s"] : ["kbit/s", "Mbit/s"];
+    return `${r.num} ${words[r.unit === "m" ? 1 : 0]}`;
+  }
+  function drawStatsGraphs() {
+    const box = $("stats-graph-box");
+    if (!box) return;
+    const hist = state.statHist;
+    box.hidden = hist.length < 2;
+    if (hist.length < 2) return;
+    const series = (key) => hist.map((p) => typeof p[key] === "number" ? p[key] : null);
+    const values = (arr) => arr.filter((v) => v !== null);
+    const peak = (arr, floor) => Math.max(floor, ...values(arr));
+    const now = (arr) => {
+      const kept = values(arr);
+      return kept.length ? kept[kept.length - 1] : null;
+    };
+    const secs = `last ${hist.length} s`;
+    const down = series("down");
+    statsPlot($("stats-graph-down"), down, peak(down, 100), true, "#00e000");
+    const downMax = Math.max(0, ...values(down));
+    statsNote(
+      "stats-note-down",
+      `down ${rateWords(now(down))} now, peak ${rateWords(downMax)}, ${secs}`
+    );
+    const rtt = series("rtt");
+    statsPlot($("stats-graph-rtt"), rtt, peak(rtt, 100), false, "#f0e000");
+    statsNote(
+      "stats-note-rtt",
+      values(rtt).length ? `round trip ${msText(now(rtt))} now, peak ${msText(Math.max(...values(rtt)))}, ${secs}` : `round trip not measured, ${secs}`
+    );
+    const loss = series("loss");
+    statsPlot($("stats-graph-loss"), loss, peak(loss, 1), false, "#ff5050");
+    const lossMax = Math.max(0, ...values(loss));
+    statsNote(
+      "stats-note-loss",
+      lossMax > 0 ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}` : `loss none, ${secs}`
+    );
+  }
+  var keptRows = /* @__PURE__ */ new Map();
+  function setText(node, text) {
+    const s = String(text);
+    if (node.textContent !== s) node.textContent = s;
+  }
+  function setClass(node, name, on) {
+    if (node.classList.contains(name) !== !!on) node.classList.toggle(name, !!on);
+  }
+  function writeCells(span, value, metrics) {
+    const parts = Array.isArray(value) ? value : [value];
+    if (span.children.length !== parts.length) {
+      span.replaceChildren(...statCells(value, metrics).childNodes);
+      return;
+    }
+    for (let i = 0; i < parts.length; i++) {
+      const raw = parts[i];
+      const p = Array.isArray(raw) ? raw : [raw];
+      const cell = span.children[i];
+      const word = p.length > 1 ? p[2] : p[0];
+      const text = cell.lastElementChild;
+      if (text) setText(text, word === null || word === void 0 ? "" : String(word));
+      setClass(cell, "good", p[3] === true);
+      setClass(cell, "bad", p[3] === false);
+    }
+  }
+  function meterInto(line, meter) {
+    const bar = line.querySelector(".meter");
+    const fill = bar && bar.querySelector("i");
+    if (!bar || !fill || typeof meter !== "number") return;
+    const pct = `${Math.round(meter * 100)}%`;
+    if (fill.style.width !== pct) fill.style.width = pct;
+    const word = `level ${Math.round(meter * 100)} percent`;
+    if (bar.getAttribute("aria-label") !== word) bar.setAttribute("aria-label", word);
+  }
+  function writeGuestRow(row, pairs, level) {
+    const head = row.querySelector(".sname");
+    let chip = head && head.querySelector(".sbadge");
+    if (head) {
+      if (level && !chip) {
+        chip = document.createElement("span");
+        chip.className = "sbadge";
+        head.appendChild(chip);
+      }
+      if (chip) {
+        if (level) {
+          chip.dataset.level = level;
+          setText(chip, level);
+        } else chip.remove();
+      }
+    }
+    const lines = row.children;
+    for (let i = 0; i < pairs.length; i++) {
+      const line = lines[i + 1];
+      if (!line) break;
+      const p = pairs[i];
+      writeCells(line.querySelector(".sv"), p[1], p[3] === "metrics");
+      setClass(line, "good", p[2] === true);
+      setClass(line, "bad", p[2] === false);
+      if (typeof p[4] === "number") meterInto(line, p[4]);
+    }
+  }
+  async function updateStats() {
+    if (!statsOpen() || state.statsBusy) return;
+    const body = $("stats-body");
+    if (!body) return;
+    state.statsBusy = true;
+    try {
+      const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
+      const live = [];
+      const peers = [...state.peers.values()];
+      const reports = await Promise.all(peers.map((peer) => peerStats(peer)));
+      const guests = peers.map((peer, i) => {
+        const s = reports[i];
+        if (s) {
+          live.push(s);
+          for (const dir of ["up", "down"]) {
+            for (const kind of ["audio", "video"]) total[dir][kind] += s[dir][kind];
+          }
+        }
+        return { peer, s };
+      });
+      recordStatsHistory(total, live);
+      const rows = [];
+      if (state.peers.size > 1) {
+        const call = callPairs(live, total);
+        if (call.length) rows.push(statsRow("call", call));
+      }
+      const seen = /* @__PURE__ */ new Set();
+      for (const { peer, s } of guests) {
+        if (s && peer.tile) peer.tile.dataset.relay = s.path.startsWith("relay") ? "yes" : "no";
+        const level = linkLevel(s);
+        const pairs = peerPairs(peer, s);
+        if (!pairs.length) continue;
+        seen.add(peer.id);
+        let row = keptRows.get(peer.id);
+        if (!row) {
+          row = statsRow(peerName(peer), pairs, void 0, level ? { level, text: level } : null);
+          keptRows.set(peer.id, row);
+        }
+        writeGuestRow(row, pairs, level);
+        rows.push(row);
+      }
+      for (const key of [...keptRows.keys()]) if (!seen.has(key)) keptRows.delete(key);
+      rows.push(statsRow("you", ownPairs(total)));
+      $("stats-sum").replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
+      const legend = document.createElement("p");
+      legend.className = "slegend";
+      legend.textContent = state.statsBytes ? "k is KiB/s and m is MiB/s, eight bits to the byte. The up arrow is what you send, the down arrow what you receive." : "k is kbit/s and m is Mbit/s. The up arrow is what you send, the down arrow what you receive.";
+      body.replaceChildren(...rows, ...sealedCards(), legend);
+      drawStatsGraphs();
+    } finally {
+      state.statsBusy = false;
+    }
+  }
+  function sealedPairCount(id) {
+    const label = pairLabel(id);
+    let out = 0;
+    let inn = 0;
+    let refused = 0;
+    for (const st of Object.values(state.frames)) {
+      if (!st || st.pair !== label) continue;
+      if (st.dir === "send") out += st.ok || 0;
+      else if (st.dir === "recv") {
+        inn += st.ok || 0;
+        refused += st.fail || 0;
+      }
+    }
+    return { out, inn, refused };
+  }
+  function sealedAlarms() {
+    const out = [];
+    if (state.sealFault) out.push(statsRow("sealing fault", [["", state.sealFault, false]]));
+    const failed = sealedFailedPairs();
+    if (failed.length) {
+      const tags = failed.map((peer) => `${peerName(peer)} ${verifyText(peer.sas) || "no code"}`);
+      out.push(
+        statsRow("room code", [
+          ["", "KEY MISMATCH " + tags.join(", "), false],
+          ["", "do not trust this call", false]
+        ])
+      );
+    }
+    if (state.wireLeaks.length) {
+      out.push(
+        statsRow(
+          "leak",
+          state.wireLeaks.map((w) => ["", `${w.where}: ${w.canary}`, false])
+        )
+      );
+    }
+    if (state.workerErrors.length) {
+      out.push(
+        statsRow(
+          "worker",
+          state.workerErrors.slice(0, 5).map((e) => ["", e, false])
+        )
+      );
+    }
+    const wt = state.wasmTest;
+    if (wt && !wasmTestOk(wt)) out.push(statsRow("self test", wasmTestFaults(wt)));
+    return out;
+  }
+  function wasmTestOk(wt) {
+    return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused && wt.idSign && wt.idUnsigned && wt.idFp && wt.pad && wt.passGood && wt.passBad);
+  }
+  function wasmTestFaults(wt) {
+    const bad = [
+      ["sas ", wt.sasMatch ? "match" : "no", !!wt.sasMatch],
+      ["confirm ", wt.confirm ? "ok" : "no", !!wt.confirm],
+      ["open ", wt.open ? "ok" : "no", !!wt.open],
+      ["padding ", wt.pad ? "ok" : "BROKEN", !!wt.pad],
+      ["wrong key ", wt.wrongKeyRefused ? "refused" : "OPENED", !!wt.wrongKeyRefused],
+      ["identity ", wt.idSign ? "signs" : "BROKEN", !!wt.idSign],
+      ["unsigned ", wt.idUnsigned ? "refused" : "ACCEPTED", !!wt.idUnsigned],
+      ["fingerprint ", wt.idFp ? "ok" : "BROKEN", !!wt.idFp],
+      ["room key ", wt.passGood ? "ok" : "BROKEN", !!wt.passGood],
+      ["wrong key ", wt.passBad ? "refused" : "ACCEPTED", !!wt.passBad]
+    ];
+    const out = [["", "FAIL", false]];
+    for (const b of bad) if (!b[2]) out.push(b);
+    return out;
+  }
+  function sealedCards() {
+    const out = [];
+    const available = sealingAvailable();
+    const wt = state.wasmTest;
+    const seal = [
+      ["media ", available ? "sealed, every frame" : "NO SEALING, no media is sent", available]
+    ];
+    if (wt) seal.push(["self test ", wasmTestOk(wt) ? "pass" : "FAIL", wasmTestOk(wt)]);
+    out.push(statsRow("crypto", seal));
+    let refused = 0;
+    for (const st of Object.values(state.frames)) {
+      if (st && st.dir === "recv") refused += st.fail || 0;
+    }
+    const clean = state.workerErrors.length === 0;
+    const counts = [
+      [
+        "frames ",
+        `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`,
+        refused === 0 && clean
+      ],
+      [
+        "wire ",
+        `frames ${state.wireFrames} leaks ${state.wireLeaks.length} clear ${state.clearSignaling}`,
+        state.wireLeaks.length === 0 && state.clearSignaling === 0
+      ]
+    ];
+    const files = state.fileOffers + state.fileRecv + state.fileChunksRecv + state.fileChunksSent + state.fileRefused + state.fileCancelled;
+    if (files) {
+      counts.push([
+        "files ",
+        `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`,
+        state.fileRefused === 0 && state.fileCancelled === 0
+      ]);
+    }
+    const chat = state.chatSent + state.chatRecv + state.replayDrops + state.confirmFailures + state.identityFailures;
+    if (chat) {
+      counts.push([
+        "chat ",
+        `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`,
+        state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0
+      ]);
+    }
+    out.push(statsRow("counters", counts));
+    return out;
+  }
+
+  // src/frame.ts
+  function startSealedWorker() {
+    const worker = new Worker(scriptURL("/e2e-transform.js"));
+    worker.onmessage = (event) => {
+      const msg = event.data || {};
+      if (msg.type === "stats") {
+        state.frames[msg.pair + "|" + msg.dir + (msg.kind ? "|" + msg.kind : "")] = msg;
+        paintFrameCounters();
+      } else if (msg.type === "keys-ok") {
+        const waiting = state.keyWait.get(msg.pair);
+        if (waiting && waiting.gen === msg.gen) {
+          state.keyWait.delete(msg.pair);
+          waiting.resolve(true);
+        }
+      } else if (msg.type === "sample") {
+        if (state.samples.length < 40) state.samples.push(msg);
+      } else if (msg.type === "error") {
+        state.workerErrors.push(msg.msg || "worker error");
+        const waiting = msg.pair && state.keyWait.get(msg.pair);
+        if (waiting && (msg.gen === void 0 || waiting.gen === msg.gen)) {
+          state.keyWait.delete(msg.pair);
+          waiting.resolve(false);
+          say("the frame keys did not install; the link stays without video");
+        }
+      }
+    };
+    worker.onerror = (event) => state.workerErrors.push(String(event.message || event));
+    state.worker = worker;
+  }
+  function paintFrameCounters() {
+    let enc = 0;
+    let dec = 0;
+    for (const st of Object.values(state.frames)) {
+      if (!st) continue;
+      if (st.dir === "send") enc += st.ok || 0;
+      else if (st.dir === "recv") dec += st.ok || 0;
+    }
+    state.encryptFrames = enc;
+    state.decryptFrames = dec;
+  }
+
+  // src/wasm.ts
+  function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+      if (win().Go) return resolve(null);
+      const el2 = document.createElement("script");
+      el2.src = scriptURL(src);
+      el2.onload = () => resolve(null);
+      el2.onerror = () => reject(new Error("could not load " + src));
+      document.head.appendChild(el2);
+    });
+  }
+  function loadWasmModule() {
+    return new Promise((resolve, reject) => {
+      const Go = win().Go;
+      if (!window.WebAssembly || typeof Go !== "function")
+        return reject(new Error("webassembly unavailable"));
+      const go = new Go();
+      fetch("/pq.wasm" + BUILD_Q).then((res) => {
+        if (!res.ok) throw new Error("wasm " + res.status);
+        return WebAssembly.instantiateStreaming(res, go.importObject);
+      }).catch(async () => {
+        const res = await fetch("/pq.wasm" + BUILD_Q);
+        if (!res.ok) throw new Error("wasm " + res.status);
+        const buf = await res.arrayBuffer();
+        return WebAssembly.instantiate(buf, go.importObject);
+      }).then((res) => {
+        go.run(res.instance);
+        const started = Date.now();
+        const timer = setInterval(() => {
+          if (pqModule()) {
+            clearInterval(timer);
+            resolve(null);
+          } else if (Date.now() - started > 3e4) {
+            clearInterval(timer);
+            reject(new Error("wasm module did not start"));
+          }
+        }, 20);
+      }).catch(reject);
+    });
+  }
+  function fpShape(fp) {
+    const parts = String(fp || "").split("-");
+    if (parts.length !== 5) return false;
+    return parts.every((part) => part.length === 4 && /^[a-z2-7]+$/.test(part));
+  }
+  function pqSelfTest() {
+    const pq = pqModule();
+    const a = JSON.parse(pq.gen());
+    const b = JSON.parse(pq.gen());
+    const k1 = JSON.parse(pq.idgen());
+    const k2 = JSON.parse(pq.idgen());
+    const sidA = b64e(crypto.getRandomValues(new Uint8Array(16)));
+    const sidB = b64e(crypto.getRandomValues(new Uint8Array(16)));
+    const off = JSON.parse(
+      pq.initiate(
+        JSON.stringify({
+          self: "a",
+          peer: "b",
+          selfX: a.xpub,
+          selfK: a.ek,
+          selfID: k1.pub,
+          selfSID: sidA,
+          peerX: b.xpub,
+          peerK: b.ek,
+          peerID: k2.pub,
+          peerSID: sidB
+        })
+      )
+    );
+    const helloSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k1.seed, msg: off.transcript })));
+    const respond = (sig) => JSON.parse(
+      pq.respond(
+        JSON.stringify({
+          self: "b",
+          peer: "a",
+          selfX: b.xpub,
+          selfSK: b.xsk,
+          selfK: b.ek,
+          selfDK: b.dk,
+          selfID: k2.pub,
+          selfSID: sidB,
+          peerX: a.xpub,
+          peerK: a.ek,
+          peerID: k1.pub,
+          peerSID: sidA,
+          epk: off.epk,
+          ct: off.ct,
+          ...sig ? { sig } : {}
+        })
+      )
+    );
+    const acc = respond(helloSig.sig);
+    const okSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k2.seed, msg: acc.transcript })));
+    const proved = (key, tag, id, sig) => JSON.parse(pq.proved(JSON.stringify({ key, transcript: off.transcript, tag, id, sig })));
+    const verifyA = proved(off.keys.recvMedia, acc.confirm, k2.pub, okSig.sig);
+    const verifyB = proved(acc.keys.recvMedia, off.confirm, k1.pub, helloSig.sig);
+    const verifyNoSig = proved(off.keys.recvMedia, acc.confirm, k2.pub, "");
+    const pt = b64e(sealUtf8.encode("sealed hello"));
+    const aad = b64e(sealUtf8.encode("pq-e2e v2 chat a|b 1"));
+    const sealed = JSON.parse(pq.seal(JSON.stringify({ key: off.keys.sendChat, aad, pt })));
+    const openWith2 = (key) => JSON.parse(pq.open(JSON.stringify({ key, aad, b: sealed.b })));
+    const opened = openWith2(acc.keys.recvChat);
+    const wrong = openWith2(b64e(crypto.getRandomValues(new Uint8Array(32))));
+    const idV = (id, msg, sig) => JSON.parse(pq.idverify(JSON.stringify({ id, msg, sig })));
+    const idOk = idV(k1.pub, off.transcript, helloSig.sig);
+    const idOther = idV(k2.pub, off.transcript, helloSig.sig);
+    const idOk2 = idV(k2.pub, acc.transcript, okSig.sig);
+    const idTampered = idV(k1.pub, b64e(sealUtf8.encode("another transcript")), helloSig.sig);
+    const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
+    const w1 = JSON.parse(pq.spakew(JSON.stringify({ pass: "a", salt: "room" }))).w;
+    const wBad = (() => {
+      const raw = b64d(w1);
+      raw[raw.length - 1] ^= 1;
+      return b64e(raw);
+    })();
+    const passRun = (wa, wb) => {
+      const start = (w, role) => JSON.parse(
+        pq.spakestart(
+          JSON.stringify({
+            w,
+            role,
+            a: b64e(sealUtf8.encode("a")),
+            b: b64e(sealUtf8.encode("b"))
+          })
+        )
+      );
+      const one = start(wa, "A");
+      const two = start(wb, "B");
+      if (!one.id || !two.id) return { error: true };
+      const finA = JSON.parse(pq.spakefinish(JSON.stringify({ id: one.id, msg: two.msg })));
+      const finB = JSON.parse(pq.spakefinish(JSON.stringify({ id: two.id, msg: one.msg })));
+      const okA = JSON.parse(pq.spakeverify(JSON.stringify({ id: one.id, tag: finB.conf })));
+      const okB = JSON.parse(pq.spakeverify(JSON.stringify({ id: two.id, tag: finA.conf })));
+      return {
+        match: !!finA.ke && finA.ke === finB.ke,
+        ok: !!(okA.ok && okB.ok)
+      };
+    };
+    const passGood = passRun(w1, w1);
+    const passBad = passRun(w1, wBad);
+    const noSig = respond("");
+    return {
+      sas: off.keys.sas,
+      sasMatch: off.keys.sas === acc.keys.sas,
+      pad: padRoundTripOk(),
+      confirm: !!(verifyA.ok && verifyB.ok && !verifyNoSig.ok),
+      open: opened.pt === pt,
+      wrongKeyRefused: !!wrong.error,
+      idSign: idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
+      idUnsigned: !!noSig.error,
+      idFp: fpShape(idFp.fp),
+      passGood: !!(passGood.match && passGood.ok),
+      passBad: !!(passBad.match === false && passBad.ok === false)
+    };
+  }
+  var wasmLoad = null;
+  function ensureWasm() {
+    if (state.wasmOk) return Promise.resolve();
+    if (wasmLoad) return wasmLoad;
+    wasmLoad = loadScriptOnce("/wasm_exec.js" + BUILD_Q).then(loadWasmModule).then(() => {
+      const test = pqSelfTest();
+      state.wasmTest = test;
+      if (!test.sasMatch || !test.confirm || !test.open || !test.wrongKeyRefused || !test.idSign || !test.idUnsigned || !test.idFp || !test.passGood || !test.passBad) {
+        throw new Error("crypto self test failed");
+      }
+      state.wasmOk = true;
+    }).catch((err) => {
+      wasmLoad = null;
+      throw err;
+    });
+    return wasmLoad;
+  }
+  function preloadSealed() {
+    $("sealed-note").hidden = false;
+    $("sealed-note").textContent = "loading the post-quantum module";
+    ensureReady().then(() => {
+      if (!$("lobby").hidden) $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
+    }).catch((err) => {
+      if (!$("lobby").hidden) {
+        $("sealed-note").textContent = "the sealed client did not start: " + (err && err.message ? err.message : err);
+      }
+    });
+  }
+  function ensureReady() {
+    return ensureWasm().then(ensureIdentity);
+  }
+
+  // src/phone.ts
+  var phoneQuery = window.matchMedia ? window.matchMedia("(max-width: 620px), (max-height: 520px) and (hover: none)") : null;
+  function applyImmersive() {
+    const stage = $("stage");
+    const on = !!phoneQuery && phoneQuery.matches && !stage.hidden;
+    stage.classList.toggle("immersive", on);
+    if (!on) stage.classList.remove("chrome");
+    $("chrome-btn").setAttribute("aria-expanded", String(stage.classList.contains("chrome")));
+  }
+  function setChrome(show) {
+    const stage = $("stage");
+    if (!stage.classList.contains("immersive")) return;
+    stage.classList.toggle("chrome", show);
+    $("chrome-btn").setAttribute("aria-expanded", String(show));
+    if (show) return;
+    menuClose();
+    if (statsOpen()) setStatsOpen(false);
+  }
+
+  // src/room.ts
+  var worldStart = "";
+  async function enterRoom(room, pass, start) {
+    worldStart = start || "";
+    if (state.entering || state.ws) return;
+    state.entering = true;
+    try {
+      ensureSfx();
+      preloadSfx();
+      cancelReconnect();
+      stopLost();
+      state.fatal = "";
+      state.room = room;
+      state.name = cleanSealedName($("name").value) || "guest";
+      state.path = $("path").value;
+      state.noiseWanted = $("noise").checked;
+      state.mirror = true;
+      state.leaving = false;
+      state.mic = load("mic") !== "0";
+      state.cam = load("cam") !== "0";
+      store("name", state.name);
+      store("room", state.room);
+      store("path", state.path);
+      store("noise", state.noiseWanted ? 1 : 0);
+      ensurePlayback();
+      $("enter-btn").disabled = true;
+      $("sealed-note").hidden = false;
+      $("sealed-note").textContent = "loading the post-quantum module";
+      try {
+        try {
+          await ensureReady();
+          $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
+        } catch (err) {
+          const why = err && err.message ? err.message : String(err);
+          $("sealed-note").textContent = "the sealed client did not start: " + why;
+          state.room = "";
+          say("cannot open a sealed room: " + why);
+          return;
+        }
+        canary(pass);
+        state.w = "";
+        try {
+          const derived = await deriveRoomW(pass, room);
+          state.w = typeof derived === "string" ? derived : "";
+        } catch {
+          state.w = roomW(pass, room);
+        }
+        state.gate = { v: pass, n: 0 };
+        paintGate();
+        state.warmed = true;
+        if (!rootFingerprint(room)) {
+          try {
+            const fp = await roomRoot(room);
+            if (fp) setRoot(fp);
+          } catch {
+          }
+        }
+        startSealedWorker();
+        const made = JSON.parse(pqModule().gen());
+        state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
+        state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
+        canary(state.name);
+        if (!sealingAvailable()) {
+          state.sealFault = "this browser cannot seal media frames, so no media is sent";
+          state.mic = false;
+          state.cam = false;
+        }
+        $("lobby").hidden = true;
+        $("stage").hidden = false;
+        $("stage").classList.remove("chrome");
+        applyImmersive();
+        document.title = "stanze - " + room;
+        $("chat-note").hidden = false;
+        updatePinCount();
+        setHash(room);
+        startCallClock();
+        startSpeaking();
+        prepareLocal();
+        prefetchNoise();
+        if (sealingAvailable()) {
+          try {
+            await requestLocal();
+          } catch {
+          }
+        } else {
+          updateButtons();
+          say(state.sealFault + "; you joined without microphone and camera");
+        }
+        connectWS();
+        worldEnter(room, worldStart).catch(() => {
+        });
+      } catch (err) {
+        leave("");
+        state.leaving = false;
+        say("cannot open a sealed room: " + (err && err.message ? err.message : String(err)));
+      } finally {
+        state.entering = false;
+        const button = $("enter-btn");
+        if (button) button.disabled = false;
+      }
+    } catch (err) {
+      state.entering = false;
+      throw err;
+    }
+  }
+  function leaveFor(room, pass) {
+    if (state.leaving) return;
+    const was = state.name;
+    leave("");
+    if (was) $("name").value = was;
+    enterRoom(room, pass || "");
+  }
+  setWorldLeave(leaveFor);
+  function leave(message) {
+    const was = state.room;
+    state.leaving = true;
+    cancelReconnect();
+    if (state.ws) {
+      const ws = state.ws;
+      state.ws = null;
+      ws.onclose = null;
+      try {
+        ws.close();
+      } catch {
+      }
+    }
+    if (state.screen) {
+      stopTracks(state.screen);
+      state.screen = null;
+      if (state.screenTile) {
+        state.screenTile.remove();
+        state.screenTile = null;
+      }
+    }
+    dropPeers();
+    if (state.worker) {
+      state.worker.terminate();
+      state.worker = null;
+    }
+    wipeIdentity();
+    state.w = "";
+    state.warmed = false;
+    state.root = "";
+    state.passTries = 0;
+    state.passRefusals = 0;
+    state.passLast = 0;
+    state.seqGaps = 0;
+    state.gate = { v: null, n: 0 };
+    state.auth = { n: -1, admins: [], by: "", sig: "" };
+    if (state.authTimer) clearTimeout(state.authTimer);
+    state.authTimer = null;
+    state.wait = { on: false, n: 0 };
+    state.kickedFps = /* @__PURE__ */ new Set();
+    state.sid = "";
+    state.identityFailures = 0;
+    state.keyWait.clear();
+    state.frames = {};
+    state.encryptFrames = 0;
+    state.decryptFrames = 0;
+    state.chatSent = 0;
+    state.chatRecv = 0;
+    state.replayDrops = 0;
+    fileClearAll();
+    state.confirmFailures = 0;
+    state.workerErrors = [];
+    state.sealFault = "";
+    state.wireFrames = 0;
+    state.wireLeaks = [];
+    state.clearSignaling = 0;
+    state.canaries = /* @__PURE__ */ new Set();
+    state.samples = [];
+    asrStop();
+    omniStop();
+    state.waiting = false;
+    state.waitingRoom = false;
+    state.hand = false;
+    state.handTs = 0;
+    state.insideFps.clear();
+    paintWaiting();
+    paintHandQueue();
+    updatePinCount();
+    $("chat-note").hidden = true;
+    if (state.micTrack) stopQuietly(state.micTrack);
+    if (state.camTrack) stopQuietly(state.camTrack);
+    if (state.audioCtx) {
+      state.audioCtx.close().catch(() => {
+      });
+      state.audioCtx = null;
+    }
+    if (state.playCtx) {
+      state.playCtx.close().catch(() => {
+      });
+      state.playCtx = null;
+    }
+    stopLost();
+    if (state.sfxCtx) {
+      state.sfxCtx.close().catch(() => {
+      });
+      state.sfxCtx = null;
+    }
+    sfxCache.clear();
+    state.sfxSource = null;
+    state.mixer = null;
+    state.micGain = null;
+    state.micSource = null;
+    state.denoise = null;
+    state.denoiseOn = false;
+    state.denoiseEngine = "off";
+    state.micAnalyser = null;
+    state.meterPeak = 0;
+    stopSpeaking();
+    state.outStream = null;
+    state.camTrack = null;
+    state.micTrack = null;
+    stopStats();
+    clearStatsPanel();
+    $("stats-panel").hidden = true;
+    $("stats-btn").setAttribute("aria-pressed", "false");
+    state.spotlight = "";
+    setLocalTile(null);
+    worldLeave();
+    $("stage-main").replaceChildren();
+    $("self-pip").replaceChildren();
+    $("self-pip").hidden = true;
+    $("stage-rail").replaceChildren();
+    $("stage-rail").hidden = false;
+    stopCallClock();
+    menuSet(false);
+    $("stage").hidden = true;
+    $("lobby").hidden = false;
+    applyImmersive();
+    document.title = "stanze";
+    state.room = "";
+    state.self = null;
+    state.ice = [];
+    state.fatal = "";
+    state.reconnectDelay = 500;
+    state.mic = false;
+    state.cam = false;
+    setAdmins([]);
+    state.peers.clear();
+    if ($("chat-log")) clearChat();
+    setHash("");
+    worldStart = "";
+    if (was) $("room").value = was;
+    else suggestRoom();
+    if (message) {
+      say(message);
+      const note = $("sealed-note");
+      if (note) {
+        note.hidden = false;
+        note.textContent = message;
+      }
+    }
+  }
+
   // src/handshake.ts
   function sealedSendPub(peer) {
     if (!state.identity || !state.idKey) return;
@@ -7147,6 +8664,7 @@
   }
   function sealedRefusePass(peer) {
     if (!state.peers.has(peer.id)) return;
+    peer.passFailed = true;
     if (peer.pc) {
       peer.pc.close();
       peer.pc = null;
@@ -7154,7 +8672,10 @@
     wipeKeys(peer);
     sealedSetE2E(peer, "failed");
     say(shortPeer(peer.id) + " does not know the room passphrase; the link stays closed");
-    if (state.waiting) return;
+    if (state.waiting) {
+      if ([...state.peers.values()].every((one) => one.passFailed)) setTimeout(() => leave("the room refused the passphrase"), 0);
+      return;
+    }
     if (!isAdmin(state.self) || isAdmin(peer.id)) return;
     sealedKick(peer.id);
   }
@@ -8308,7 +9829,8 @@
       if (pc.connectionState === "connected") {
         capCameraSenders(pc);
         markRelay(peer);
-        if (!peer.askedKey) {
+        const sent = peer.tx?.video?.sender.track;
+        if (!peer.askedKey && sent?.readyState === "live") {
           peer.askedKey = true;
           sealedSendOpaque(peer.id, { k: "key" });
         }
@@ -10580,1450 +12102,6 @@
     state.spotlight = id && state.spotlight !== id ? id : "";
     for (const open of document.querySelectorAll(".tile.ctl")) open.classList.remove("ctl");
     layoutStage();
-  }
-
-  // src/clock.ts
-  function clockText(ms) {
-    const total = Math.max(0, Math.floor(ms / 1e3));
-    const h = Math.floor(total / 3600);
-    const m = Math.floor(total % 3600 / 60);
-    const s = total % 60;
-    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  }
-  function startCallClock() {
-    stopCallClock();
-    state.callStart = Date.now();
-    $("call-timer").textContent = clockText(0);
-    state.callTimer = setInterval(() => {
-      if (!state.callStart) return;
-      $("call-timer").textContent = clockText(Date.now() - state.callStart);
-    }, 1e3);
-  }
-  function stopCallClock() {
-    if (state.callTimer) clearInterval(state.callTimer);
-    state.callTimer = null;
-    state.callStart = 0;
-    const el2 = $("call-timer");
-    if (el2) el2.textContent = "";
-  }
-
-  // src/signaling.ts
-  function dropPeers() {
-    for (const id of [...state.peers.keys()]) dropPeer(id);
-  }
-  function scheduleReconnect() {
-    if (state.leaving || state.fatal || state.reconnectTimer) return;
-    const delay = state.reconnectDelay;
-    state.reconnectDelay = Math.min(state.reconnectDelay * 2, 1e4);
-    state.reconnectTimer = setTimeout(() => {
-      state.reconnectTimer = null;
-      if (!state.leaving && !state.fatal) connectWS();
-    }, delay);
-  }
-  function cancelReconnect() {
-    if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
-    state.reconnectTimer = null;
-    state.reconnectDelay = 500;
-  }
-  function connectWS() {
-    cancelReconnect();
-    if (state.ws) {
-      const old = state.ws;
-      state.ws = null;
-      old.onclose = null;
-      try {
-        old.close();
-      } catch {
-      }
-    }
-    let ws;
-    try {
-      ws = new WebSocket(wsURL());
-    } catch {
-      scheduleReconnect();
-      return;
-    }
-    state.ws = ws;
-    ws.onopen = () => {
-      state.reconnectDelay = 500;
-      stopLost();
-      send({ t: "join", room: state.room });
-    };
-    ws.onmessage = (event) => {
-      auditWire("in", event.data);
-      let msg;
-      try {
-        msg = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      handle(msg);
-    };
-    ws.onclose = () => {
-      if (state.ws === ws) state.ws = null;
-      if (state.leaving) return;
-      dropPeers();
-      if (state.fatal) {
-        leave(state.fatal);
-        return;
-      }
-      say("connection lost, reconnecting");
-      startLost();
-      scheduleReconnect();
-    };
-    ws.onerror = () => {
-    };
-  }
-  function handle(msg) {
-    if (msg.t === "error") {
-      if (msg.code === "unavailable") {
-        state.fatal = "room unavailable or full";
-        leave(state.fatal);
-      } else if (msg.code === "sealed-only") {
-        state.fatal = "this page is out of date; reload it to join";
-        leave(state.fatal);
-      }
-      return;
-    }
-    switch (msg.t) {
-      case "joined": {
-        state.self = msg.self;
-        state.ice = msg.ice || [];
-        if (state.notice === "connection lost, reconnecting") say("");
-        state.auth = { n: -1, admins: [], by: "", sig: "" };
-        setAdmins([]);
-        state.waiting = true;
-        asrProbe();
-        omniProbe();
-        let listed = 0;
-        for (const info of msg.peers || []) {
-          if (!info || !info.id) continue;
-          const peer = ensurePeer(info.id);
-          peer.waiting = false;
-          sealedSendPub(peer);
-          listed++;
-        }
-        if (!listed) sealedSendPub(null);
-        startAuthSeed();
-        markAdmins();
-        paintWaiting();
-        sendState();
-        updateCount();
-        break;
-      }
-      case "peer-joined": {
-        if (!msg.peer || !msg.peer.id) break;
-        const peer = ensurePeer(msg.peer.id);
-        markAdmins();
-        paintWaiting();
-        paintHandQueue();
-        sealedSendPub(peer);
-        playSfx("joined");
-        break;
-      }
-      case "peer-left": {
-        dropPeer(msg.from);
-        state.admins.delete(msg.from);
-        resealOnLeave(msg.from);
-        markAdmins();
-        paintWaiting();
-        playSfx("left");
-        break;
-      }
-      case "enc": {
-        if (msg.from && typeof msg.b === "string") sealedHandleOpaque(msg.from, msg.b);
-        break;
-      }
-    }
-  }
-
-  // src/stats.ts
-  var STATS_MS = 1e3;
-  var STATS_HISTORY = 60;
-  function statsOpen() {
-    const panel = $("stats-panel");
-    return !!panel && !panel.hidden;
-  }
-  function startStats() {
-    if (state.statsTimer || !statsOpen()) return;
-    for (const peer of state.peers.values()) {
-      peer.statLast.clear();
-      peer.statLoss = void 0;
-    }
-    state.statHist.length = 0;
-    clearStatsPanel();
-    updateStats();
-    state.statsTimer = setInterval(() => updateStats(), STATS_MS);
-  }
-  function stopStats() {
-    if (state.statsTimer) clearInterval(state.statsTimer);
-    state.statsTimer = null;
-  }
-  function setStatsOpen(open) {
-    $("stats-panel").hidden = !open;
-    $("stats-btn").setAttribute("aria-pressed", String(open));
-    if (open && !document.hidden) startStats();
-    else stopStats();
-  }
-  function clearStatsPanel() {
-    keptRows.clear();
-    const body = $("stats-body");
-    if (body) body.replaceChildren();
-    const sum = $("stats-sum");
-    if (sum) sum.replaceChildren();
-  }
-  function bitrate(last, report, field) {
-    const bytes = report[field] || 0;
-    const ts = report.timestamp || 0;
-    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
-    const prev = last.get(key);
-    last.set(key, { bytes, ts });
-    if (!prev || !(ts > prev.ts)) return 0;
-    const kbit = (bytes - prev.bytes) * 8 / (ts - prev.ts);
-    return kbit > 0 ? Math.round(kbit) : 0;
-  }
-  function isDirectType(type) {
-    return type === "host" || type === "srflx" || type === "prflx";
-  }
-  function counterDelta(last, report, field) {
-    const value = report[field];
-    if (typeof value !== "number") return null;
-    const key = `${report.id || report.type + ":" + report.kind}:${field}`;
-    const prev = last.get(key);
-    last.set(key, { bytes: value, ts: report.timestamp || 0 });
-    return prev ? value - prev.bytes : null;
-  }
-  async function peerStats(peer) {
-    const pc = peer.pc;
-    if (!pc || pc.connectionState === "closed" || pc.signalingState === "closed") return null;
-    let report;
-    try {
-      report = await pc.getStats();
-    } catch {
-      return null;
-    }
-    if (!report || typeof report.forEach !== "function") return null;
-    const out = {
-      up: { audio: 0, video: 0 },
-      down: { audio: 0, video: 0 },
-      rtt: null,
-      path: "",
-      jitter: null,
-      loss: null,
-      shot: ""
-    };
-    let jitterMax = null;
-    let lost = 0;
-    let got = 0;
-    let pairId = null;
-    const pairs = /* @__PURE__ */ new Map();
-    const cands = /* @__PURE__ */ new Map();
-    let legacyPairId = null;
-    try {
-      report.forEach((r) => {
-        if (r.type === "outbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
-          out.up[r.kind] += bitrate(peer.statLast, r, "bytesSent");
-        } else if (r.type === "inbound-rtp" && (r.kind === "audio" || r.kind === "video")) {
-          out.down[r.kind] += bitrate(peer.statLast, r, "bytesReceived");
-          if (r.kind === "video" && r.frameWidth && r.frameHeight) {
-            out.shot = `${r.frameWidth}x${r.frameHeight}`;
-          }
-          if (typeof r.jitter === "number") {
-            jitterMax = jitterMax === null ? r.jitter : Math.max(jitterMax, r.jitter);
-          }
-          const dLost = counterDelta(peer.statLast, r, "packetsLost");
-          const dGot = counterDelta(peer.statLast, r, "packetsReceived");
-          if (dLost !== null && dGot !== null && dGot >= 0) {
-            lost += Math.max(0, dLost);
-            got += dGot;
-          }
-        } else if (r.type === "transport" && r.selectedCandidatePairId) {
-          pairId = r.selectedCandidatePairId;
-        } else if (r.type === "connection" && (r.selectedCandidatePairId || r.nominatedCandidatePairId)) {
-          legacyPairId = r.selectedCandidatePairId || r.nominatedCandidatePairId;
-        } else if (r.type === "candidate-pair") {
-          pairs.set(r.id, r);
-        } else if (r.type === "local-candidate" || r.type === "remote-candidate") {
-          cands.set(r.id, r);
-        }
-      });
-    } catch {
-    }
-    const pick = (ok) => [...pairs.values()].find(ok);
-    const pair = (pairId ? pairs.get(pairId) : null) || (legacyPairId ? pairs.get(legacyPairId) : null) || pick((p) => p.selected || p.nominated) || pick((p) => p.state === "succeeded");
-    if (pair) {
-      if (typeof pair.currentRoundTripTime === "number") {
-        out.rtt = Math.round(pair.currentRoundTripTime * 1e3);
-      }
-      const local = cands.get(pair.localCandidateId);
-      const remote = cands.get(pair.remoteCandidateId);
-      const lt = local ? local.candidateType || local.type || "" : "";
-      const rt = remote ? remote.candidateType || remote.type || "" : "";
-      const relays = [];
-      if (lt === "relay") relays.push("you");
-      if (rt === "relay") relays.push("them");
-      if (relays.length) out.path = `relay (${relays.join(" + ")})`;
-      else if (isDirectType(lt) && isDirectType(rt)) out.path = "p2p";
-    }
-    if (jitterMax !== null) out.jitter = jitterMax * 1e3;
-    if (got > 0) {
-      const now = lost / (lost + got) * 100;
-      out.loss = typeof peer.statLoss === "number" ? peer.statLoss * 0.7 + now * 0.3 : now;
-      peer.statLoss = out.loss;
-    }
-    return out;
-  }
-  function rateScale(kbit) {
-    const bytes = state.statsBytes;
-    const n = Math.max(0, kbit) * (bytes ? 125 : 1);
-    const big = n >= (bytes ? 1048576 : 1e3);
-    const v = n / (big ? bytes ? 1048576 : 1e3 : bytes ? 1024 : 1);
-    const num = big ? v.toFixed(v >= 10 ? 0 : 1) : Math.round(v).toString();
-    return { num, unit: big ? "m" : "k" };
-  }
-  function rateText(kbit) {
-    if (!(kbit > 0)) return "";
-    const r = rateScale(kbit);
-    return r.num + r.unit;
-  }
-  function msText(ms) {
-    return Math.round(ms) + " ms";
-  }
-  function jitterText(ms) {
-    if (typeof ms !== "number") return "";
-    return (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + " ms";
-  }
-  function lossText(pct) {
-    if (typeof pct !== "number") return "";
-    if (pct < 0.05) return "none";
-    return (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + " %";
-  }
-  function lossMark(pct) {
-    return pct >= 2 ? false : void 0;
-  }
-  var VIDEO_ICON = ["1F3A5", "video"];
-  var AUDIO_ICON = ["1F50A", "audio"];
-  var PICTURE_ICON = ["1F5BC", "picture size"];
-  var PING_ICON = ["1F3D3", "round trip"];
-  var JITTER_ICON = ["1F30A", "jitter, how far apart the packets arrive"];
-  var LOSS_ICON = ["1F4C9", "packet loss"];
-  var DIRECT_ICON = ["1F517", "direct, the two browsers talk to each other"];
-  var RELAY_ICON = ["1F4E1", "relay, the media goes through the server"];
-  var UP_ICON = ["2B06", "out, what this browser sends"];
-  var DOWN_ICON = ["2B07", "in, what this browser receives"];
-  function routeCell(path) {
-    if (!path) return ["", "", "not known yet"];
-    const word = pathText(path);
-    return [...word === "direct" ? DIRECT_ICON : RELAY_ICON, word];
-  }
-  function rateCell(dir, kbit) {
-    return [...dir === "up" ? UP_ICON : DOWN_ICON, rateText(kbit) || "-"];
-  }
-  function tripCells(rtt, jitter, loss) {
-    return [
-      [...PING_ICON, typeof rtt === "number" ? msText(rtt) : ""],
-      [...JITTER_ICON, typeof jitter === "number" ? jitterText(jitter) : ""],
-      [...LOSS_ICON, typeof loss === "number" ? lossText(loss) : "", lossMark(loss)]
-    ];
-  }
-  function pathText(path) {
-    return path === "p2p" ? "direct" : path;
-  }
-  function callPath(live) {
-    const words = /* @__PURE__ */ new Set();
-    for (const s of live) if (s.path) words.add(pathText(s.path));
-    if (words.size === 0) return "";
-    if (words.size === 1) return [...words][0];
-    return "mixed: " + [...words].join(", ");
-  }
-  function worstOf(live, key) {
-    const nums = live.map((s) => s[key]).filter((n) => typeof n === "number");
-    return nums.length ? Math.max(...nums) : null;
-  }
-  function callPairs(live, total) {
-    const out = [];
-    const path = callPath(live);
-    if (path) out.push(["route ", [routeCell(path)]]);
-    const rtt = worstOf(live, "rtt");
-    const jitter = worstOf(live, "jitter");
-    const loss = worstOf(live, "loss");
-    if (rtt !== null || jitter !== null || loss !== null) {
-      out.push(["link ", tripCells(rtt, jitter, loss), void 0, "metrics"]);
-    }
-    out.push([
-      VIDEO_ICON,
-      [["", "", ""], rateCell("up", total.up.video), rateCell("down", total.down.video)]
-    ]);
-    out.push([
-      AUDIO_ICON,
-      [["", "", ""], rateCell("up", total.up.audio), rateCell("down", total.down.audio)]
-    ]);
-    return out;
-  }
-  function levelDb(peak) {
-    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
-    return db > -60 ? `${Math.round(db)} dB` : "silent";
-  }
-  function levelFraction(peak) {
-    const db = peak > 1e-6 ? 20 * Math.log10(peak) : -90;
-    return clamp((db + 60) / 60, 0, 1);
-  }
-  function peerLevel(peer) {
-    if (!peer.audioSrc || !peer.meter) return "";
-    return levelDb(peer.meterPeak || 0);
-  }
-  function noiseText(out, down) {
-    if (!out && !down) return "";
-    return `out ${out || "?"}, in ${down || "?"}`;
-  }
-  function ownPairs(total) {
-    const out = [];
-    if (state.idKey) out.push(["key ", state.idKey.fp, void 0, "mono"]);
-    const live = !!(state.mic && state.micTrack && state.micTrack.readyState === "live");
-    const mic = live && state.micTrack && state.micTrack.getSettings ? state.micTrack.getSettings() : null;
-    const cam = state.camTrack && state.camTrack.getSettings ? state.camTrack.getSettings() : null;
-    const shot = cam && cam.width && cam.height ? `${cam.width}x${cam.height}` : "off";
-    out.push([
-      VIDEO_ICON,
-      [
-        [...PICTURE_ICON, shot],
-        rateCell("up", total ? total.up.video : 0),
-        rateCell("down", total ? total.down.video : 0)
-      ]
-    ]);
-    const sample = mic && mic.sampleRate ? `${Math.round(mic.sampleRate / 1e3)} kHz ${mic.channelCount || 1}ch` : "";
-    out.push([
-      AUDIO_ICON,
-      [
-        ["", "", live ? sample || "on" : "off"],
-        rateCell("up", total ? total.up.audio : 0),
-        rateCell("down", total ? total.down.audio : 0)
-      ]
-    ]);
-    const level = live && state.micAnalyser ? micLevelCells(state.meterPeak) : null;
-    out.push([
-      "mic ",
-      [["", "", level ? level.state === "silent" ? "silent" : level.db : "off"]],
-      void 0,
-      false,
-      level ? levelFraction(state.meterPeak) : 0
-    ]);
-    const fe = feDrops();
-    const seen = fe.frames + fe.dropped;
-    const drops = seen > 0 ? `, ${(100 * fe.dropped / seen).toFixed(1)}% drop` : "";
-    out.push(["filter ", `out ${state.denoiseOn ? state.denoiseEngine : "off"}${drops}`]);
-    const ctx = state.playCtx;
-    const play2 = ctx ? ctx.state : "none";
-    if (play2 !== "running") out.push(["sound ", `${play2}, tap the page once`, false]);
-    return out;
-  }
-  function peerPairs(peer, s) {
-    const out = [];
-    const pin = pinState(peer);
-    if (peer.fp && pin !== "new") {
-      const bad = pin === "changed" || pin === "rollback";
-      const cells = [pin === "known" ? ["2714", "verified", peer.fp] : ["", "", peer.fp]];
-      if (pin !== "known") cells.push(["", "", pin]);
-      out.push(["key ", cells, bad ? false : void 0, "mono"]);
-    }
-    if (!s) {
-      out.push(["", "connecting", void 0, true]);
-    } else {
-      out.push(["route ", [routeCell(s.path)]]);
-      out.push(["link ", tripCells(s.rtt, s.jitter, s.loss), void 0, "metrics"]);
-      out.push([
-        VIDEO_ICON,
-        [[...PICTURE_ICON, s.shot || ""], rateCell("up", s.up.video), rateCell("down", s.down.video)]
-      ]);
-      out.push([
-        AUDIO_ICON,
-        [["", "", peerLevel(peer)], rateCell("up", s.up.audio), rateCell("down", s.down.audio)]
-      ]);
-      const noise = noiseText(peer.outFilter, peer.inFilter);
-      if (noise) out.push(["filter ", noise]);
-    }
-    if (peer.sas && sealedRoomCodes().size > 1)
-      out.push(["code ", verifyText(peer.sas), void 0, true]);
-    if (!peer.keys) out.push(["keys ", "none", false, true]);
-    else if (peer.ready === "ready" && !peer.confirmed)
-      out.push(["keys ", "not confirmed", false, true]);
-    const c = sealedPairCount(peer.id);
-    if (c.refused) out.push(["frames ", `${c.refused} refused`, false, true]);
-    return out;
-  }
-  function statIcon(hex, title) {
-    const img = document.createElement("img");
-    img.className = "sico";
-    img.src = `/openmoji/${hex}.svg`;
-    img.alt = title;
-    img.title = title;
-    return img;
-  }
-  function statCells(value, metrics) {
-    const span = document.createElement("span");
-    span.className = "sv";
-    const parts = Array.isArray(value) ? value : [value];
-    for (const raw of parts) {
-      const p = Array.isArray(raw) ? raw : [raw];
-      const cell = document.createElement("span");
-      cell.className = "cell" + (p[3] === true ? " good" : p[3] === false ? " bad" : "");
-      const word = p.length > 1 ? p[2] : p[0];
-      const text = document.createElement("span");
-      text.textContent = word === null || word === void 0 ? "" : String(word);
-      if (metrics && p.length > 1 && p[1]) {
-        const label = document.createElement("span");
-        label.className = "cl";
-        label.title = String(p[1]);
-        label.textContent = String(p[1]).split(",")[0];
-        text.className = "cv";
-        cell.append(label, text);
-      } else {
-        if (p.length > 1 && p[0]) cell.appendChild(statIcon(p[0], p[1]));
-        cell.appendChild(text);
-      }
-      span.appendChild(cell);
-    }
-    return span;
-  }
-  function statLine(key, value, mark, sub, meter) {
-    const line = document.createElement("div");
-    const parts = Array.isArray(value) ? value : [value];
-    line.className = "sline" + (sub === "mono" ? " mono" : sub === "metrics" ? " metrics" : sub ? " sub" : "") + (typeof meter === "number" ? " meterline" : "") + (mark === true ? " good" : mark === false ? " bad" : "");
-    line.dataset.n = String(parts.length);
-    const k = document.createElement("span");
-    k.className = "sk";
-    if (Array.isArray(key) && key[0]) {
-      k.appendChild(statIcon(key[0], key[1]));
-      k.appendChild(document.createTextNode(String(key[1]).split(",")[0]));
-    } else k.textContent = Array.isArray(key) ? key[1] || "" : key;
-    line.appendChild(k);
-    if (typeof meter === "number") {
-      const bar = document.createElement("span");
-      bar.className = "meter";
-      bar.setAttribute("role", "img");
-      bar.setAttribute("aria-label", `level ${Math.round(meter * 100)} percent`);
-      const fill = document.createElement("i");
-      fill.style.width = `${Math.round(meter * 100)}%`;
-      bar.appendChild(fill);
-      line.appendChild(bar);
-    }
-    line.appendChild(statCells(value, sub === "metrics"));
-    return line;
-  }
-  function statsRow(title, pairs, mark = null, badge = null) {
-    const row = document.createElement("div");
-    row.className = "srow";
-    const head = document.createElement("div");
-    head.className = "sname";
-    const name = document.createElement("span");
-    name.className = "stitle";
-    name.textContent = title;
-    head.appendChild(name);
-    if (badge && badge.level) {
-      const chip = document.createElement("span");
-      chip.className = "sbadge";
-      chip.dataset.level = badge.level;
-      chip.textContent = badge.text || badge.level;
-      head.appendChild(chip);
-    }
-    row.appendChild(head);
-    for (const p of pairs) {
-      row.appendChild(
-        statLine(p[0], p[1], p.length > 2 ? p[2] : mark, p.length > 3 ? p[3] : false, p[4])
-      );
-    }
-    return row;
-  }
-  function linkLevel(s) {
-    if (!s) return "";
-    const { rtt, loss, jitter } = s;
-    if (rtt === null && loss === null) return "";
-    if (loss !== null && loss >= 5 || rtt !== null && rtt >= 400) return "poor";
-    if (loss !== null && loss >= 2 || rtt !== null && rtt >= 200 || jitter !== null && jitter >= 40)
-      return "fair";
-    return "good";
-  }
-  function worstLevel(levels) {
-    for (const word of ["poor", "fair", "good"]) if (levels.includes(word)) return word;
-    return "";
-  }
-  function statsSummary(live, guestCount) {
-    const level = worstLevel(live.map(linkLevel));
-    const box = document.createElement("div");
-    box.className = "ssum";
-    box.dataset.level = level;
-    const lamp = document.createElement("span");
-    lamp.className = "slamp";
-    const text = document.createElement("div");
-    const head = document.createElement("div");
-    head.className = "ssum-head";
-    const sub = document.createElement("div");
-    sub.className = "ssum-sub";
-    if (guestCount === 0) {
-      head.textContent = "waiting for guests";
-      sub.textContent = "the numbers start when someone joins";
-    } else if (!level) {
-      head.textContent = "measuring";
-      sub.textContent = "the first numbers arrive in a second";
-    } else {
-      head.textContent = `connection ${level}`;
-      const nums = live.map((s) => s.rtt).filter((n) => typeof n === "number");
-      const loss = live.map((s) => s.loss).filter((n) => typeof n === "number");
-      const bits = [callPath(live)];
-      if (nums.length) bits.push(msText(Math.max(...nums)));
-      if (loss.length) bits.push(`loss ${lossText(Math.max(...loss))}`);
-      sub.textContent = bits.filter(Boolean).join(" | ");
-      if (level === "poor") sub.textContent += ". Try a lower quality in the toolbar.";
-    }
-    text.append(head, sub);
-    box.append(lamp, text);
-    return box;
-  }
-  function recordStatsHistory(total, live) {
-    state.statHist.push({
-      down: total.down.video + total.down.audio,
-      rtt: worstOf(live, "rtt"),
-      loss: worstOf(live, "loss")
-    });
-    if (state.statHist.length > STATS_HISTORY) state.statHist.shift();
-  }
-  function statsPlot(canvas, values, peak, fill, color) {
-    if (!canvas) return;
-    const cssW = canvas.clientWidth || 288;
-    const cssH = canvas.clientHeight || 34;
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.round(cssW * dpr);
-    const h = Math.round(cssH * dpr);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, cssW, cssH);
-    const n = values.length;
-    const stepX = (cssW - 2) / (STATS_HISTORY - 1);
-    const px = (i) => cssW - 1 - (n - 1 - i) * stepX;
-    const py = (v) => cssH - 1 - Math.min(v, peak) / peak * (cssH - 2);
-    ctx.strokeStyle = "#0c3c0c";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let g = 1; g < 3; g++) {
-      const y = Math.round(cssH * g / 3) + 0.5;
-      ctx.moveTo(0, y);
-      ctx.lineTo(cssW, y);
-    }
-    for (let g = 1; g < 6; g++) {
-      const x = Math.round(cssW * g / 6) + 0.5;
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, cssH);
-    }
-    ctx.stroke();
-    if (n < 1) return;
-    if (fill) {
-      ctx.beginPath();
-      ctx.moveTo(px(0), cssH - 1);
-      for (let i = 0; i < n; i++) ctx.lineTo(px(i), py(values[i] === null ? 0 : values[i]));
-      ctx.lineTo(px(n - 1), cssH - 1);
-      ctx.closePath();
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.35;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-    ctx.beginPath();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    let drawing = false;
-    for (let i = 0; i < n; i++) {
-      const v = values[i];
-      if (v === null) {
-        drawing = false;
-        continue;
-      }
-      if (drawing) ctx.lineTo(px(i), py(v));
-      else {
-        ctx.moveTo(px(i), py(v));
-        drawing = true;
-      }
-    }
-    ctx.stroke();
-  }
-  function statsNote(id, text) {
-    const note = $(id);
-    if (note) note.textContent = text;
-  }
-  function rateWords(kbit) {
-    const r = rateScale(kbit);
-    const words = state.statsBytes ? ["KiB/s", "MiB/s"] : ["kbit/s", "Mbit/s"];
-    return `${r.num} ${words[r.unit === "m" ? 1 : 0]}`;
-  }
-  function drawStatsGraphs() {
-    const box = $("stats-graph-box");
-    if (!box) return;
-    const hist = state.statHist;
-    box.hidden = hist.length < 2;
-    if (hist.length < 2) return;
-    const series = (key) => hist.map((p) => typeof p[key] === "number" ? p[key] : null);
-    const values = (arr) => arr.filter((v) => v !== null);
-    const peak = (arr, floor) => Math.max(floor, ...values(arr));
-    const now = (arr) => {
-      const kept = values(arr);
-      return kept.length ? kept[kept.length - 1] : null;
-    };
-    const secs = `last ${hist.length} s`;
-    const down = series("down");
-    statsPlot($("stats-graph-down"), down, peak(down, 100), true, "#00e000");
-    const downMax = Math.max(0, ...values(down));
-    statsNote(
-      "stats-note-down",
-      `down ${rateWords(now(down))} now, peak ${rateWords(downMax)}, ${secs}`
-    );
-    const rtt = series("rtt");
-    statsPlot($("stats-graph-rtt"), rtt, peak(rtt, 100), false, "#f0e000");
-    statsNote(
-      "stats-note-rtt",
-      values(rtt).length ? `round trip ${msText(now(rtt))} now, peak ${msText(Math.max(...values(rtt)))}, ${secs}` : `round trip not measured, ${secs}`
-    );
-    const loss = series("loss");
-    statsPlot($("stats-graph-loss"), loss, peak(loss, 1), false, "#ff5050");
-    const lossMax = Math.max(0, ...values(loss));
-    statsNote(
-      "stats-note-loss",
-      lossMax > 0 ? `loss ${lossText(now(loss))} now, peak ${lossText(lossMax)}, ${secs}` : `loss none, ${secs}`
-    );
-  }
-  var keptRows = /* @__PURE__ */ new Map();
-  function setText(node, text) {
-    const s = String(text);
-    if (node.textContent !== s) node.textContent = s;
-  }
-  function setClass(node, name, on) {
-    if (node.classList.contains(name) !== !!on) node.classList.toggle(name, !!on);
-  }
-  function writeCells(span, value, metrics) {
-    const parts = Array.isArray(value) ? value : [value];
-    if (span.children.length !== parts.length) {
-      span.replaceChildren(...statCells(value, metrics).childNodes);
-      return;
-    }
-    for (let i = 0; i < parts.length; i++) {
-      const raw = parts[i];
-      const p = Array.isArray(raw) ? raw : [raw];
-      const cell = span.children[i];
-      const word = p.length > 1 ? p[2] : p[0];
-      const text = cell.lastElementChild;
-      if (text) setText(text, word === null || word === void 0 ? "" : String(word));
-      setClass(cell, "good", p[3] === true);
-      setClass(cell, "bad", p[3] === false);
-    }
-  }
-  function meterInto(line, meter) {
-    const bar = line.querySelector(".meter");
-    const fill = bar && bar.querySelector("i");
-    if (!bar || !fill || typeof meter !== "number") return;
-    const pct = `${Math.round(meter * 100)}%`;
-    if (fill.style.width !== pct) fill.style.width = pct;
-    const word = `level ${Math.round(meter * 100)} percent`;
-    if (bar.getAttribute("aria-label") !== word) bar.setAttribute("aria-label", word);
-  }
-  function writeGuestRow(row, pairs, level) {
-    const head = row.querySelector(".sname");
-    let chip = head && head.querySelector(".sbadge");
-    if (head) {
-      if (level && !chip) {
-        chip = document.createElement("span");
-        chip.className = "sbadge";
-        head.appendChild(chip);
-      }
-      if (chip) {
-        if (level) {
-          chip.dataset.level = level;
-          setText(chip, level);
-        } else chip.remove();
-      }
-    }
-    const lines = row.children;
-    for (let i = 0; i < pairs.length; i++) {
-      const line = lines[i + 1];
-      if (!line) break;
-      const p = pairs[i];
-      writeCells(line.querySelector(".sv"), p[1], p[3] === "metrics");
-      setClass(line, "good", p[2] === true);
-      setClass(line, "bad", p[2] === false);
-      if (typeof p[4] === "number") meterInto(line, p[4]);
-    }
-  }
-  async function updateStats() {
-    if (!statsOpen() || state.statsBusy) return;
-    const body = $("stats-body");
-    if (!body) return;
-    state.statsBusy = true;
-    try {
-      const total = { up: { audio: 0, video: 0 }, down: { audio: 0, video: 0 } };
-      const live = [];
-      const peers = [...state.peers.values()];
-      const reports = await Promise.all(peers.map((peer) => peerStats(peer)));
-      const guests = peers.map((peer, i) => {
-        const s = reports[i];
-        if (s) {
-          live.push(s);
-          for (const dir of ["up", "down"]) {
-            for (const kind of ["audio", "video"]) total[dir][kind] += s[dir][kind];
-          }
-        }
-        return { peer, s };
-      });
-      recordStatsHistory(total, live);
-      const rows = [];
-      if (state.peers.size > 1) {
-        const call = callPairs(live, total);
-        if (call.length) rows.push(statsRow("call", call));
-      }
-      const seen = /* @__PURE__ */ new Set();
-      for (const { peer, s } of guests) {
-        if (s && peer.tile) peer.tile.dataset.relay = s.path.startsWith("relay") ? "yes" : "no";
-        const level = linkLevel(s);
-        const pairs = peerPairs(peer, s);
-        if (!pairs.length) continue;
-        seen.add(peer.id);
-        let row = keptRows.get(peer.id);
-        if (!row) {
-          row = statsRow(peerName(peer), pairs, void 0, level ? { level, text: level } : null);
-          keptRows.set(peer.id, row);
-        }
-        writeGuestRow(row, pairs, level);
-        rows.push(row);
-      }
-      for (const key of [...keptRows.keys()]) if (!seen.has(key)) keptRows.delete(key);
-      rows.push(statsRow("you", ownPairs(total)));
-      $("stats-sum").replaceChildren(...sealedAlarms(), statsSummary(live, state.peers.size));
-      const legend = document.createElement("p");
-      legend.className = "slegend";
-      legend.textContent = state.statsBytes ? "k is KiB/s and m is MiB/s, eight bits to the byte. The up arrow is what you send, the down arrow what you receive." : "k is kbit/s and m is Mbit/s. The up arrow is what you send, the down arrow what you receive.";
-      body.replaceChildren(...rows, ...sealedCards(), legend);
-      drawStatsGraphs();
-    } finally {
-      state.statsBusy = false;
-    }
-  }
-  function sealedPairCount(id) {
-    const label = pairLabel(id);
-    let out = 0;
-    let inn = 0;
-    let refused = 0;
-    for (const st of Object.values(state.frames)) {
-      if (!st || st.pair !== label) continue;
-      if (st.dir === "send") out += st.ok || 0;
-      else if (st.dir === "recv") {
-        inn += st.ok || 0;
-        refused += st.fail || 0;
-      }
-    }
-    return { out, inn, refused };
-  }
-  function sealedAlarms() {
-    const out = [];
-    if (state.sealFault) out.push(statsRow("sealing fault", [["", state.sealFault, false]]));
-    const failed = sealedFailedPairs();
-    if (failed.length) {
-      const tags = failed.map((peer) => `${peerName(peer)} ${verifyText(peer.sas) || "no code"}`);
-      out.push(
-        statsRow("room code", [
-          ["", "KEY MISMATCH " + tags.join(", "), false],
-          ["", "do not trust this call", false]
-        ])
-      );
-    }
-    if (state.wireLeaks.length) {
-      out.push(
-        statsRow(
-          "leak",
-          state.wireLeaks.map((w) => ["", `${w.where}: ${w.canary}`, false])
-        )
-      );
-    }
-    if (state.workerErrors.length) {
-      out.push(
-        statsRow(
-          "worker",
-          state.workerErrors.slice(0, 5).map((e) => ["", e, false])
-        )
-      );
-    }
-    const wt = state.wasmTest;
-    if (wt && !wasmTestOk(wt)) out.push(statsRow("self test", wasmTestFaults(wt)));
-    return out;
-  }
-  function wasmTestOk(wt) {
-    return !!(wt.sasMatch && wt.confirm && wt.open && wt.wrongKeyRefused && wt.idSign && wt.idUnsigned && wt.idFp && wt.pad && wt.passGood && wt.passBad);
-  }
-  function wasmTestFaults(wt) {
-    const bad = [
-      ["sas ", wt.sasMatch ? "match" : "no", !!wt.sasMatch],
-      ["confirm ", wt.confirm ? "ok" : "no", !!wt.confirm],
-      ["open ", wt.open ? "ok" : "no", !!wt.open],
-      ["padding ", wt.pad ? "ok" : "BROKEN", !!wt.pad],
-      ["wrong key ", wt.wrongKeyRefused ? "refused" : "OPENED", !!wt.wrongKeyRefused],
-      ["identity ", wt.idSign ? "signs" : "BROKEN", !!wt.idSign],
-      ["unsigned ", wt.idUnsigned ? "refused" : "ACCEPTED", !!wt.idUnsigned],
-      ["fingerprint ", wt.idFp ? "ok" : "BROKEN", !!wt.idFp],
-      ["room key ", wt.passGood ? "ok" : "BROKEN", !!wt.passGood],
-      ["wrong key ", wt.passBad ? "refused" : "ACCEPTED", !!wt.passBad]
-    ];
-    const out = [["", "FAIL", false]];
-    for (const b of bad) if (!b[2]) out.push(b);
-    return out;
-  }
-  function sealedCards() {
-    const out = [];
-    const available = sealingAvailable();
-    const wt = state.wasmTest;
-    const seal = [
-      ["media ", available ? "sealed, every frame" : "NO SEALING, no media is sent", available]
-    ];
-    if (wt) seal.push(["self test ", wasmTestOk(wt) ? "pass" : "FAIL", wasmTestOk(wt)]);
-    out.push(statsRow("crypto", seal));
-    let refused = 0;
-    for (const st of Object.values(state.frames)) {
-      if (st && st.dir === "recv") refused += st.fail || 0;
-    }
-    const clean = state.workerErrors.length === 0;
-    const counts = [
-      [
-        "frames ",
-        `out ${state.encryptFrames} in ${state.decryptFrames} refused ${refused}`,
-        refused === 0 && clean
-      ],
-      [
-        "wire ",
-        `frames ${state.wireFrames} leaks ${state.wireLeaks.length} clear ${state.clearSignaling}`,
-        state.wireLeaks.length === 0 && state.clearSignaling === 0
-      ]
-    ];
-    const files = state.fileOffers + state.fileRecv + state.fileChunksRecv + state.fileChunksSent + state.fileRefused + state.fileCancelled;
-    if (files) {
-      counts.push([
-        "files ",
-        `offers ${state.fileOffers} saved ${state.fileRecv} in ${state.fileChunksRecv} out ${state.fileChunksSent} refused ${state.fileRefused} cancelled ${state.fileCancelled}`,
-        state.fileRefused === 0 && state.fileCancelled === 0
-      ]);
-    }
-    const chat = state.chatSent + state.chatRecv + state.replayDrops + state.confirmFailures + state.identityFailures;
-    if (chat) {
-      counts.push([
-        "chat ",
-        `out ${state.chatSent} in ${state.chatRecv} replays ${state.replayDrops}`,
-        state.replayDrops === 0 && state.confirmFailures === 0 && state.identityFailures === 0
-      ]);
-    }
-    out.push(statsRow("counters", counts));
-    return out;
-  }
-
-  // src/frame.ts
-  function startSealedWorker() {
-    const worker = new Worker(scriptURL("/e2e-transform.js"));
-    worker.onmessage = (event) => {
-      const msg = event.data || {};
-      if (msg.type === "stats") {
-        state.frames[msg.pair + "|" + msg.dir + (msg.kind ? "|" + msg.kind : "")] = msg;
-        paintFrameCounters();
-      } else if (msg.type === "keys-ok") {
-        const waiting = state.keyWait.get(msg.pair);
-        if (waiting && waiting.gen === msg.gen) {
-          state.keyWait.delete(msg.pair);
-          waiting.resolve(true);
-        }
-      } else if (msg.type === "sample") {
-        if (state.samples.length < 40) state.samples.push(msg);
-      } else if (msg.type === "error") {
-        state.workerErrors.push(msg.msg || "worker error");
-        const waiting = msg.pair && state.keyWait.get(msg.pair);
-        if (waiting && (msg.gen === void 0 || waiting.gen === msg.gen)) {
-          state.keyWait.delete(msg.pair);
-          waiting.resolve(false);
-          say("the frame keys did not install; the link stays without video");
-        }
-      }
-    };
-    worker.onerror = (event) => state.workerErrors.push(String(event.message || event));
-    state.worker = worker;
-  }
-  function paintFrameCounters() {
-    let enc = 0;
-    let dec = 0;
-    for (const st of Object.values(state.frames)) {
-      if (!st) continue;
-      if (st.dir === "send") enc += st.ok || 0;
-      else if (st.dir === "recv") dec += st.ok || 0;
-    }
-    state.encryptFrames = enc;
-    state.decryptFrames = dec;
-  }
-
-  // src/wasm.ts
-  function loadScriptOnce(src) {
-    return new Promise((resolve, reject) => {
-      if (win().Go) return resolve(null);
-      const el2 = document.createElement("script");
-      el2.src = scriptURL(src);
-      el2.onload = () => resolve(null);
-      el2.onerror = () => reject(new Error("could not load " + src));
-      document.head.appendChild(el2);
-    });
-  }
-  function loadWasmModule() {
-    return new Promise((resolve, reject) => {
-      const Go = win().Go;
-      if (!window.WebAssembly || typeof Go !== "function")
-        return reject(new Error("webassembly unavailable"));
-      const go = new Go();
-      fetch("/pq.wasm" + BUILD_Q).then((res) => {
-        if (!res.ok) throw new Error("wasm " + res.status);
-        return WebAssembly.instantiateStreaming(res, go.importObject);
-      }).catch(async () => {
-        const res = await fetch("/pq.wasm" + BUILD_Q);
-        if (!res.ok) throw new Error("wasm " + res.status);
-        const buf = await res.arrayBuffer();
-        return WebAssembly.instantiate(buf, go.importObject);
-      }).then((res) => {
-        go.run(res.instance);
-        const started = Date.now();
-        const timer = setInterval(() => {
-          if (pqModule()) {
-            clearInterval(timer);
-            resolve(null);
-          } else if (Date.now() - started > 3e4) {
-            clearInterval(timer);
-            reject(new Error("wasm module did not start"));
-          }
-        }, 20);
-      }).catch(reject);
-    });
-  }
-  function fpShape(fp) {
-    const parts = String(fp || "").split("-");
-    if (parts.length !== 5) return false;
-    return parts.every((part) => part.length === 4 && /^[a-z2-7]+$/.test(part));
-  }
-  function pqSelfTest() {
-    const pq = pqModule();
-    const a = JSON.parse(pq.gen());
-    const b = JSON.parse(pq.gen());
-    const k1 = JSON.parse(pq.idgen());
-    const k2 = JSON.parse(pq.idgen());
-    const sidA = b64e(crypto.getRandomValues(new Uint8Array(16)));
-    const sidB = b64e(crypto.getRandomValues(new Uint8Array(16)));
-    const off = JSON.parse(
-      pq.initiate(
-        JSON.stringify({
-          self: "a",
-          peer: "b",
-          selfX: a.xpub,
-          selfK: a.ek,
-          selfID: k1.pub,
-          selfSID: sidA,
-          peerX: b.xpub,
-          peerK: b.ek,
-          peerID: k2.pub,
-          peerSID: sidB
-        })
-      )
-    );
-    const helloSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k1.seed, msg: off.transcript })));
-    const respond = (sig) => JSON.parse(
-      pq.respond(
-        JSON.stringify({
-          self: "b",
-          peer: "a",
-          selfX: b.xpub,
-          selfSK: b.xsk,
-          selfK: b.ek,
-          selfDK: b.dk,
-          selfID: k2.pub,
-          selfSID: sidB,
-          peerX: a.xpub,
-          peerK: a.ek,
-          peerID: k1.pub,
-          peerSID: sidA,
-          epk: off.epk,
-          ct: off.ct,
-          ...sig ? { sig } : {}
-        })
-      )
-    );
-    const acc = respond(helloSig.sig);
-    const okSig = JSON.parse(pq.idsign(JSON.stringify({ seed: k2.seed, msg: acc.transcript })));
-    const proved = (key, tag, id, sig) => JSON.parse(pq.proved(JSON.stringify({ key, transcript: off.transcript, tag, id, sig })));
-    const verifyA = proved(off.keys.recvMedia, acc.confirm, k2.pub, okSig.sig);
-    const verifyB = proved(acc.keys.recvMedia, off.confirm, k1.pub, helloSig.sig);
-    const verifyNoSig = proved(off.keys.recvMedia, acc.confirm, k2.pub, "");
-    const pt = b64e(sealUtf8.encode("sealed hello"));
-    const aad = b64e(sealUtf8.encode("pq-e2e v2 chat a|b 1"));
-    const sealed = JSON.parse(pq.seal(JSON.stringify({ key: off.keys.sendChat, aad, pt })));
-    const openWith2 = (key) => JSON.parse(pq.open(JSON.stringify({ key, aad, b: sealed.b })));
-    const opened = openWith2(acc.keys.recvChat);
-    const wrong = openWith2(b64e(crypto.getRandomValues(new Uint8Array(32))));
-    const idV = (id, msg, sig) => JSON.parse(pq.idverify(JSON.stringify({ id, msg, sig })));
-    const idOk = idV(k1.pub, off.transcript, helloSig.sig);
-    const idOther = idV(k2.pub, off.transcript, helloSig.sig);
-    const idOk2 = idV(k2.pub, acc.transcript, okSig.sig);
-    const idTampered = idV(k1.pub, b64e(sealUtf8.encode("another transcript")), helloSig.sig);
-    const idFp = JSON.parse(pq.idfp(JSON.stringify({ id: k1.pub })));
-    const w1 = JSON.parse(pq.spakew(JSON.stringify({ pass: "a", salt: "room" }))).w;
-    const wBad = (() => {
-      const raw = b64d(w1);
-      raw[raw.length - 1] ^= 1;
-      return b64e(raw);
-    })();
-    const passRun = (wa, wb) => {
-      const start = (w, role) => JSON.parse(
-        pq.spakestart(
-          JSON.stringify({
-            w,
-            role,
-            a: b64e(sealUtf8.encode("a")),
-            b: b64e(sealUtf8.encode("b"))
-          })
-        )
-      );
-      const one = start(wa, "A");
-      const two = start(wb, "B");
-      if (!one.id || !two.id) return { error: true };
-      const finA = JSON.parse(pq.spakefinish(JSON.stringify({ id: one.id, msg: two.msg })));
-      const finB = JSON.parse(pq.spakefinish(JSON.stringify({ id: two.id, msg: one.msg })));
-      const okA = JSON.parse(pq.spakeverify(JSON.stringify({ id: one.id, tag: finB.conf })));
-      const okB = JSON.parse(pq.spakeverify(JSON.stringify({ id: two.id, tag: finA.conf })));
-      return {
-        match: !!finA.ke && finA.ke === finB.ke,
-        ok: !!(okA.ok && okB.ok)
-      };
-    };
-    const passGood = passRun(w1, w1);
-    const passBad = passRun(w1, wBad);
-    const noSig = respond("");
-    return {
-      sas: off.keys.sas,
-      sasMatch: off.keys.sas === acc.keys.sas,
-      pad: padRoundTripOk(),
-      confirm: !!(verifyA.ok && verifyB.ok && !verifyNoSig.ok),
-      open: opened.pt === pt,
-      wrongKeyRefused: !!wrong.error,
-      idSign: idOk.ok === true && idOther.ok === false && idOk2.ok === true && idTampered.ok === false,
-      idUnsigned: !!noSig.error,
-      idFp: fpShape(idFp.fp),
-      passGood: !!(passGood.match && passGood.ok),
-      passBad: !!(passBad.match === false && passBad.ok === false)
-    };
-  }
-  var wasmLoad = null;
-  function ensureWasm() {
-    if (state.wasmOk) return Promise.resolve();
-    if (wasmLoad) return wasmLoad;
-    wasmLoad = loadScriptOnce("/wasm_exec.js" + BUILD_Q).then(loadWasmModule).then(() => {
-      const test = pqSelfTest();
-      state.wasmTest = test;
-      if (!test.sasMatch || !test.confirm || !test.open || !test.wrongKeyRefused || !test.idSign || !test.idUnsigned || !test.idFp || !test.passGood || !test.passBad) {
-        throw new Error("crypto self test failed");
-      }
-      state.wasmOk = true;
-    }).catch((err) => {
-      wasmLoad = null;
-      throw err;
-    });
-    return wasmLoad;
-  }
-  function preloadSealed() {
-    $("sealed-note").hidden = false;
-    $("sealed-note").textContent = "loading the post-quantum module";
-    ensureReady().then(() => {
-      if (!$("lobby").hidden) $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
-    }).catch((err) => {
-      if (!$("lobby").hidden) {
-        $("sealed-note").textContent = "the sealed client did not start: " + (err && err.message ? err.message : err);
-      }
-    });
-  }
-  function ensureReady() {
-    return ensureWasm().then(ensureIdentity);
-  }
-
-  // src/phone.ts
-  var phoneQuery = window.matchMedia ? window.matchMedia("(max-width: 620px), (max-height: 520px) and (hover: none)") : null;
-  function applyImmersive() {
-    const stage = $("stage");
-    const on = !!phoneQuery && phoneQuery.matches && !stage.hidden;
-    stage.classList.toggle("immersive", on);
-    if (!on) stage.classList.remove("chrome");
-    $("chrome-btn").setAttribute("aria-expanded", String(stage.classList.contains("chrome")));
-  }
-  function setChrome(show) {
-    const stage = $("stage");
-    if (!stage.classList.contains("immersive")) return;
-    stage.classList.toggle("chrome", show);
-    $("chrome-btn").setAttribute("aria-expanded", String(show));
-    if (show) return;
-    menuClose();
-    if (statsOpen()) setStatsOpen(false);
-  }
-
-  // src/room.ts
-  var worldStart = "";
-  async function enterRoom(room, pass, start) {
-    worldStart = start || "";
-    if (state.entering || state.ws) return;
-    state.entering = true;
-    try {
-      ensureSfx();
-      preloadSfx();
-      cancelReconnect();
-      stopLost();
-      state.fatal = "";
-      state.room = room;
-      state.name = cleanSealedName($("name").value) || "guest";
-      state.path = $("path").value;
-      state.noiseWanted = $("noise").checked;
-      state.mirror = true;
-      state.leaving = false;
-      state.mic = load("mic") !== "0";
-      state.cam = load("cam") !== "0";
-      store("name", state.name);
-      store("room", state.room);
-      store("path", state.path);
-      store("noise", state.noiseWanted ? 1 : 0);
-      ensurePlayback();
-      $("enter-btn").disabled = true;
-      $("sealed-note").hidden = false;
-      $("sealed-note").textContent = "loading the post-quantum module";
-      try {
-        try {
-          await ensureReady();
-          $("sealed-note").textContent = "pq-e2e ready, " + deviceNote();
-        } catch (err) {
-          const why = err && err.message ? err.message : String(err);
-          $("sealed-note").textContent = "the sealed client did not start: " + why;
-          state.room = "";
-          say("cannot open a sealed room: " + why);
-          return;
-        }
-        canary(pass);
-        state.w = "";
-        try {
-          const derived = await deriveRoomW(pass, room);
-          state.w = typeof derived === "string" ? derived : "";
-        } catch {
-          state.w = roomW(pass, room);
-        }
-        state.gate = { v: pass, n: 0 };
-        paintGate();
-        state.warmed = true;
-        if (!rootFingerprint(room)) {
-          try {
-            const fp = await roomRoot(room);
-            if (fp) setRoot(fp);
-          } catch {
-          }
-        }
-        startSealedWorker();
-        const made = JSON.parse(pqModule().gen());
-        state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
-        state.sid = b64e(crypto.getRandomValues(new Uint8Array(16)));
-        canary(state.name);
-        if (!sealingAvailable()) {
-          state.sealFault = "this browser cannot seal media frames, so no media is sent";
-          state.mic = false;
-          state.cam = false;
-        }
-        $("lobby").hidden = true;
-        $("stage").hidden = false;
-        $("stage").classList.remove("chrome");
-        applyImmersive();
-        document.title = "stanze - " + room;
-        $("chat-note").hidden = false;
-        updatePinCount();
-        setHash(room);
-        startCallClock();
-        startSpeaking();
-        prepareLocal();
-        prefetchNoise();
-        if (sealingAvailable()) {
-          try {
-            await requestLocal();
-          } catch {
-          }
-        } else {
-          updateButtons();
-          say(state.sealFault + "; you joined without microphone and camera");
-        }
-        connectWS();
-        worldEnter(room, worldStart).catch(() => {
-        });
-      } catch (err) {
-        leave("");
-        state.leaving = false;
-        say("cannot open a sealed room: " + (err && err.message ? err.message : String(err)));
-      } finally {
-        state.entering = false;
-        const button = $("enter-btn");
-        if (button) button.disabled = false;
-      }
-    } catch (err) {
-      state.entering = false;
-      throw err;
-    }
-  }
-  function leaveFor(room, pass) {
-    if (state.leaving) return;
-    const was = state.name;
-    leave("");
-    if (was) $("name").value = was;
-    enterRoom(room, pass || "");
-  }
-  setWorldLeave(leaveFor);
-  function leave(message) {
-    const was = state.room;
-    state.leaving = true;
-    cancelReconnect();
-    if (state.ws) {
-      const ws = state.ws;
-      state.ws = null;
-      ws.onclose = null;
-      try {
-        ws.close();
-      } catch {
-      }
-    }
-    if (state.screen) {
-      stopTracks(state.screen);
-      state.screen = null;
-      if (state.screenTile) {
-        state.screenTile.remove();
-        state.screenTile = null;
-      }
-    }
-    dropPeers();
-    if (state.worker) {
-      state.worker.terminate();
-      state.worker = null;
-    }
-    wipeIdentity();
-    state.w = "";
-    state.warmed = false;
-    state.root = "";
-    state.passTries = 0;
-    state.passRefusals = 0;
-    state.passLast = 0;
-    state.seqGaps = 0;
-    state.gate = { v: null, n: 0 };
-    state.auth = { n: -1, admins: [], by: "", sig: "" };
-    if (state.authTimer) clearTimeout(state.authTimer);
-    state.authTimer = null;
-    state.wait = { on: false, n: 0 };
-    state.kickedFps = /* @__PURE__ */ new Set();
-    state.sid = "";
-    state.identityFailures = 0;
-    state.keyWait.clear();
-    state.frames = {};
-    state.encryptFrames = 0;
-    state.decryptFrames = 0;
-    state.chatSent = 0;
-    state.chatRecv = 0;
-    state.replayDrops = 0;
-    fileClearAll();
-    state.confirmFailures = 0;
-    state.workerErrors = [];
-    state.sealFault = "";
-    state.wireFrames = 0;
-    state.wireLeaks = [];
-    state.clearSignaling = 0;
-    state.canaries = /* @__PURE__ */ new Set();
-    state.samples = [];
-    asrStop();
-    omniStop();
-    state.waiting = false;
-    state.waitingRoom = false;
-    state.hand = false;
-    state.handTs = 0;
-    state.insideFps.clear();
-    paintWaiting();
-    paintHandQueue();
-    updatePinCount();
-    $("chat-note").hidden = true;
-    if (state.micTrack) stopQuietly(state.micTrack);
-    if (state.camTrack) stopQuietly(state.camTrack);
-    if (state.audioCtx) {
-      state.audioCtx.close().catch(() => {
-      });
-      state.audioCtx = null;
-    }
-    if (state.playCtx) {
-      state.playCtx.close().catch(() => {
-      });
-      state.playCtx = null;
-    }
-    stopLost();
-    if (state.sfxCtx) {
-      state.sfxCtx.close().catch(() => {
-      });
-      state.sfxCtx = null;
-    }
-    sfxCache.clear();
-    state.sfxSource = null;
-    state.mixer = null;
-    state.micGain = null;
-    state.micSource = null;
-    state.denoise = null;
-    state.denoiseOn = false;
-    state.denoiseEngine = "off";
-    state.micAnalyser = null;
-    state.meterPeak = 0;
-    stopSpeaking();
-    state.outStream = null;
-    state.camTrack = null;
-    state.micTrack = null;
-    stopStats();
-    clearStatsPanel();
-    $("stats-panel").hidden = true;
-    $("stats-btn").setAttribute("aria-pressed", "false");
-    state.spotlight = "";
-    setLocalTile(null);
-    worldLeave();
-    $("stage-main").replaceChildren();
-    $("self-pip").replaceChildren();
-    $("self-pip").hidden = true;
-    $("stage-rail").replaceChildren();
-    $("stage-rail").hidden = false;
-    stopCallClock();
-    menuSet(false);
-    $("stage").hidden = true;
-    $("lobby").hidden = false;
-    applyImmersive();
-    document.title = "stanze";
-    state.room = "";
-    state.self = null;
-    state.ice = [];
-    state.fatal = "";
-    state.reconnectDelay = 500;
-    state.mic = false;
-    state.cam = false;
-    setAdmins([]);
-    state.peers.clear();
-    if ($("chat-log")) clearChat();
-    setHash("");
-    worldStart = "";
-    if (was) $("room").value = was;
-    else suggestRoom();
-    if (message) {
-      say(message);
-      const note = $("sealed-note");
-      if (note) {
-        note.hidden = false;
-        note.textContent = message;
-      }
-    }
   }
 
   // src/gate.ts

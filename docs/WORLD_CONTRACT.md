@@ -14,11 +14,11 @@ review contradicts researchD, trix wins and this file says why.
 | Decision | Value | Why |
 |---|---|---|
 | Position transport | `files` DataChannel, `t:"pos"` frames | `sealedSend` is `app`, a **strict** counter: one missing seq calls `sealedGapReset` and restarts the pair (`handshake.ts:695-708`). The relay drops frames on a slow queue on purpose. Positions are lossy-shaped data; they must not be able to kill audio. |
-| Position rate | **5 Hz**, `POSITION_DELAY = 200` ms | researchC §4 |
-| Interpolation | lerp toward last target, stop extrapolating after **100 ms** (`MAX_EXTRAPOLATION = 100`) | researchC §4 |
+| Position rate | **follows the walker**: `MOVING_DELAY = 66` ms (about 15 Hz) while moving, `IDLE_DELAY = 1000` ms while still, and an immediate frame on a stop or a turn. Amended 2026-11-28 (trix): the flat 5 Hz clock read as choppy, and a still guest wastes nothing at 1 Hz. | trix 2026-11-28 |
+| Interpolation | lerp from the previous sample to the last one over the **measured gap** between them, clamped to 16..150 ms, never extrapolating past the last frame. | trix 2026-11-28 |
 | Office peer cap | **6**, refused with the existing `unavailable`, and `config.go` cap knob | researchD §0 |
 | Per-frame server relay | **none**. `x,y` never appear in a Go struct, a clear frame, or `state.wireLeaks` | researchA P1, researchD §1 |
-| Room budget | raise `roomBudget.perSecond` to **1500**, `burst` **3000** when office/loose mode is on | researchD §1; trix §1 |
+| Room budget | **1200** frames/s, **2400** burst, so six guests at 15 Hz to five pairs each (450 frames/s) plus a share still fit | researchD §1; trix 2026-11-28 |
 | Per-connection limiter | `peer.go:35 newTokenBucket(120,60)` must not close the socket for office traffic | trix risk 2; if it fires the socket dies, not slow down |
 | Map bytes | never over `enc`. Public HTTP GET only. | researchD §3, `encMax` 96 KiB |
 | Tile spritesheet | **one PNG per tileset**, never one image per tile | trix §6 |
