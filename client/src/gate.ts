@@ -61,16 +61,21 @@ import { setGuestFlags } from './presence.js';
 // longer adopted.
 
 // ROOTED is the room id shape this build mints: a fingerprint, a dash, a name.
-export const ROOTED = /^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-([a-z0-9._-]{1,40})$/;
+// The five groups are captured one at a time: pq.Fingerprint hashes 100 bits
+// into 20 base32 chars and joins them as five groups of four, so the id carries
+// those 24 characters with the dashes, and the groups are the whole of it.
+export const ROOTED = /^([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z0-9._-]{1,40})$/;
 
 // rootFingerprint is the identity fingerprint that roots this room, or '' for a
 // room that has none yet. A room id this build mints carries it; a room named
 // any other way gets one from the page that created it, recorded locally
 // (identity.ts adoptRoot) and read into state.root at the join and when a claim
-// asks for it.
+// asks for it. Rejoined, the groups are the whole fingerprint and compare equal
+// to state.idKey.fp and to peer.fp; a value one character short compares to
+// neither, so the room's own page seeds no step 0 and the room has no admin.
 export function rootFingerprint(room) {
   const m = ROOTED.exec(String(room || ''));
-  if (m) return m[0].slice(0, 23);
+  if (m) return m.slice(1, 6).join('-');
   return state.root || '';
 }
 
