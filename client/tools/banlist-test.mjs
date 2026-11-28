@@ -74,7 +74,8 @@ test('the whole browser over its cap drops the oldest across rooms', () => {
   const list = [];
   const rooms = 12;
   for (let r = 0; r < rooms; r++) {
-    for (let i = 0; i < BAN_ROOM_CAP; i++) list.push(rec('room-' + r, 'fp-' + i, NOW + r * 100 + i));
+    for (let i = 0; i < BAN_ROOM_CAP; i++)
+      list.push(rec('room-' + r, 'fp-' + i, NOW + r * 100 + i));
   }
   assert.ok(rooms * BAN_ROOM_CAP > BAN_ALL_CAP);
   const { kept, removed } = pruneBans(list, NOW + 10_000);
@@ -94,7 +95,10 @@ test('a sweep drops the lapsed rows and keeps the rest untouched', () => {
     rec('room-2', 'fp-other', NOW + 1),
   ];
   const { kept, removed } = pruneBans(list, NOW + 2);
-  assert.deepEqual(removed.map((r) => r.fp), ['fp-old']);
+  assert.deepEqual(
+    removed.map((r) => r.fp),
+    ['fp-old'],
+  );
   assert.deepEqual(kept.map((r) => r.fp).sort(), ['fp-new', 'fp-other']);
 });
 
@@ -107,7 +111,10 @@ test('a torn record is dropped instead of enforced', () => {
     rec('room-1', 'fp-good', NOW),
   ];
   const { kept, removed } = pruneBans(list, NOW);
-  assert.deepEqual(kept.map((r) => r.fp), ['fp-good']);
+  assert.deepEqual(
+    kept.map((r) => r.fp),
+    ['fp-good'],
+  );
   // A bare null is not a record that was written; it is nothing to delete.
   assert.equal(removed.length, 3);
   assert.equal(banHeld(list, 'room-1', 'fp-a', NOW), false);
