@@ -114,10 +114,37 @@ func TestErrorFrameShape(t *testing.T) {
 	}
 }
 
+// shortLossWindow shortens the loss window for one test, so the mark can age
+// without a real minute passing.
+func shortLossWindow(t *testing.T) {
+	t.Helper()
+	old := lostFrameBudget
+	lostFrameBudget = time.Nanosecond
+	t.Cleanup(func() { lostFrameBudget = old })
+	time.Sleep(time.Microsecond)
+}
+
+// joinRoom seats a peer in a room, so its relay budget is the room's.
+func joinRoom(t *testing.T, srv *server, room, id string) *Peer {
+	t.Helper()
+	p := newPeer()
+	p.id = id
+	if _, err := srv.hub.join(room, p); err != nil {
+		t.Fatalf("join %s: %v", id, err)
+	}
+	return p
+}
+
+// newRoomServer is a server whose hub accepts seats, so a test can join.
+func newRoomServer() *server {
+	cfg := &Config{MaxPeers: 8, MaxRooms: 8}
+	return newServer(cfg, newHub(cfg), slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
 // The room budget is paid for by the sender that overran it, not by the guest
 // it could not reach. A slow receiver no longer takes the receiver down; a
 // sender whose frames reach nobody for the whole loss window is the one
-// closed.
+// closed, and only that one.
 func TestRoomBudgetClosesTheFlooder(t *testing.T) {
 	srv := newServer(&Config{}, newHub(&Config{}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := newPeer()
@@ -129,10 +156,7 @@ func TestRoomBudgetClosesTheFlooder(t *testing.T) {
 	srv.nothingReached(p)
 
 	// With the window open the very next frame is refused.
-	old := lostFrameBudget
-	lostFrameBudget = time.Nanosecond
-	t.Cleanup(func() { lostFrameBudget = old })
-	time.Sleep(time.Microsecond)
+	shortLossWindow(t)
 	if srv.spend(p, len(small)) {
 		t.Fatal("a sender that reached nobody for a window was still allowed to relay")
 	}
@@ -149,6 +173,207 @@ func TestRoomBudgetClosesTheFlooder(t *testing.T) {
 	srv.delivered(fresh)
 	if !srv.spend(fresh, len(small)) {
 		t.Fatal("a delivered frame did not clear the loss mark")
+	}
+}
+
+// The loss mark belongs to the sender, not to the room: one pair whose
+// receiver cannot keep up must not silence the other senders that share the
+// room's tokens.
+func TestOneStuckSenderDoesNotRefuseTheRoom(t *testing.T) {
+	srv := newRoomServer()
+	slow := joinRoom(t, srv, "shared-room", "slow")
+	other := joinRoom(t, srv, "shared-room", "other")
+	small := encBlob(64)
+
+	if !srv.spend(slow, len(small)) || !srv.spend(other, len(small)) {
+		t.Fatal("the first frames of a fresh room were refused")
+	}
+	// Only one of the two senders stops reaching anybody.
+	srv.nothingReached(slow)
+	shortLossWindow(t)
+
+	if srv.spend(slow, len(small)) {
+		t.Fatal("a sender that reached nobody for a window was still allowed to relay")
+	}
+	// The other sender keeps its place in the room, on the same tokens.
+	for i := 0; i < 8; i++ {
+		if !srv.spend(other, len(small)) {
+			t.Fatal("one stuck sender refused another sender in the same room")
+		}
+	}
+	// A frame that reaches somebody again clears only its own sender.
+	srv.delivered(slow)
+	if !srv.spend(slow, len(small)) {
+		t.Fatal("a delivered frame did not clear the sender's own loss mark")
+	}
+	// And clearing it did not clear anybody else's: the other sender's mark
+	// is still its own.
+	srv.nothingReached(other)
+	time.Sleep(time.Microsecond)
+	if srv.spend(other, len(small)) {
+		t.Fatal("another sender's delivered frame cleared this sender's mark")
+	}
+}
+
+// A sender that joins after the mark was set starts clean: the mark names a
+// peer, and a peer that was not there when the frames went nowhere has none.
+func TestFreshPeerInAStuckRoomStartsClean(t *testing.T) {
+	srv := newRoomServer()
+	slow := joinRoom(t, srv, "shared-room", "slow")
+	small := encBlob(64)
+
+	srv.spend(slow, len(small))
+	srv.nothingReached(slow)
+	shortLossWindow(t)
+	if srv.spend(slow, len(small)) {
+		t.Fatal("the marked sender was still allowed to relay")
+	}
+
+	late := joinRoom(t, srv, "shared-room", "late")
+	if !srv.spend(late, len(small)) {
+		t.Fatal("a peer that joined after the mark was born was refused with it")
+	}
+	// A peer that leaves and comes back to the same room is a new sender too:
+	// its old mark went with its socket.
+	gone := joinRoom(t, srv, "shared-room", "gone")
+	srv.spend(gone, len(small))
+	srv.nothingReached(gone)
+	if room := srv.hub.leave(gone); room == nil {
+		// The room still holds the other two, so leave answers with it.
+		t.Fatal("leave did not return the room")
+	} else {
+		srv.forget(gone, false)
+	}
+	if !srv.spend(gone, len(small)) {
+		t.Fatal("a peer that left kept its loss mark in the room")
+	}
+}
+
+// A guest that leaves takes its own mark with it and nothing else: the room's
+// tokens are the room's, so one departure must not hand the room a fresh
+// allowance.
+func TestLeavingPeerLeavesTheRoomsTokens(t *testing.T) {
+	srv := newRoomServer()
+	spender := joinRoom(t, srv, "shared-room", "spender")
+	guest := joinRoom(t, srv, "shared-room", "guest")
+	size := 64
+	for srv.spend(spender, size) {
+		// Drain the room's allowance, as a flood would.
+	}
+	if srv.spend(spender, size) {
+		t.Fatal("the room bucket never emptied")
+	}
+
+	if room := srv.hub.leave(guest); room == nil {
+		t.Fatal("leave did not return the room")
+	} else {
+		srv.forget(guest, false)
+	}
+	if srv.spend(spender, size) {
+		t.Fatal("a guest leaving refilled the room's tokens")
+	}
+	if len(srv.budgets) != 1 {
+		t.Fatalf("budgets = %d entries, want only the room's", len(srv.budgets))
+	}
+}
+
+// A peer that never joined a room owns its bucket, so the bucket goes with the
+// connection instead of being kept for a peer id that is gone.
+func TestPeerWithoutRoomForgetsItsBucket(t *testing.T) {
+	srv := newRoomServer()
+	p := newPeer()
+	if !srv.spend(p, 64) {
+		t.Fatal("the first frame was refused")
+	}
+	srv.nothingReached(p)
+	srv.forget(p, srv.hub.leave(p) == nil)
+	if len(srv.budgets) != 0 {
+		t.Fatalf("budgets = %v, want none", srv.budgets)
+	}
+}
+
+// A peer seated in a new room spends that room's tokens, not the ones of the
+// room it left: budgetKey names the last room for a peer between leave and
+// close, and a join has to take that name back.
+func TestPeerSeatedAgainSpendsTheNewRoomsTokens(t *testing.T) {
+	srv := newRoomServer()
+	mover := joinRoom(t, srv, "first-room", "mover")
+	stay := joinRoom(t, srv, "first-room", "stay")
+	size := 64
+	for srv.spend(mover, size) {
+		// Drain the first room.
+	}
+	srv.hub.leave(mover)
+
+	moved := joinRoom(t, srv, "second-room", "mover")
+	if moved.leaveRoom != "" {
+		t.Fatalf("a seated peer still names %q", moved.leaveRoom)
+	}
+	if !srv.spend(moved, size) {
+		t.Fatal("a peer seated in a fresh room was refused")
+	}
+	// The frame was charged to the new room, not to the one it left.
+	if srv.budgets["room:second-room"] == nil {
+		t.Fatal("a peer seated in a new room was charged to the old one")
+	}
+	if len(srv.budgets) != 2 {
+		t.Fatalf("budgets = %v, want one per room", srv.budgets)
+	}
+	// The old room is still drained, and its guest still pays for it.
+	if srv.spend(stay, size) {
+		t.Fatal("the room that was drained was refilled by a peer moving out")
+	}
+}
+
+// The last peer out takes the room's account with it, the same way the hub
+// takes the room: a stream of short calls cannot leave an account behind for
+// every room that ever relayed one frame.
+func TestLastPeerOutDropsTheRoomsAccount(t *testing.T) {
+	srv := newRoomServer()
+	only := joinRoom(t, srv, "one-room", "only")
+	if !srv.spend(only, 64) {
+		t.Fatal("the first frame was refused")
+	}
+	srv.nothingReached(only)
+	if room := srv.hub.leave(only); room != nil {
+		t.Fatal("the last peer out kept the room alive")
+	}
+	srv.forget(only, srv.hub.leave(only) == nil)
+	if len(srv.budgets) != 0 {
+		t.Fatalf("budgets = %v, want none after the last peer out", srv.budgets)
+	}
+}
+
+// A room the sweep took away takes its account with it: the last peer out
+// settles it, so a burst of short lived rooms cannot leave one behind. The
+// peers of that room are closed without ever having left, so the sweep names
+// the room for them the way a leave does.
+func TestSweptRoomDropsItsAccount(t *testing.T) {
+	srv := newRoomServer()
+	a := joinRoom(t, srv, "doomed", "a")
+	b := joinRoom(t, srv, "doomed", "b")
+	for _, p := range []*Peer{a, b} {
+		if !srv.spend(p, 64) {
+			t.Fatal("the first frame was refused")
+		}
+		srv.nothingReached(p)
+	}
+	if len(srv.budgets) != 1 {
+		t.Fatalf("budgets = %d entries, want the room's one", len(srv.budgets))
+	}
+
+	// The sweep drops the room and clears the pointer of every peer in it.
+	if n := srv.hub.sweepIdle(time.Now().Add(roomIdleTimeout + time.Second)); n != 1 {
+		t.Fatalf("swept %d rooms, want 1", n)
+	}
+	for _, p := range []*Peer{a, b} {
+		if p.leaveRoom != "doomed" {
+			t.Fatalf("a swept peer names %q, want the room it was in", p.leaveRoom)
+		}
+		srv.forget(p, srv.hub.leave(p) == nil)
+	}
+	if len(srv.budgets) != 0 {
+		t.Fatalf("budgets = %v after the sweep, want none", srv.budgets)
 	}
 }
 

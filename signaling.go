@@ -67,7 +67,8 @@ type server struct {
 	budgetMu sync.Mutex
 	// budgets is keyed by room id, not by peer: the bucket is the room's, so a
 	// guest with parts of two rooms cannot spend it twice. A peer that is not
-	// in a room yet spends the peer key.
+	// in a room yet spends the peer key. The loss mark inside is per sender
+	// id, so a room shares its tokens without sharing its marks.
 	budgets map[string]*relayBudget
 
 	// closeMu guards live, the sockets that are still open, so a shutdown can
@@ -86,9 +87,12 @@ type relayBudget struct {
 	tokens float64
 	bytes  float64
 	last   time.Time
-	// lost is set on the sender that overran its own share while its last
-	// frame reached nobody: the receiver is the one that cannot keep up.
-	lostSince time.Time
+	// lost is per sender, not per room: a frame that reached nobody says
+	// something about the sender and about the receiver that could not keep
+	// up, never about the other senders sharing the room. Each entry is the
+	// time that sender's frame first reached nobody, and a frame of the same
+	// sender that gets through clears its own entry.
+	lost map[string]time.Time
 }
 
 func newServer(cfg *Config, hub *Hub, log *slog.Logger) *server {
@@ -184,11 +188,14 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			close(done)
 			conn.Close()
 			s.sockets.release(addr)
-			s.forget(p)
 			s.forgetLive(p)
 			// The peer is out of the room, so the notice reaches the rest of
 			// it. An empty room is already gone and hears nothing.
-			if room := s.hub.leave(p); room != nil {
+			room := s.hub.leave(p)
+			// The relay account is settled after the leave: it is the leave
+			// that says whether the room is still there.
+			s.forget(p, room == nil)
+			if room != nil {
 				s.hub.broadcastTo(room, mustJSON(serverMsg{T: "peer-left", From: p.id}))
 				s.log.Debug("peer left")
 			}
@@ -421,7 +428,8 @@ func (s *server) handleEnc(p *Peer, m clientMsg) bool {
 // their own bucket so a flood of small frames and a flood of large ones both
 // hit a wall. A sender whose frames have reached nobody for lostFrameBudget is
 // refused too: by then it is the sender, not its receivers, that is the
-// problem.
+// problem. The loss mark is the sender's own, so another sender in the same
+// room keeps relaying on the room's tokens while one of them is refused.
 func (s *server) spend(p *Peer, size int) bool {
 	key := budgetKey(p)
 	s.budgetMu.Lock()
@@ -437,8 +445,9 @@ func (s *server) spend(p *Peer, size int) bool {
 	b.tokens = min(b.tokens+dt*roomBudget.perSecond, roomBudget.burst)
 	b.bytes = min(b.bytes+dt*roomBudget.bytes, roomBudget.bytes)
 	// A sender that reached nobody keeps its loss mark for as long as it keeps
-	// failing; a frame that gets through again clears it.
-	if !b.lostSince.IsZero() && now.Sub(b.lostSince) > lostFrameBudget {
+	// failing; a frame that gets through again clears it. The mark belongs to
+	// the sender, so only that sender is refused here.
+	if since, ok := b.lost[p.id]; ok && now.Sub(since) > lostFrameBudget {
 		return false
 	}
 	if b.tokens < 1 || b.bytes < float64(size) {
@@ -449,13 +458,15 @@ func (s *server) spend(p *Peer, size int) bool {
 	return true
 }
 
-// delivered clears the loss mark: a sender whose frame got through again has
-// a room that keeps up, whatever it was before.
+// delivered clears the sender's loss mark: a sender whose frame got through
+// again has receivers that keep up, whatever they did before. Nobody else's
+// mark is touched, so a room with one slow pair does not put the others on
+// probation.
 func (s *server) delivered(p *Peer) {
 	s.budgetMu.Lock()
 	defer s.budgetMu.Unlock()
 	if b := s.budgets[budgetKey(p)]; b != nil {
-		b.lostSince = time.Time{}
+		delete(b.lost, p.id)
 	}
 }
 
@@ -465,8 +476,11 @@ func (s *server) delivered(p *Peer) {
 func (s *server) nothingReached(p *Peer) {
 	s.budgetMu.Lock()
 	defer s.budgetMu.Unlock()
-	if b := s.budgets[budgetKey(p)]; b != nil && b.lostSince.IsZero() {
-		b.lostSince = time.Now()
+	if b := s.budgets[budgetKey(p)]; b != nil && b.lost[p.id].IsZero() {
+		if b.lost == nil {
+			b.lost = make(map[string]time.Time)
+		}
+		b.lost[p.id] = time.Now()
 	}
 }
 
@@ -484,16 +498,28 @@ func budgetKey(p *Peer) string {
 	return "peer:" + p.id
 }
 
-// forget hands the peer's bucket back only when it never joined a room: a
-// joined peer's bucket is the room's, and the room must not lose its tokens
-// because one guest left.
-func (s *server) forget(p *Peer) {
-	if p.leaveRoom != "" || p.room != nil {
-		return
-	}
+// forget settles the relay account of a connection that is gone. A peer takes
+// its own loss marks out of every account it could have marked, and the account
+// of a room goes when the room went: the last peer out drops it, the same way
+// the hub drops the room. The tokens of a room that is still there are the
+// room's, so a guest leaving does not hand it a fresh allowance.
+//
+// roomGone says the leave took the room with it, so its account has no peers
+// left to pay for it.
+func (s *server) forget(p *Peer, roomGone bool) {
 	s.budgetMu.Lock()
+	defer s.budgetMu.Unlock()
+	if p.leaveRoom != "" && roomGone {
+		delete(s.budgets, "room:"+p.leaveRoom)
+	}
+	for _, key := range []string{"peer:" + p.id, budgetKey(p)} {
+		if b := s.budgets[key]; b != nil {
+			delete(b.lost, p.id)
+		}
+	}
+	// The peer key is nobody else's, and a closed peer has no room left to
+	// share an account with, so it goes whatever else happened.
 	delete(s.budgets, "peer:"+p.id)
-	s.budgetMu.Unlock()
 }
 
 // remember lists a live connection so a shutdown can close it.
