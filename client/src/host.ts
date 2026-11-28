@@ -11,6 +11,7 @@ import { attachScreen, attachTrack } from './devices.js';
 import { paintHandQueue, sendState, setPeerNoise } from './audio.js';
 import { playSfx } from './sfx.js';
 import { updatePinCount } from './identity.js';
+import { banOf, banPeer, unbanPeer } from './bans.js';
 import { asrAnnounce } from './asr.js';
 import {
   admitAllHeld,
@@ -79,6 +80,20 @@ export function wireDots(host) {
         if (peer) sealedMute(peer);
       });
       add('remove from room', () => sealedKick(host.dataset.peer));
+      // A ban is the removal that outlives the call: the guest is removed now,
+      // and this browser keeps the identity so the next knock of the same room
+      // is refused. It is its own line and never a side effect of a plain
+      // removal, so a guest removed for a wrong passphrase this hour is not
+      // banned for a month. The row says what this browser already holds.
+      const target = state.peers.get(host.dataset.peer);
+      if (target && target.fp && banOf(target.fp)) {
+        add('lift the ban on this identity', () => void unbanPeer(target.fp));
+      } else if (target && target.fp) {
+        add('ban for 30 days', () => {
+          void banPeer(target.fp, target.name);
+          sealedKick(target.id);
+        });
+      }
     }
     const noiseOn = !!(peer && peer.inNoise);
     const noiseEngine = peer ? peer.inEngine : '';

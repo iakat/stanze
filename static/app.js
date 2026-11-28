@@ -267,6 +267,8 @@
     // the sealed waiting-room switch, with a counter
     kickedFps: /* @__PURE__ */ new Set(),
     // identities this page removed for good in this call
+    banned: /* @__PURE__ */ new Map(),
+    // "room length:room fp" -> {fp, room, at, until, by, label}, bans kept across calls
     pins: /* @__PURE__ */ new Map(),
     // local label -> {label, fp, first, last}
     revoked: /* @__PURE__ */ new Map(),
@@ -8255,6 +8257,122 @@
     return out;
   }
 
+  // src/banlist.ts
+  var BAN_TTL_MS = 30 * 24 * 60 * 60 * 1e3;
+  var BAN_ROOM_CAP = 32;
+  var BAN_ALL_CAP = 256;
+  function banKey(room, fp) {
+    const r = String(room || "");
+    return r.length + ":" + r + String(fp || "");
+  }
+  function banValid(rec) {
+    return !!(rec && typeof rec.fp === "string" && rec.fp.length > 0 && typeof rec.room === "string" && rec.room.length > 0 && Number.isFinite(rec.at) && Number.isFinite(rec.until));
+  }
+  function freshBan(rec, now) {
+    return banValid(rec) && rec.until > now;
+  }
+  function pruneBans(list, now, roomCap = BAN_ROOM_CAP, allCap = BAN_ALL_CAP) {
+    const kept = [];
+    const removed = [];
+    const age = (rec) => Number.isFinite(rec && rec.at) ? rec.at : 0;
+    const byAt = (a, b) => age(a) - age(b) || (banKey(a.room, a.fp) < banKey(b.room, b.fp) ? -1 : 1);
+    for (const rec of list || []) {
+      if (!banValid(rec)) {
+        if (rec) removed.push(rec);
+        continue;
+      }
+      if (freshBan(rec, now)) kept.push(rec);
+      else removed.push(rec);
+    }
+    kept.sort(byAt);
+    const perRoom = /* @__PURE__ */ new Map();
+    for (const rec of kept) {
+      const rows = perRoom.get(rec.room);
+      if (rows) rows.push(rec);
+      else perRoom.set(rec.room, [rec]);
+    }
+    const over = /* @__PURE__ */ new Set();
+    for (const rows of perRoom.values()) {
+      if (rows.length <= roomCap) continue;
+      for (const rec of rows.slice(0, rows.length - roomCap)) over.add(rec);
+    }
+    let rest = kept.filter((rec) => !over.has(rec));
+    if (rest.length > allCap) {
+      const spare = rest.length - allCap;
+      for (let i = 0; i < spare; i++) over.add(rest[i]);
+    }
+    rest = kept.filter((rec) => !over.has(rec));
+    for (const rec of kept) if (over.has(rec)) removed.push(rec);
+    return { kept: rest, removed };
+  }
+
+  // src/bans.ts
+  function banRead(fp) {
+    if (!fp || !state.room) return false;
+    const rec = state.banned.get(banKey(state.room, fp));
+    return !!rec && freshBan(rec, Date.now());
+  }
+  function banOf(fp) {
+    if (!fp || !state.room) return null;
+    const rec = state.banned.get(banKey(state.room, fp));
+    return rec && freshBan(rec, Date.now()) ? rec : null;
+  }
+  function sweepBans() {
+    const { kept, removed } = pruneBans([...state.banned.values()], Date.now());
+    if (!removed.length) return;
+    const keep = new Set(kept.map((rec) => banKey(rec.room, rec.fp)));
+    for (const [key, rec] of state.banned) {
+      if (keep.has(banKey(rec.room, rec.fp))) continue;
+      state.banned.delete(key);
+    }
+    for (const rec of removed) banStoreDelete(banKey(rec.room, rec.fp)).catch(() => {
+    });
+  }
+  function banPeer(fp, label = "") {
+    if (!fp || !state.room) return Promise.resolve(false);
+    if (!isAdmin(state.self)) return Promise.resolve(false);
+    const now = Date.now();
+    const rec = {
+      fp,
+      room: state.room,
+      at: now,
+      until: now + BAN_TTL_MS,
+      by: state.idKey && state.idKey.fp || "",
+      // The label is for a menu only. Nothing reads it as an identity.
+      label: String(label || "").slice(0, 32)
+    };
+    state.banned.set(banKey(rec.room, rec.fp), rec);
+    sweepBans();
+    return banStorePut(banKey(rec.room, rec.fp), rec).then(() => true).catch(() => false);
+  }
+  function unbanPeer(fp) {
+    if (!fp || !state.room) return Promise.resolve(false);
+    if (!isAdmin(state.self)) return Promise.resolve(false);
+    const key = banKey(state.room, fp);
+    if (!state.banned.delete(key)) return Promise.resolve(false);
+    return banStoreDelete(key).then(() => true).catch(() => false);
+  }
+  async function banLoad() {
+    let rows;
+    try {
+      rows = await banStoreAll();
+    } catch {
+      return 0;
+    }
+    state.banned.clear();
+    for (const rec of rows || []) {
+      if (!banValid(rec)) continue;
+      if (!freshBan(rec, Date.now())) {
+        banStoreDelete(banKey(rec.room, rec.fp)).catch(() => {
+        });
+        continue;
+      }
+      state.banned.set(banKey(rec.room, rec.fp), rec);
+    }
+    sweepBans();
+    return state.banned.size;
+  }
+
   // src/frame.ts
   function startSealedWorker() {
     const worker = new Worker(scriptURL("/e2e-transform.js"));
@@ -8559,6 +8677,7 @@
           } catch {
           }
         }
+        await banLoad();
         startSealedWorker();
         const made = JSON.parse(pqModule().gen());
         state.identity = { xpub: made.xpub, ek: made.ek, xsk: b64d(made.xsk), dk: b64d(made.dk) };
@@ -9067,6 +9186,10 @@
       sealedRefuse(peer, "was removed from this room");
       return;
     }
+    if (banRead(peer.fp)) {
+      sealedRefuse(peer, "is banned from this room");
+      return;
+    }
     const keys = sealedInstallKeys(peer);
     peer.keyPromise = keys;
     sealedSetE2E(peer, "ready");
@@ -9435,9 +9558,9 @@
         reject(new Error("no indexeddb"));
         return;
       }
-      const req = indexedDB.open(ID_DB, 2);
+      const req = indexedDB.open(ID_DB, 3);
       req.onupgradeneeded = () => {
-        for (const name of ["id", "pins", "revoked", "roots"]) {
+        for (const name of ["id", "pins", "revoked", "roots", "bans"]) {
           if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
         }
       };
@@ -9494,6 +9617,15 @@
   }
   function idbDelete(store2, key) {
     return idbRequest(store2, "readwrite", (s) => s.delete(key));
+  }
+  function banStoreAll() {
+    return idbAll("bans");
+  }
+  function banStorePut(key, rec) {
+    return idbPut("bans", key, rec);
+  }
+  function banStoreDelete(key) {
+    return idbDelete("bans", key);
   }
   function fingerprint(pub) {
     const out = pqCall((json) => pqModule().idfp(json), { id: pub });
@@ -11732,6 +11864,15 @@
           if (peer2) sealedMute(peer2);
         });
         add("remove from room", () => sealedKick(host.dataset.peer));
+        const target = state.peers.get(host.dataset.peer);
+        if (target && target.fp && banOf(target.fp)) {
+          add("lift the ban on this identity", () => void unbanPeer(target.fp));
+        } else if (target && target.fp) {
+          add("ban for 30 days", () => {
+            void banPeer(target.fp, target.name);
+            sealedKick(target.id);
+          });
+        }
       }
       const noiseOn = !!(peer && peer.inNoise);
       const noiseEngine = peer ? peer.inEngine : "";

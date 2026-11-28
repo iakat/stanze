@@ -29,6 +29,7 @@ import {
   peerName,
 } from './sealed.js';
 import { fingerprint, paintPin, pinState, updatePinCount } from './identity.js';
+import { banRead } from './bans.js';
 import { scriptURL } from './trust.js';
 import { setTalks } from './presence.js';
 import { asrAnnounce, asrOnMessage } from './asr.js';
@@ -478,6 +479,14 @@ async function sealedOnProof(peer, msg) {
   // notice went to every page, so no page answers this key again.
   if (state.kickedFps.has(peer.fp)) {
     sealedRefuse(peer, 'was removed from this room');
+    return;
+  }
+  // The same answer, for a page that was not here when the removal happened: the
+  // ban this browser wrote is read at the join and consulted at the same proof
+  // time as the notice of this call, so a banned pair never gets a channel, on
+  // this knock or on any later one of the same room.
+  if (banRead(peer.fp)) {
+    sealedRefuse(peer, 'is banned from this room');
     return;
   }
   // The keys go to the worker now: the passphrase proof travels sealed, and a

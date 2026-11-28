@@ -25,6 +25,7 @@ import { ensureSfx, preloadSfx, sfxCache, stopLost } from './sfx.js';
 import { clearStatsPanel, stopStats } from './stats.js';
 import { b64d, b64e, cleanSealedName, pqModule, sealingAvailable } from './sealed.js';
 import { deviceNote, roomRoot, updatePinCount } from './identity.js';
+import { banLoad } from './bans.js';
 import { deriveRoomW, paintGate, wipeIdentity } from './handshake.js';
 import { rootFingerprint, setRoot } from './gate.js';
 import { startSealedWorker } from './frame.js';
@@ -119,6 +120,11 @@ export async function enterRoom(room, pass, start?: string) {
           /* no record here: an unrooted room */
         }
       }
+      // The bans this browser holds are read before the socket opens, so the
+      // first knock of a banned pair already meets the list. The read is local
+      // and small; a browser that refuses the database leaves the list empty and
+      // the call goes on as it did before this file existed.
+      await banLoad();
       startSealedWorker();
       const made = JSON.parse(pqModule().gen());
       // The secret halves stay Uint8Arrays, so leave can zero them.
@@ -239,6 +245,9 @@ export function leave(message) {
   state.authTimer = null;
   state.wait = { on: false, n: 0 };
   state.kickedFps = new Set();
+  // state.banned is not cleared here: that is the whole point of it. The rows
+  // were written to this browser's database by a page that held the role to
+  // remove a guest, and the next join of this room reads them back in banLoad.
   state.sid = '';
   state.identityFailures = 0;
   state.keyWait.clear();
