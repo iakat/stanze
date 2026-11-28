@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"testing"
@@ -178,4 +179,63 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestSeededSignerAgreesWithVerify pins the other half of M0: the signer the
+// module exposes. `idsign` rebuilds a key from a seed the caller holds and
+// signs with it, which is the path a browser without WebCrypto Ed25519 takes.
+// A test that only ever uses NewSigningKey never touches that path, so a
+// disagreement between the seed rule and the verifier would stay invisible
+// until a real page could not issue a claim.
+//
+// The signer here is the module's own: SigningKeyFromSeed over the seed, Sign
+// over the raw UTF-8 bytes of the claim, and the verifier is the same
+// VerifySignature the module calls. The base64 layer is only transport and is
+// applied last, exactly as signingBytes does it.
+func TestSeededSignerAgreesWithVerify(t *testing.T) {
+	fresh, err := pq.NewSigningKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := fresh.Seed()
+
+	key, err := pq.SigningKeyFromSeed(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A seed written down and read back must name the same identity, or a page
+	// that kept its seed would come back as a stranger.
+	if !bytes.Equal(key.PublicKey(), fresh.PublicKey()) {
+		t.Fatal("the same seed produced a different public key")
+	}
+
+	claim := []byte("stanze/claim/2|roomname|0|abcdef012345,012345abcdef|")
+	sig := key.Sign(claim)
+
+	// The wire form: the message is base64 of the signed bytes, the signature
+	// is base64 of itself. signingBytes decodes the message exactly once.
+	msg, err := decodeMsg(b64(claim))
+	if err != nil {
+		t.Fatalf("the module refused the wire form of the message: %v", err)
+	}
+	if !pq.VerifySignature(key.PublicKey(), msg, sig) {
+		t.Fatal("idverify rejected a signature the seeded signer made over the same bytes")
+	}
+
+	// The disagreement the finding described: the message is the plain claim and
+	// the decoder base64s it, while the signature was made over the claim
+	// itself. A caller that base64s the text first, or one that never decodes,
+	// lands on different bytes than the signer used, and the check must fail.
+	if pq.VerifySignature(key.PublicKey(), []byte(b64(claim)), sig) {
+		t.Fatal("a signature verified over base64 text instead of the signed bytes")
+	}
+	// The exact shape of the old defect: the claim was signed as base64 text
+	// and verified after decoding, which is the reverse of the rule above.
+	wrongWay := key.Sign([]byte(b64(claim)))
+	if pq.VerifySignature(key.PublicKey(), claim, wrongWay) {
+		t.Fatal("a signature made over base64 text verified over the decoded bytes")
+	}
+	if !pq.VerifySignature(key.PublicKey(), []byte(b64(claim)), wrongWay) {
+		t.Fatal("control: the wrong-way signature does verify over the bytes it was made on")
+	}
 }

@@ -658,6 +658,19 @@ export function sealedSendCand(peer, cand) {
   sealedSend(peer, { k: 'cand', c: cand });
 }
 
+// ENC_MAX is the relay's own bound on one sealed blob, in the base64 the wire
+// carries it as. It is `encMax` in signaling.go: 96 KiB plus the two quotes the
+// JSON body puts around it. The page applies the same number before a frame
+// leaves, so a payload the relay is bound to refuse is refused here instead,
+// where it costs no sequence number and no pair restart.
+export const ENC_MAX = 96 * 1024 + 2;
+
+// sealedSend seals one object for one pair and writes it. A frame the relay
+// would refuse is stopped here: spending a sequence number on it would desync
+// both counters for the rest of the call, and the restart that follows would
+// report a link that keeps failing rather than a payload that is too large.
+// `padPayload` rounds a large payload up, so the check runs on the sealed
+// result and not on the object it was made from.
 export function sealedSend(peer, obj) {
   if (!peer.keys) return;
   const seq = peer.seqOut + 1;
@@ -667,6 +680,13 @@ export function sealedSend(peer, obj) {
     pt: b64e(sealUtf8.encode(padPayload(obj))),
   });
   if (!out || !out.b) return;
+  if (out.b.length > ENC_MAX) {
+    // The counters are untouched: the next frame of this pair is still seq,
+    // and nothing went on the socket.
+    state.oversizeFrames++;
+    say('a sealed frame was too large to send; the link was not restarted');
+    return;
+  }
   peer.seqOut = seq;
   sealedSendOpaque(peer.id, { k: 'app', q: seq, b: out.b });
 }

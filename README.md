@@ -234,7 +234,7 @@ Server to client:
 
 | Message | Fields |
 | --- | --- |
-| `joined` | `self`, `peers[]`, `admins`, `waitingRoom`, `waiting`, `ice[]` |
+| `joined` | `self`, `ice[]` — **no roster**: discovery is one broadcast key bundle and every answer is proved, so the relay never hands out a peer list |
 | `peer-joined`, `peer-left` | `peer`, `from` |
 | `enc` | `from`, `b` (forwarded verbatim) |
 | `admin`, `mod`, `kicked` | as above (the toggles travel sealed, one copy per pair) |

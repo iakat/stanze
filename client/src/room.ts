@@ -258,6 +258,7 @@ export function leave(message) {
   state.chatRecv = 0;
   state.sideSent = 0;
   state.sideRecv = 0;
+  state.oversizeFrames = 0;
   state.replayDrops = 0;
   fileClearAll();
   state.confirmFailures = 0;

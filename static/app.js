@@ -291,6 +291,8 @@
     // whisper lines this guest sent
     sideRecv: 0,
     // whisper lines this guest received
+    oversizeFrames: 0,
+    // sealed frames refused here because the relay would drop them
     replayDrops: 0,
     // a sealed app or file frame out of order or replayed
     fileOffers: 0,
@@ -7475,15 +7477,7 @@
         state.waiting = true;
         asrProbe();
         omniProbe();
-        let listed = 0;
-        for (const info of msg.peers || []) {
-          if (!info || !info.id) continue;
-          const peer = ensurePeer(info.id);
-          peer.waiting = false;
-          sealedSendPub(peer);
-          listed++;
-        }
-        if (!listed) sealedSendPub(null);
+        sealedSendPub(null);
         startAuthSeed();
         markAdmins();
         paintWaiting();
@@ -8831,6 +8825,7 @@
     state.chatRecv = 0;
     state.sideSent = 0;
     state.sideRecv = 0;
+    state.oversizeFrames = 0;
     state.replayDrops = 0;
     fileClearAll();
     state.confirmFailures = 0;
@@ -13147,6 +13142,7 @@
     if (!peer.keys || !cand) return;
     sealedSend(peer, { k: "cand", c: cand });
   }
+  var ENC_MAX = 96 * 1024 + 2;
   function sealedSend(peer, obj) {
     if (!peer.keys) return;
     const seq = peer.seqOut + 1;
@@ -13156,6 +13152,11 @@
       pt: b64e(sealUtf8.encode(padPayload(obj)))
     });
     if (!out || !out.b) return;
+    if (out.b.length > ENC_MAX) {
+      state.oversizeFrames++;
+      say("a sealed frame was too large to send; the link was not restarted");
+      return;
+    }
     peer.seqOut = seq;
     sealedSendOpaque(peer.id, { k: "app", q: seq, b: out.b });
   }
@@ -13641,6 +13642,7 @@
       chatRecv: state.chatRecv,
       sideSent: state.sideSent,
       sideRecv: state.sideRecv,
+      oversizeFrames: state.oversizeFrames,
       fileOffers: state.fileOffers,
       fileRecv: state.fileRecv,
       fileChunksSent: state.fileChunksSent,
@@ -13658,6 +13660,25 @@
     }),
     selfTest: pqSelfTest,
     lab: runLab,
+    // sealedSize sends one sealed frame of a chosen text size to the first pair
+    // and answers what happened: the byte length the relay would see, whether it
+    // went, and the pair's counters before and after. A test uses it to prove the
+    // page refuses an over-large frame itself instead of spending a sequence
+    // number on one the relay is bound to drop.
+    sealedSize: (bytes) => {
+      const peer = [...state.peers.values()].find((one) => one.keys);
+      if (!peer) return { error: "no proved pair" };
+      if (state.oversizeFrames === void 0) state.oversizeFrames = 0;
+      const before = { seqOut: peer.seqOut, oversize: state.oversizeFrames, sent: state.wireFrames };
+      const text = "x".repeat(Math.max(1, Math.min(bytes, 400 * 1024)));
+      sealedSend(peer, { k: "asr", n: "c", x: text });
+      return {
+        bytes: text.length,
+        refused: state.oversizeFrames > before.oversize,
+        seqOut: peer.seqOut,
+        seqBefore: before.seqOut
+      };
+    },
     // The whisper: what this page is in, what its panel holds, and the two
     // actions a browser test drives. A person uses the menu and the panel.
     side: () => ({

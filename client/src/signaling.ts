@@ -157,19 +157,14 @@ export function handle(msg) {
       state.waiting = true;
       asrProbe();
       omniProbe();
-      let listed = 0;
-      for (const info of msg.peers || []) {
-        if (!info || !info.id) continue;
-        // A toggle field in the roster is ignored: the flags come sealed from
-        // the guest itself.
-        const peer = ensurePeer(info.id);
-        peer.waiting = false;
-        sealedSendPub(peer);
-        listed++;
-      }
-      // A server with no roster leaves discovery to the room: one broadcast
-      // bundle, and every member that answers is a pair.
-      if (!listed) sealedSendPub(null);
+      // Discovery is the room's own and never the server's: one broadcast
+      // bundle, and every member that answers proves itself before it is a
+      // pair. There is deliberately no roster branch here. A `peers` array on
+      // this frame would be an unproven list handed out by the relay, and the
+      // page would answer it by sending its key bundle to ids nobody
+      // confirmed. The field is gone from `serverMsg` for the same reason: a
+      // one-line change must not be able to bring the trust back.
+      sealedSendPub(null);
       startAuthSeed();
       markAdmins();
       paintWaiting();

@@ -176,6 +176,7 @@ win().e2eApp = {
     chatRecv: state.chatRecv,
     sideSent: state.sideSent,
     sideRecv: state.sideRecv,
+    oversizeFrames: state.oversizeFrames,
     fileOffers: state.fileOffers,
     fileRecv: state.fileRecv,
     fileChunksSent: state.fileChunksSent,
@@ -193,6 +194,25 @@ win().e2eApp = {
   }),
   selfTest: pqSelfTest,
   lab: runLab,
+  // sealedSize sends one sealed frame of a chosen text size to the first pair
+  // and answers what happened: the byte length the relay would see, whether it
+  // went, and the pair's counters before and after. A test uses it to prove the
+  // page refuses an over-large frame itself instead of spending a sequence
+  // number on one the relay is bound to drop.
+  sealedSize: (bytes: number) => {
+    const peer = [...state.peers.values()].find((one) => one.keys);
+    if (!peer) return { error: 'no proved pair' };
+    if (state.oversizeFrames === undefined) state.oversizeFrames = 0;
+    const before = { seqOut: peer.seqOut, oversize: state.oversizeFrames, sent: state.wireFrames };
+    const text = 'x'.repeat(Math.max(1, Math.min(bytes, 400 * 1024)));
+    sealedSend(peer, { k: 'asr', n: 'c', x: text });
+    return {
+      bytes: text.length,
+      refused: state.oversizeFrames > before.oversize,
+      seqOut: peer.seqOut,
+      seqBefore: before.seqOut,
+    };
+  },
   // The whisper: what this page is in, what its panel holds, and the two
   // actions a browser test drives. A person uses the menu and the panel.
   side: () => ({

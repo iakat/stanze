@@ -19,8 +19,8 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 846 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
-| [src/state.ts](src/state.ts) | 217 | The client state, one object per page. |
+| [src/boot.ts](src/boot.ts) | 866 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/state.ts](src/state.ts) | 218 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 77 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
 | [src/trust.ts](src/trust.ts) | 37 | Script addresses under Trusted Types: the worker and worklet URLs. |
@@ -33,10 +33,10 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/room.ts](src/room.ts) | 353 | Create, join, wait, leave, and the lobby that drives them. |
-| [src/signaling.ts](src/signaling.ts) | 212 | The websocket frames, both directions. |
+| [src/room.ts](src/room.ts) | 354 | Create, join, wait, leave, and the lobby that drives them. |
+| [src/signaling.ts](src/signaling.ts) | 207 | The websocket frames, both directions. |
 | [src/peers.ts](src/peers.ts) | 375 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
-| [src/gate.ts](src/gate.ts) | 832 | The room gate: the passphrase, the member list and the sealed claims. |
+| [src/gate.ts](src/gate.ts) | 852 | The room gate: the passphrase, the member list and the sealed claims. |
 | [src/host.ts](src/host.ts) | 260 | The host controls in the call panel: waiting room, let in, member menus. |
 | [src/lobby.ts](src/lobby.ts) | 122 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
 | [src/menu.ts](src/menu.ts) | 222 | The drop-down menu bar. |

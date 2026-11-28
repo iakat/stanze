@@ -146,6 +146,7 @@ export const state = {
   chatRecv: 0,
   sideSent: 0, // whisper lines this guest sent
   sideRecv: 0, // whisper lines this guest received
+  oversizeFrames: 0, // sealed frames refused here because the relay would drop them
   replayDrops: 0, // a sealed app or file frame out of order or replayed
   fileOffers: 0, // file offers this guest sent
   fileRecv: 0, // file offers this guest received and saved
