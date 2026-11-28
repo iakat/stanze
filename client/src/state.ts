@@ -62,6 +62,8 @@ export const state = {
   cam: false,
   deaf: false, // this browser plays no sound and sends no microphone
   micBeforeDeaf: false, // the microphone state to restore when deaf mode ends
+  micAway: false, // the tab mute is in force, and the return turns it back on
+  muteOnHidden: true, // a hidden tab mutes the microphone, unless the guest says no
   camBeforeDeaf: false, // the camera state to restore when deaf mode ends
   camId: '', // deviceId of the chosen camera, '' = the system device
   micId: '', // the same for the microphone

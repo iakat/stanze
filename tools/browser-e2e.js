@@ -200,9 +200,14 @@ async function stats(page) {
     check('lobby offers the enter form', !!lobby.hasForm && !!lobby.enter && lobby.enter.visible, JSON.stringify(lobby.enter || {}));
     await pageA.fill('#name', 'alice');
     await pageA.click('#enter-btn', { timeout: 20000 });
-    await until(pageA, () => /^#r=[a-z2-7]{26}$/.test(location.hash), null, 30000, 'room hash');
+    // A room this build mints is a rooted id: a fingerprint in five groups,
+    // a dash, then a name. The older plain 128 bit id is still accepted, so an
+    // older server can be tested with the same file.
+    const roomShape = /^(?:[a-z2-7]{4}-){5}[a-z0-9._-]{1,40}$|^[a-z2-7]{26}$/;
+    await until(pageA, (shape) => new RegExp(shape).test(location.hash.replace('#r=', '')), roomShape.source,
+      30000, 'room hash');
     room = await pageA.evaluate(() => location.hash.replace('#r=', ''));
-    check('A created a room (128 bit base32 id)', /^[a-z2-7]{26}$/.test(room), 'len=' + room.length);
+    check('A created a room', roomShape.test(room), 'id=' + room);
 
     // ---- join: the camera and the microphone are on from the first second
     await until(pageA, () => document.querySelectorAll('.tile').length >= 1, null, 30000, 'A local tile');
@@ -330,6 +335,32 @@ async function stats(page) {
     }, null, 10000, 'A sends the camera while hidden');
     const parkedA = await pageA.evaluate(() => window.e2eApp.effects());
     check('a hidden tab sends the raw camera and keeps it live', parkedA.cam === 'live', JSON.stringify(parkedA));
+
+    // A hidden tab is not a listener: the microphone goes quiet with it, and the
+    // button says so rather than claiming a live microphone over silence.
+    await until(pageA, () => !state.mic, null, 5000, 'A mutes on a hidden tab');
+    const quietA = await pageA.evaluate(() => ({
+      mic: state.mic,
+      gain: state.micGain ? state.micGain.gain.value : null,
+      label: document.getElementById('mic-btn').textContent,
+      title: document.getElementById('mic-btn').title,
+      away: state.micAway,
+      track: state.micTrack ? state.micTrack.readyState : 'none',
+      peers: state.peers.size,
+      pref: localStorage.getItem('rooms.mic'),
+    }));
+    check('a hidden tab mutes the microphone on its gain',
+      quietA.mic === false && quietA.gain === 0 && /^mic off$/.test(quietA.label), JSON.stringify(quietA));
+    check('the button says why, and the device stays open', quietA.away === true && quietA.track === 'live' && /hidden/.test(quietA.title), JSON.stringify(quietA));
+    check('a hidden tab is not a guest who left', quietA.peers === 1, 'peers=' + quietA.peers);
+    check('the tab mute writes no preference', quietA.pref === '1', 'rooms.mic=' + quietA.pref);
+    await sleep(2000);
+    const quietB = await pageB.evaluate(() => {
+      const peer = [...state.peers.values()][0];
+      return { level: peer ? peer.meterPeak || 0 : -1, mic: peer ? peer.mic : null, state: peer ? peer.state : '' };
+    });
+    check('the peer still holds the pair and hears silence', quietB.state === 'connected' && quietB.mic === false && quietB.level < 0.02,
+      JSON.stringify(quietB));
     await sleep(2500);
     const parkedSnapB = await pageB.evaluate(snapshot);
     const parkedB = await stats(pageB);
@@ -348,6 +379,61 @@ async function stats(page) {
       return !e.parked && e.drawn && e.loop === true && e.senders.length === 1 && e.senders[0] === 'drawn';
     }, null, 10000, 'A draws again');
     check('the drawn track comes back with the tab', true);
+
+    // Back in front, the microphone comes back with the tab, exactly as it was.
+    await until(pageA, () => state.mic, null, 5000, 'A unmutes on the return');
+    const backA = await pageA.evaluate(() => ({
+      mic: state.mic,
+      gain: state.micGain ? state.micGain.gain.value : null,
+      label: document.getElementById('mic-btn').textContent,
+      away: state.micAway,
+      title: document.getElementById('mic-btn').title,
+      pref: localStorage.getItem('rooms.mic'),
+    }));
+    check('the return restores the microphone', backA.mic === true && backA.gain === 1 && /^mic on$/.test(backA.label),
+      JSON.stringify(backA));
+    check('the return leaves no reason behind on the button', backA.away === false && backA.title === '', JSON.stringify(backA));
+    check('the return writes no preference either', backA.pref === '1', 'rooms.mic=' + backA.pref);
+
+    // A mute the guest set by hand is theirs: the return must not undo it.
+    await pageA.click('#mic-btn');
+    await pageA.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const handHidden = await pageA.evaluate(() => ({ mic: state.mic, away: state.micAway }));
+    await pageA.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const handBack = await pageA.evaluate(() => ({ mic: state.mic, away: state.micAway, pref: localStorage.getItem('rooms.mic') }));
+    check('a guest who muted by hand is not unmuted by the tab coming back',
+      handHidden.mic === false && handHidden.away === false && handBack.mic === false && handBack.pref === '0',
+      JSON.stringify({ handHidden, handBack }));
+    await pageA.click('#mic-btn');
+
+    // The switch is the guest's call, and it comes back with the other stored
+    // choices; off means a hidden tab keeps the microphone as it is.
+    const offSwitch = await pageA.evaluate(() => {
+      const box = document.getElementById('mute-hidden');
+      const was = { checked: box.checked, stored: localStorage.getItem('rooms.mutehidden') };
+      box.checked = false;
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      const quiet = { mic: state.mic, away: state.micAway };
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.dispatchEvent(new Event('visibilitychange'));
+      const back = { mic: state.mic, away: state.micAway, stored: localStorage.getItem('rooms.mutehidden') };
+      box.checked = true;
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+      return { was, quiet, back, now: box.checked, stored: localStorage.getItem('rooms.mutehidden') };
+    });
+    check('the switch starts on and is stored like the other switches',
+      offSwitch.was.checked === true && offSwitch.was.stored === null && offSwitch.now === true && offSwitch.stored === '1',
+      JSON.stringify(offSwitch));
+    check('switched off, a hidden tab keeps the microphone on',
+      offSwitch.quiet.mic === true && offSwitch.quiet.away === false, JSON.stringify(offSwitch.quiet));
 
     // Toggling an effect on a live pipeline must not swap the sender track:
     // a swap costs a keyframe and the picture blinks (katia, 2026-11-23).

@@ -389,11 +389,17 @@ export async function requestLocal() {
   // The first permission is what turns the placeholders into real labels.
   refreshDevices();
   refreshSelf();
+  // A tab that joins from the background starts quiet as well: the state is the
+  // one the tab change would have set, a moment earlier.
+  if (document.hidden) setAway(true);
 }
 
 // prepareLocal builds the empty local side: output stream, own tile and buttons.
 // requestLocal runs right after it and fills in the devices.
 export function prepareLocal() {
+  // A call starts with no tab mute behind it: the flag belongs to one stay in
+  // one room, and a stale one would unmute a guest who joins muted.
+  state.micAway = false;
   state.outStream = new MediaStream();
   // The own tile exists without a camera and a microphone too, so the mirror, the
   // name and the mute flags always have a place.
@@ -768,7 +774,7 @@ async function openInput(kind) {
   return true;
 }
 
-export async function enableMic() {
+export async function enableMic(away = false) {
   if (!sealingAvailable()) {
     // No transform, no frame: the microphone stays off and says why.
     say('this browser cannot seal media frames, so the microphone stays off');
@@ -776,8 +782,14 @@ export async function enableMic() {
   }
   if (!state.micTrack && !(await openInput('audio'))) return;
   state.mic = true;
-  store('mic', 1);
-  playSfx('unmuted');
+  // A tab coming back is not the guest unmuting: no cue, and the stored choice
+  // is the one they left, not the one the tab gave back. Any other unmute ends a
+  // tab mute, so the flag never waits for a return that has already happened.
+  if (!away) {
+    state.micAway = false;
+    store('mic', 1);
+    playSfx('unmuted');
+  }
   if (state.micGain) state.micGain.gain.value = 1;
   if (state.micTrack) state.micTrack.enabled = true;
   updateButtons();
@@ -786,13 +798,36 @@ export async function enableMic() {
 
 // disableMic mutes the microphone. A mute the guest chose is remembered, a mute
 // the host forced is not, or the guest joins muted for ever after one request.
-export function disableMic(persist = true) {
-  playSfx('muted');
+export function disableMic(persist = true, away = false) {
+  // The tab mute is undone by setAway, and any other mute cancels that restore.
+  state.micAway = state.micAway && away;
+  if (!away) playSfx('muted');
   state.mic = false;
   if (persist) store('mic', 0);
   if (state.micGain) state.micGain.gain.value = 0;
   updateButtons();
   sendState();
+}
+
+// setAway mutes the microphone while the tab is out of front and gives the prior
+// state back on the return: a hidden tab is not a listener, and the room would
+// hear the desk. The device stays open and the button says off, so the page
+// never claims to be heard while it sends silence. A guest who muted by hand is
+// silent already, so nothing is unmuted behind their back.
+export function setAway(hidden) {
+  // Outside a call there is nothing to mute and no return would undo a flag set
+  // here, so a flag can not be carried into the next room.
+  const inCall = !!state.room && !state.leaving;
+  if (!inCall) state.micAway = false;
+  else if (hidden && state.muteOnHidden && state.mic) {
+    state.micAway = true;
+    disableMic(false, true);
+  } else if (!hidden && state.micAway) {
+    state.micAway = false;
+    if (state.micTrack && state.micTrack.readyState === 'live') enableMic(true);
+  }
+  // The button carries the reason, so the word off is not read as a fault.
+  $('mic-btn').title = state.micAway ? 'microphone off while the tab is hidden' : '';
 }
 
 export async function enableCam() {

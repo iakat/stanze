@@ -19,14 +19,14 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 798 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
-| [src/state.ts](src/state.ts) | 215 | The client state, one object per page. |
+| [src/boot.ts](src/boot.ts) | 817 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/state.ts](src/state.ts) | 217 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 77 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
 | [src/trust.ts](src/trust.ts) | 37 | Script addresses under Trusted Types: the worker and worklet URLs. |
 | [src/util.ts](src/util.ts) | 107 | Small helpers that touch nothing but their arguments and storage. |
 | [src/buildtag.ts](src/buildtag.ts) | 18 | The build label in the corner, read from `/version.txt`. |
-| [src/dom.ts](src/dom.ts) | 104 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
+| [src/dom.ts](src/dom.ts) | 105 | The typed element lookup; `Elements` mirrors the markup ids, so an unlisted id is a typo. |
 | [src/globals.d.ts](src/globals.d.ts) | 20 | Optional globals the loader sets at run time: the wasm glue, the transcriber, the test hook. |
 
 ## Room, signalling and panels
@@ -85,7 +85,7 @@ module in `src` has no row yet.
 | [src/asr.ts](src/asr.ts) | 1289 | Local transcription, one language and many. |
 | [src/fawkes.ts](src/fawkes.ts) | 1096 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |
 | [src/look.ts](src/look.ts) | 2443 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 852 | The device pickers of the join card and the toolbar. |
+| [src/devices.ts](src/devices.ts) | 887 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 1099 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory
