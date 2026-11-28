@@ -130,8 +130,7 @@ export async function worldEnter(room: string, start?: string) {
     if (gen !== generation || state.leaving) return;
     sheets = await loadSheets();
     if (gen !== generation || state.leaving) return;
-    // The character is rolled on the join and travels with the frames; the
-    // menu still overrides it, and the select shows what was rolled.
+    // Rolled on the join; the menu overrides it and the select shows it.
     const pick = document.getElementById('avatar-pick') as HTMLSelectElement | null;
     if (pick) pick.value = String(rollAvatar());
     if (view) view.destroy();
@@ -501,8 +500,7 @@ function syncPeers() {
     // A guest in the conversation is drawn mid step; one that is not is drawn
     // where its last frame put it, so a grey avatar never slides.
     const draw = posAt(id, now, near.includes(id));
-    // The sender's character, carried with its frames; the id hash is only the
-    // fallback before the first frame lands.
+    // The sender's character; the id hash is the pre-frame fallback.
     const sheet = sheetFor(id, sheets, false, remoteSheet(id));
     if (!one) {
       one = {

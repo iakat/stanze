@@ -14,12 +14,12 @@ review contradicts researchD, trix wins and this file says why.
 | Decision | Value | Why |
 |---|---|---|
 | Position transport | `files` DataChannel, `t:"pos"` frames | `sealedSend` is `app`, a **strict** counter: one missing seq calls `sealedGapReset` and restarts the pair (`handshake.ts:695-708`). The relay drops frames on a slow queue on purpose. Positions are lossy-shaped data; they must not be able to kill audio. |
-| Position rate | **follows the walker**: `MOVING_DELAY = 40` ms (25 Hz) while moving, `IDLE_DELAY = 1000` ms while still, and an immediate frame on a stop or a turn. Amended 2026-11-28 (trix): the flat 5 Hz clock read as choppy, 15 Hz still read as choppy live, and a still guest wastes nothing at 1 Hz. | trix 2026-11-28 |
+| Position rate | **follows the walker**: `MOVING_DELAY = 33` ms (30 Hz) while moving, `IDLE_DELAY = 1000` ms while still, and an immediate frame on a stop or a turn. Amended 2026-11-28 (trix): the flat 5 Hz clock read as choppy, 15 Hz still read as choppy live, and a still guest wastes nothing at 1 Hz. | trix 2026-11-28 |
 | Interpolation | lerp from the previous sample to the last one over the **measured gap** between them, clamped to 16..150 ms, never extrapolating past the last frame. | trix 2026-11-28 |
 | Office peer cap | **6**, refused with the existing `unavailable`, and `config.go` cap knob | researchD §0 |
 | Per-frame server relay | **none**. `x,y` never appear in a Go struct, a clear frame, or `state.wireLeaks` | researchA P1, researchD §1 |
-| Room budget | **1800** frames/s, **3600** burst: six guests at 25 Hz over five pairs is 750 frames/s, and a screen share has to fit beside it | researchD §1; trix 2026-11-28 |
-| Per-connection limiter | `newTokenBucket(240,180)`: one page at 25 Hz to five pairs is 125 frames/s, so the old 120/60 would have closed the socket | trix risk 2; if it fires the socket dies, not slow down |
+| Room budget | **600** frames/s, **1200** burst. Positions never reach it: they are pair-to-pair on the data channel, so this is signalling, chat and media state only | researchD §1; corrected 2026-11-28 |
+| Per-connection limiter | `newTokenBucket(120,60)`, unchanged: it gates the socket, and position frames do not cross the socket | corrected 2026-11-28 |
 | Map bytes | never over `enc`. Public HTTP GET only. | researchD §3, `encMax` 96 KiB |
 | Tile spritesheet | **one PNG per tileset**, never one image per tile | trix §6 |
 
@@ -44,9 +44,11 @@ grows one optional discriminator and everything else stays as it is:
   field carries the literal `'pos'`, `seq` is a per-pair counter that starts at 0 and
   rises by one. That reuses `fileAAD` verbatim, so no new AAD helper is needed.
 - **Wire cost, measured** (python, this box): plaintext 107 B, `padPayload` 512,
-  AES-GCM + base64 704 B, envelope 750 B. At 5 Hz and 5 peers: **3.75 KB/s per pair,
-  25 frames/s per sender**. That is the number to put in any further document; the
-  "~700 B" in researchD is the sealed blob, the "~1 KB" in trix is the envelope.
+  AES-GCM + base64 704 B, envelope 750 B. At the walking rate of 30 Hz: **22.5 KB/s
+  per pair, 110 KiB/s across five pairs**; at 1 Hz standing it is under 1 KB/s. That
+  is the number to put in any further document; the "~700 B" in researchD is the
+  sealed blob, the "~1 KB" in trix is the envelope. The cost is paid on the pair's
+  own data channel, so it never touches the websocket bucket or the room budget.
 - Position frames are **not** counted against the `app` seq counter. They never
   touch `sealedSend`.
 

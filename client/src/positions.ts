@@ -1,6 +1,6 @@
 /*
  Position frames over the sealed files channel, and the drawing that turns them
- back into somebody walking: twenty five a second while the guest walks, one a
+ back into somebody walking: thirty a second while the guest walks, one a
  second while it stands still, and one at once when it stops or turns.
 
  One pair, one direction: every guest holds a pair to every other guest and
@@ -14,10 +14,16 @@ import { b64d, b64e, fileAAD, pqCall, pqModule } from './sealed.js';
 import type { Point } from './proximity.js';
 
 // The cadence follows the walker instead of a fixed clock. A guest on the move
-// sends MOVING_DELAY twenty five times a second, so a walk reads as a walk;
-// a guest standing still sends IDLE_DELAY once a second, which is all a late
-// joiner needs to learn where everybody is. A stop and a turn go out at once.
-export const MOVING_DELAY = 40;
+// sends thirty times a second, so a walk reads as a walk; a guest standing
+// still sends IDLE_DELAY once a second, which is all a late joiner needs to
+// learn where everybody is. A stop and a turn go out at once.
+//
+// A send can only happen on an animation frame, and two frames of a 60 Hz
+// screen are 33.4 ms together but not always: a pair that lands early sums
+// under that and the clock would take a third frame, which is 20 Hz and reads
+// as a stutter. The threshold therefore sits under the pair, so any two frames
+// count and 30 Hz holds at 60, 90 and 120 Hz alike.
+export const MOVING_DELAY = 30;
 export const IDLE_DELAY = 1000;
 
 // A measured gap is clamped to this window: below it a burst is not a reason to
@@ -29,8 +35,7 @@ const MAX_GAP = 150;
 // the channel.
 const POS_MAX_JSON = 200;
 const POS_MAX_POINT = 65535;
-// A sheet index comes from the sender, so it is bounded here and clamped again
-// against the receiver's own list: a hostile page can not name a sheet away.
+// A sheet index comes from the sender: bounded here, clamped by the receiver.
 const POS_MAX_SHEET = 63;
 // The transfer field of the associated data. A literal, so a position frame
 // can not be lifted onto a file of the same pair, and the reverse.
@@ -127,9 +132,9 @@ export function posFrame(x: number, y: number, d: number, a: number): PosFrame {
 }
 
 // posDelay is how long to wait before the next frame. A walking guest sends at
-// about twenty five a second, which is smooth enough for a walk and still one
-// frame per pair, so the cost grows with the room. A guest standing still sends
-// once a second, which is all a late joiner needs to learn where everybody is.
+// about thirty a second, and one frame per pair, so the cost grows with the
+// room. A guest standing still sends once a second, which is all a late
+// joiner needs to learn where everybody is.
 export function posDelay(moving: boolean): number {
   return moving ? MOVING_DELAY : IDLE_DELAY;
 }

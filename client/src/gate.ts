@@ -280,8 +280,8 @@ export function sealedOnClaim(peer, obj) {
 // are separate decisions. Admission to an empty room is a waiting-room matter
 // and happens for any page; the first role is a root matter, so a page whose
 // identity is not in the room id seeds no claim and asks the root for one
-// instead (see startRootAsk). An unrooted room therefore has no admin until it
-// is handed a root, and README says so.
+// instead. An unrooted room therefore has no admin until it is handed a root,
+// and README says so.
 export function startAuthSeed() {
   if (state.authTimer) clearTimeout(state.authTimer);
   state.authTimer = setTimeout(() => {
@@ -294,16 +294,6 @@ export function startAuthSeed() {
     if (!isRootOwner(rootFingerprint(state.room))) return;
     void issueClaim(0, [state.self]);
   }, 1200);
-}
-
-// startRootAsk is the guest half of the seed: when the member that made the
-// room speaks on a proved pair, ask it for a role. A room with no root never
-// asks, and no page answers.
-export function startRootAsk(peer) {
-  const root = rootFingerprint(state.room);
-  if (!root || state.auth.n >= 0 || !peer || peer.waiting) return;
-  peer.handAsks = 0;
-  handOver(peer, 'the waiting room');
 }
 
 // resealOnLeave drops a member that left from the role list. The first admin

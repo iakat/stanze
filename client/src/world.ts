@@ -917,8 +917,7 @@ export function setAvatar(index: number) {
 }
 
 // rollAvatar picks a sheet at random, once per join: the character is the
-// sender's and travels with the frames, so every window draws the same guest.
-// The menu still overrides it, and that pick travels too.
+// sender's and travels with the frames. The menu overrides it, and travels too.
 export function rollAvatar(): number {
   const n = Math.floor(Math.random() * AVATARS.length) || 0;
   store('avatar', String(n));
@@ -953,10 +952,9 @@ export async function loadSheets(signal?: AbortSignal): Promise<CharSheet[]> {
   return out;
 }
 
-// sheetFor answers the sheet of one guest. This page's own sheet is the one it
-// picked; a remote's is the one that guest sent with its frames, clamped to the
-// list this tree ships. The peer id hash is only the fallback before the first
-// frame lands, so a remote index that never arrives is still a character.
+// sheetFor answers the sheet of one guest: the own pick, or the sheet a remote
+// sent with its frames, clamped to this list. The peer id hash is the fallback
+// before the first frame lands.
 export function sheetFor(id: string, sheets: CharSheet[], mine: boolean, index = -1): CharSheet {
   if (!mine && index < 0) {
     let h = 0;

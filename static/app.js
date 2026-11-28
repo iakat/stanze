@@ -3454,7 +3454,7 @@
   }
 
   // src/positions.ts
-  var MOVING_DELAY = 40;
+  var MOVING_DELAY = 30;
   var IDLE_DELAY = 1e3;
   var MIN_GAP = 16;
   var MAX_GAP = 150;

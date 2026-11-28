@@ -36,7 +36,7 @@ module in `src` has no row yet.
 | [src/room.ts](src/room.ts) | 342 | Create, join, wait, leave, and the lobby that drives them. |
 | [src/signaling.ts](src/signaling.ts) | 205 | The websocket frames, both directions. |
 | [src/peers.ts](src/peers.ts) | 375 | The mesh: one `RTCPeerConnection` per peer and what flows on it. |
-| [src/gate.ts](src/gate.ts) | 832 | The room gate: the passphrase, the member list and the sealed claims. |
+| [src/gate.ts](src/gate.ts) | 822 | The room gate: the passphrase, the member list and the sealed claims. |
 | [src/host.ts](src/host.ts) | 240 | The host controls in the call panel: waiting room, let in, member menus. |
 | [src/lobby.ts](src/lobby.ts) | 122 | The lobby window on a desktop: dragged by its title bar, placed and remembered. |
 | [src/menu.ts](src/menu.ts) | 222 | The drop-down menu bar. |
@@ -71,11 +71,11 @@ module in `src` has no row yet.
 | File | Lines | What it does |
 | --- | ---: | --- |
 | [src/tiles.ts](src/tiles.ts) | 508 | The stage: one tile per peer, the row list, the corner layout, the spotlight and the volume slider. |
-| [src/world.ts](src/world.ts) | 1431 | The world: the Tiled map with its tilesets and avatars, the collision grid, the spawn, the walking avatar, the camera and the touch pad. |
+| [src/world.ts](src/world.ts) | 1429 | The world: the Tiled map with its tilesets and avatars, the collision grid, the spawn, the walking avatar, the camera and the touch pad. |
 | [src/zones.ts](src/zones.ts) | 204 | The named rectangles of a map (meeting or silent), the cell cached hit test and the enter and leave of a walk. |
 | [src/proximity.ts](src/proximity.ts) | 98 | The talk rule of a pair: a meeting area, a shared area inside its bubble, a silent area, or the conversation bubble. |
-| [src/positions.ts](src/positions.ts) | 269 | Position frames at 5 Hz over the sealed files channel, and the lerp that draws them. |
-| [src/roomworld.ts](src/roomworld.ts) | 701 | Joining the world of a room, the position tick, the near pairs, the talks frame and the switch between the map and the call grid. |
+| [src/positions.ts](src/positions.ts) | 268 | Position frames that follow the walker (30 Hz moving, 1 Hz still) over the sealed files channel, and the lerp that draws them. |
+| [src/roomworld.ts](src/roomworld.ts) | 699 | Joining the world of a room, the position tick, the near pairs, the talks frame and the switch between the map and the call grid. |
 | [src/presence.ts](src/presence.ts) | 180 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
 | [src/chat.ts](src/chat.ts) | 117 | The room log and its links. |
 | [src/board.ts](src/board.ts) | 82 | The cue board: eight one shot notification cues, a volume and a stop. |

@@ -37,11 +37,11 @@ type Peer struct {
 func newPeer() *Peer {
 	return &Peer{
 		send:  make(chan []byte, 64),
-		// A boss room of six guests at 25 Hz is 125 position frames a second
-		// from one page to its five pairs, before chat, media state or a
-		// screen share. The limiter must sit above that or it closes the
-		// socket, which is a disconnect and not a slowdown.
-		limit: newTokenBucket(240, 180),
+		// Position frames never come through this socket: they ride the pair's
+		// own data channel, so the walking cadence does not spend this budget.
+		// What is left is signalling, chat and media state, which the bucket
+		// below covers with room to spare.
+		limit: newTokenBucket(120, 60),
 	}
 }
 
