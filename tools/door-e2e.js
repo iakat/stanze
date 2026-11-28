@@ -71,6 +71,7 @@ async function join(browser, room, name) {
 
 (async () => {
   const browser = await chromium.launch({
+    ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}),
     args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
   });
   let a;

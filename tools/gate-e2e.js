@@ -83,6 +83,7 @@ async function joinPage(context, name, room, pass) {
 (async () => {
   if (OUT) fs.mkdirSync(OUT, { recursive: true });
   const browser = await chromium.launch({
+    ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}),
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',

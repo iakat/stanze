@@ -723,6 +723,7 @@ async function dumpFailure(browser, attempt) {
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const browser = await chromium.launch({
+    ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}),
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',

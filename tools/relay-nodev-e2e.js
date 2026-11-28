@@ -6,7 +6,8 @@ const BASE = process.env.ROOMSBASE || 'http://127.0.0.1:8095';
 const NAMES = ['uno', 'due'];
 const room = 'nd' + Date.now().toString(36);
 (async () => {
-  const b = await chromium.launch({ headless: true, args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--enable-features=RTCRtpScriptTransform'] });
+  const b = await chromium.launch({
+    ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}), headless: true, args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--enable-features=RTCRtpScriptTransform'] });
   const pages = [];
   for (const n of NAMES) {
     const ctx = await b.newContext();

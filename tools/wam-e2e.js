@@ -41,7 +41,8 @@ async function until(page, fn, arg, timeout, label) {
 }
 
 (async () => {
-  const browser = await chromium.launch({ args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
+  const browser = await chromium.launch({
+    ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}), args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
   const errors = [];
   try {
     const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });

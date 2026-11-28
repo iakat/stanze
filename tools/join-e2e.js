@@ -83,6 +83,7 @@ const VIEWS = [
 
 (async () => {
   const browser = await pw.chromium.launch({
+    ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}),
     headless: true,
     args: [
       '--use-fake-device-for-media-stream',

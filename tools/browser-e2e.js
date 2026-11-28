@@ -150,6 +150,7 @@ async function stats(page) {
 
 (async () => {
   const browser = await chromium.launch({
+    ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}),
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',
