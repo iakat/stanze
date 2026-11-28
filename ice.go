@@ -106,6 +106,11 @@ func startTURN(cfg *Config, log *slog.Logger) (*turn.Server, error) {
 	turnCfg := turn.ServerConfig{
 		Realm:       cfg.TurnRealm,
 		AuthHandler: turn.LongTermTURNRESTAuthHandler(cfg.TurnSecret, nil),
+		// A relay never outlives the credential that asked for it. Without a
+		// per-host count the port range is the only ceiling, so what keeps it
+		// from being held is time: whoever fills it must redo the work every
+		// TurnTTL and cannot park relays there.
+		AllocationLifetime: cfg.TurnTTL,
 		// A credential is minted once per socket and then used for every pair
 		// of that socket, so the ceiling is maxPeers-1 and the key is the
 		// credential, never the host: a house behind one NAT may hold as many
