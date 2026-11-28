@@ -548,8 +548,7 @@ export function drawFawkes(ctx: CanvasRenderingContext2D, W: number, H: number, 
       // nose reads on white plastic even when the light is flat.
       const noseY = f.face.nose[1];
       a -= 0.16 * gauss((Math.abs(x) - 0.1) / 0.032) * gauss((y - noseY) / 0.14);
-      a -= 0.06 * gauss((Math.abs(x) - 0.12) / 0.09) *
-        gauss((y - (f.face.browL[1] - 0.01)) / 0.04);
+      a -= 0.06 * gauss((Math.abs(x) - 0.12) / 0.09) * gauss((y - (f.face.browL[1] - 0.01)) / 0.04);
       ao[at] = Math.max(0.42, a);
     }
   }
@@ -879,10 +878,9 @@ function holePoints(f: Fit, s: number, grow: number) {
     const a = Math.cos(th) * HOLE_A * grow;
     // The hole is a teardrop: full at the outer corner, drawn to a point at the
     // nose, so the look is the mask's and not a pair of soft ovals.
-    const inward = Math.max(0, (-s * Math.cos(th)));
+    const inward = Math.max(0, -s * Math.cos(th));
     const taper = 1 - 0.62 * inward * inward;
-    const b =
-      Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow * taper;
+    const b = Math.sin(th) * (Math.sin(th) > 0 ? HOLE_BU : HOLE_BL) * grow * taper;
     const x = s * EYE_X + a * cs - b * sn;
     const y = EYE_Y + a * sn + b * cs;
     const z = fawkesHeight(f, x, y, fawkesRho(x, y));

@@ -158,7 +158,12 @@ function identityNames(peerId, selfId, peerIdKey) {
 // different identity.
 export function chatAAD(peerId, seq, selfId, peerIdKey) {
   return sealUtf8.encode(
-    'pq-e2e v2 chat ' + pairLabel(peerId) + ' id ' + identityNames(peerId, selfId, peerIdKey) + ' ' + seq,
+    'pq-e2e v2 chat ' +
+      pairLabel(peerId) +
+      ' id ' +
+      identityNames(peerId, selfId, peerIdKey) +
+      ' ' +
+      seq,
   );
 }
 

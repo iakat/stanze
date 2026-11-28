@@ -100,9 +100,7 @@ function asrNote(text) {
 // engine.
 function asrPaintOthers() {
   if (asr.busy || asr.on || omni.busy || omni.on) return;
-  const names = [...state.peers.values()]
-    .filter((p) => p.asr)
-    .map(peerName);
+  const names = [...state.peers.values()].filter((p) => p.asr).map(peerName);
   if (names.length) {
     asrNote(
       `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} transcribing this meeting. The text appears in the chat.`,

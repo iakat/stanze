@@ -218,9 +218,7 @@ export function feDrops() {
 function noteLine(label, frames, ms, dropped) {
   if (!frames) return `${label}, warming up`;
   const per = ms / frames;
-  const drop = dropped / frames > 0.0005
-    ? `, ${((100 * dropped) / frames).toFixed(1)}% drop`
-    : '';
+  const drop = dropped / frames > 0.0005 ? `, ${((100 * dropped) / frames).toFixed(1)}% drop` : '';
   return `${label} ${per.toFixed(per < 1 ? 2 : 1)} ms/frame${drop}`;
 }
 
@@ -242,7 +240,10 @@ export function paintFilterNote() {
     }
   }
   if (inc) {
-    let frames = 0, ms = 0, dropped = 0, engines = 0;
+    let frames = 0,
+      ms = 0,
+      dropped = 0,
+      engines = 0;
     for (const g of state.gtStats.values()) {
       if (g.dir !== 'in') continue;
       frames += g.frames;

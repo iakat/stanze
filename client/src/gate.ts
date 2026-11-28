@@ -64,7 +64,8 @@ import { setGuestFlags } from './presence.js';
 // The five groups are captured one at a time: pq.Fingerprint hashes 100 bits
 // into 20 base32 chars and joins them as five groups of four, so the id carries
 // those 24 characters with the dashes, and the groups are the whole of it.
-export const ROOTED = /^([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z0-9._-]{1,40})$/;
+export const ROOTED =
+  /^([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z0-9._-]{1,40})$/;
 
 // rootFingerprint is the identity fingerprint that roots this room, or '' for a
 // room that has none yet. A room id this build mints carries it; a room named
@@ -313,7 +314,6 @@ export function resealOnLeave(id) {
   void issueClaim(state.auth.n + 1, rest);
 }
 
-
 // sealedOnWait takes the room switch from an admin's pair. The counter orders
 // two changes, and the peer id breaks a tie, the same rule as the gate value.
 export function sealedOnWait(peer, obj) {
@@ -522,7 +522,10 @@ export function sealedOnState(peer, obj) {
   }
   // The camera and microphone lamps of the presence line are the guest's own
   // word, and they are what a name tag shows.
-  setGuestFlags(peer.id, { cam: obj.cam !== undefined ? !!obj.cam : undefined, mic: obj.mic !== undefined ? !!obj.mic : undefined });
+  setGuestFlags(peer.id, {
+    cam: obj.cam !== undefined ? !!obj.cam : undefined,
+    mic: obj.mic !== undefined ? !!obj.mic : undefined,
+  });
   if (obj.deaf !== undefined) peer.deaf = !!obj.deaf;
   // The two noise models the guest reports: its microphone filter and the one
   // it runs on the stream this pair sends to it. An older guest sends neither.
@@ -594,7 +597,8 @@ const PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
 // for the size and no offer ever showed. This check holds for every frame, now
 // and later, because it sits on the one path every sealed frame takes.
 function padPayload(obj) {
-  if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY)) throw new Error('the padding key is reserved');
+  if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY))
+    throw new Error('the padding key is reserved');
   const withPad = Object.assign({}, obj, { [PAD_KEY]: '' }) as any;
   const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
   let target = PAD_BUCKETS.find((n) => n >= bytes);
@@ -636,7 +640,8 @@ export function roomW(pass, room) {
   // label, so an open room and a passphrase room look alike on the wire.
   const secret = pass === '' ? '\u0000open room' : pass;
   const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
-  if (!out || typeof out.w !== 'string' || !out.w) throw new Error('the room key could not be derived');
+  if (!out || typeof out.w !== 'string' || !out.w)
+    throw new Error('the room key could not be derived');
   return out.w;
 }
 

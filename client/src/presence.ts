@@ -92,11 +92,18 @@ export function isRouted(peerId: string): boolean {
 // ids that are in this room are kept, so the line never names a stranger.
 export function setTalks(peerId: string, ids: unknown) {
   if (!state.peers.has(peerId)) return;
-  const list = Array.isArray(ids) ? ids.filter((one) => typeof one === 'string' && state.peers.has(one)) : [];
+  const list = Array.isArray(ids)
+    ? ids.filter((one) => typeof one === 'string' && state.peers.has(one))
+    : [];
   const before = talks.get(peerId) || [];
   if (before.length === list.length && before.every((one, i) => one === list[i])) return;
   talks.set(peerId, list);
-  presenceDebug('talks ' + shortPeer(peerId) + ' says ' + (list.length ? list.map(shortPeer).join(',') : 'nobody'));
+  presenceDebug(
+    'talks ' +
+      shortPeer(peerId) +
+      ' says ' +
+      (list.length ? list.map(shortPeer).join(',') : 'nobody'),
+  );
   paintPresence();
 }
 
@@ -155,7 +162,9 @@ export function paintPresence() {
   const via = $('presence-via') as HTMLElement | null;
   if (!room || !near) return;
   const total = state.peers.size;
-  room.textContent = total ? 'room: ' + total + ' other' + (total === 1 ? '' : 's') : 'room: you alone';
+  room.textContent = total
+    ? 'room: ' + total + ' other' + (total === 1 ? '' : 's')
+    : 'room: you alone';
   const mine: string[] = [];
   const theirs: string[] = [];
   for (const id of [...routed.keys()].sort()) {
@@ -172,7 +181,9 @@ export function paintPresence() {
     }
     if (list.length) theirs.push(name + ' with ' + list.join(', '));
   }
-  near.textContent = mine.length ? 'hearing: ' + mine.join(' · ') : 'hearing: nobody, walk closer or into an area';
+  near.textContent = mine.length
+    ? 'hearing: ' + mine.join(' · ')
+    : 'hearing: nobody, walk closer or into an area';
   if (via) {
     via.textContent = theirs.length ? 'also: ' + theirs.join('; ') : '';
     via.hidden = !theirs.length;

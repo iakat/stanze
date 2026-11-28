@@ -86,7 +86,8 @@ export type Above = {
 export function isOverhead(layer: any): boolean {
   if (!layer || (layer.type !== 'tilelayer' && layer.type !== 'group')) return false;
   const props = Array.isArray(layer.properties) ? layer.properties : [];
-  if (props.some((p: any) => p && p.name === 'above' && (p.value === true || p.value === 'true'))) return true;
+  if (props.some((p: any) => p && p.name === 'above' && (p.value === true || p.value === 'true')))
+    return true;
   return /above|overhead/i.test(String(layer.name || ''));
 }
 
@@ -151,7 +152,9 @@ function gidOf(cell: number): number {
 // the floor it stands on. Drawing it into a canvas of its own painted the
 // walls nowhere, so a surrounded floor showed through as a gap.
 function isWallLayer(layer: any): boolean {
-  return layer && layer.type === 'tilelayer' && /wall|collide|block/i.test(String(layer.name || ''));
+  return (
+    layer && layer.type === 'tilelayer' && /wall|collide|block/i.test(String(layer.name || ''))
+  );
 }
 
 function walkLayers(list: any[], tiles: any[], objects: any[]) {
@@ -161,7 +164,8 @@ function walkLayers(list: any[], tiles: any[], objects: any[]) {
       walkLayers(layer.layers, tiles, objects);
       continue;
     }
-    if (layer.type === 'tilelayer' && (Array.isArray(layer.data) || typeof layer.data === 'string')) tiles.push(layer);
+    if (layer.type === 'tilelayer' && (Array.isArray(layer.data) || typeof layer.data === 'string'))
+      tiles.push(layer);
     if (layer.type === 'objectgroup' && Array.isArray(layer.objects)) objects.push(layer);
   }
 }
@@ -198,7 +202,9 @@ async function inflate(bytes: Uint8Array, comp: string): Promise<Uint8Array> {
   if (comp !== 'gzip' && comp !== 'zlib') throw new Error('compression ' + comp);
   const DS = (globalThis as any).DecompressionStream;
   if (!DS) throw new Error('no decompressor');
-  const stream = new Blob([bytes as any]).stream().pipeThrough(new DS(comp === 'gzip' ? 'gzip' : 'deflate'));
+  const stream = new Blob([bytes as any])
+    .stream()
+    .pipeThrough(new DS(comp === 'gzip' ? 'gzip' : 'deflate'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
@@ -265,44 +271,56 @@ function zoneObjects(objects: any[]): any[] {
       const classWord = String(classOf || '').toLowerCase();
       const wa =
         (!classWord || classWord === 'area') &&
-        (typeof bag["silent"] === 'boolean' ||
-          bag["silent"] === 'true' ||
-          bag["jitsiRoom"] !== undefined ||
-          bag["jitsiRoomProperty"] !== undefined ||
-          bag["exitUrl"] !== undefined ||
-          bag["start"] !== undefined);
+        (typeof bag['silent'] === 'boolean' ||
+          bag['silent'] === 'true' ||
+          bag['jitsiRoom'] !== undefined ||
+          bag['jitsiRoomProperty'] !== undefined ||
+          bag['exitUrl'] !== undefined ||
+          bag['start'] !== undefined);
       if (!wa && classWord !== ZONE_CLASS && classWord !== 'area') continue;
       // The two WorkAdventure names that mean what this tree means, and nothing
       // else: silent is a zone without a word, a jitsiRoom is a meeting room, and
       // an area that says neither is a plain area, never a place where a silent
       // tone mutes a guest by accident.
-      let kind = String(bag["kind"] || '');
-      if (wa && !kind && (typeof bag["silent"] === 'boolean' || bag["silent"] === 'true')) {
+      let kind = String(bag['kind'] || '');
+      if (wa && !kind && (typeof bag['silent'] === 'boolean' || bag['silent'] === 'true')) {
         kind = 'silent';
       }
-      if (wa && !kind && (bag["jitsiRoom"] !== undefined || bag["jitsiRoomProperty"] !== undefined)) {
+      if (
+        wa &&
+        !kind &&
+        (bag['jitsiRoom'] !== undefined || bag['jitsiRoomProperty'] !== undefined)
+      ) {
         kind = 'meeting';
       }
       let rects: { x: number; y: number; w: number; h: number }[];
       const shape = obj.polygon || obj.polyline;
       if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
-      else rects = [{ x: Math.round(obj.x), y: Math.round(obj.y), w: Math.round(obj.width), h: Math.round(obj.height) }];
+      else
+        rects = [
+          {
+            x: Math.round(obj.x),
+            y: Math.round(obj.y),
+            w: Math.round(obj.width),
+            h: Math.round(obj.height),
+          },
+        ];
       // WorkAdventure's own door and landing: a zone with an exitUrl carries a
       // guest to the room it names, and a zone marked start is where that room
       // puts them down. Both travel through the runtime zone and never through
       // a position frame.
-      const exitUrl = bag["exitUrl"] !== undefined ? bag["exitUrl"] : bag["exiturl"];
+      const exitUrl = bag['exitUrl'] !== undefined ? bag['exitUrl'] : bag['exiturl'];
       const exit = typeof exitUrl === 'string' ? exitUrl.trim() : '';
-      const start = bag["start"] === true || bag["start"] === 'true';
+      const start = bag['start'] === true || bag['start'] === 'true';
       out.push({
         id: obj.name,
-        name: bag["label"] || bag["name"] || obj.name,
+        name: bag['label'] || bag['name'] || obj.name,
         // The property bag of a Tiled zone is {kind, proximity, maxUsers}; the
         // runtime form is {kind, proximity, capacity}, and without these lines
         // a meeting room is a plain area that carries no talk.
         kind,
-        proximity: bag["proximity"],
-        capacity: bag["maxUsers"] !== undefined ? bag["maxUsers"] : bag["capacity"],
+        proximity: bag['proximity'],
+        capacity: bag['maxUsers'] !== undefined ? bag['maxUsers'] : bag['capacity'],
         rects,
         exit,
         start,
@@ -331,7 +349,7 @@ function spawn(
       if (free(x, y)) return { x: Math.round(x), y: Math.round(y) };
     }
   }
-  const centre = { x: Math.round(w * tw / 2), y: Math.round(h * th / 2) };
+  const centre = { x: Math.round((w * tw) / 2), y: Math.round((h * th) / 2) };
   if (free(centre.x, centre.y)) return centre;
   return { x: Math.round(tw * 1.5), y: Math.round(th * 1.5) };
 }
@@ -372,7 +390,10 @@ async function startLayerRect(
   const flagged = list.find((layer) => {
     const props = Array.isArray(layer.properties) ? layer.properties : [];
     return props.some(
-      (p) => p && (p.name === 'startLayer' || p.name === 'start') && (p.value === true || p.value === 'true'),
+      (p) =>
+        p &&
+        (p.name === 'startLayer' || p.name === 'start') &&
+        (p.value === true || p.value === 'true'),
     );
   });
   const pick = named || flagged || null;
@@ -421,7 +442,9 @@ function mapCandidates(room: string): string[] {
 // isWam tells a WorkAdventure world from a Tiled map: a world names a mapUrl
 // and carries its areas, a map carries its layers and no mapUrl.
 function isWam(doc: any): boolean {
-  return !!doc && typeof doc === 'object' && typeof doc.mapUrl === 'string' && !Array.isArray(doc.layers);
+  return (
+    !!doc && typeof doc === 'object' && typeof doc.mapUrl === 'string' && !Array.isArray(doc.layers)
+  );
 }
 
 // loadWam follows a .wam world to the map it names: the mapUrl is resolved
@@ -457,19 +480,25 @@ function wamZones(doc: any): any[] {
   for (const area of Array.isArray(doc.areas) ? doc.areas : []) {
     if (!area || typeof area !== 'object') continue;
     const props: Record<string, any> = {};
-    for (const p of Array.isArray(area.properties) ? area.properties : []) if (p && p.name) props[p.name] = p.value;
+    for (const p of Array.isArray(area.properties) ? area.properties : [])
+      if (p && p.name) props[p.name] = p.value;
     const bag = props;
-    let kind = String(bag["kind"] || '');
-    if (!kind && (bag["silent"] === true || bag["silent"] === 'true')) kind = 'silent';
-    if (!kind && (bag["jitsiRoom"] !== undefined || bag["jitsiRoomProperty"] !== undefined)) kind = 'meeting';
-    const users = bag["maxUsersInAreaPropertyData"];
+    let kind = String(bag['kind'] || '');
+    if (!kind && (bag['silent'] === true || bag['silent'] === 'true')) kind = 'silent';
+    if (!kind && (bag['jitsiRoom'] !== undefined || bag['jitsiRoomProperty'] !== undefined))
+      kind = 'meeting';
+    const users = bag['maxUsersInAreaPropertyData'];
     out.push({
       id: area.id || area.name,
-      name: bag["label"] || bag["name"] || area.name || area.id,
+      name: bag['label'] || bag['name'] || area.name || area.id,
       kind,
-      proximity: bag["proximity"],
+      proximity: bag['proximity'],
       capacity:
-        bag["maxUsers"] !== undefined ? bag["maxUsers"] : bag["capacity"] !== undefined ? bag["capacity"] : users && users.maxUsers,
+        bag['maxUsers'] !== undefined
+          ? bag['maxUsers']
+          : bag['capacity'] !== undefined
+            ? bag['capacity']
+            : users && users.maxUsers,
       rects: [areaRect(area)],
     });
   }
@@ -507,7 +536,9 @@ const DEFAULT_MAP = '/world/maps/office.tmj';
 // looked broken). A name is only usable by a map that names its cells, which
 // is not the kind of map this tree ships, so the Tiled tileset path is the one
 // that draws the export. It answers an empty map when the file is not there.
-async function atlasFrames(signal?: AbortSignal): Promise<{ image: string; frames: Map<number, any> } | null> {
+async function atlasFrames(
+  signal?: AbortSignal,
+): Promise<{ image: string; frames: Map<number, any> } | null> {
   const raw = await loadJSON('/world/atlas.json', signal, true);
   if (!raw || typeof raw !== 'object' || !raw.image) return null;
   const frames = new Map<number, any>();
@@ -523,7 +554,11 @@ async function atlasFrames(signal?: AbortSignal): Promise<{ image: string; frame
     // as the pixel rect a Tiled export writes; the rect wins when both.
     let x = Math.floor(Number(one.x));
     let y = Math.floor(Number(one.y));
-    if ((!Number.isFinite(x) || !Number.isFinite(y)) && Number.isFinite(Number(one.col)) && Number.isFinite(Number(one.row))) {
+    if (
+      (!Number.isFinite(x) || !Number.isFinite(y)) &&
+      Number.isFinite(Number(one.col)) &&
+      Number.isFinite(Number(one.row))
+    ) {
       const g = Math.max(0, Math.floor(Number(raw.gutter)) || 0);
       x = g + Math.floor(Number(one.col)) * (TILE + g);
       y = g + Math.floor(Number(one.row)) * (TILE + g);
@@ -591,7 +626,10 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
   // map that was actually used, not the name the room asked for: a room on the
   // default office has no sidecar of its own either.
   const sidecarPath = own.replace(/\.\w+$/, '') + '.zones.json';
-  const sidecar = mapPathUsed !== DEFAULT_MAP && !OWN_MAPS.test(room) ? await loadJSON(sidecarPath, signal, true) : null;
+  const sidecar =
+    mapPathUsed !== DEFAULT_MAP && !OWN_MAPS.test(room)
+      ? await loadJSON(sidecarPath, signal, true)
+      : null;
   const fromSidecar = sidecar && Array.isArray(sidecar.zones) ? sidecar.zones : [];
   const fromMap = fromSidecar.length ? fromSidecar : zoneObjects(objects);
   const zones = zoneList(wam ? fromMap.concat(wamZones(wam)) : fromMap);
@@ -749,7 +787,9 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
     if (draw[gid]) return draw[gid];
     const frame = atlasImage && atlas ? atlas.frames.get(gid) || null : null;
     let set: TileSet | null = null;
-    if (!frame) for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
+    if (!frame)
+      for (const one of sets)
+        if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
     const hit = frame || set ? { frame, set } : null;
     draw[gid] = hit;
     return hit;
@@ -769,7 +809,17 @@ export async function loadWorld(room: string, signal?: AbortSignal): Promise<Wor
       if (!hit) continue;
       const { frame, set } = hit;
       if (frame) {
-        target.drawImage(atlasImage as HTMLImageElement, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
+        target.drawImage(
+          atlasImage as HTMLImageElement,
+          frame.x,
+          frame.y,
+          frame.w,
+          frame.h,
+          dx,
+          dy,
+          tw,
+          th,
+        );
         continue;
       }
       if (!set) continue;
@@ -892,7 +942,13 @@ export function bodyBlocked(
     if (cx < 0 || cy < 0 || cx >= width || cy >= height) return true;
     return blocked[cy * width + cx] === 1;
   };
-  return probe(left, top) || probe(right, top) || probe(left, bottom) || probe(right, bottom) || probe(x, bottom);
+  return (
+    probe(left, top) ||
+    probe(right, top) ||
+    probe(left, bottom) ||
+    probe(right, bottom) ||
+    probe(x, bottom)
+  );
 }
 
 // AVATARS is the pick WorkAdventure offers before a guest walks: a small list
@@ -961,7 +1017,10 @@ export function sheetFor(id: string, sheets: CharSheet[], mine: boolean, index =
     for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
     index = Math.abs(h);
   }
-  const n = Math.max(0, Math.min(sheets.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0)));
+  const n = Math.max(
+    0,
+    Math.min(sheets.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0)),
+  );
   return sheets[n];
 }
 
@@ -987,7 +1046,14 @@ function defaultSheet(): CharSheet {
     idle[dir] = IDLE_FRAME;
     walk[dir] = [...WALK_ORDER];
   }
-  return { image: canvas as unknown as HTMLImageElement, cellW: CHAR_W, cellH: CHAR_H, idle, walk, columns: cols };
+  return {
+    image: canvas as unknown as HTMLImageElement,
+    cellW: CHAR_W,
+    cellH: CHAR_H,
+    idle,
+    walk,
+    columns: cols,
+  };
 }
 
 // ---------------------------------------------------------------- walking
@@ -1087,7 +1153,10 @@ function typing(event: KeyboardEvent): boolean {
 // shown only on a screen without a hover, each holding its key while pressed.
 // A tap that starts on a button never reaches the canvas, so a tap on the map
 // itself stays a tap.
-function makePad(host: HTMLElement, hold: (key: string, down: boolean) => void): HTMLElement | null {
+function makePad(
+  host: HTMLElement,
+  hold: (key: string, down: boolean) => void,
+): HTMLElement | null {
   const box = document.createElement('div');
   box.className = 'world-pad';
   box.setAttribute('aria-label', 'walk');
@@ -1160,7 +1229,10 @@ export class WorldView {
     this.world = world;
     canvas.tabIndex = 0;
     canvas.setAttribute('role', 'img');
-    canvas.setAttribute('aria-label', 'the world of this room, walk with the arrow keys or w a s d');
+    canvas.setAttribute(
+      'aria-label',
+      'the world of this room, walk with the arrow keys or w a s d',
+    );
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     this.pad = makePad(canvas, (key, down) => this.touch(key, down));
@@ -1253,7 +1325,12 @@ export class WorldView {
     if (local && local.walker && document.visibilityState === 'visible') {
       const walker = local.walker;
       walker.step(dt, this.held);
-      if (walker.x !== local.x || walker.y !== local.y || walker.dir !== local.dir || walker.moving !== local.moving) {
+      if (
+        walker.x !== local.x ||
+        walker.y !== local.y ||
+        walker.dir !== local.dir ||
+        walker.moving !== local.moving
+      ) {
         local.x = walker.x;
         local.y = walker.y;
         local.dir = walker.dir;
@@ -1283,7 +1360,9 @@ export class WorldView {
       const wantX = local.x * this.scale - width / 2;
       const wantY = local.y * this.scale - height / 2;
       this.camX = Math.round(Math.max(0, Math.min(this.world.widthPx * this.scale - width, wantX)));
-      this.camY = Math.round(Math.max(0, Math.min(this.world.heightPx * this.scale - height, wantY)));
+      this.camY = Math.round(
+        Math.max(0, Math.min(this.world.heightPx * this.scale - height, wantY)),
+      );
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = this.scale % 1 !== 0;
@@ -1297,7 +1376,17 @@ export class WorldView {
     const y1 = Math.min(this.world.heightPx, Math.ceil((this.camY + height) / this.scale) + 1);
     const view = { x0, y0, x1, y1 };
     if (x1 > x0 && y1 > y0) {
-      ctx.drawImage(this.world.tiles, x0, y0, x1 - x0, y1 - y0, x0 * this.scale - this.camX, y0 * this.scale - this.camY, (x1 - x0) * this.scale, (y1 - y0) * this.scale);
+      ctx.drawImage(
+        this.world.tiles,
+        x0,
+        y0,
+        x1 - x0,
+        y1 - y0,
+        x0 * this.scale - this.camX,
+        y0 * this.scale - this.camY,
+        (x1 - x0) * this.scale,
+        (y1 - y0) * this.scale,
+      );
     }
     ctx.setTransform(this.scale, 0, 0, this.scale, -this.camX, -this.camY);
     // The sort is by foot line, and the overhead paint goes between the guests:
@@ -1306,7 +1395,13 @@ export class WorldView {
     // standing in front of it. With no overhead layer one plain loop runs.
     const at = (one: Avatar) => one.y + AVATAR_SORT_OFFSET;
     const list = [...this.avatars.values()]
-      .filter((one) => one.x + CHAR_W >= view.x0 && one.x - CHAR_W <= view.x1 && one.y >= view.y0 && one.y - CHAR_H <= view.y1)
+      .filter(
+        (one) =>
+          one.x + CHAR_W >= view.x0 &&
+          one.x - CHAR_W <= view.x1 &&
+          one.y >= view.y0 &&
+          one.y - CHAR_H <= view.y1,
+      )
       .sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1));
     const above = this.world.above;
     if (!above) {
@@ -1329,7 +1424,10 @@ export class WorldView {
       const where = new Map<Avatar, number>();
       for (const one of list) where.set(one, above.cover(one.x, one.y, CHAR_H, HALO_RY));
       const ordered = [...list].sort(
-        (a, b) => (where.get(a) as number) - (where.get(b) as number) || at(a) - at(b) || (a.id < b.id ? -1 : 1),
+        (a, b) =>
+          (where.get(a) as number) - (where.get(b) as number) ||
+          at(a) - at(b) ||
+          (a.id < b.id ? -1 : 1),
       );
       for (const one of ordered) {
         flush(where.get(one) as number);
@@ -1347,7 +1445,9 @@ export class WorldView {
     const sheet = one.sheet;
     const name = DIR[one.dir] || DIR[0];
     const walk = sheet.walk[name] && sheet.walk[name].length ? sheet.walk[name] : WALK_ORDER;
-    const col = one.moving ? walk[Math.floor(performance.now() / CHAR_MOVE_MS) % walk.length] : sheet.idle[name] ?? IDLE_FRAME;
+    const col = one.moving
+      ? walk[Math.floor(performance.now() / CHAR_MOVE_MS) % walk.length]
+      : (sheet.idle[name] ?? IDLE_FRAME);
     const row = SHEET_ROW[one.dir] ?? 0;
     const dx = Math.round(one.x - CHAR_W / 2);
     const dy = Math.round(one.y - CHAR_ORIGIN_Y);
@@ -1364,7 +1464,17 @@ export class WorldView {
       ctx.fill();
       ctx.globalAlpha = 1;
     }
-    ctx.drawImage(sheet.image, col * sheet.cellW, row * sheet.cellH, sheet.cellW, sheet.cellH, dx, dy, sheet.cellW, sheet.cellH);
+    ctx.drawImage(
+      sheet.image,
+      col * sheet.cellW,
+      row * sheet.cellH,
+      sheet.cellW,
+      sheet.cellH,
+      dx,
+      dy,
+      sheet.cellW,
+      sheet.cellH,
+    );
     ctx.filter = 'none';
     // The name is drawn in map pixels, so it scales with the avatar and never
     // blurs differently from it.

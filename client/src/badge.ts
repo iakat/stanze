@@ -18,7 +18,11 @@ export async function markRelay(peer) {
     });
     if (!pair)
       stats.forEach((r) => {
-        if (!pair && r.type === 'candidate-pair' && (r.selected || (r.nominated && r.state === 'succeeded')))
+        if (
+          !pair &&
+          r.type === 'candidate-pair' &&
+          (r.selected || (r.nominated && r.state === 'succeeded'))
+        )
           pair = r;
       });
     if (!pair) return;

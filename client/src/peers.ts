@@ -315,7 +315,7 @@ async function applyDescription(peer, type, sdp) {
     // and the stats panel and the console would then hold the call's addresses
     // in the clear under the seal. The error name is enough to tell one failure
     // from another.
-    const kind = (err && (err.name || err.constructor && err.constructor.name)) || 'error';
+    const kind = (err && (err.name || (err.constructor && err.constructor.name))) || 'error';
     const short = shortPeer(peer.id);
     state.workerErrors.push('description failed for ' + short + ': ' + kind);
     say('the ' + type + ' with ' + short + ' failed; the link has no media');
