@@ -47,9 +47,16 @@ jobs:
         run: npm --prefix client run check
       - name: lint
         run: npm --prefix client run lint
-      # Formatting and the README line table are real checks too, but the tree is
-      # not clean for either today (18 files, and the counts drifted), so they
-      # come in a tree-wide change of their own rather than mixed into this one.
+      # An unformatted tree hides real diffs in whitespace noise, and a caller
+      # who runs `prettier --write` would reformat code they never meant to
+      # touch, so the check runs here and not in review.
+      - name: format check
+        run: npm --prefix client run format:check
+      # A line table that is wrong is worse than no table: it sends a reader to
+      # the wrong file for the code they are after, and a new module would never
+      # be named at all. The script counts and names the gap, so it is the check.
+      - name: readme check
+        run: npm --prefix client run readme:check
       - name: audit
         run: npm --prefix client audit --omit=dev --audit-level=high
 
