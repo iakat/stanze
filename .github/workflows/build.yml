@@ -283,6 +283,17 @@ jobs:
           for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
           node tools/relay-quartet-e2e.js; code=$?; kill $pid || true; exit $code
 
+      # A machine with no webcam is not a second-class guest: the pair setup
+      # adds a transceiver per kind whether or not there is a device behind it.
+      # This step is what keeps that true.
+      - name: relay without devices
+        env: {PW: /tmp/pw/node_modules/playwright-core, ROOMSBASE: "http://127.0.0.1:8095", OUTDIR: shots}
+        run: |
+          /tmp/stanze -listen 127.0.0.1:8095 -turn-port 3478 -turn-public-ip 127.0.0.1 \
+            -turn-min-port 49200 -turn-max-port 49300 & pid=$!
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8095/ && break; sleep 1; done
+          node tools/relay-nodev-e2e.js; code=$?; kill $pid || true; exit $code
+
   image:
     name: image
     runs-on: ubuntu-latest
