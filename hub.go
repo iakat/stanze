@@ -183,6 +183,10 @@ func (h *Hub) join(roomID string, p *Peer) (*Room, error) {
 	room.peers[p.id] = p
 	room.lastSeen = time.Now()
 	p.room = room
+	// A peer that relaid in another room names that one only until it is
+	// seated again: the relay account is the room's, so a guest carried
+	// through a door has to spend the new room's tokens, not the old one's.
+	p.leaveRoom = ""
 	return room, nil
 }
 
@@ -232,6 +236,10 @@ func (h *Hub) sweepIdle(now time.Time) int {
 		for _, p := range room.peers {
 			p.room = nil
 			gone = append(gone, p)
+			// The peer last relaid in this room, so the relay account it
+			// marked is this room's: a swept peer has to name it to take its
+			// own loss mark out of it on close, as a peer that left does.
+			p.leaveRoom = room.id
 		}
 		stale = append(stale, gone)
 	}
