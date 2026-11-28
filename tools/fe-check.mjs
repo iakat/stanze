@@ -9,10 +9,19 @@
  *
  * It asserts the module's frame size, that fe_init returns 0, that a frame of
  * noise comes back as a frame of floats, and that the loader's engine is the
- * one the worklet cuts (512 samples for the small and base tiers).
+ * one the worklet cuts: the frame is read from static/fastenhancer-worklet.js,
+ * so no second copy of the tier table exists to drift from the first.
+ *
+ * FE_TIER is the tier the build meant to make. Given it, the check also
+ * requires the bake's own record (fe.tier, written by tools/fewasm/build.sh
+ * next to the module) to name that tier: a build argument that never reached
+ * the compiler is then a failed check, not a medium module shipped beside the
+ * small weights.
  *
  * env: FE_MODULE (default static/fe.wasm), FE_WEIGHTS (default static/fe.q8),
- *      FE_FRAME (default 512)
+ *      FE_WORKLET (default static/fastenhancer-worklet.js),
+ *      FE_FRAME (default: the frame the worklet cuts),
+ *      FE_TIER, FE_TIER_FILE (default <module dir>/fe.tier)
  */
 'use strict';
 
@@ -20,7 +29,25 @@ import fs from 'node:fs';
 
 const MODULE = process.env.FE_MODULE || 'static/fe.wasm';
 const WEIGHTS = process.env.FE_WEIGHTS || 'static/fe.q8';
-const FRAME = Number(process.env.FE_FRAME || 512);
+const WORKLET = process.env.FE_WORKLET || 'static/fastenhancer-worklet.js';
+// Set-but-empty is the interesting case (an ARG out of scope), so the tier is
+// tested for presence, never for truthiness.
+const TIER = process.env.FE_TIER;
+const TIER_FILE = process.env.FE_TIER_FILE || MODULE.replace(/[^/]*$/, '') + 'fe.tier';
+
+// The page cuts one frame size and the module exports one; a build that gets
+// them apart is silent until a browser runs it. The worklet is the source.
+function workletFrame() {
+  const src = fs.readFileSync(WORKLET, 'utf8');
+  const m = src.match(/const\s+FRAME\s*=\s*(\d+)/);
+  if (!m) {
+    console.log('FAIL  the worklet no longer declares FRAME');
+    process.exit(1);
+  }
+  return Number(m[1]);
+}
+
+const FRAME = Number(process.env.FE_FRAME || workletFrame());
 
 const fails = [];
 
@@ -53,6 +80,25 @@ const FeWasm = new Function(
 if (!fs.existsSync(MODULE)) fail('module exists', MODULE + ' is missing');
 if (!fs.existsSync(WEIGHTS)) fail('weights exist', WEIGHTS + ' is missing');
 if (fails.length) process.exit(1);
+
+// The tier the build asked for and the tier the bake recorded, when both are
+// known: this is the fault a pairing test alone cannot see. A module and a
+// weights blob of the same tier initialise, but a build argument that never
+// reached the compiler produces a module from another tier and the wrong frame
+// for the page, and only a browser would ever notice.
+if (TIER !== undefined) {
+  if (TIER === '') {
+    fail('tier is set', 'FE_TIER is empty: the build argument is not in scope in the stage that compiles the module');
+  } else if (!fs.existsSync(TIER_FILE)) {
+    fail('bake records its tier', TIER_FILE + ' is missing: was the module built by tools/fewasm/build.sh?');
+  } else {
+    const [bakedTier, bakedFrame] = fs.readFileSync(TIER_FILE, 'utf8').trim().split(/\s+/);
+    if (bakedTier === TIER) pass('tier matches the build', bakedTier);
+    else fail('tier matches the build', 'asked for ' + TIER + ', the bake is ' + bakedTier);
+    if (Number(bakedFrame) === FRAME) pass('tier frame is the worklet frame', bakedFrame);
+    else fail('tier frame is the worklet frame', 'the bake is ' + bakedFrame + ', the worklet cuts ' + FRAME);
+  }
+}
 
 const module = fs.readFileSync(MODULE);
 const weights = fs.readFileSync(WEIGHTS);

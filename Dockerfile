@@ -36,20 +36,28 @@ RUN node client/build.mjs
 # must be compiled by a clang that owns a wasm32-wasip1 sysroot and its
 # builtins. Debian's own clang has neither (no wasm headers, no wasm builtins
 # archive), and Alpine's clang has no compiler at all, so neither can build it.
-# The tier is a build argument and the small one is the default, as in
-# build.sh; the weights follow the tier, because fe.q8 in the engine tree and
-# the frame size the worklet cuts are one property.
+# The weights follow the tier, because fe.q8 in the engine tree and the frame
+# size the worklet cuts are one property.
+#
+# The tier is an ARG of this stage and not of the file. An ARG declared before a
+# FROM is in scope for the FROM lines only, so one written above this stage
+# would leave FE_TIER empty here, build.sh would fall back to its own default
+# (medium, 320 samples), and the image would ship a module that fe_init refuses
+# beside the small weights. GOAMD64 above is read the same way and is likewise
+# re-declared in the stage that consumes it.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS werecompiler
 ARG FE_TIER=small
+# nodejs is here for the check below: the pairing test runs the module the way
+# the page does, in V8, so a wrong pair fails this stage instead of a browser.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl nodejs \
+ && rm -rf /var/lib/apt/lists/*
 # Pinned by the exact release URL and by the sha256 of the tarball, so a
 # changed download fails the build instead of changing the module silently.
 # Both values are written straight into the RUN: a build argument is expanded
 # by the frontend as a make-style variable, so an underscore in the path gets
 # eaten and curl exits 3 on a malformed URL. The release tag (wasi-sdk-34)
 # and the version (34.0) do not share a spelling, hence one spelled path.
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS werecompiler
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
- && rm -rf /var/lib/apt/lists/*
 # The tarball is 190 MB and a runner transfer can drop, so curl retries
 # instead of restarting the stage over one lost connection.
 RUN cd /opt \
@@ -64,13 +72,37 @@ RUN cd /opt \
 ENV PATH=/opt/wasi-sdk/bin:$PATH
 WORKDIR /src
 COPY tools/fewasm ./tools/fewasm
+# The check and the two client files it reads: it evaluates the worklet's own
+# loader over the pair, so it must read the worker and the worklet of this
+# commit, not a copy.
+COPY tools/fe-check.mjs ./tools/fe-check.mjs
+COPY static/fastenhancer-worker.js static/fastenhancer-worklet.js ./static/
 # The check is the point of the step: a page that asks for /fe.wasm and gets
-# nothing has no incoming filter at all, so a missing module fails the build
-# here rather than in a browser. The sandbox build takes its clang from PATH,
-# and the strip step comes from the same directory as the compiler.
-RUN TIER="${FE_TIER}" tools/fewasm/build.sh /fe \
- && test -s /fe/fe.wasm \
- && test -s tools/fewasm/engine/weights/fe.q8
+# nothing has no incoming filter at all, and a module of the wrong tier is the
+# same loss with no missing file to notice, so the pair is exercised here. The
+# sandbox build takes its clang from PATH, and the strip step comes from the
+# same directory as the compiler.
+#
+# The pair is assembled first and checked where it lies, so the bytes the check
+# accepts are the bytes the next stage copies. FE_TIER goes to the check as well
+# as to the build: the checker refuses an empty tier (what an out of scope ARG
+# gives) and a bake whose own fe.tier disagrees with it, so a tier that never
+# reached the compiler fails here instead of shipping a medium module beside the
+# small weights. The hashes are what the client stage verifies after its COPY.
+RUN set -eu; \
+    TIER="$FE_TIER" tools/fewasm/build.sh /fe/build; \
+    mkdir -p /fe; \
+    cp /fe/build/fe.wasm /fe/fe.wasm; \
+    cp /fe/build/fe.tier /fe/fe.tier; \
+    cp tools/fewasm/engine/weights/fe.q8 /fe/fe.q8; \
+    FE_TIER="$FE_TIER" \
+    FE_MODULE=/fe/fe.wasm \
+    FE_WEIGHTS=/fe/fe.q8 \
+    FE_TIER_FILE=/fe/fe.tier \
+    FE_WORKLET=static/fastenhancer-worklet.js \
+      node tools/fe-check.mjs; \
+    cd /fe; \
+    sha256sum fe.wasm fe.q8 > SHA256
 
 # The client is platform independent, so it is built once in its own stage:
 # build static/pq.wasm from source, then pack static/ into packed/static.tgz,
@@ -94,11 +126,13 @@ RUN GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" -o s
 # artifact, so a context without one (a clean clone, a CI checkout without the
 # local toolchain) still gives a complete image.
 COPY --from=werecompiler /fe/fe.wasm static/fe.wasm
-COPY --from=werecompiler /src/tools/fewasm/engine/weights/fe.q8 static/fe.q8
+COPY --from=werecompiler /fe/fe.q8 static/fe.q8
+COPY --from=werecompiler /fe/SHA256 /fe/SHA256
 RUN printf '%s\n' "${GIT_COMMIT}" > static/version.txt
-# Nothing below may ship a page whose filter files are missing or empty: the
-# packer would happily pack whatever is in static/, so this is the last gate.
-RUN test -s static/fe.wasm && test -s static/fe.q8
+# Nothing below may ship a page whose filter files are missing, empty, or not
+# the pair the werecompiler stage checked: a COPY from the wrong path is a wrong
+# tier again, and the packer would happily pack whatever is in static/.
+RUN cd static && sha256sum -c /fe/SHA256 && test -s fe.wasm && test -s fe.q8
 RUN go run -trimpath -buildvcs=false ./cmd/pack
 
 # The server is the only target dependent step: trimmed, stripped, no VCS

@@ -53,11 +53,19 @@ if [ ! -s static/fe.wasm ] || [ "$FE_STALE" = "1" ] || [ "${FE_REBUILD:-0}" = "1
 	TIER="$FE_TIER" CC="$FE_CC" "$here/tools/fewasm/build.sh" "$here/tools/fewasm/out" >/dev/null
 	cp "$here/tools/fewasm/out/fe.wasm" static/fe.wasm
 	cp "$here/tools/fewasm/engine/weights/fe.q8" static/fe.q8
-	rm -rf "$here/tools/fewasm/out"
 	# The builder leaves the debug and name sections in; the page never reads
 	# them and they double the module.
 	FE_STRIP="$(dirname "$FE_CC")/llvm-strip"
 	[ -x "$FE_STRIP" ] && "$FE_STRIP" --strip-all static/fe.wasm
+	# The pair is checked before it is packed, and against the tier that was
+	# asked for: the module and fe.q8 only work together, and a mismatch is
+	# one line in a corner of a page and nothing anywhere else. FE_TIER_FILE
+	# points at the bake's own record, which is removed with the rest of out/.
+	if command -v node >/dev/null 2>&1; then
+		FE_TIER="$FE_TIER" FE_TIER_FILE="$here/tools/fewasm/out/fe.tier" \
+			node "$here/tools/fe-check.mjs" || exit 1
+	fi
+	rm -rf "$here/tools/fewasm/out"
 fi
 
 # The client is TypeScript under client/, and the bundle it produces is what the
