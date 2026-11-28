@@ -155,10 +155,9 @@ export async function worldEnter(room: string, start?: string) {
   } catch (err) {
     if (gen !== generation) return;
     // A room with no map is a call, not a broken page: the grid stays and the
-    // note says where the map should have been. Every pair is in one
-    // conversation here, because there is no place to judge them against.
+    // note says where the map should have been.
     worldSet(false);
-    routeAll([...state.peers.values()]);
+    route([...state.peers.values()]);
     const why = err && (err as Error).message ? (err as Error).message : String(err);
     note.hidden = false;
     note.textContent = 'no world for this room (' + why + '), the call grid is shown instead';
@@ -279,11 +278,9 @@ export function roomOfExit(exit: string): string | null {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(seg)) return '';
     return seg.replace(/\.(tmj|json|png)$/i, '').toLowerCase();
   };
-  // A full address is the only form that has to name this host; the check is a
-  // plain prefix and a parse rather than a regex, because the regex was the one
-  // the linter could not prove linear.
   let target: string;
-  if (raw.startsWith('//') || raw.toLowerCase().startsWith('http://') || raw.toLowerCase().startsWith('https://')) {
+  const lower = raw.toLowerCase();
+  if (raw.startsWith('//') || lower.startsWith('http://') || lower.startsWith('https://')) {
     let url: URL;
     try {
       url = new URL(raw, location.href);
@@ -418,7 +415,9 @@ function step() {
 // route turns the strands on and off and keeps the presence line true. A pair
 // whose media is routed is a pair the line names. The whole batch asks for one
 // stage layout, on the next frame, and not one per pair.
-export function route(peers: any[], nearIds: string[]) {
+export function route(peers: any[], nearIds: string[] = peers.map((one) => one.id)) {
+  // With no list every peer is in the conversation: a room with no map has no
+  // walker to judge a distance with.
   const on = new Set(nearIds);
   for (const peer of peers) {
     const wanted = on.has(peer.id);
@@ -426,23 +425,6 @@ export function route(peers: any[], nearIds: string[]) {
   }
   paintPresence();
   stageLayoutSoon();
-}
-
-// route is the pair rule of a room with no map: every peer is in the
-// conversation. A room loads its map after the join, so the first seconds of a
-// call and a room whose map failed to load have no walker at all. Without this
-// the whole mesh stayed unrouted (a silent gain and no picture) until a map
-// arrived, and a room with no map never routed anybody.
-export function routeAll(peers: any[]) {
-  const ids: string[] = [];
-  for (const peer of peers) {
-    if (!peer || !peer.id) continue;
-    ids.push(peer.id);
-    if (isRouted(peer.id) !== true) setRouted(peer.id, true);
-  }
-  paintPresence();
-  stageLayoutSoon();
-  return ids;
 }
 
 // worldOnPos is the one entry the files channel calls for a position frame. It
@@ -506,12 +488,6 @@ export function worldDrop(peerId: string) {
   posForget(peerId);
 }
 
-// topLeft is where the visible window stands in map pixels.
-export function viewTopLeft(): { x: number; y: number } {
-  if (!view) return { x: 0, y: 0 };
-  return view.topLeft();
-}
-
 // viewSize is the drawn size of the window in map pixels.
 export function viewSize(): { w: number; h: number } {
   if (!view) return { w: 0, h: 0 };
@@ -523,23 +499,6 @@ export function viewSize(): { w: number; h: number } {
 export function worldDrawn(): { drawn: number; ink: number } {
   if (!view) return { drawn: 0, ink: 0 };
   return { drawn: view.frames, ink: view.ink() };
-}
-
-export function worldAvatars(): {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  local: boolean;
-}[] {
-  if (!view) return [];
-  return [...view.avatars.values()].map((one) => ({
-    id: one.id,
-    name: one.name,
-    x: Math.round(one.x),
-    y: Math.round(one.y),
-    local: !!one.local,
-  }));
 }
 
 // aboveFilled counts the map rows that the overhead paint puts pixels in: a

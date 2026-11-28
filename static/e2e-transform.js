@@ -89,8 +89,17 @@ function report(pair, dir, kind, st, force) {
 self.onmessage = async (event) => {
   const msg = event.data || {};
   if (msg.type === 'keyframe') {
-    // Only video carries key frames; the sender builds the frame.
-    try { SEND.get(msg.pair + '|video').generateKeyFrame(); } catch (_err) { /* no encoder yet */ }
+    // Only video carries key frames; the sender builds the frame. Gecko rejects
+    // the returned promise with InvalidStateError 'Not sending video' when the
+    // sender carries no live video, and a rejected promise is not a throw: the
+    // rejection is caught here, and the page asks only when it has a track.
+    const tx = SEND.get(msg.pair + '|video');
+    if (!tx) return;
+    try {
+      Promise.resolve(tx.generateKeyFrame()).catch(() => {});
+    } catch (_err) {
+      /* no encoder yet */
+    }
     return;
   }
   if (msg.type === 'pad') {

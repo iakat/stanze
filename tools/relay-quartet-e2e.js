@@ -97,7 +97,11 @@ const CONNECTED = (want) => {
     });
     const guests = [];
     for (let i = 0; i < N; i++) {
-      const ctx = await cr.newContext({ permissions: ['camera', 'microphone'] });
+      // Do not pre-grant camera/microphone here: a context created with those
+      // permissions makes headless Chromium skip STUN/TURN entirely and gather
+      // nothing at all. --use-fake-ui-for-media-stream already answers the
+      // prompts, which is all these guests need.
+      const ctx = await cr.newContext();
       const page = await ctx.newPage();
       watch(page, NAMES[i], errors);
       await page.goto(BASE + '/#r=' + id, { waitUntil: 'domcontentloaded' });

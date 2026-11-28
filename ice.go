@@ -102,25 +102,32 @@ func startTURN(cfg *Config, log *slog.Logger) (*turn.Server, error) {
 		setTurnPort(cfg, port)
 	}
 
+	relayGrants = newRelayGrants(cfg.MaxPeers)
 	turnCfg := turn.ServerConfig{
 		Realm:       cfg.TurnRealm,
 		AuthHandler: turn.LongTermTURNRESTAuthHandler(cfg.TurnSecret, nil),
-		// The quota is keyed by the address the allocation comes from, not by
-		// the minted username: a username is a fresh random string per mint, so
-		// a per-user count never blocked anything. See allocQuota.
+		// A relay never outlives the credential that asked for it. Without a
+		// per-host count the port range is the only ceiling, so what keeps it
+		// from being held is time: whoever fills it must redo the work every
+		// TurnTTL and cannot park relays there.
+		AllocationLifetime: cfg.TurnTTL,
+		// A credential is minted once per socket and then used for every pair
+		// of that socket, so the ceiling is maxPeers-1 and the key is the
+		// credential, never the host: a house behind one NAT may hold as many
+		// relays as it has guests. Nothing is counted per address here.
 		QuotaHandler: func(username, realm string, srcAddr net.Addr) bool {
-			return turnQuota.allow(addrKey(srcAddr))
+			return relayGrants.allow(username)
 		},
-		// The allocation count is kept honest by the lifecycle, not by the
-		// request: a count that only goes up in the quota handler and never
-		// down would lock an address out after its first allocation. Created
-		// and deleted are the only two events that move it.
+		// The grant count is kept honest by the lifecycle, not by the request:
+		// a count that only went up in the quota handler and never down would
+		// lock a credential out after one allocation that failed. Created and
+		// deleted are the only two events that move it.
 		EventHandler: turn.EventHandler{
-			OnAllocationCreated: func(srcAddr, _ net.Addr, _, _, _ string, _ net.Addr, _ int) {
-				turnQuota.created(addrKey(srcAddr))
+			OnAllocationCreated: func(_, _ net.Addr, _, userID, _ string, _ net.Addr, _ int) {
+				relayGrants.created(userID)
 			},
-			OnAllocationDeleted: func(srcAddr, _ net.Addr, _, _, _ string) {
-				turnQuota.deleted(addrKey(srcAddr))
+			OnAllocationDeleted: func(_, _ net.Addr, _, userID, _ string) {
+				relayGrants.deleted(userID)
 			},
 		},
 		PacketConnConfigs: []turn.PacketConnConfig{{
@@ -156,20 +163,35 @@ func startTURN(cfg *Config, log *slog.Logger) (*turn.Server, error) {
 	return srv, nil
 }
 
-// turnQuota caps relay allocations per client address. A credential is a
-// portable UDP relay for its lifetime, so what matters is how many relays one
-// host holds at once, not how many usernames it asked for.
-var turnQuota = newAllocQuota(8, 10*time.Minute)
+// relayGrants caps how many relays one credential may open. A credential is
+// minted once per socket and then used for every pair of that socket, so its
+// honest ceiling is the number of pairs one guest can have: maxPeers-1. The
+// key is the credential, never the host, so one address may hold as many
+// relays as it has guests and a house behind one NAT is not a suspect. The
+// port range is the real ceiling on relays alive at once.
+//
+// The count moves on allocation created and deleted, never on the request: a
+// request that is refused (a bad credential, a port out of range) must not use
+// up the grant.
+// relayGrants is set once at start, before any datagram is served, so the
+// quota handler and the event handler read the same object.
+var relayGrants *allocQuota
+
+func newRelayGrants(maxPeers int) *allocQuota {
+	if maxPeers < 2 {
+		maxPeers = 2
+	}
+	return newAllocQuota(maxPeers-1, 10*time.Minute)
+}
 
 // allocQuota counts live relay allocations per key.
 //
-// The key is the address the allocation request came from, so the ceiling
-// follows whatever it protects: one host cannot hold more than max relays, and
-// it gets its slots back when the allocations close. A count that only went up
-// would turn into a permanent ban, and a map that was wiped whole at a size
-// limit would hand a fresh allowance to everyone at once; instead an entry
-// whose last allocation closed is forgotten after idle, and a sweep drops such
-// entries on its own.
+// A key is a credential, and the entry is forgotten as soon as its last
+// allocation closes: a count that only went up would lock a credential out
+// after one allocation that failed, and a map that was wiped whole at a size
+// limit would hand a fresh allowance to everyone at once. An entry that has
+// been idle is dropped by a sweep, so the map cannot grow without bound from
+// credentials that were minted and never used.
 type allocQuota struct {
 	mu    sync.Mutex
 	max   int
@@ -255,29 +277,6 @@ func (q *allocQuota) sweepLocked(now time.Time) {
 			delete(q.seen, k)
 		}
 	}
-}
-
-// addrKey names the host behind an address, without the port: a client opens
-// many connections from many ports of one address.
-func addrKey(a net.Addr) string {
-	if a == nil {
-		return ""
-	}
-	switch v := a.(type) {
-	case *net.UDPAddr:
-		if v.IP != nil {
-			return v.IP.String()
-		}
-	case *net.TCPAddr:
-		if v.IP != nil {
-			return v.IP.String()
-		}
-	}
-	host, _, err := net.SplitHostPort(a.String())
-	if err != nil {
-		return a.String()
-	}
-	return host
 }
 
 // stunMux answers STUN binding requests on the relay socket and passes every

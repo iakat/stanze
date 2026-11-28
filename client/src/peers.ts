@@ -28,7 +28,7 @@ export function iceServers() {
   return all.filter((server) => !/^turns?:/i.test(String(server.urls)));
 }
 
-function rtcConfig(): RTCConfiguration {
+export function rtcConfig(): RTCConfiguration {
   return {
     iceServers: iceServers(),
     iceTransportPolicy: (state.path === 'relay' ? 'relay' : 'all') as RTCIceTransportPolicy,
@@ -212,9 +212,10 @@ export function connectPeer(id, initiator) {
       // The encodings exist now, so a cap that was too early applies here.
       capCameraSenders(pc);
       markRelay(peer);
-      // One ask over the sealed channel, answered once with a key frame from
-      // the sender. It is the only frame a fresh receiver can decode.
-      if (!peer.askedKey) {
+      // One ask over the sealed channel, answered with a key frame: the only
+      // frame a fresh receiver decodes. No live video throws in Gecko.
+      const sent = peer.tx?.video?.sender.track;
+      if (!peer.askedKey && sent?.readyState === 'live') {
         peer.askedKey = true;
         sealedSendOpaque(peer.id, { k: 'key' });
       }
@@ -231,24 +232,6 @@ export function connectPeer(id, initiator) {
   // per kind with both transforms and the live track, then the offer.
   if (initiator) preparePeer(peer);
   return peer;
-}
-
-// applyIceToLive hands the relay list that arrived late to every peer
-// connection already built. A pair whose offer left before the list did is
-// gathering with no TURN servers, so the pair is told to gather again: an ICE
-// restart with the new list is the only way a direct link that failed gets a
-// relayed one without a new socket.
-export function applyIceToLive() {
-  for (const peer of state.peers.values()) {
-    const pc = peer.pc;
-    if (!pc) continue;
-    try {
-      pc.setConfiguration(rtcConfig());
-      if (pc.iceConnectionState === 'failed' || pc.iceGatheringState === 'complete') pc.restartIce();
-    } catch {
-      /* a closed pair takes the restart of the next rejoin */
-    }
-  }
 }
 
 // errName is what a console line carries about a browser error: its name, never

@@ -118,11 +118,6 @@ function sealedGapReset(peer) {
 // passphrase costs one handshake. Only a member kicks, and only an admin kicks
 // at all; a page that waits outside stays. A spakeok from a pair that proved no
 // passphrase is never a reason to leave the room.
-//
-// The guest that does not know the passphrase is the one case the page can act
-// on: every pair of the room fails the same proof, one after the other, so a
-// page that saw every pair refuse is the page holding the wrong passphrase, and
-// it goes back to the lobby with the reason instead of sitting in a silent call.
 export function sealedRefusePass(peer) {
   // A failed proof is not an identity failure: it must not read as an attack on
   // the identity pins, so it closes the pair without touching the pin count.
@@ -135,29 +130,16 @@ export function sealedRefusePass(peer) {
   wipeKeys(peer);
   sealedSetE2E(peer, 'failed');
   say(shortPeer(peer.id) + ' does not know the room passphrase; the link stays closed');
+  // Every pair refused the same proof, so this page holds the wrong
+  // passphrase: it goes back to the lobby. One refusal is a guest's problem.
   if (state.waiting) {
-    refuseIfAlone();
+    if ([...state.peers.values()].every((one) => one.passFailed)) setTimeout(() => leave('the room refused the passphrase'), 0);
     return;
   }
   // The admin removes the identity, not the socket, so the same guest can not
   // come back on a fresh pair in this call.
   if (!isAdmin(state.self) || isAdmin(peer.id)) return;
   sealedKick(peer.id);
-}
-
-// refuseIfAlone leaves the room when every pair refused the same proof: the
-// passphrase this page holds is the wrong one. One refusal is a guest with the
-// wrong passphrase, and the page keeps waiting for a member that will let it in.
-function refuseIfAlone() {
-  let seen = 0;
-  for (const one of state.peers.values()) {
-    if (!one.passFailed) return;
-    seen++;
-  }
-  if (!seen) return;
-  // Out of the message handler: the pair state is being torn down here, and
-  // leaving the room rewrites all of it.
-  setTimeout(() => leave('the room refused the passphrase'), 0);
 }
 
 // sealedRestart drops a pair's state so a new handshake can run: a deliberate
@@ -732,10 +714,8 @@ export function sealedHandleOpaque(from, b) {
       sealedOnProof(peer, msg).catch(() => sealedRefuse(peer, 'handshake failed'));
       break;
     case 'key':
-      // One request, one answer: ask our own worker for a key frame on the
-      // video sender of this pair. Only a pair that passed the room proof is
-      // answered: a key frame on a pair that proved nothing would let any
-      // proven stranger make this page encode for media nobody admitted.
+      // One request, one answer: ask this page's worker for a key frame on the
+      // video sender of the pair. Only a proven pair is answered.
       if (peer.pass && peer.pass.done && peer.keys && state.worker)
         state.worker.postMessage({ type: 'keyframe', pair: pairLabel(peer.id) });
       break;
