@@ -6,7 +6,7 @@ NODE ?= /data/workspace/node/bin
 PW ?=
 ROOMSBASE ?= http://127.0.0.1:8095
 
-.PHONY: all build client wasm selftest run test typecheck lint deps format readme readme-check smoke sealed wam gate world door check clean
+.PHONY: all build client wasm selftest run test typecheck lint deps format readme readme-check smoke tabmute sealed wam gate world door check clean
 
 all: build selftest
 
@@ -61,6 +61,12 @@ format:
 smoke:
 	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
 	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) $(NODE)/node tools/smoke.js
+
+# Two browsers in one room, and the microphone on a hidden tab: the gain, the
+# button, the peer's view and the return, which the smoke of one page can not see.
+tabmute:
+	@test -n "$(PW)" || { echo "set PW to the playwright-core directory (see README)"; exit 1; }
+	PATH=$(NODE):$$PATH PW=$(PW) ROOMSBASE=$(ROOMSBASE) $(NODE)/node tools/tabmute-e2e.js
 
 # Two browsers in a sealed room: handshake, media frames, sealed chat, audit.
 sealed:

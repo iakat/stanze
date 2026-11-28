@@ -91,6 +91,7 @@ export interface Elements {
   'look-filter': HTMLSelectElement;
   freeze: HTMLInputElement;
   'stats-bytes': HTMLInputElement;
+  'mute-hidden': HTMLInputElement;
   'cx-swap': HTMLInputElement;
 }
 

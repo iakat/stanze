@@ -270,6 +270,7 @@ Browser suites in `tools/` (each needs a server and a `playwright-core`):
 | --- | --- |
 | `smoke.js` | a fresh page joins, chats, toggles devices; fails on the first uncaught error |
 | `browser-e2e.js` | two users, one room: tiles, media frames, mute, volume, stats, reconnect |
+| `tabmute-e2e.js` | two users, one room: the microphone while the tab is hidden, and the return |
 | `pq-browser-e2e.js` | sealed handshake, matching codes, sealed chat, replay refused |
 | `pq-mesh-e2e.js` | third guest, unsigned peer, unpinned key, stripped identity are refused |
 | `pq-file-e2e.js` | file offers, chunked transfer, cancel, refuse, SHA-256 match |
@@ -282,7 +283,8 @@ PW=/tmp/pw/node_modules/playwright-core ROOMSBASE=http://127.0.0.1:8095 \
 
 `make` targets: `build`, `client`, `selftest`, `run`, `test` (selftest against
 `ADDR`), `typecheck` (the TypeScript client), `lint`, `format`, `deps` (client
-dependencies behind the registry), `smoke`, `sealed`, `check` (typecheck, lint,
+dependencies behind the registry), `smoke`, `tabmute` (the microphone on a hidden
+tab, two browsers), `sealed`, `check` (typecheck, lint,
 then smoke). `tools/wsjoin.py` is a dependency-free WebSocket client
 for a one-shot join. With gcc present, `go test -race ./...` also runs.
 

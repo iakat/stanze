@@ -145,6 +145,10 @@
     // this browser plays no sound and sends no microphone
     micBeforeDeaf: false,
     // the microphone state to restore when deaf mode ends
+    micAway: false,
+    // the tab mute is in force, and the return turns it back on
+    muteOnHidden: true,
+    // a hidden tab mutes the microphone, unless the guest says no
     camBeforeDeaf: false,
     // the camera state to restore when deaf mode ends
     camId: "",
@@ -3753,7 +3757,8 @@
   function isOverhead(layer) {
     if (!layer || layer.type !== "tilelayer" && layer.type !== "group") return false;
     const props = Array.isArray(layer.properties) ? layer.properties : [];
-    if (props.some((p) => p && p.name === "above" && (p.value === true || p.value === "true"))) return true;
+    if (props.some((p) => p && p.name === "above" && (p.value === true || p.value === "true")))
+      return true;
     return /above|overhead/i.test(String(layer.name || ""));
   }
   function loadImage(src, signal) {
@@ -3791,7 +3796,8 @@
         walkLayers(layer.layers, tiles, objects);
         continue;
       }
-      if (layer.type === "tilelayer" && (Array.isArray(layer.data) || typeof layer.data === "string")) tiles.push(layer);
+      if (layer.type === "tilelayer" && (Array.isArray(layer.data) || typeof layer.data === "string"))
+        tiles.push(layer);
       if (layer.type === "objectgroup" && Array.isArray(layer.objects)) objects.push(layer);
     }
   }
@@ -3879,7 +3885,15 @@
         let rects;
         const shape = obj.polygon || obj.polyline;
         if (Array.isArray(shape) && shape.length > 1) rects = polygonRects(obj, shape);
-        else rects = [{ x: Math.round(obj.x), y: Math.round(obj.y), w: Math.round(obj.width), h: Math.round(obj.height) }];
+        else
+          rects = [
+            {
+              x: Math.round(obj.x),
+              y: Math.round(obj.y),
+              w: Math.round(obj.width),
+              h: Math.round(obj.height)
+            }
+          ];
         const exitUrl = bag["exitUrl"] !== void 0 ? bag["exitUrl"] : bag["exiturl"];
         const exit = typeof exitUrl === "string" ? exitUrl.trim() : "";
         const start = bag["start"] === true || bag["start"] === "true";
@@ -3988,11 +4002,13 @@
     for (const area of Array.isArray(doc.areas) ? doc.areas : []) {
       if (!area || typeof area !== "object") continue;
       const props = {};
-      for (const p of Array.isArray(area.properties) ? area.properties : []) if (p && p.name) props[p.name] = p.value;
+      for (const p of Array.isArray(area.properties) ? area.properties : [])
+        if (p && p.name) props[p.name] = p.value;
       const bag = props;
       let kind = String(bag["kind"] || "");
       if (!kind && (bag["silent"] === true || bag["silent"] === "true")) kind = "silent";
-      if (!kind && (bag["jitsiRoom"] !== void 0 || bag["jitsiRoomProperty"] !== void 0)) kind = "meeting";
+      if (!kind && (bag["jitsiRoom"] !== void 0 || bag["jitsiRoomProperty"] !== void 0))
+        kind = "meeting";
       const users = bag["maxUsersInAreaPropertyData"];
       out.push({
         id: area.id || area.name,
@@ -4172,7 +4188,8 @@
       const frame = atlasImage && atlas ? atlas.frames.get(gid) || null : null;
       let set = null;
       if (!frame) {
-        for (const one of sets) if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
+        for (const one of sets)
+          if (gid >= one.firstgid && (!set || one.firstgid > set.firstgid)) set = one;
       }
       const hit = frame || set ? { frame, set } : null;
       draw[gid] = hit;
@@ -4192,7 +4209,17 @@
         if (!hit) continue;
         const { frame, set } = hit;
         if (frame) {
-          target.drawImage(atlasImage, frame.x, frame.y, frame.w, frame.h, dx, dy, tw, th);
+          target.drawImage(
+            atlasImage,
+            frame.x,
+            frame.y,
+            frame.w,
+            frame.h,
+            dx,
+            dy,
+            tw,
+            th
+          );
           continue;
         }
         if (!set) continue;
@@ -4334,7 +4361,10 @@
       for (let i = 0; i < id.length; i++) h = h * 31 + id.charCodeAt(i) | 0;
       index = Math.abs(h);
     }
-    const n = Math.max(0, Math.min(sheets2.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0)));
+    const n = Math.max(
+      0,
+      Math.min(sheets2.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0))
+    );
     return sheets2[n];
   }
   function defaultSheet() {
@@ -4357,7 +4387,14 @@
       idle[dir] = IDLE_FRAME;
       walk[dir] = [...WALK_ORDER];
     }
-    return { image: canvas, cellW: CHAR_W, cellH: CHAR_H, idle, walk, columns: cols };
+    return {
+      image: canvas,
+      cellW: CHAR_W,
+      cellH: CHAR_H,
+      idle,
+      walk,
+      columns: cols
+    };
   }
   var Walker = class {
     x;
@@ -4488,7 +4525,10 @@
       this.world = world;
       canvas.tabIndex = 0;
       canvas.setAttribute("role", "img");
-      canvas.setAttribute("aria-label", "the world of this room, walk with the arrow keys or w a s d");
+      canvas.setAttribute(
+        "aria-label",
+        "the world of this room, walk with the arrow keys or w a s d"
+      );
       window.addEventListener("keydown", this.onKeyDown);
       window.addEventListener("keyup", this.onKeyUp);
       this.pad = makePad(canvas, (key, down) => this.touch(key, down));
@@ -4597,7 +4637,9 @@
         const wantX = local.x * this.scale - width / 2;
         const wantY = local.y * this.scale - height / 2;
         this.camX = Math.round(Math.max(0, Math.min(this.world.widthPx * this.scale - width, wantX)));
-        this.camY = Math.round(Math.max(0, Math.min(this.world.heightPx * this.scale - height, wantY)));
+        this.camY = Math.round(
+          Math.max(0, Math.min(this.world.heightPx * this.scale - height, wantY))
+        );
       }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.imageSmoothingEnabled = this.scale % 1 !== 0;
@@ -4609,11 +4651,23 @@
       const y1 = Math.min(this.world.heightPx, Math.ceil((this.camY + height) / this.scale) + 1);
       const view2 = { x0, y0, x1, y1 };
       if (x1 > x0 && y1 > y0) {
-        ctx.drawImage(this.world.tiles, x0, y0, x1 - x0, y1 - y0, x0 * this.scale - this.camX, y0 * this.scale - this.camY, (x1 - x0) * this.scale, (y1 - y0) * this.scale);
+        ctx.drawImage(
+          this.world.tiles,
+          x0,
+          y0,
+          x1 - x0,
+          y1 - y0,
+          x0 * this.scale - this.camX,
+          y0 * this.scale - this.camY,
+          (x1 - x0) * this.scale,
+          (y1 - y0) * this.scale
+        );
       }
       ctx.setTransform(this.scale, 0, 0, this.scale, -this.camX, -this.camY);
       const at = (one) => one.y + AVATAR_SORT_OFFSET;
-      const list = [...this.avatars.values()].filter((one) => one.x + CHAR_W >= view2.x0 && one.x - CHAR_W <= view2.x1 && one.y >= view2.y0 && one.y - CHAR_H <= view2.y1).sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1));
+      const list = [...this.avatars.values()].filter(
+        (one) => one.x + CHAR_W >= view2.x0 && one.x - CHAR_W <= view2.x1 && one.y >= view2.y0 && one.y - CHAR_H <= view2.y1
+      ).sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : 1));
       const above = this.world.above;
       if (!above) {
         for (const one of list) this.drawAvatar(one);
@@ -4661,7 +4715,17 @@
         ctx.fill();
         ctx.globalAlpha = 1;
       }
-      ctx.drawImage(sheet.image, col * sheet.cellW, row * sheet.cellH, sheet.cellW, sheet.cellH, dx, dy, sheet.cellW, sheet.cellH);
+      ctx.drawImage(
+        sheet.image,
+        col * sheet.cellW,
+        row * sheet.cellH,
+        sheet.cellW,
+        sheet.cellH,
+        dx,
+        dy,
+        sheet.cellW,
+        sheet.cellH
+      );
       ctx.filter = "none";
       const label = String(one.name || "").trim() || String(one.id || "").slice(0, 6);
       ctx.font = "8px sans-serif";
@@ -8927,7 +8991,8 @@
     sealedSetE2E(peer, "failed");
     say(shortPeer(peer.id) + " does not know the room passphrase; the link stays closed");
     if (state.waiting) {
-      if ([...state.peers.values()].every((one) => one.passFailed)) setTimeout(() => leave("the room refused the passphrase"), 0);
+      if ([...state.peers.values()].every((one) => one.passFailed))
+        setTimeout(() => leave("the room refused the passphrase"), 0);
       return;
     }
     if (!isAdmin(state.self) || isAdmin(peer.id)) return;
@@ -10408,7 +10473,9 @@
     const before = talks.get(peerId) || [];
     if (before.length === list.length && before.every((one, i) => one === list[i])) return;
     talks.set(peerId, list);
-    presenceDebug("talks " + shortPeer(peerId) + " says " + (list.length ? list.map(shortPeer).join(",") : "nobody"));
+    presenceDebug(
+      "talks " + shortPeer(peerId) + " says " + (list.length ? list.map(shortPeer).join(",") : "nobody")
+    );
     paintPresence();
   }
   function applyGain(peer) {
@@ -10849,8 +10916,10 @@
     }
     refreshDevices();
     refreshSelf();
+    if (document.hidden) setAway(true);
   }
   function prepareLocal() {
+    state.micAway = false;
     state.outStream = new MediaStream();
     const self2 = makeTile(state.name, state.name, true);
     setLocalTile(self2);
@@ -10950,8 +11019,9 @@
     if (!peer.pass || !peer.pass.done) return;
     const tr = peer.tx && peer.tx.screen;
     const track = state.screen && state.screen.getVideoTracks()[0];
-    if (tr && track && !isAttached(peer, "screen", track)) tr.sender.replaceTrack(track).catch(() => {
-    });
+    if (tr && track && !isAttached(peer, "screen", track))
+      tr.sender.replaceTrack(track).catch(() => {
+      });
   }
   function publishTrack(track) {
     if (!track) return;
@@ -11123,27 +11193,43 @@
     refreshDevices();
     return true;
   }
-  async function enableMic() {
+  async function enableMic(away = false) {
     if (!sealingAvailable()) {
       say("this browser cannot seal media frames, so the microphone stays off");
       return;
     }
     if (!state.micTrack && !await openInput("audio")) return;
     state.mic = true;
-    store("mic", 1);
-    playSfx("unmuted");
+    if (!away) {
+      state.micAway = false;
+      store("mic", 1);
+      playSfx("unmuted");
+    }
     if (state.micGain) state.micGain.gain.value = 1;
     if (state.micTrack) state.micTrack.enabled = true;
     updateButtons();
     sendState();
   }
-  function disableMic(persist = true) {
-    playSfx("muted");
+  function disableMic(persist = true, away = false) {
+    state.micAway = state.micAway && away;
+    if (!away) playSfx("muted");
     state.mic = false;
     if (persist) store("mic", 0);
     if (state.micGain) state.micGain.gain.value = 0;
     updateButtons();
     sendState();
+  }
+  function setAway(hidden) {
+    const inCall = !!state.room && !state.leaving;
+    if (!inCall) state.micAway = false;
+    else if (hidden && state.muteOnHidden && state.mic) {
+      state.micAway = true;
+      disableMic(false, true);
+    } else if (!hidden && state.micAway) {
+      state.micAway = false;
+      if (state.micTrack && state.micTrack.readyState === "live") enableMic(true);
+    }
+    $("mic-btn").title = state.micAway ? "microphone off while the tab is hidden" : "";
   }
   async function enableCam() {
     if (!sealingAvailable()) {
@@ -12381,10 +12467,10 @@
   }
 
   // src/gate.ts
-  var ROOTED = /^[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-[a-z2-7]{4}-([a-z0-9._-]{1,40})$/;
+  var ROOTED = /^([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z2-7]{4})-([a-z0-9._-]{1,40})$/;
   function rootFingerprint(room) {
     const m = ROOTED.exec(String(room || ""));
-    if (m) return m[0].slice(0, 23);
+    if (m) return m.slice(1, 6).join("-");
     return state.root || "";
   }
   function setRoot(fp) {
@@ -12674,7 +12760,10 @@
       if (peer.cam) paintPeerVideo(peer);
       else dropPeerCamera(peer);
     }
-    setGuestFlags(peer.id, { cam: obj.cam !== void 0 ? !!obj.cam : void 0, mic: obj.mic !== void 0 ? !!obj.mic : void 0 });
+    setGuestFlags(peer.id, {
+      cam: obj.cam !== void 0 ? !!obj.cam : void 0,
+      mic: obj.mic !== void 0 ? !!obj.mic : void 0
+    });
     if (obj.deaf !== void 0) peer.deaf = !!obj.deaf;
     if (obj.outFilter !== void 0) peer.outFilter = filterName(obj.outFilter);
     if (obj.inFilter !== void 0) peer.inFilter = filterName(obj.inFilter);
@@ -12720,7 +12809,8 @@
   var PAD_BUCKETS = [512, 2048, 8192];
   var PAD_LAST = PAD_BUCKETS[PAD_BUCKETS.length - 1];
   function padPayload(obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY)) throw new Error("the padding key is reserved");
+    if (Object.prototype.hasOwnProperty.call(obj, PAD_KEY))
+      throw new Error("the padding key is reserved");
     const withPad = Object.assign({}, obj, { [PAD_KEY]: "" });
     const bytes = sealUtf8.encode(JSON.stringify(withPad)).length;
     let target = PAD_BUCKETS.find((n) => n >= bytes);
@@ -12751,7 +12841,8 @@
   function roomW(pass, room) {
     const secret = pass === "" ? "\0open room" : pass;
     const out = pqCall((json) => pqModule().spakew(json), { pass: secret, salt: room });
-    if (!out || typeof out.w !== "string" || !out.w) throw new Error("the room key could not be derived");
+    if (!out || typeof out.w !== "string" || !out.w)
+      throw new Error("the room key could not be derived");
     return out.w;
   }
   function sealedSendSdp(peer, kind, sdp) {
@@ -13368,6 +13459,8 @@
     $("noise-engine").value = state.noiseEngine;
     state.selfPip = load("selfpip") === "1";
     $("pip").checked = state.selfPip;
+    state.muteOnHidden = load("mutehidden") !== "0";
+    $("mute-hidden").checked = state.muteOnHidden;
     state.voiceTiles = load("hidevoicetiles") !== "1";
     $("voice-tiles").checked = !state.voiceTiles;
     localStorage.removeItem("rooms.voicetiles");
@@ -13466,6 +13559,11 @@
       state.voiceTiles = !hide;
       store("hidevoicetiles", hide ? 1 : 0);
       layoutStage();
+    });
+    const muteHidden = $("mute-hidden");
+    muteHidden.addEventListener("change", () => {
+      state.muteOnHidden = muteHidden.checked;
+      store("mutehidden", muteHidden.checked ? 1 : 0);
     });
   }
   function wirePanels() {
@@ -13632,7 +13730,9 @@
       if (state.spotlight) setSpotlight("");
     });
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
+      const hidden = document.hidden;
+      setAway(hidden);
+      if (hidden) {
         stopStats();
         lookPark(true);
       } else {

@@ -39,6 +39,7 @@ import {
   onDevicePicked,
   paintDeviceMenu,
   refreshDevices,
+  setAway,
   setDeaf,
 } from './devices.js';
 import {
@@ -318,6 +319,11 @@ function restorePrefs() {
   // left it that way.
   state.selfPip = load('selfpip') === '1';
   $('pip').checked = state.selfPip;
+  // A hidden tab mutes the microphone unless the guest said otherwise, and the
+  // answer comes back with the other switches. It is read before any listener
+  // is wired, so the first tab change already acts on the stored choice.
+  state.muteOnHidden = load('mutehidden') !== '0';
+  $('mute-hidden').checked = state.muteOnHidden;
   // A guest without a camera holds a tile by default, so the switch hides those
   // tiles. The older key that stored the opposite meaning is dropped.
   state.voiceTiles = load('hidevoicetiles') !== '1';
@@ -452,6 +458,15 @@ function wireSwitches() {
     state.voiceTiles = !hide;
     store('hidevoicetiles', hide ? 1 : 0);
     layoutStage();
+  });
+
+  // A hidden tab mutes the microphone, which is on by default: a tab nobody is
+  // looking at is not a listener. Turning it off is the guest's call, and the
+  // switch only writes that; the next tab change acts on it.
+  const muteHidden = $('mute-hidden');
+  muteHidden.addEventListener('change', () => {
+    state.muteOnHidden = muteHidden.checked;
+    store('mutehidden', muteHidden.checked ? 1 : 0);
   });
 }
 
@@ -677,9 +692,13 @@ function wireStage() {
 
   // A hidden tab has no one to read the numbers, so the polling sleeps until
   // it comes back. A drawn camera has the same trouble: no frame is painted
-  // there, so the senders take the raw camera meanwhile.
+  // there, so the senders take the raw camera meanwhile. The microphone goes
+  // quiet first: a tab nobody looks at is not a listener, and the gain has to
+  // be down before the camera swaps, because a drawn track reads from it.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
+    const hidden = document.hidden;
+    setAway(hidden);
+    if (hidden) {
       stopStats();
       lookPark(true);
     } else {
