@@ -5278,6 +5278,127 @@
   var FILE_LOW = 64 * 1024;
   var FILE_OPEN_WAIT = 15e3;
   var FILE_DONE = /* @__PURE__ */ new Set(["done", "refused", "cancelled", "gone"]);
+  var PIC_MAX = 8 << 20;
+  var PIC_SIDE = 8192;
+  var PIC_PIXELS = 32 << 20;
+  var PIC_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  var VID_TYPES = ["video/mp4", "video/webm"];
+  var HEAD_BYTES = 4096;
+  function headBytes(chunks, max) {
+    let size = 0;
+    for (const c of chunks) size += c.length;
+    const out = new Uint8Array(Math.min(max, size));
+    let at = 0;
+    for (const c of chunks) {
+      if (at >= out.length) break;
+      const n = Math.min(c.length, out.length - at);
+      out.set(c.subarray(0, n), at);
+      at += n;
+    }
+    return out;
+  }
+  function u32be(b, i) {
+    return (b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]) >>> 0;
+  }
+  function ascii(b, i, n) {
+    let s = "";
+    for (let k = 0; k < n; k++) s += String.fromCharCode(b[i + k] || 0);
+    return s;
+  }
+  function jpegFrame(b) {
+    for (let p = 2; p + 9 < b.length; ) {
+      if (b[p] !== 255) {
+        p++;
+        continue;
+      }
+      const m = b[p + 1];
+      if (m === 255 || m === 1 || m === 216 || m >= 208 && m <= 215) {
+        p += m === 255 ? 1 : 2;
+        continue;
+      }
+      const len = b[p + 2] << 8 | b[p + 3];
+      if (m >= 192 && m <= 207 && m !== 196 && m !== 200 && m !== 204) {
+        return { w: b[p + 7] << 8 | b[p + 8], h: b[p + 5] << 8 | b[p + 6] };
+      }
+      if (len < 2) return null;
+      p += 2 + len;
+    }
+    return null;
+  }
+  function webpFrame(b) {
+    const c = ascii(b, 12, 4);
+    if (b.length < 30) return null;
+    if (c === "VP8X") {
+      return { w: 1 + (b[24] | b[25] << 8 | b[26] << 16), h: 1 + (b[27] | b[28] << 8 | b[29] << 16) };
+    }
+    if (c === "VP8 " && b[23] === 157 && b[24] === 1 && b[25] === 42) {
+      return { w: (b[26] | b[27] << 8) & 16383, h: (b[28] | b[29] << 8) & 16383 };
+    }
+    if (c === "VP8L" && b[20] === 47) {
+      const v = b[21] | b[22] << 8 | b[23] << 16 | b[24] << 24;
+      return { w: (v & 16383) + 1, h: (v >>> 14 & 16383) + 1 };
+    }
+    return null;
+  }
+  function picFrame(b) {
+    if (b.length >= 26 && u32be(b, 0) === 2303741511 && u32be(b, 4) === 218765834) {
+      return { t: "image/png", w: u32be(b, 16), h: u32be(b, 20) };
+    }
+    if (b.length >= 10 && (ascii(b, 0, 6) === "GIF87a" || ascii(b, 0, 6) === "GIF89a")) {
+      return { t: "image/gif", w: b[6] | b[7] << 8, h: b[8] | b[9] << 8 };
+    }
+    if (b.length >= 12 && b[0] === 255 && b[1] === 216) {
+      const f = jpegFrame(b);
+      return f && { t: "image/jpeg", w: f.w, h: f.h };
+    }
+    if (b.length >= 30 && ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 4) === "WEBP") {
+      const f = webpFrame(b);
+      return f && { t: "image/webp", w: f.w, h: f.h };
+    }
+    return null;
+  }
+  function vidFrame(m, b) {
+    if (m === "video/mp4") return b.length > 8 && ascii(b, 4, 4) === "ftyp";
+    return b.length > 4 && b[0] === 26 && b[1] === 69 && b[2] === 223 && b[3] === 163;
+  }
+  function fileMime(type) {
+    return String(type || "").split(";")[0].trim().toLowerCase();
+  }
+  function fileWantsInline(type, size) {
+    return PIC_TYPES.includes(fileMime(type)) && size > 0 && size <= PIC_MAX;
+  }
+  function fileProveType(type, size, chunks) {
+    const m = fileMime(type);
+    if (size <= 0 || size > PIC_MAX) return { kind: "", m };
+    const b = headBytes(chunks, HEAD_BYTES);
+    if (PIC_TYPES.includes(m)) {
+      const f = picFrame(b);
+      if (!f || f.t !== m || !f.w || !f.h) return { kind: "", m };
+      if (f.w > PIC_SIDE || f.h > PIC_SIDE || f.w * f.h > PIC_PIXELS) return { kind: "", m };
+      return { kind: "image", m };
+    }
+    if (VID_TYPES.includes(m) && vidFrame(m, b)) return { kind: "video", m };
+    return { kind: "", m };
+  }
+  function filePreview(rec) {
+    const box = rec.el && rec.el.preview;
+    if (!box) return;
+    const onFail = () => {
+      box.replaceChildren();
+      box.hidden = true;
+      rec.kind = "";
+    };
+    const leaf = rec.kind === "image" ? Object.assign(document.createElement("img"), { alt: rec.name, decoding: "async" }) : Object.assign(document.createElement("video"), {
+      controls: true,
+      preload: "metadata",
+      playsInline: true
+    });
+    leaf.className = rec.kind === "image" ? "file-image" : "file-video";
+    leaf.addEventListener("error", onFail);
+    leaf.src = rec.url;
+    box.replaceChildren(leaf);
+    box.hidden = false;
+  }
   function cleanFileName(raw) {
     return String(raw || "").replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 64);
   }
@@ -5364,12 +5485,15 @@
     status.className = "file-status";
     const acts = document.createElement("span");
     acts.className = "file-acts";
-    li.append(when, speaker, head, bar, status, acts);
+    const preview = document.createElement("span");
+    preview.className = "file-preview";
+    preview.hidden = true;
+    li.append(when, speaker, head, preview, bar, status, acts);
     log.appendChild(li);
     while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
     log.scrollTop = log.scrollHeight;
     chatEmpty(log);
-    return { li, bar, fill, status, acts };
+    return { li, bar, fill, status, acts, preview };
   }
   function fileSetBar(el2, show, frac) {
     if (!el2) return;
@@ -5445,6 +5569,10 @@
       expect: 0,
       el: null,
       url: "",
+      auto: false,
+      // taken without a click, because the offer is a small picture
+      kind: "",
+      // 'image' or 'video' once the bytes proved one
       rateT: 0,
       rateB: 0,
       rate: 0,
@@ -5453,13 +5581,24 @@
     state.filesIn.set(key, rec);
     canary(name);
     rec.el = addFileRow(peerName(peer), name, size);
-    if (rec.el) {
+    if (rec.el && fileWantsInline(type, size)) {
+      rec.auto = true;
+      fileAcceptAuto(rec);
+    } else if (rec.el) {
       rec.el.acts.append(
         fileButton("accept", (button) => fileAccept(rec, button)),
         fileButton("refuse", () => fileRefuse(rec))
       );
     }
     filePaintIn(rec);
+  }
+  function fileAcceptAuto(rec) {
+    const peer = state.peers.get(rec.peerId);
+    if (!peer || !peer.keys) {
+      fileFinishIn(rec, "gone");
+      return;
+    }
+    fileAcceptGo(rec, peer, false);
   }
   function fileDiskWanted() {
     const pick = window.showSaveFilePicker;
@@ -5865,13 +6004,16 @@
       const rate2 = fileRateText(rec.rate);
       return "receiving " + pct + " percent" + (rate2 ? ", " + rate2 : "");
     }
-    if (rec.status === "done") {
-      return rec.disk ? "saved to disk" + (rec.avg ? ", " + rec.avg : "") : "ready, click save" + (rec.avg ? ", " + rec.avg : "");
-    }
+    if (rec.status === "done") return fileInDone(rec);
     if (rec.status === "refused") return "refused";
     if (rec.status === "cancelled") return "cancelled";
     if (rec.status === "gone") return "the sender left";
     return "";
+  }
+  function fileInDone(rec) {
+    if (rec.disk) return "saved to disk" + (rec.avg ? ", " + rec.avg : "");
+    if (rec.kind) return "inline, save to keep it" + (rec.avg ? ", " + rec.avg : "");
+    return "ready, click save" + (rec.avg ? ", " + rec.avg : "");
   }
   function filePaintIn(rec) {
     if (!rec.el) return;
@@ -5914,8 +6056,10 @@
     }
     if (status === "done") {
       rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
-      const blob = new Blob(rec.chunks, { type: rec.type || "application/octet-stream" });
+      const proof = fileProveType(rec.type, rec.size, rec.chunks);
+      const blob = new Blob(rec.chunks, { type: proof.m || "application/octet-stream" });
       rec.chunks = [];
+      rec.kind = proof.kind;
       if (rec.url) {
         URL.revokeObjectURL(rec.url);
         state.fileLinks.delete(rec.url);
@@ -5930,7 +6074,8 @@
         link.download = rec.name;
         link.textContent = "save " + fileBytes(rec.size);
         rec.el.acts.replaceChildren(link);
-        rec.el.status.textContent = "ready, click save" + (rec.avg ? ", " + rec.avg : "");
+        if (rec.kind) filePreview(rec);
+        rec.el.status.textContent = fileInDone(rec);
       }
       state.filesIn.delete(rec.key);
       return;
@@ -13139,6 +13284,13 @@
       panel.classList.add("drop");
     });
     panel.addEventListener("dragleave", () => panel.classList.remove("drop"));
+    document.addEventListener("paste", (event) => {
+      const paste = event;
+      const list = Array.from(paste.clipboardData?.files || []);
+      if (!list.length) return;
+      paste.preventDefault();
+      for (const file of list) fileOffer(file);
+    });
     panel.addEventListener("drop", (event) => {
       const drop = event;
       drop.preventDefault();

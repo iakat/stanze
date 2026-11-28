@@ -774,6 +774,28 @@ body:not(.jit) .lobby.dragging > .titlebar { cursor: grabbing; }
 .file-save { color: var(--navy); font-weight: bold; font-size: var(--fs-tiny); }
 .file-save:focus-visible { outline: 1px dotted var(--ink); outline-offset: 1px; }
 
+/* A picture or a video is drawn in the row, bounded on both axes so a tall
+ * screenshot never pushes the log away and a game map never widens the panel.
+ * The frame keeps the old sunken edge, and the box is a span so the row stays
+ * one chat line. */
+.file-preview { display: block; margin: 3px 0 2px; }
+.file-image,
+.file-video {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  width: auto;
+  height: auto;
+  background: #fff;
+  border: 1px solid;
+  border-color: var(--edge) #fff #fff var(--edge);
+}
+/* A player needs a floor, or a clip with no poster is a hairline. */
+.file-video { min-width: 160px; max-width: 100%; height: auto; }
+/* A picture is a still until a guest saves it, so it takes no pointer and no
+ * text selection drag out of the row. */
+.file-image { user-select: none; -webkit-user-drag: none; }
+
 /* The stage is two zones. The large area takes all the width and height that
    the rail does not use. The rail is one column of compact rows, so a guest
    without a picture does not hold a black rectangle. */
