@@ -428,6 +428,120 @@ func TestDeadlineIsPushedByEveryFrame(t *testing.T) {
 	}
 }
 
+// roomLastSeen reads when a room last carried a sign of life, under the hub
+// lock, so a test can wait for a touch without racing the read path.
+func roomLastSeen(h *Hub, id string) time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r := h.rooms[id]; r != nil {
+		return r.lastSeen
+	}
+	return time.Time{}
+}
+
+// waitTouched waits until a room's lastSeen moves past before, and fails the
+// test if it does not within the budget.
+func waitTouched(t *testing.T, h *Hub, id string, before time.Time) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for roomLastSeen(h, id).Equal(before) {
+		if time.Now().After(deadline) {
+			t.Fatalf("room %q was never touched", id)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// A call carries no application frame once it is up: the media, positions and
+// chat ride the sealed channels of each pair, and the only WebSocket traffic
+// left is the keepalive the server pings and the browser answers. That pong
+// proves the guest is still in the room, so it has to keep the room from the
+// sweep. A room that really carries nothing is still dropped by the same
+// sweep, which is what keeps the timeout meaningful.
+func TestKeepalivePongKeepsALiveCallFromTheSweep(t *testing.T) {
+	old := roomIdleTimeout
+	roomIdleTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { roomIdleTimeout = old })
+
+	srv, url := newTestServer(t, &Config{})
+	live, _ := wireJoin(t, url, "call-room")
+	silent, _ := wireJoin(t, url, "silent-room")
+
+	// Past the timeout with no frame of any kind: both rooms are stale now.
+	time.Sleep(2 * roomIdleTimeout)
+	before := roomLastSeen(srv.hub, "call-room")
+	if time.Since(before) < roomIdleTimeout {
+		t.Fatalf("the room aged %v, which is inside the timeout", time.Since(before))
+	}
+
+	// The browser answers the server's keepalive. Nothing else is sent.
+	if err := live.conn.WriteControl(websocket.PongMessage, []byte("keepalive"), time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("pong: %v", err)
+	}
+	waitTouched(t, srv.hub, "call-room", before)
+
+	// The sweep takes the room that said nothing and leaves the one that
+	// answered its keepalive.
+	if n := srv.hub.sweepIdle(time.Now()); n != 1 {
+		t.Fatalf("swept %d rooms, want 1", n)
+	}
+	if roomInMap(srv.hub, "call-room") == nil {
+		t.Fatal("a room whose only traffic was a pong was swept")
+	}
+	if roomInMap(srv.hub, "silent-room") != nil {
+		t.Fatal("a room with no traffic at all survived the sweep")
+	}
+	// The guests of the swept room hear the socket close.
+	if _, ok := silent.next("", 2*time.Second); ok {
+		t.Fatal("the swept room's socket stayed open")
+	}
+}
+
+// A client ping is answered and counts the same way: it says the guest is
+// still there just as a pong does.
+func TestClientPingAlsoTouchesTheRoom(t *testing.T) {
+	srv, url := newTestServer(t, &Config{})
+	a, _ := wireJoin(t, url, "ping-room")
+	before := roomLastSeen(srv.hub, "ping-room")
+	if err := a.conn.WriteControl(websocket.PingMessage, []byte("hello"), time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	waitTouched(t, srv.hub, "ping-room", before)
+}
+
+// A keepalive from a socket that is not in a room yet touches nothing: no room
+// appears, and the socket is still usable for the join that follows.
+func TestKeepaliveBeforeJoinTouchesNothing(t *testing.T) {
+	srv, url := newTestServer(t, &Config{})
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	c := newWireClient(t, conn)
+
+	// Two keepalives from a peer with no room: a ping the server answers and a
+	// pong nobody answers. Neither may make a room.
+	if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if err := conn.WriteControl(websocket.PongMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("pong: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := roomCount(srv.hub); got != 0 {
+		t.Fatalf("%d rooms were made by a keepalive from a peer with no room", got)
+	}
+	// The socket is untouched by the handlers: the join still goes through.
+	c.send(map[string]any{"t": "join", "room": "after-keepalive"})
+	if m, ok := c.next("joined", 3*time.Second); !ok || m["self"] == "" {
+		t.Fatalf("the join after a keepalive failed: %v", m)
+	}
+	if roomCount(srv.hub) != 1 {
+		t.Fatal("the join did not make its room")
+	}
+}
+
 // ---------------------------------------------------------------- A6
 
 // The socket cap is per address and goes back down when a connection closes.
