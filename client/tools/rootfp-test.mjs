@@ -103,7 +103,10 @@ check(
 
 try {
   fs.rmSync(path.dirname(bundle), { recursive: true, force: true });
-} catch {}
+} catch {
+  // A temp dir that will not go is the operating system's problem, not a test
+  // failure: the checks above already ran.
+}
 
 if (fails) {
   console.log(fails + ' check(s) failed');
