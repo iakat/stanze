@@ -230,6 +230,11 @@ async function pairIds(a) {
       screenWhileNear,
     );
 
+    // What the audio sender reads while the guests are together. The gate must
+    // leave it exactly as it was: the microphone has its own gate and its own
+    // reason (a nulled audio sender would need a rebuild per pair).
+    const audioBefore = await b.page.evaluate(() => window.e2eApp.wire().map((one) => one.audio));
+
     // The receiver's tile is marked, so the check after the walk back can tell a
     // reattached element from a rebuilt one.
     const mark = 'm' + Date.now();
@@ -272,6 +277,68 @@ async function pairIds(a) {
     ).catch(() => 'still playing');
     check('a share stops playing when the guest walks out of earshot', screenGone !== 'still playing', screenGone);
 
+    // The part that saves the bandwidth and the part that matters for opsec:
+    // the sharer does not hand the picture to a guest it is not talking to. The
+    // sender holds no track at all, so nothing is encoded, nothing is sealed and
+    // nothing crosses the relay for that pair.
+    const wireFar = await until(
+      b.page,
+      () => {
+        const w = window.e2eApp.wire();
+        const off = w.filter((one) => one.video === 'none' && one.screen === 'none');
+        return off.length === w.length && w.length > 0 ? w : null;
+      },
+      null,
+      15000,
+      'the senders dropped the picture',
+    ).catch(() => 'still sending');
+    check(
+      'no picture is sent to a guest out of earshot',
+      wireFar !== 'still sending' && wireFar.every((one) => one.video === 'none' && one.screen === 'none'),
+      wireFar,
+    );
+    // The sender's own outbound stats are the last word: a track set to null
+    // stops the encoder, so no frame is produced at all. A 3 s window with the
+    // guest out of earshot must show a delta of zero frames, not a small one.
+    const outbound = () =>
+      b.page.evaluate(async () => {
+        const peer = [...window.e2eApp.state.peers.values()][0];
+        if (!peer || !peer.pc) return null;
+        const stats = await peer.pc.getStats();
+        let bytes = 0;
+        let frames = 0;
+        stats.forEach((r) => {
+          if (r.type !== 'outbound-rtp' || r.kind !== 'video') return;
+          bytes += r.bytesSent || 0;
+          frames += r.framesSent || 0;
+        });
+        return { bytes, frames };
+      });
+    const a1 = await outbound();
+    await sleep(3000);
+    const a2 = await outbound();
+    check(
+      'no video frame is encoded for a guest out of earshot',
+      a1 && a2 && a2.frames - a1.frames === 0,
+      { before: a1 && a1.frames, after: a2 && a2.frames },
+    );
+    check(
+      'no video byte crosses the relay for that guest',
+      a1 && a2 && a2.bytes - a1.bytes === 0,
+      { before: a1 && a1.bytes, after: a2 && a2.bytes },
+    );
+
+    // Audio is untouched: whatever the microphone was doing before the walk it
+    // is doing after it. Its gain is the gate, and nulling the sender would
+    // need a rebuild per pair on every step.
+    check(
+      'the gate leaves the audio sender alone',
+      wireFar !== 'still sending' &&
+        wireFar.length === audioBefore.length &&
+        wireFar.every((one, i) => one.audio === audioBefore[i]),
+      { before: audioBefore, after: wireFar === 'still sending' ? null : wireFar.map((one) => one.audio) },
+    );
+
     // Walk back: the same track, no new negotiation, and the picture returns.
     await place(b.page, 120, 100);
     await until(
@@ -299,6 +366,25 @@ async function pairIds(a) {
       'the screen comes back',
     ).catch(() => 'did not come back');
     check('the share comes back when the guest walks into earshot again', back !== 'did not come back', back);
+
+    // And the senders are loaded again, with the same tracks, so the return is
+    // a replaceTrack and not a new negotiation.
+    const wireNear = await until(
+      b.page,
+      () => {
+        const w = window.e2eApp.wire();
+        const on = w.filter((one) => one.video === 'live' && one.screen === 'live');
+        return on.length === w.length && w.length > 0 ? w : null;
+      },
+      null,
+      15000,
+      'the senders took the picture back',
+    ).catch(() => 'still off');
+    check(
+      'the picture is sent again once the guest is back in earshot',
+      wireNear !== 'still off' && wireNear.every((one) => one.video === 'live' && one.screen === 'live'),
+      wireNear,
+    );
     // The share itself never stopped, and the picture came back on the same
     // tile: the receiver's element was kept and reattached, so no second
     // negotiation and no rebuilt tile took place. The element is marked before

@@ -10748,6 +10748,7 @@
     presenceDebug("route " + shortPeer(peerId) + " " + (on ? "on" : "off") + where(peer));
     if (!peer) return;
     applyGain(peer);
+    sendGate(peer, on);
     paintPeerVideo(peer);
     paintPeerScreen(peer);
     stageLayoutSoon();
@@ -11288,6 +11289,7 @@
       const track = kind === "screen" ? state.screen && state.screen.getVideoTracks()[0] : state.outStream && state.outStream.getTracks().find((t) => t.kind === kind);
       if (!track) continue;
       if (peer.waiting) continue;
+      if (media === "video" && !isRouted(peer.id)) continue;
       if (isAttached(peer, kind, track)) continue;
       tr.sender.replaceTrack(track).catch(() => {
       });
@@ -11311,6 +11313,24 @@
     if (tr && track && !isAttached(peer, "screen", track))
       tr.sender.replaceTrack(track).catch(() => {
       });
+  }
+  function sendGate(peer, on) {
+    if (!peer || !peer.tx) return;
+    for (const kind of ["video", "screen"]) {
+      const tr = peer.tx[kind];
+      if (!tr || !tr.sender) continue;
+      if (on) {
+        const track = kind === "screen" ? state.screen && state.screen.getVideoTracks()[0] : state.outStream && state.outStream.getTracks().find((t) => t.kind === "video");
+        if (!track || isAttached(peer, kind, track)) continue;
+        tr.sender.replaceTrack(track).catch(() => {
+        });
+        if (kind === "video") capVideoSender(tr.sender);
+      } else {
+        if (!tr.sender.track) continue;
+        tr.sender.replaceTrack(null).catch(() => {
+        });
+      }
+    }
   }
   function publishTrack(track) {
     if (!track) return;
@@ -13678,6 +13698,18 @@
         if (track === state.lookOut) return "drawn";
         return "other";
       })
+    }),
+    // wire is what this page is actually sending each pair, per kind: the track
+    // on the sender, or 'none' when the sender holds no track. A guest out of
+    // earshot must read 'none' for the picture, because that is the difference
+    // between drawing no frame and sending none.
+    wire: () => [...state.peers.values()].map((peer) => {
+      const tx = peer.tx || {};
+      const track = (kind) => {
+        const tr = tx[kind];
+        return tr && tr.sender && tr.sender.track ? tr.sender.track.readyState : "none";
+      };
+      return { id: peer.id, video: track("video"), screen: track("screen"), audio: track("audio") };
     }),
     setLook: (name) => {
       state.look = Object.prototype.hasOwnProperty.call(LOOKS, name) ? name : "none";

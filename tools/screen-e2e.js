@@ -52,9 +52,10 @@ function attach(page, errors) {
   page.on('pageerror', (e) => errors.push('pageerror: ' + String(e)));
   page.on('response', (r) => {
     const path = new URL(r.url()).pathname;
-    // /vosk/models answers 404 when no model directory is configured, and the
-    // page asks for it on every join to decide whether to offer the feature.
-    if (r.status() >= 400 && path !== '/favicon.ico' && path !== '/vosk/models') {
+    // /vosk/models and /omni/models answer 404 when no model directory is
+    // configured, and the page asks for both on every join to decide whether to
+    // offer each feature.
+    if (r.status() >= 400 && path !== '/favicon.ico' && path !== '/vosk/models' && path !== '/omni/models') {
       errors.push('http ' + r.status() + ' ' + r.url());
     }
   });

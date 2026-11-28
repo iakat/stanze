@@ -502,6 +502,12 @@ export function preparePeer(peer) {
     if (!track) continue;
     // A waiting guest gets no media until it is let in.
     if (peer.waiting) continue;
+    // A picture is sent only to a guest this page is in a conversation with:
+    // a pair that is out of earshot is not offered the track at all, so the
+    // bytes are never encoded and never reach the relay. `sendGate` turns it on
+    // later when the guests walk into earshot, with no renegotiation. Audio is
+    // not gated here: its gain does that, and its transceiver must stay live.
+    if (media === 'video' && !isRouted(peer.id)) continue;
     // The group opened by replaceTrack applies from the next description; a new
     // sender has none yet, and a sender that already holds the track is done.
     if (isAttached(peer, kind, track)) continue;
@@ -532,6 +538,39 @@ export function attachScreen(peer) {
   const track = state.screen && state.screen.getVideoTracks()[0];
   if (tr && track && !isAttached(peer, 'screen', track))
     tr.sender.replaceTrack(track).catch(() => {});
+}
+
+// sendGate puts the senders of one pair on or off the wire, without touching a
+// transceiver and without a renegotiation. A sender whose track is set to null
+// stops encoding that stream: nothing is captured, nothing is sealed, nothing
+// crosses the relay. That is the point, and it is not a saving of pixels. Two
+// guests out of earshot are two guests who must not be able to receive each
+// other's picture at all, so the camera and the screen follow the same rule the
+// audio already follows through its gain.
+//
+// Audio is handled by its gain because the microphone graph is shared and a
+// nulled audio sender would need a rebuild per pair. Video has a track per pair
+// for free, so the bytes simply stop. The receiver's transceiver stays, so the
+// way back is one replaceTrack with no new negotiation.
+export function sendGate(peer, on: boolean) {
+  if (!peer || !peer.tx) return;
+  for (const kind of ['video', 'screen']) {
+    const tr = peer.tx[kind];
+    if (!tr || !tr.sender) continue;
+    if (on) {
+      // The live track of that kind, exactly as preparePeer would pick it.
+      const track =
+        kind === 'screen'
+          ? state.screen && state.screen.getVideoTracks()[0]
+          : state.outStream && state.outStream.getTracks().find((t) => t.kind === 'video');
+      if (!track || isAttached(peer, kind, track)) continue;
+      tr.sender.replaceTrack(track).catch(() => {});
+      if (kind === 'video') capVideoSender(tr.sender);
+    } else {
+      if (!tr.sender.track) continue;
+      tr.sender.replaceTrack(null).catch(() => {});
+    }
+  }
 }
 
 // publishTrack hands one new track to every connection that has transceivers; a

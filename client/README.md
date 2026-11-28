@@ -19,7 +19,7 @@ module in `src` has no row yet.
 
 | File | Lines | What it does |
 | --- | ---: | --- |
-| [src/boot.ts](src/boot.ts) | 833 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
+| [src/boot.ts](src/boot.ts) | 846 | The one entry function: wires the page, restores preferences, drives the lobby and the call. |
 | [src/state.ts](src/state.ts) | 217 | The client state, one object per page. |
 | [src/config.ts](src/config.ts) | 77 | Constant tables: quality and performance steps, camera looks, mask names, the face mesh rate, the room id alphabet. |
 | [src/prefs.ts](src/prefs.ts) | 25 | What the browser keeps between loads, under a `rooms.` prefix. |
@@ -78,14 +78,14 @@ module in `src` has no row yet.
 | [src/proximity.ts](src/proximity.ts) | 163 | The talk rule of a pair: a meeting area, a shared area inside its bubble, a silent area, or the conversation bubble. |
 | [src/positions.ts](src/positions.ts) | 324 | Position frames that follow the walker (30 Hz moving, 1 Hz still) over the sealed files channel, and the 1 euro filter that draws them. |
 | [src/roomworld.ts](src/roomworld.ts) | 719 | Joining the world of a room, the position tick, the near pairs, the talks frame and the switch between the map and the call grid. |
-| [src/presence.ts](src/presence.ts) | 200 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
+| [src/presence.ts](src/presence.ts) | 203 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
 | [src/chat.ts](src/chat.ts) | 455 | The room log, its links, and the whisper: a private side conversation over the sealed pair channel. |
 | [src/board.ts](src/board.ts) | 82 | The cue board: eight one shot notification cues, a volume and a stop. |
 | [src/stats.ts](src/stats.ts) | 1043 | The stats panel: media metrics per guest and the wire and crypto counters. |
 | [src/asr.ts](src/asr.ts) | 1289 | Local transcription, one language and many. |
 | [src/fawkes.ts](src/fawkes.ts) | 1096 | The Guy Fawkes mask: a shell fitted to the face, lit and painted. |
 | [src/look.ts](src/look.ts) | 2443 | The drawn camera: the face mesh, the masks and the custom effect. |
-| [src/devices.ts](src/devices.ts) | 852 | The device pickers of the join card and the toolbar. |
+| [src/devices.ts](src/devices.ts) | 891 | The device pickers of the join card and the toolbar. |
 | [src/files.ts](src/files.ts) | 1099 | File offers and the data channel that carries the bytes. |
 
 ## The rest of the directory

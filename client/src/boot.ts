@@ -234,6 +234,19 @@ win().e2eApp = {
       return 'other';
     }),
   }),
+  // wire is what this page is actually sending each pair, per kind: the track
+  // on the sender, or 'none' when the sender holds no track. A guest out of
+  // earshot must read 'none' for the picture, because that is the difference
+  // between drawing no frame and sending none.
+  wire: () =>
+    [...state.peers.values()].map((peer) => {
+      const tx = peer.tx || {};
+      const track = (kind: string) => {
+        const tr = tx[kind];
+        return tr && tr.sender && tr.sender.track ? tr.sender.track.readyState : 'none';
+      };
+      return { id: peer.id, video: track('video'), screen: track('screen'), audio: track('audio') };
+    }),
   setLook: (name) => {
     state.look = Object.prototype.hasOwnProperty.call(LOOKS, name) ? name : 'none';
     store('look', state.look);
