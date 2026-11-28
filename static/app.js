@@ -5278,6 +5278,112 @@
   var FILE_LOW = 64 * 1024;
   var FILE_OPEN_WAIT = 15e3;
   var FILE_DONE = /* @__PURE__ */ new Set(["done", "refused", "cancelled", "gone"]);
+  var PIC_MAX = 8 << 20;
+  var PIC_SIDE = 8192;
+  var PIC_PIXELS = 32 << 20;
+  var PIC_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  var VID_TYPES = ["video/mp4", "video/webm"];
+  var u16 = (b, i) => b[i] | b[i + 1] << 8;
+  var u32 = (b, i) => (b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]) >>> 0;
+  var word = (b, i) => String.fromCharCode(b[i] || 0, b[i + 1] || 0, b[i + 2] || 0, b[i + 3] || 0);
+  function jpegSize(b) {
+    for (let p = 2; p + 9 < b.length; ) {
+      if (b[p] !== 255) return null;
+      const m = b[p + 1];
+      const len = b[p + 2] << 8 | b[p + 3];
+      if (m >= 192 && m <= 207 && m !== 196 && m !== 200 && m !== 204)
+        return { w: b[p + 7] << 8 | b[p + 8], h: b[p + 5] << 8 | b[p + 6] };
+      if (m === 1 || m >= 208 && m <= 215) p += 2;
+      else if (m === 217 || m === 218 || len < 2) return null;
+      else p += 2 + len;
+    }
+    return null;
+  }
+  function picSize(b) {
+    if (b.length > 25 && u32(b, 0) === 2303741511 && u32(b, 4) === 218765834)
+      return { t: "image/png", w: u32(b, 16), h: u32(b, 20) };
+    if (b.length > 9 && word(b, 0).slice(0, 3) === "GIF")
+      return { t: "image/gif", w: u16(b, 6), h: u16(b, 8) };
+    if (b.length > 11 && b[0] === 255 && b[1] === 216) {
+      const s = jpegSize(b);
+      return s && { t: "image/jpeg", ...s };
+    }
+    if (b.length > 29 && word(b, 0) === "RIFF" && word(b, 8) === "WEBP") {
+      const c = word(b, 12);
+      if (c === "VP8X")
+        return {
+          t: "image/webp",
+          w: 1 + u16(b, 24) + (b[26] << 16),
+          h: 1 + u16(b, 27) + (b[29] << 16)
+        };
+      if (c === "VP8 " && b[23] === 157 && u16(b, 24) === 298)
+        return { t: "image/webp", w: u16(b, 26) & 16383, h: u16(b, 28) & 16383 };
+      if (c === "VP8L" && b[20] === 47) {
+        const v = u32(b, 21);
+        return { t: "image/webp", w: (v & 16383) + 1, h: (v >>> 14 & 16383) + 1 };
+      }
+    }
+    return null;
+  }
+  function vidOk(m, b) {
+    if (m === "video/mp4") return b.length > 8 && word(b, 4) === "ftyp";
+    return b.length > 4 && b[0] === 26 && b[1] === 69 && b[2] === 223 && b[3] === 163;
+  }
+  function picHead(chunks) {
+    const out = new Uint8Array(4096);
+    let at = 0;
+    for (const c of chunks) {
+      if (at >= out.length) break;
+      const n = Math.min(c.length, out.length - at);
+      out.set(c.subarray(0, n), at);
+      at += n;
+    }
+    return out.subarray(0, at);
+  }
+  function fileMime(type) {
+    return String(type || "").split(";")[0].trim().toLowerCase();
+  }
+  var fileAuto = (type, size) => PIC_TYPES.includes(fileMime(type)) && size > 0 && size <= PIC_MAX;
+  var PREVIEW_MAX = 4;
+  var PREVIEW_BUSY = 24;
+  function previewBusy() {
+    let n = 0;
+    for (const rec of state.filesIn.values()) if (rec.auto && !FILE_DONE.has(rec.status)) n++;
+    return n;
+  }
+  function seeAuto(rec) {
+    if (!fileAuto(rec.type, rec.size)) return false;
+    if (state.filesIn.size > PREVIEW_BUSY) return false;
+    return previewBusy() < PREVIEW_MAX;
+  }
+  function fileDrawn(type, size, chunks) {
+    const m = fileMime(type);
+    if (!(size > 0 && size <= PIC_MAX)) return { kind: "", m };
+    const head = picHead(chunks);
+    if (PIC_TYPES.includes(m)) {
+      const f = picSize(head);
+      if (!f || f.t !== m || f.w * f.h > PIC_PIXELS) return { kind: "", m };
+      if (!f.w || !f.h || f.w > PIC_SIDE || f.h > PIC_SIDE) return { kind: "", m };
+      return { kind: "image", m };
+    }
+    if (VID_TYPES.includes(m) && vidOk(m, head)) return { kind: "video", m };
+    return { kind: "", m };
+  }
+  function filePreview(rec) {
+    const box = rec.el && rec.el.preview;
+    if (!box) return;
+    const leaf = rec.kind === "image" ? Object.assign(document.createElement("img"), { alt: rec.name, decoding: "async" }) : Object.assign(document.createElement("video"), { controls: true, preload: "metadata" });
+    leaf.className = "file-" + rec.kind;
+    leaf.addEventListener("error", () => {
+      box.replaceChildren();
+      box.hidden = true;
+      rec.kind = "";
+      if (rec.el) rec.el.status.textContent = fileInDone(rec);
+    });
+    leaf.src = rec.url;
+    box.replaceChildren(leaf);
+    box.hidden = false;
+  }
   function cleanFileName(raw) {
     return String(raw || "").replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 64);
   }
@@ -5364,12 +5470,15 @@
     status.className = "file-status";
     const acts = document.createElement("span");
     acts.className = "file-acts";
-    li.append(when, speaker, head, bar, status, acts);
+    const preview = document.createElement("span");
+    preview.className = "file-preview";
+    preview.hidden = true;
+    li.append(when, speaker, head, preview, bar, status, acts);
     log.appendChild(li);
     while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
     log.scrollTop = log.scrollHeight;
     chatEmpty(log);
-    return { li, bar, fill, status, acts };
+    return { li, bar, fill, status, acts, preview };
   }
   function fileSetBar(el2, show, frac) {
     if (!el2) return;
@@ -5445,6 +5554,10 @@
       expect: 0,
       el: null,
       url: "",
+      auto: false,
+      // taken without a click, because the offer is a small picture
+      kind: "",
+      // 'image' or 'video' once the bytes proved one
       rateT: 0,
       rateB: 0,
       rate: 0,
@@ -5453,13 +5566,24 @@
     state.filesIn.set(key, rec);
     canary(name);
     rec.el = addFileRow(peerName(peer), name, size);
-    if (rec.el) {
+    if (rec.el && seeAuto(rec)) {
+      rec.auto = true;
+      fileAcceptAuto(rec);
+    } else if (rec.el) {
       rec.el.acts.append(
         fileButton("accept", (button) => fileAccept(rec, button)),
         fileButton("refuse", () => fileRefuse(rec))
       );
     }
     filePaintIn(rec);
+  }
+  function fileAcceptAuto(rec) {
+    const peer = state.peers.get(rec.peerId);
+    if (!peer || !peer.keys) {
+      fileFinishIn(rec, "gone");
+      return;
+    }
+    fileAcceptGo(rec, peer, false);
   }
   function fileDiskWanted() {
     const pick = window.showSaveFilePicker;
@@ -5865,13 +5989,16 @@
       const rate2 = fileRateText(rec.rate);
       return "receiving " + pct + " percent" + (rate2 ? ", " + rate2 : "");
     }
-    if (rec.status === "done") {
-      return rec.disk ? "saved to disk" + (rec.avg ? ", " + rec.avg : "") : "ready, click save" + (rec.avg ? ", " + rec.avg : "");
-    }
+    if (rec.status === "done") return fileInDone(rec);
     if (rec.status === "refused") return "refused";
     if (rec.status === "cancelled") return "cancelled";
     if (rec.status === "gone") return "the sender left";
     return "";
+  }
+  function fileInDone(rec) {
+    if (rec.disk) return "saved to disk" + (rec.avg ? ", " + rec.avg : "");
+    if (rec.kind) return "inline, save to keep it" + (rec.avg ? ", " + rec.avg : "");
+    return "ready, click save" + (rec.avg ? ", " + rec.avg : "");
   }
   function filePaintIn(rec) {
     if (!rec.el) return;
@@ -5914,8 +6041,10 @@
     }
     if (status === "done") {
       rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
-      const blob = new Blob(rec.chunks, { type: rec.type || "application/octet-stream" });
+      const proof = fileDrawn(rec.type, rec.size, rec.chunks);
+      const blob = new Blob(rec.chunks, { type: proof.m || "application/octet-stream" });
       rec.chunks = [];
+      rec.kind = proof.kind;
       if (rec.url) {
         URL.revokeObjectURL(rec.url);
         state.fileLinks.delete(rec.url);
@@ -5930,7 +6059,8 @@
         link.download = rec.name;
         link.textContent = "save " + fileBytes(rec.size);
         rec.el.acts.replaceChildren(link);
-        rec.el.status.textContent = "ready, click save" + (rec.avg ? ", " + rec.avg : "");
+        if (rec.kind) filePreview(rec);
+        rec.el.status.textContent = fileInDone(rec);
       }
       state.filesIn.delete(rec.key);
       return;
@@ -7515,8 +7645,8 @@
   var DOWN_ICON = ["2B07", "in, what this browser receives"];
   function routeCell(path) {
     if (!path) return ["", "", "not known yet"];
-    const word = pathText(path);
-    return [...word === "direct" ? DIRECT_ICON : RELAY_ICON, word];
+    const word2 = pathText(path);
+    return [...word2 === "direct" ? DIRECT_ICON : RELAY_ICON, word2];
   }
   function rateCell(dir, kbit) {
     return [...dir === "up" ? UP_ICON : DOWN_ICON, rateText(kbit) || "-"];
@@ -7669,9 +7799,9 @@
       const p = Array.isArray(raw) ? raw : [raw];
       const cell = document.createElement("span");
       cell.className = "cell" + (p[3] === true ? " good" : p[3] === false ? " bad" : "");
-      const word = p.length > 1 ? p[2] : p[0];
+      const word2 = p.length > 1 ? p[2] : p[0];
       const text = document.createElement("span");
-      text.textContent = word === null || word === void 0 ? "" : String(word);
+      text.textContent = word2 === null || word2 === void 0 ? "" : String(word2);
       if (metrics && p.length > 1 && p[1]) {
         const label = document.createElement("span");
         label.className = "cl";
@@ -7746,7 +7876,7 @@
     return "good";
   }
   function worstLevel(levels) {
-    for (const word of ["poor", "fair", "good"]) if (levels.includes(word)) return word;
+    for (const word2 of ["poor", "fair", "good"]) if (levels.includes(word2)) return word2;
     return "";
   }
   function statsSummary(live, guestCount) {
@@ -7915,9 +8045,9 @@
       const raw = parts[i];
       const p = Array.isArray(raw) ? raw : [raw];
       const cell = span.children[i];
-      const word = p.length > 1 ? p[2] : p[0];
+      const word2 = p.length > 1 ? p[2] : p[0];
       const text = cell.lastElementChild;
-      if (text) setText(text, word === null || word === void 0 ? "" : String(word));
+      if (text) setText(text, word2 === null || word2 === void 0 ? "" : String(word2));
       setClass(cell, "good", p[3] === true);
       setClass(cell, "bad", p[3] === false);
     }
@@ -7928,8 +8058,8 @@
     if (!bar || !fill || typeof meter !== "number") return;
     const pct = `${Math.round(meter * 100)}%`;
     if (fill.style.width !== pct) fill.style.width = pct;
-    const word = `level ${Math.round(meter * 100)} percent`;
-    if (bar.getAttribute("aria-label") !== word) bar.setAttribute("aria-label", word);
+    const word2 = `level ${Math.round(meter * 100)} percent`;
+    if (bar.getAttribute("aria-label") !== word2) bar.setAttribute("aria-label", word2);
   }
   function writeGuestRow(row, pairs, level) {
     const head = row.querySelector(".sname");
@@ -13139,6 +13269,13 @@
       panel.classList.add("drop");
     });
     panel.addEventListener("dragleave", () => panel.classList.remove("drop"));
+    document.addEventListener("paste", (event) => {
+      const paste = event;
+      const list = Array.from(paste.clipboardData?.files || []);
+      if (!list.length) return;
+      paste.preventDefault();
+      for (const file of list) fileOffer(file);
+    });
     panel.addEventListener("drop", (event) => {
       const drop = event;
       drop.preventDefault();

@@ -379,6 +379,16 @@ function wireJoinCard() {
     panel.classList.add('drop');
   });
   panel.addEventListener('dragleave', () => panel.classList.remove('drop'));
+  // A paste of a picture is the same offer, wherever the caret is: the
+  // clipboard hands over files and the sealed path carries them. A paste with
+  // no file in it is left alone, because the field in the form takes the text.
+  document.addEventListener('paste', (event) => {
+    const paste = event as ClipboardEvent;
+    const list = Array.from(paste.clipboardData?.files || []);
+    if (!list.length) return;
+    paste.preventDefault();
+    for (const file of list) fileOffer(file);
+  });
   panel.addEventListener('drop', (event) => {
     const drop = event as DragEvent;
     drop.preventDefault();

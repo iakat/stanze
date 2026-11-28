@@ -35,6 +35,170 @@ const FILE_OPEN_WAIT = 15000;
 // change it again.
 const FILE_DONE = new Set(['done', 'refused', 'cancelled', 'gone']);
 
+// ------------------------------------------------------- inline preview
+//
+// The type and the bytes of an offer both come from another page, so a drawn
+// picture is bounded three ways: the declared type on a short allowlist, a byte
+// cap, and the frame size read out of the header here, before any decoder runs.
+// A header that names a 60000 by 60000 frame is refused while the page holds a
+// few hundred bytes, not after it has allocated the pixels.
+const PIC_MAX = 8 << 20; // bytes one preview may carry
+const PIC_SIDE = 8192; // pixels on one side
+const PIC_PIXELS = 32 << 20; // pixels of the whole frame
+
+// Rasters only. No SVG, which is a document that may carry script and remote
+// references, and no container that an outside viewer opens. A video plays in
+// the page's own player, with controls, and never starts on its own.
+const PIC_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const VID_TYPES = ['video/mp4', 'video/webm'];
+
+const u16 = (b, i) => b[i] | (b[i + 1] << 8);
+const u32 = (b, i) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+const word = (b, i) => String.fromCharCode(b[i] || 0, b[i + 1] || 0, b[i + 2] || 0, b[i + 3] || 0);
+
+// jpegSize walks the marker segments to the first frame header, which is where
+// the height and the width sit. The walk is bounded by the head it was given, so
+// a file of segments that never names a frame is simply not a picture.
+function jpegSize(b) {
+  for (let p = 2; p + 9 < b.length;) {
+    if (b[p] !== 0xff) return null;
+    const m = b[p + 1];
+    const len = (b[p + 2] << 8) | b[p + 3];
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc)
+      return { w: (b[p + 7] << 8) | b[p + 8], h: (b[p + 5] << 8) | b[p + 6] };
+    if (m === 0x01 || (m >= 0xd0 && m <= 0xd7)) p += 2;
+    else if (m === 0xd9 || m === 0xda || len < 2) return null;
+    else p += 2 + len;
+  }
+  return null;
+}
+
+// picSize says which of the four pictures a head of bytes is and how big the
+// frame it names is. The type comes from the signature, never from the sender.
+function picSize(b) {
+  if (b.length > 25 && u32(b, 0) === 0x89504e47 && u32(b, 4) === 0x0d0a1a0a)
+    return { t: 'image/png', w: u32(b, 16), h: u32(b, 20) };
+  if (b.length > 9 && word(b, 0).slice(0, 3) === 'GIF')
+    return { t: 'image/gif', w: u16(b, 6), h: u16(b, 8) };
+  if (b.length > 11 && b[0] === 0xff && b[1] === 0xd8) {
+    const s = jpegSize(b);
+    return s && { t: 'image/jpeg', ...s };
+  }
+  if (b.length > 29 && word(b, 0) === 'RIFF' && word(b, 8) === 'WEBP') {
+    const c = word(b, 12);
+    // Extended, lossy and lossless keep the canvas size in three places.
+    if (c === 'VP8X')
+      return {
+        t: 'image/webp',
+        w: 1 + u16(b, 24) + (b[26] << 16),
+        h: 1 + u16(b, 27) + (b[29] << 16),
+      };
+    if (c === 'VP8 ' && b[23] === 0x9d && u16(b, 24) === 0x012a)
+      return { t: 'image/webp', w: u16(b, 26) & 0x3fff, h: u16(b, 28) & 0x3fff };
+    if (c === 'VP8L' && b[20] === 0x2f) {
+      const v = u32(b, 21);
+      return { t: 'image/webp', w: (v & 0x3fff) + 1, h: ((v >>> 14) & 0x3fff) + 1 };
+    }
+  }
+  return null;
+}
+
+// vidOk is the signature of the two containers the page can play.
+function vidOk(m, b) {
+  if (m === 'video/mp4') return b.length > 8 && word(b, 4) === 'ftyp';
+  return b.length > 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3;
+}
+
+// picHead joins the first few KiB of a transfer, which is all a frame header
+// needs and all the page ever reads before the blob exists.
+function picHead(chunks) {
+  const out = new Uint8Array(4096);
+  let at = 0;
+  for (const c of chunks) {
+    if (at >= out.length) break;
+    const n = Math.min(c.length, out.length - at);
+    out.set(c.subarray(0, n), at);
+    at += n;
+  }
+  return out.subarray(0, at);
+}
+
+function fileMime(type) {
+  return String(type || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+}
+
+// fileAuto is the rule at the offer: a small picture on the allowlist is taken
+// without a click. Everything else keeps accept and refuse.
+const fileAuto = (type, size) => PIC_TYPES.includes(fileMime(type)) && size > 0 && size <= PIC_MAX;
+
+// A click used to be the rate limit: nothing downloaded unless a guest asked for
+// it. Taking pictures without one opens that up, so the page keeps its own cap:
+// at most PREVIEW_MAX previews are carried at once, across every pair, and a
+// chat that already holds PREVIEW_BUSY rows that have not finished is draining as
+// fast as it can. Both numbers are small on purpose: a chat is not a gallery, and
+// each carried preview may be PIC_MAX bytes in memory.
+const PREVIEW_MAX = 4;
+const PREVIEW_BUSY = 24;
+
+// previewBusy counts the offers this page is carrying right now, across every
+// pair: a page of five guests must not get five times the allowance.
+function previewBusy() {
+  let n = 0;
+  for (const rec of state.filesIn.values()) if (rec.auto && !FILE_DONE.has(rec.status)) n++;
+  return n;
+}
+
+// seeAuto accepts one offer without a click only while there is room. Over the
+// cap the row keeps its accept and refuse buttons, so the guest decides, and a
+// page that floods the chat gets no free bytes at all.
+function seeAuto(rec) {
+  if (!fileAuto(rec.type, rec.size)) return false;
+  if (state.filesIn.size > PREVIEW_BUSY) return false;
+  return previewBusy() < PREVIEW_MAX;
+}
+
+// fileDrawn decides what finished bytes may become: a kind, and the type to keep
+// on the blob. An empty kind is the save row every file got before.
+function fileDrawn(type, size, chunks) {
+  const m = fileMime(type);
+  if (!(size > 0 && size <= PIC_MAX)) return { kind: '', m };
+  const head = picHead(chunks);
+  if (PIC_TYPES.includes(m)) {
+    const f = picSize(head);
+    if (!f || f.t !== m || f.w * f.h > PIC_PIXELS) return { kind: '', m };
+    if (!f.w || !f.h || f.w > PIC_SIDE || f.h > PIC_SIDE) return { kind: '', m };
+    return { kind: 'image', m };
+  }
+  if (VID_TYPES.includes(m) && vidOk(m, head)) return { kind: 'video', m };
+  return { kind: '', m };
+}
+
+// filePreview draws the sealed bytes in the slot the row already has. The source
+// is the blob URL of this transfer and nothing else: no data: URL, no remote
+// fetch, no markup. A decoder that refuses the file clears the slot and leaves
+// the save row, so a broken picture never costs the guest the file.
+function filePreview(rec) {
+  const box = rec.el && rec.el.preview;
+  if (!box) return;
+  const leaf =
+    rec.kind === 'image'
+      ? Object.assign(document.createElement('img'), { alt: rec.name, decoding: 'async' })
+      : Object.assign(document.createElement('video'), { controls: true, preload: 'metadata' });
+  leaf.className = 'file-' + rec.kind;
+  leaf.addEventListener('error', () => {
+    box.replaceChildren();
+    box.hidden = true;
+    rec.kind = '';
+    if (rec.el) rec.el.status.textContent = fileInDone(rec);
+  });
+  leaf.src = rec.url;
+  box.replaceChildren(leaf);
+  box.hidden = false;
+}
+
 // A file name is shown in the chat only, but it comes from another page, so it is
 // cleaned like a sealed guest name.
 function cleanFileName(raw) {
@@ -141,12 +305,17 @@ function addFileRow(who, name, size) {
   status.className = 'file-status';
   const acts = document.createElement('span');
   acts.className = 'file-acts';
-  li.append(when, speaker, head, bar, status, acts);
+  // The preview slot sits between the head and the bar: empty until a picture
+  // or a video is drawn there, so a row of any other kind is unchanged.
+  const preview = document.createElement('span');
+  preview.className = 'file-preview';
+  preview.hidden = true;
+  li.append(when, speaker, head, preview, bar, status, acts);
   log.appendChild(li);
   while (log.children.length > CHAT_MAX) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
   chatEmpty(log);
-  return { li, bar, fill, status, acts };
+  return { li, bar, fill, status, acts, preview };
 }
 
 function fileSetBar(el, show, frac) {
@@ -230,6 +399,8 @@ function fileOnOffer(peer, msg) {
     expect: 0,
     el: null,
     url: '',
+    auto: false, // taken without a click, because the offer is a small picture
+    kind: '', // 'image' or 'video' once the bytes proved one
     rateT: 0,
     rateB: 0,
     rate: 0,
@@ -238,13 +409,30 @@ function fileOnOffer(peer, msg) {
   state.filesIn.set(key, rec);
   canary(name);
   rec.el = addFileRow(peerName(peer), name, size);
-  if (rec.el) {
+  // A small picture on the allowlist comes without a click: the guest asked for
+  // a chat, not for a download manager. Everything else keeps accept and refuse.
+  if (rec.el && seeAuto(rec)) {
+    rec.auto = true;
+    fileAcceptAuto(rec);
+  } else if (rec.el) {
     rec.el.acts.append(
       fileButton('accept', (button) => fileAccept(rec, button)),
       fileButton('refuse', () => fileRefuse(rec)),
     );
   }
   filePaintIn(rec);
+}
+
+// fileAcceptAuto takes an offer nobody clicked. It never asks for a file on
+// disk: a preview lives in the Blob, and a picker that a guest did not ask for
+// would be a dialog out of nothing.
+function fileAcceptAuto(rec) {
+  const peer = state.peers.get(rec.peerId);
+  if (!peer || !peer.keys) {
+    fileFinishIn(rec, 'gone');
+    return;
+  }
+  fileAcceptGo(rec, peer, false);
 }
 
 // A big file should not sit in the tab twice: with the File System Access API each
@@ -720,15 +908,19 @@ function fileInText(rec) {
     const rate = fileRateText(rec.rate);
     return 'receiving ' + pct + ' percent' + (rate ? ', ' + rate : '');
   }
-  if (rec.status === 'done') {
-    return rec.disk
-      ? 'saved to disk' + (rec.avg ? ', ' + rec.avg : '')
-      : 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
-  }
+  if (rec.status === 'done') return fileInDone(rec);
   if (rec.status === 'refused') return 'refused';
   if (rec.status === 'cancelled') return 'cancelled';
   if (rec.status === 'gone') return 'the sender left';
   return '';
+}
+
+// fileInDone is the last line of a transfer that landed: a picture says it is
+// drawn and keeps the save link beside it, anything else keeps the words it had.
+function fileInDone(rec) {
+  if (rec.disk) return 'saved to disk' + (rec.avg ? ', ' + rec.avg : '');
+  if (rec.kind) return 'inline, save to keep it' + (rec.avg ? ', ' + rec.avg : '');
+  return 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
 }
 
 function filePaintIn(rec) {
@@ -778,11 +970,14 @@ function fileFinishIn(rec, status) {
     return;
   }
   if (status === 'done') {
-    // The bytes live in this Blob only. The link hands them over on a click, so
-    // nothing is written before it.
+    // What the bytes are is decided here, from the header, and not from the
+    // type the sender wrote: only a proof may become a drawn picture or a
+    // player, and anything else keeps the save row it always had.
     rec.avg = fileAverageRate(rec.size, rec.rateAt, performance.now());
-    const blob = new Blob(rec.chunks, { type: rec.type || 'application/octet-stream' });
+    const proof = fileDrawn(rec.type, rec.size, rec.chunks);
+    const blob = new Blob(rec.chunks, { type: proof.m || 'application/octet-stream' });
     rec.chunks = [];
+    rec.kind = proof.kind;
     if (rec.url) {
       URL.revokeObjectURL(rec.url);
       state.fileLinks.delete(rec.url);
@@ -797,7 +992,8 @@ function fileFinishIn(rec, status) {
       link.download = rec.name;
       link.textContent = 'save ' + fileBytes(rec.size);
       rec.el.acts.replaceChildren(link);
-      rec.el.status.textContent = 'ready, click save' + (rec.avg ? ', ' + rec.avg : '');
+      if (rec.kind) filePreview(rec);
+      rec.el.status.textContent = fileInDone(rec);
     }
     state.filesIn.delete(rec.key);
     return;
