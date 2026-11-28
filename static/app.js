@@ -10749,6 +10749,7 @@
     if (!peer) return;
     applyGain(peer);
     paintPeerVideo(peer);
+    paintPeerScreen(peer);
     stageLayoutSoon();
   }
   function isRouted(peerId) {

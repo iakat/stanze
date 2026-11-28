@@ -78,7 +78,7 @@ module in `src` has no row yet.
 | [src/proximity.ts](src/proximity.ts) | 163 | The talk rule of a pair: a meeting area, a shared area inside its bubble, a silent area, or the conversation bubble. |
 | [src/positions.ts](src/positions.ts) | 324 | Position frames that follow the walker (30 Hz moving, 1 Hz still) over the sealed files channel, and the 1 euro filter that draws them. |
 | [src/roomworld.ts](src/roomworld.ts) | 719 | Joining the world of a room, the position tick, the near pairs, the talks frame and the switch between the map and the call grid. |
-| [src/presence.ts](src/presence.ts) | 196 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
+| [src/presence.ts](src/presence.ts) | 200 | The talk gate of every pair and the presence line: whom this page hears, whom each guest says it talks to, and whose camera is on. |
 | [src/chat.ts](src/chat.ts) | 455 | The room log, its links, and the whisper: a private side conversation over the sealed pair channel. |
 | [src/board.ts](src/board.ts) | 82 | The cue board: eight one shot notification cues, a volume and a stop. |
 | [src/stats.ts](src/stats.ts) | 1043 | The stats panel: media metrics per guest and the wire and crypto counters. |

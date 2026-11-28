@@ -14,7 +14,7 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { applyFlags, volGain } from './volume.js';
-import { paintPeerVideo } from './devices.js';
+import { paintPeerScreen, paintPeerVideo } from './devices.js';
 import { addChatLine } from './chat.js';
 import { layoutStage } from './tiles.js';
 import { peerName, shortPeer } from './sealed.js';
@@ -72,7 +72,10 @@ export function stageLayoutSoon() {
 
 // setRouted turns the audio and the pictures of one pair on or off. It is the
 // only place a remote stream reaches its output, so a guest out of the
-// conversation has a silent gain and no picture.
+// conversation has a silent gain and no picture. "No picture" is both pictures:
+// the camera and the screen. `paintPeerScreen` tests `isRouted` itself, so the
+// one call here is what stops a share that was already playing when the guest
+// walked out of earshot, and what brings it back when the walk returns.
 export function setRouted(peerId: string, on: boolean) {
   if (routed.get(peerId) === on) return;
   routed.set(peerId, on);
@@ -81,6 +84,7 @@ export function setRouted(peerId: string, on: boolean) {
   if (!peer) return;
   applyGain(peer);
   paintPeerVideo(peer);
+  paintPeerScreen(peer);
   stageLayoutSoon();
 }
 

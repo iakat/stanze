@@ -117,7 +117,13 @@ async function pairIds(a) {
 (async () => {
   const browser = await chromium.launch({
     ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}),
-    args: ['--no-sandbox', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+    args: [
+      '--no-sandbox',
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      '--autoplay-policy=no-user-gesture-required',
+      '--enable-features=RTCRtpScriptTransform',
+    ],
   });
   let a;
   let b;
@@ -164,6 +170,154 @@ async function pairIds(a) {
       'the pair rule to drop the neighbour',
     ).catch(() => 'bubble');
     check('a guest across the map is out of the conversation', far === 'far' || far === 'full' || far === 'silent', far);
+
+    // ---- a share stops when the guest walks out of earshot
+    // The rule of the module is that nobody is subscribed to a stream they can
+    // not see, and a screen is a stream like the camera. A share that was
+    // playing when the guest walked away used to keep playing, because
+    // setRouted repainted the camera tile and not the screen tile.
+    // A headless run has no display picker, so getDisplayMedia returns a canvas
+    // capture: the layout and routing path under test is the one a picked
+    // window takes.
+    await b.page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 640;
+      c.height = 360;
+      const g = c.getContext('2d');
+      let n = 0;
+      setInterval(() => {
+        g.fillStyle = n % 2 ? '#224466' : '#88cc44';
+        g.fillRect(0, 0, 640, 360);
+        n += 1;
+      }, 40);
+      navigator.mediaDevices.getDisplayMedia = async () => c.captureStream(20);
+    });
+    await b.page.click('#share-btn');
+    await until(b.page, () => !!window.e2eApp.state.screen, null, 20000, 'beta shares a screen');
+    await place(b.page, 120, 100);
+    await until(
+      a.page,
+      (id) => {
+        const why = window.e2eApp.world.reason(id);
+        return why && why !== 'far' ? why : 'far';
+      },
+      bId,
+      15000,
+      'the neighbour back in earshot',
+    ).catch(() => 'far');
+    await sleep(500);
+    // The screen track crosses the pair like any other, so the tile is waited
+    // for rather than sampled on a fixed delay.
+    const screenWhileNear = await until(
+      a.page,
+      () => {
+        const tiles = [...document.querySelectorAll('.tile[data-screen="yes"]')].filter(
+          (t) => t.dataset.local !== 'screen',
+        );
+        const live = tiles.map((t) => ({
+          playing: t.classList.contains('playing'),
+          src: !!t.querySelector('video').srcObject,
+        }));
+        return live.length && live.every((one) => one.playing && one.src) ? live : null;
+      },
+      null,
+      20000,
+      'the guest sees the screen',
+    ).catch(() => []);
+    check(
+      'the guest sees the screen while the sharer is in earshot',
+      screenWhileNear.length > 0 && screenWhileNear.every((one) => one.playing && one.src),
+      screenWhileNear,
+    );
+
+    // The receiver's tile is marked, so the check after the walk back can tell a
+    // reattached element from a rebuilt one.
+    const mark = 'm' + Date.now();
+    await a.page.evaluate((m) => {
+      const tile = [...document.querySelectorAll('.tile[data-screen="yes"]')].filter(
+        (t) => t.dataset.local !== 'screen',
+      )[0];
+      if (tile) tile.dataset.presenceTileMark = m;
+    }, mark);
+
+    // Walk the sharer across the map, out of the bubble. Beta holds the
+    // screen, so beta is the one that moves; alpha is the guest that must stop
+    // drawing it.
+    await place(b.page, 900, 700);
+    const dropped = await until(
+      a.page,
+      (id) => {
+        const why = window.e2eApp.world.reason(id);
+        return why === 'far' || why === 'full' || why === 'silent' ? why : null;
+      },
+      bId,
+      15000,
+      'the sharer out of earshot',
+    ).catch(() => 'bubble');
+    check('the sharer is out of the conversation', dropped !== 'bubble', dropped);
+    // The picture follows the route on the next frame, so the tile is read once
+    // the routing has settled rather than immediately.
+    const screenGone = await until(
+      a.page,
+      () => {
+        const tiles = [...document.querySelectorAll('.tile[data-screen="yes"]')].filter(
+          (t) => t.dataset.local !== 'screen',
+        );
+        const live = tiles.filter((t) => t.classList.contains('playing') || t.querySelector('video').srcObject);
+        return live.length === 0 ? { tiles: tiles.length, live: 0 } : null;
+      },
+      null,
+      15000,
+      'the screen tile stops playing',
+    ).catch(() => 'still playing');
+    check('a share stops playing when the guest walks out of earshot', screenGone !== 'still playing', screenGone);
+
+    // Walk back: the same track, no new negotiation, and the picture returns.
+    await place(b.page, 120, 100);
+    await until(
+      a.page,
+      (id) => {
+        const why = window.e2eApp.world.reason(id);
+        return why && why !== 'far' ? why : 'far';
+      },
+      bId,
+      15000,
+      'the sharer back in earshot',
+    ).catch(() => 'far');
+    const back = await until(
+      a.page,
+      () => {
+        const tiles = [...document.querySelectorAll('.tile[data-screen="yes"]')].filter(
+          (t) => t.dataset.local !== 'screen',
+        );
+        return tiles.length && tiles.every((t) => t.classList.contains('playing') && t.querySelector('video').srcObject)
+          ? { tiles: tiles.length }
+          : null;
+      },
+      null,
+      20000,
+      'the screen comes back',
+    ).catch(() => 'did not come back');
+    check('the share comes back when the guest walks into earshot again', back !== 'did not come back', back);
+    // The share itself never stopped, and the picture came back on the same
+    // tile: the receiver's element was kept and reattached, so no second
+    // negotiation and no rebuilt tile took place. The element is marked before
+    // the walk and looked for after it.
+    const stillShared = await b.page.evaluate(() => ({
+      sharing: !!window.e2eApp.state.screen,
+      tracks: window.e2eApp.state.screen
+        ? window.e2eApp.state.screen.getVideoTracks().map((t) => t.readyState)
+        : [],
+    }));
+    const sameTile = await a.page.evaluate((mark) => {
+      const tile = document.querySelector('.tile[data-screen="yes"][data-presence-tile-mark]');
+      return !!tile && tile.dataset.presenceTileMark === mark;
+    }, mark);
+    check(
+      'no new negotiation was needed for the share to return',
+      back !== 'did not come back' && stillShared.sharing && sameTile,
+      { ...stillShared, sameTile },
+    );
 
     // ---- the map is painted whole: every tile layer, walls included
     // A floor that is walled all round on its top rows is drawn as that floor.
