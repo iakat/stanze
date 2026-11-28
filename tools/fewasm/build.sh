@@ -46,4 +46,9 @@ $CC --target=wasm32-wasip1 -msimd128 $OPT -mexec-model=reactor \
 # never reads. The code sections and the output are unchanged.
 STRIP=${STRIP:-$(dirname "$CC")/llvm-strip}
 [ -x "$STRIP" ] && "$STRIP" --strip-all "$OUT/fe.wasm"
+# The tier and the frame it implies are written beside the module, because the
+# pair (module, weights) is only valid together and a caller that copies the
+# module away otherwise has no record of which bake it holds. This is the one
+# tier table; every check reads this line instead of spelling a second one.
+echo "$TIER $FRAME" > "$OUT/fe.tier"
 echo "$TIER tier: frame $FRAME, module $(stat -c %s "$OUT/fe.wasm") bytes"
