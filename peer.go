@@ -37,7 +37,11 @@ type Peer struct {
 func newPeer() *Peer {
 	return &Peer{
 		send:  make(chan []byte, 64),
-		limit: newTokenBucket(120, 60),
+		// A boss room of six guests at 25 Hz is 125 position frames a second
+		// from one page to its five pairs, before chat, media state or a
+		// screen share. The limiter must sit above that or it closes the
+		// socket, which is a disconnect and not a slowdown.
+		limit: newTokenBucket(240, 180),
 	}
 }
 

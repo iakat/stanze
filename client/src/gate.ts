@@ -80,13 +80,6 @@ export function setRoot(fp) {
   if (fp && !state.root) state.root = fp;
 }
 
-// roomNameOf is the human name of a room: the label after the root prefix, or
-// the whole id.
-export function roomNameOf(room) {
-  const m = ROOTED.exec(String(room || ''));
-  return m ? m[1] : String(room || '');
-}
-
 // claimText is the exact byte string a role claim signs. The room id binds the
 // claim to this room (salt is the whole id), the counter orders two admins that
 // act at once, and ROOT binds a step to the identity that made the room, so a

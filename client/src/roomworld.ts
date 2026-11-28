@@ -10,7 +10,7 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { load, store } from './prefs.js';
-import { Above, CharSheet, loadSheets, loadWorld, sheetFor, Walker, WorldView } from './world.js';
+import { Above, avatarIndex, CharSheet, loadSheets, loadWorld, rollAvatar, sheetFor, Walker, WorldView } from './world.js';
 import { Guest, Proximity } from './proximity.js';
 import { Zone, ZoneGrid, ZoneWatch } from './zones.js';
 import { ROOM_RE } from './config.js';
@@ -24,6 +24,7 @@ import {
   remoteDir,
   remoteMoving,
   remotePoints,
+  remoteSheet,
 } from './positions.js';
 import { layoutStage } from './tiles.js';
 import { updateCount } from './host.js';
@@ -76,6 +77,7 @@ export const worldStats = {
   zones: [] as string[],
   doors: 0,
   lastDoor: '',
+  lastSentAt: 0, // the clock of the last frame out, for a test of the stop edge
 };
 
 // worldAvatar is the pick of the own avatar: the boot raises it when the menu
@@ -84,6 +86,7 @@ export function worldAvatar() {
   if (!view || !sheets.length) return;
   const self = view.avatars.get('self') as any;
   if (self) self.sheet = sheetFor('self', sheets, true);
+  lastPosAt = 0; // a new sheet is news: the next frame goes out at once
   view.mark();
 }
 
@@ -127,6 +130,10 @@ export async function worldEnter(room: string, start?: string) {
     if (gen !== generation || state.leaving) return;
     sheets = await loadSheets();
     if (gen !== generation || state.leaving) return;
+    // The character is rolled on the join and travels with the frames; the
+    // menu still overrides it, and the select shows what was rolled.
+    const pick = document.getElementById('avatar-pick') as HTMLSelectElement | null;
+    if (pick) pick.value = String(rollAvatar());
     if (view) view.destroy();
     view = new WorldView(canvas, world);
     walker = new Walker(world, world.startPoint(start));
@@ -274,8 +281,10 @@ function sendPos(now: number) {
   lastPosY = walker.y;
   lastPosDir = walker.dir;
   lastPosMoving = walker.moving;
-  posSend(state.peers.values(), posFrame(walker.x, walker.y, walker.dir));
+  // The sheet rides every frame: a menu change is seen at once.
+  posSend(state.peers.values(), posFrame(walker.x, walker.y, walker.dir, avatarIndex()));
   worldStats.sent++;
+  worldStats.lastSentAt = now;
 }
 
 function stopLoop() {
@@ -492,6 +501,9 @@ function syncPeers() {
     // A guest in the conversation is drawn mid step; one that is not is drawn
     // where its last frame put it, so a grey avatar never slides.
     const draw = posAt(id, now, near.includes(id));
+    // The sender's character, carried with its frames; the id hash is only the
+    // fallback before the first frame lands.
+    const sheet = sheetFor(id, sheets, false, remoteSheet(id));
     if (!one) {
       one = {
         id,
@@ -500,7 +512,7 @@ function syncPeers() {
         y: draw.y,
         dir: remoteDir(id),
         moving: remoteMoving(id),
-        sheet: sheetFor(id, sheets, false),
+        sheet,
       };
       avatars.set(id, one);
     } else {
@@ -508,6 +520,7 @@ function syncPeers() {
       one.y = draw.y;
       one.dir = remoteDir(id);
       one.moving = remoteMoving(id);
+      one.sheet = sheet;
       one.name = peer.name || one.name;
     }
   }
@@ -525,19 +538,6 @@ function syncPeers() {
 export function worldDrop(peerId: string) {
   if (view) view.avatars.delete(peerId);
   posForget(peerId);
-}
-
-// viewSize is the drawn size of the window in map pixels.
-export function viewSize(): { w: number; h: number } {
-  if (!view) return { w: 0, h: 0 };
-  return view.size();
-}
-
-// worldDrawn is the one answer a browser test asks: is there a picture, and is
-// it the map at all.
-export function worldDrawn(): { drawn: number; ink: number } {
-  if (!view) return { drawn: 0, ink: 0 };
-  return { drawn: view.frames, ink: view.ink() };
 }
 
 // aboveFilled counts the map rows that the overhead paint puts pixels in: a
@@ -574,6 +574,11 @@ export function worldHook() {
             moving: !!view.local.moving,
           }
         : null,
+    // sheetOf and mySheet let a browser test prove the character a guest picked
+    // is the character every window draws.
+    sheetOf: (id: string) =>
+      view?.avatars.get(id) ? sheets.indexOf(view.avatars.get(id)!.sheet) : -1,
+    mySheet: () => avatarIndex(),
     map: () => {
       if (!view) return null;
       const world = view.world;

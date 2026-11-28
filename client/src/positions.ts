@@ -1,6 +1,6 @@
 /*
  Position frames over the sealed files channel, and the drawing that turns them
- back into somebody walking: about fifteen a second while the guest walks, one a
+ back into somebody walking: twenty five a second while the guest walks, one a
  second while it stands still, and one at once when it stops or turns.
 
  One pair, one direction: every guest holds a pair to every other guest and
@@ -14,10 +14,10 @@ import { b64d, b64e, fileAAD, pqCall, pqModule } from './sealed.js';
 import type { Point } from './proximity.js';
 
 // The cadence follows the walker instead of a fixed clock. A guest on the move
-// sends MOVING_DELAY about fifteen times a second, so a walk reads as a walk;
+// sends MOVING_DELAY twenty five times a second, so a walk reads as a walk;
 // a guest standing still sends IDLE_DELAY once a second, which is all a late
 // joiner needs to learn where everybody is. A stop and a turn go out at once.
-export const MOVING_DELAY = 66;
+export const MOVING_DELAY = 40;
 export const IDLE_DELAY = 1000;
 
 // A measured gap is clamped to this window: below it a burst is not a reason to
@@ -29,6 +29,9 @@ const MAX_GAP = 150;
 // the channel.
 const POS_MAX_JSON = 200;
 const POS_MAX_POINT = 65535;
+// A sheet index comes from the sender, so it is bounded here and clamped again
+// against the receiver's own list: a hostile page can not name a sheet away.
+const POS_MAX_SHEET = 63;
 // The transfer field of the associated data. A literal, so a position frame
 // can not be lifted onto a file of the same pair, and the reverse.
 const POS_XFER = 'pos';
@@ -37,6 +40,7 @@ export type PosFrame = {
   x: number;
   y: number;
   d: number;
+  a: number; // the sheet this page picked: the avatar is the sender's
   n: number;
 };
 
@@ -49,6 +53,7 @@ type Sample = {
   px: number;
   py: number;
   d: number;
+  a: number;
   mv: boolean;
   at: number;
   gap: number;
@@ -105,21 +110,26 @@ export function remoteMoving(id: string): boolean {
   return !!(sample && sample.mv);
 }
 
+// remoteSheet is the sheet the sender chose, or -1 before its first frame.
+export function remoteSheet(id: string): number {
+  return remotes.get(id)?.a ?? -1;
+}
+
 // posFrame builds the frame of one tick from the local avatar.
-export function posFrame(x: number, y: number, d: number): PosFrame {
+export function posFrame(x: number, y: number, d: number, a: number): PosFrame {
   return {
     x: Math.round(Math.max(0, Math.min(POS_MAX_POINT, x))),
     y: Math.round(Math.max(0, Math.min(POS_MAX_POINT, y))),
     d: d === 1 || d === 2 || d === 3 ? d : 0,
+    a: Math.max(0, Math.min(POS_MAX_SHEET, Math.floor(Number(a) || 0))),
     n: 0,
   };
 }
 
 // posDelay is how long to wait before the next frame. A walking guest sends at
-// about fifteen a second, which is enough for a walk to read as a walk without
-// flooding the mesh: one frame per pair, so the cost grows with the room. A
-// guest standing still sends once a second, which is all a late joiner needs to
-// learn where everybody is.
+// about twenty five a second, which is smooth enough for a walk and still one
+// frame per pair, so the cost grows with the room. A guest standing still sends
+// once a second, which is all a late joiner needs to learn where everybody is.
 export function posDelay(moving: boolean): number {
   return moving ? MOVING_DELAY : IDLE_DELAY;
 }
@@ -195,6 +205,7 @@ export function posOnMessage(peer: any, raw: any): PosFrame | null {
     x: body.x,
     y: body.y,
     d: body.d === 1 || body.d === 2 || body.d === 3 ? body.d : 0,
+    a: Number.isSafeInteger(body.a) && body.a >= 0 && body.a <= POS_MAX_SHEET ? body.a : 0,
     n,
   };
   const before = remotes.get(peer.id);
@@ -210,6 +221,7 @@ export function posOnMessage(peer: any, raw: any): PosFrame | null {
     px: before ? before.x : frame.x,
     py: before ? before.y : frame.y,
     d: frame.d,
+    a: frame.a,
     // The moving flag does not travel: a frame that changed place is a step.
     mv: before !== undefined && (before.x !== frame.x || before.y !== frame.y),
     at: now,

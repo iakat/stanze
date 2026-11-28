@@ -3454,12 +3454,13 @@
   }
 
   // src/positions.ts
-  var MOVING_DELAY = 66;
+  var MOVING_DELAY = 40;
   var IDLE_DELAY = 1e3;
   var MIN_GAP = 16;
   var MAX_GAP = 150;
   var POS_MAX_JSON = 200;
   var POS_MAX_POINT = 65535;
+  var POS_MAX_SHEET = 63;
   var POS_XFER = "pos";
   var remotes = /* @__PURE__ */ new Map();
   var seqOut = /* @__PURE__ */ new Map();
@@ -3493,11 +3494,15 @@
     const sample = remotes.get(id);
     return !!(sample && sample.mv);
   }
-  function posFrame(x, y, d) {
+  function remoteSheet(id) {
+    return remotes.get(id)?.a ?? -1;
+  }
+  function posFrame(x, y, d, a) {
     return {
       x: Math.round(Math.max(0, Math.min(POS_MAX_POINT, x))),
       y: Math.round(Math.max(0, Math.min(POS_MAX_POINT, y))),
       d: d === 1 || d === 2 || d === 3 ? d : 0,
+      a: Math.max(0, Math.min(POS_MAX_SHEET, Math.floor(Number(a) || 0))),
       n: 0
     };
   }
@@ -3555,6 +3560,7 @@
       x: body.x,
       y: body.y,
       d: body.d === 1 || body.d === 2 || body.d === 3 ? body.d : 0,
+      a: Number.isSafeInteger(body.a) && body.a >= 0 && body.a <= POS_MAX_SHEET ? body.a : 0,
       n
     };
     const before = remotes.get(peer.id);
@@ -3566,6 +3572,7 @@
       px: before ? before.x : frame.x,
       py: before ? before.y : frame.y,
       d: frame.d,
+      a: frame.a,
       // The moving flag does not travel: a frame that changed place is a step.
       mv: before !== void 0 && (before.x !== frame.x || before.y !== frame.y),
       at: now,
@@ -4294,6 +4301,11 @@
     const n = Math.max(0, Math.min(AVATARS.length - 1, Math.floor(Number(index) || 0)));
     store("avatar", String(n));
   }
+  function rollAvatar() {
+    const n = Math.floor(Math.random() * AVATARS.length) || 0;
+    store("avatar", String(n));
+    return n;
+  }
   function sheetOf2(image) {
     const idle = {};
     const walk = {};
@@ -4314,11 +4326,14 @@
     if (!out.length) out.push(defaultSheet());
     return out;
   }
-  function sheetFor(id, sheets2, mine) {
-    if (mine) return sheets2[Math.min(avatarIndex(), sheets2.length - 1)];
-    let h = 0;
-    for (let i = 0; i < id.length; i++) h = h * 31 + id.charCodeAt(i) | 0;
-    return sheets2[Math.abs(h) % sheets2.length];
+  function sheetFor(id, sheets2, mine, index = -1) {
+    if (!mine && index < 0) {
+      let h = 0;
+      for (let i = 0; i < id.length; i++) h = h * 31 + id.charCodeAt(i) | 0;
+      index = Math.abs(h);
+    }
+    const n = Math.max(0, Math.min(sheets2.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0)));
+    return sheets2[n];
   }
   function defaultSheet() {
     const cols = 4;
@@ -4567,28 +4582,6 @@
       }
       this.raf = requestAnimationFrame((t) => this.tick(t));
     }
-    // topLeft is where the window stands in map pixels, whole, because the scale
-    // keeps every edge of the art on a whole pixel.
-    topLeft() {
-      return { x: this.camX / this.scale, y: this.camY / this.scale };
-    }
-    // size is the drawn window in map pixels.
-    size() {
-      return { w: this.canvas.width / this.scale, h: this.canvas.height / this.scale };
-    }
-    // ink counts the distinct colours of the frame, thinned out. A blank window is
-    // one colour and a map is many: it is the cheap proof that a map was painted
-    // and not a black rectangle.
-    ink() {
-      if (!this.canvas.width || !this.canvas.height) return 0;
-      const pixels = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height).data;
-      const seen = /* @__PURE__ */ new Set();
-      for (let i = 0; i < pixels.length; i += 4 * 97) {
-        seen.add(pixels[i] << 16 | pixels[i + 1] << 8 | pixels[i + 2]);
-        if (seen.size >= 64) break;
-      }
-      return seen.size;
-    }
     // draw paints one frame: the visible window of the floor, then every avatar
     // in the window with its feet sorted, then its name.
     draw() {
@@ -4809,12 +4802,15 @@
     near: 0,
     zones: [],
     doors: 0,
-    lastDoor: ""
+    lastDoor: "",
+    lastSentAt: 0
+    // the clock of the last frame out, for a test of the stop edge
   };
   function worldAvatar() {
     if (!view || !sheets.length) return;
     const self2 = view.avatars.get("self");
     if (self2) self2.sheet = sheetFor("self", sheets, true);
+    lastPosAt = 0;
     view.mark();
   }
   function isWorld() {
@@ -4843,6 +4839,8 @@
       if (gen !== generation || state.leaving) return;
       sheets = await loadSheets();
       if (gen !== generation || state.leaving) return;
+      const pick = document.getElementById("avatar-pick");
+      if (pick) pick.value = String(rollAvatar());
       if (view) view.destroy();
       view = new WorldView(canvas, world);
       walker = new Walker(world, world.startPoint(start));
@@ -4951,8 +4949,9 @@
     lastPosY = walker.y;
     lastPosDir = walker.dir;
     lastPosMoving = walker.moving;
-    posSend(state.peers.values(), posFrame(walker.x, walker.y, walker.dir));
+    posSend(state.peers.values(), posFrame(walker.x, walker.y, walker.dir, avatarIndex()));
     worldStats.sent++;
+    worldStats.lastSentAt = now;
   }
   function stopLoop() {
     if (raf) cancelAnimationFrame(raf);
@@ -5102,6 +5101,7 @@
         continue;
       }
       const draw = posAt(id, now, near.includes(id));
+      const sheet = sheetFor(id, sheets, false, remoteSheet(id));
       if (!one) {
         one = {
           id,
@@ -5110,7 +5110,7 @@
           y: draw.y,
           dir: remoteDir(id),
           moving: remoteMoving(id),
-          sheet: sheetFor(id, sheets, false)
+          sheet
         };
         avatars.set(id, one);
       } else {
@@ -5118,6 +5118,7 @@
         one.y = draw.y;
         one.dir = remoteDir(id);
         one.moving = remoteMoving(id);
+        one.sheet = sheet;
         one.name = peer.name || one.name;
       }
     }
@@ -5159,6 +5160,10 @@
         dir: view.local.dir,
         moving: !!view.local.moving
       } : null,
+      // sheetOf and mySheet let a browser test prove the character a guest picked
+      // is the character every window draws.
+      sheetOf: (id) => view?.avatars.get(id) ? sheets.indexOf(view.avatars.get(id).sheet) : -1,
+      mySheet: () => avatarIndex(),
       map: () => {
         if (!view) return null;
         const world = view.world;

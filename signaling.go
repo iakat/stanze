@@ -47,9 +47,9 @@ var roomBudget = struct {
 	bytes     float64
 	burst     float64
 }{
-	perSecond: 1200,     // relayed frames per second, room wide
+	perSecond: 1800,     // relayed frames per second, room wide
 	bytes:     24 << 20, // relayed bytes per second, room wide
-	burst:     2400,     // instant frames, for a burst of candidates or a share start
+	burst:     3600,     // instant frames, for a burst of candidates or a share start
 }
 
 type server struct {

@@ -14,12 +14,12 @@ review contradicts researchD, trix wins and this file says why.
 | Decision | Value | Why |
 |---|---|---|
 | Position transport | `files` DataChannel, `t:"pos"` frames | `sealedSend` is `app`, a **strict** counter: one missing seq calls `sealedGapReset` and restarts the pair (`handshake.ts:695-708`). The relay drops frames on a slow queue on purpose. Positions are lossy-shaped data; they must not be able to kill audio. |
-| Position rate | **follows the walker**: `MOVING_DELAY = 66` ms (about 15 Hz) while moving, `IDLE_DELAY = 1000` ms while still, and an immediate frame on a stop or a turn. Amended 2026-11-28 (trix): the flat 5 Hz clock read as choppy, and a still guest wastes nothing at 1 Hz. | trix 2026-11-28 |
+| Position rate | **follows the walker**: `MOVING_DELAY = 40` ms (25 Hz) while moving, `IDLE_DELAY = 1000` ms while still, and an immediate frame on a stop or a turn. Amended 2026-11-28 (trix): the flat 5 Hz clock read as choppy, 15 Hz still read as choppy live, and a still guest wastes nothing at 1 Hz. | trix 2026-11-28 |
 | Interpolation | lerp from the previous sample to the last one over the **measured gap** between them, clamped to 16..150 ms, never extrapolating past the last frame. | trix 2026-11-28 |
 | Office peer cap | **6**, refused with the existing `unavailable`, and `config.go` cap knob | researchD §0 |
 | Per-frame server relay | **none**. `x,y` never appear in a Go struct, a clear frame, or `state.wireLeaks` | researchA P1, researchD §1 |
-| Room budget | **1200** frames/s, **2400** burst, so six guests at 15 Hz to five pairs each (450 frames/s) plus a share still fit | researchD §1; trix 2026-11-28 |
-| Per-connection limiter | `peer.go:35 newTokenBucket(120,60)` must not close the socket for office traffic | trix risk 2; if it fires the socket dies, not slow down |
+| Room budget | **1800** frames/s, **3600** burst: six guests at 25 Hz over five pairs is 750 frames/s, and a screen share has to fit beside it | researchD §1; trix 2026-11-28 |
+| Per-connection limiter | `newTokenBucket(240,180)`: one page at 25 Hz to five pairs is 125 frames/s, so the old 120/60 would have closed the socket | trix risk 2; if it fires the socket dies, not slow down |
 | Map bytes | never over `enc`. Public HTTP GET only. | researchD §3, `encMax` 96 KiB |
 | Tile spritesheet | **one PNG per tileset**, never one image per tile | trix §6 |
 
@@ -60,6 +60,7 @@ type PosFrame = {
   x: number;   // map pixels, integer, 0..map.widthPx
   y: number;   // map pixels, integer, 0..map.heightPx
   d: 0|1|2|3;  // facing: 0=down, 1=left, 2=right, 3=up  (see the note below)
+  a: number;   // sheet index the SENDER picked, 0..63, clamped by the receiver
   mv: 0|1;     // moving this tick
   z: string[]; // ids of zones the SENDER believes it is inside, <= 8, each <= 32 chars
   f: number;   // status bitfield, see FLAGS
@@ -82,6 +83,11 @@ row order is a *separate* mapping, through `SHEET_ROW` in section 3.
 - `k === 'pos'`, `Number.isSafeInteger(x) && Number.isSafeInteger(y)`, and
   `0 <= x <= 65535`, `0 <= y <= 65535`. Outside => drop.
 - `d`, `mv` coerced to the nearest legal value, not dropped.
+- `a` clamped to `0..63` and then to the receiver's own sheet list: a page that
+  names a sheet this tree does not ship gets the nearest one, never a hole. The
+  character is the sender's choice (rolled on join, overridable from the menu)
+  and travels here so every window draws the same guest; the receiver's hash of
+  the peer id is only the fallback before the first frame lands.
 - `z` filtered to `string[]` of <= 32 chars, max 8 entries. Never trusted as geometry:
   every receiver re-tests zones itself (researchD §1).
 - `n` is advisory ordering only. A frame with `n <= lastN` is dropped (stale reordering

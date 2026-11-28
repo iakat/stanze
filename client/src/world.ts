@@ -916,6 +916,15 @@ export function setAvatar(index: number) {
   store('avatar', String(n));
 }
 
+// rollAvatar picks a sheet at random, once per join: the character is the
+// sender's and travels with the frames, so every window draws the same guest.
+// The menu still overrides it, and that pick travels too.
+export function rollAvatar(): number {
+  const n = Math.floor(Math.random() * AVATARS.length) || 0;
+  store('avatar', String(n));
+  return n;
+}
+
 // sheetOf reads one 96 x 128 sheet: three walk cells and no idle cell, four
 // rows top to bottom. The idle is the first cell of the row and the walk is the
 // three in a ping pong, so the sheet needs no padded column.
@@ -944,14 +953,18 @@ export async function loadSheets(signal?: AbortSignal): Promise<CharSheet[]> {
   return out;
 }
 
-// sheetFor answers the sheet of one guest: this page picked one, and a remote
-// is given one by the last word of its peer id, so two guests rarely match and
-// the same guest always looks the same.
-export function sheetFor(id: string, sheets: CharSheet[], mine: boolean): CharSheet {
-  if (mine) return sheets[Math.min(avatarIndex(), sheets.length - 1)];
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return sheets[Math.abs(h) % sheets.length];
+// sheetFor answers the sheet of one guest. This page's own sheet is the one it
+// picked; a remote's is the one that guest sent with its frames, clamped to the
+// list this tree ships. The peer id hash is only the fallback before the first
+// frame lands, so a remote index that never arrives is still a character.
+export function sheetFor(id: string, sheets: CharSheet[], mine: boolean, index = -1): CharSheet {
+  if (!mine && index < 0) {
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+    index = Math.abs(h);
+  }
+  const n = Math.max(0, Math.min(sheets.length - 1, Math.floor(Number(mine ? avatarIndex() : index) || 0)));
+  return sheets[n];
 }
 
 // defaultSheet is the character of a page whose sheet did not load: it is
@@ -1255,31 +1268,6 @@ export class WorldView {
       this.draw();
     }
     this.raf = requestAnimationFrame((t) => this.tick(t));
-  }
-
-  // topLeft is where the window stands in map pixels, whole, because the scale
-  // keeps every edge of the art on a whole pixel.
-  topLeft(): { x: number; y: number } {
-    return { x: this.camX / this.scale, y: this.camY / this.scale };
-  }
-
-  // size is the drawn window in map pixels.
-  size(): { w: number; h: number } {
-    return { w: this.canvas.width / this.scale, h: this.canvas.height / this.scale };
-  }
-
-  // ink counts the distinct colours of the frame, thinned out. A blank window is
-  // one colour and a map is many: it is the cheap proof that a map was painted
-  // and not a black rectangle.
-  ink(): number {
-    if (!this.canvas.width || !this.canvas.height) return 0;
-    const pixels = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height).data;
-    const seen = new Set<number>();
-    for (let i = 0; i < pixels.length; i += 4 * 97) {
-      seen.add((pixels[i] << 16) | (pixels[i + 1] << 8) | pixels[i + 2]);
-      if (seen.size >= 64) break;
-    }
-    return seen.size;
   }
 
   // draw paints one frame: the visible window of the floor, then every avatar
