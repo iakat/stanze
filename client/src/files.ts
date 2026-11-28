@@ -134,6 +134,32 @@ function fileMime(type) {
 // without a click. Everything else keeps accept and refuse.
 const fileAuto = (type, size) => PIC_TYPES.includes(fileMime(type)) && size > 0 && size <= PIC_MAX;
 
+// A click used to be the rate limit: nothing downloaded unless a guest asked for
+// it. Taking pictures without one opens that up, so the page keeps its own cap:
+// at most PREVIEW_MAX previews are carried at once, across every pair, and a
+// chat that already holds PREVIEW_BUSY rows that have not finished is draining as
+// fast as it can. Both numbers are small on purpose: a chat is not a gallery, and
+// each carried preview may be PIC_MAX bytes in memory.
+const PREVIEW_MAX = 4;
+const PREVIEW_BUSY = 24;
+
+// previewBusy counts the offers this page is carrying right now, across every
+// pair: a page of five guests must not get five times the allowance.
+function previewBusy() {
+  let n = 0;
+  for (const rec of state.filesIn.values()) if (rec.auto && !FILE_DONE.has(rec.status)) n++;
+  return n;
+}
+
+// seeAuto accepts one offer without a click only while there is room. Over the
+// cap the row keeps its accept and refuse buttons, so the guest decides, and a
+// page that floods the chat gets no free bytes at all.
+function seeAuto(rec) {
+  if (!fileAuto(rec.type, rec.size)) return false;
+  if (state.filesIn.size > PREVIEW_BUSY) return false;
+  return previewBusy() < PREVIEW_MAX;
+}
+
 // fileDrawn decides what finished bytes may become: a kind, and the type to keep
 // on the blob. An empty kind is the save row every file got before.
 function fileDrawn(type, size, chunks) {
@@ -385,7 +411,7 @@ function fileOnOffer(peer, msg) {
   rec.el = addFileRow(peerName(peer), name, size);
   // A small picture on the allowlist comes without a click: the guest asked for
   // a chat, not for a download manager. Everything else keeps accept and refuse.
-  if (rec.el && fileAuto(type, size)) {
+  if (rec.el && seeAuto(rec)) {
     rec.auto = true;
     fileAcceptAuto(rec);
   } else if (rec.el) {
