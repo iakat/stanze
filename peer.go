@@ -36,7 +36,7 @@ type Peer struct {
 
 func newPeer() *Peer {
 	return &Peer{
-		send:  make(chan []byte, 64),
+		send: make(chan []byte, 64),
 		// Position frames never come through this socket: they ride the pair's
 		// own data channel, so the walking cadence does not spend this budget.
 		// What is left is signalling, chat and media state, which the bucket
